@@ -78,7 +78,7 @@ func (s *Service) StartChatGPT(ctx context.Context, workspaceID uuid.UUID) (stri
 
 	clientID := s.chatGPTClientID
 	if clientID == "" {
-		if !isLoopbackURL(s.publicURL) {
+		if !s.allowsDynamicChatGPTRegistration() {
 			return "", errors.New("CYCLEDOCK_CHATGPT_CLIENT_ID is required for remotely hosted ChatGPT sign-in")
 		}
 		clientID = chatGPTDynamicID

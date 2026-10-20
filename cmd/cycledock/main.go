@@ -80,10 +80,16 @@ func main() {
 		logger.Error("configure NexusDock first-party connection", "error", err)
 		os.Exit(1)
 	}
+	allowHostedChatGPTDynamicRegistration, _, err := envBool("CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION")
+	if err != nil {
+		logger.Error("invalid CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION", "error", err)
+		os.Exit(1)
+	}
 	modelAuthService, err := modelauth.New(pool, modelauth.Config{
-		PublicURL:       publicURL,
-		SecretKey:       os.Getenv("CYCLEDOCK_MODEL_SECRET_KEY"),
-		ChatGPTClientID: os.Getenv("CYCLEDOCK_CHATGPT_CLIENT_ID"),
+		PublicURL:                             publicURL,
+		SecretKey:                             os.Getenv("CYCLEDOCK_MODEL_SECRET_KEY"),
+		ChatGPTClientID:                       os.Getenv("CYCLEDOCK_CHATGPT_CLIENT_ID"),
+		AllowHostedChatGPTDynamicRegistration: allowHostedChatGPTDynamicRegistration,
 	})
 	if err != nil {
 		logger.Error("configure model account authentication", "error", err)

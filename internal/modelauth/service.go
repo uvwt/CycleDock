@@ -40,7 +40,9 @@ type Config struct {
 	PublicURL       string
 	SecretKey       string
 	ChatGPTClientID string
-	HTTPClient      *http.Client
+	// 仅用于小规模 Hosted DEV 验证；正式远程部署应使用 OpenAI 批准的固定 Client ID。
+	AllowHostedChatGPTDynamicRegistration bool
+	HTTPClient                            *http.Client
 }
 
 type Status struct {
@@ -48,6 +50,7 @@ type Status struct {
 	Available    bool       `json:"available"`
 	Connected    bool       `json:"connected"`
 	Reason       string     `json:"reason,omitempty"`
+	Warning      string     `json:"warning,omitempty"`
 	DisplayLabel string     `json:"display_label,omitempty"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 }
@@ -71,12 +74,13 @@ type credentialPayload struct {
 }
 
 type Service struct {
-	pool            *pgxpool.Pool
-	httpClient      *http.Client
-	vault           *vault
-	publicURL       string
-	chatGPTClientID string
-	hostID          string
+	pool                                  *pgxpool.Pool
+	httpClient                            *http.Client
+	vault                                 *vault
+	publicURL                             string
+	chatGPTClientID                       string
+	allowHostedChatGPTDynamicRegistration bool
+	hostID                                string
 }
 
 func New(pool *pgxpool.Pool, config Config) (*Service, error) {
@@ -84,10 +88,11 @@ func New(pool *pgxpool.Pool, config Config) (*Service, error) {
 		return nil, errors.New("model auth database pool is required")
 	}
 	service := &Service{
-		pool:            pool,
-		httpClient:      config.HTTPClient,
-		publicURL:       strings.TrimRight(strings.TrimSpace(config.PublicURL), "/"),
-		chatGPTClientID: strings.TrimSpace(config.ChatGPTClientID),
+		pool:                                  pool,
+		httpClient:                            config.HTTPClient,
+		publicURL:                             strings.TrimRight(strings.TrimSpace(config.PublicURL), "/"),
+		chatGPTClientID:                       strings.TrimSpace(config.ChatGPTClientID),
+		allowHostedChatGPTDynamicRegistration: config.AllowHostedChatGPTDynamicRegistration,
 	}
 	if service.httpClient == nil {
 		service.httpClient = &http.Client{Timeout: 20 * time.Second}
@@ -115,10 +120,13 @@ func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID, provider Pr
 			status.Reason = "secret_key_required"
 		case s.publicURL == "":
 			status.Reason = "public_url_required"
-		case s.chatGPTClientID == "" && !isLoopbackURL(s.publicURL):
+		case s.chatGPTClientID == "" && !s.allowsDynamicChatGPTRegistration():
 			status.Reason = "chatgpt_client_id_required"
 		default:
 			status.Available = true
+			if s.chatGPTClientID == "" && !isLoopbackURL(s.publicURL) {
+				status.Warning = "hosted_dynamic_registration_test_mode"
+			}
 		}
 	case ProviderGrok:
 		status.Available = s.vault != nil
@@ -325,4 +333,8 @@ func isLoopbackURL(raw string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func (s *Service) allowsDynamicChatGPTRegistration() bool {
+	return isLoopbackURL(s.publicURL) || s.allowHostedChatGPTDynamicRegistration
 }
