@@ -1,0 +1,24 @@
+# Go
+/bin/
+*.test
+coverage.out
+
+# Web
+web/node_modules/
+web/dist/
+
+# Local data / env
+.env
+.env.*
+!.env.example
+data/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporary
+tmp/
+*.log
