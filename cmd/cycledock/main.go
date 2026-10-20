@@ -20,6 +20,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/mcpserver"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/nexusdock"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -69,6 +70,16 @@ func main() {
 		secureCookie = true
 	}
 	dataStore := store.New(pool)
+	nexusDockService, err := nexusdock.New(pool, nexusdock.Config{
+		MCPURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_MCP_URL"),
+		WebURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_WEB_URL"),
+		PublicURL:     publicURL,
+		EncryptionKey: os.Getenv("CYCLEDOCK_CONNECTION_ENCRYPTION_KEY"),
+	})
+	if err != nil {
+		logger.Error("configure NexusDock first-party connection", "error", err)
+		os.Exit(1)
+	}
 	modelAuthService, err := modelauth.New(pool, modelauth.Config{
 		PublicURL:       publicURL,
 		SecretKey:       os.Getenv("CYCLEDOCK_MODEL_SECRET_KEY"),
@@ -95,6 +106,7 @@ func main() {
 		WebDir:       os.Getenv("WEB_DIR"),
 		Logger:       logger,
 		OAuth:        oauthService,
+		NexusDock:    nexusDockService,
 		MCP:          mcpHandlers.MCP,
 		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
 		ModelAuth:    modelAuthService,
@@ -111,6 +123,7 @@ func main() {
 	defer stop()
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
 		ModelAuth: modelAuthService,
+		NexusDock: nexusDockService,
 	})
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

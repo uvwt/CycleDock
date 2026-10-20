@@ -81,25 +81,37 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [createCardOpen, setCreateCardOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
-  const [agentSettingsOpen, setAgentSettingsOpen] = useState(
-    () => new URLSearchParams(window.location.search).has('model_auth'),
-  )
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(() => {
+    const search = new URLSearchParams(window.location.search)
+    return search.has('model_auth') || search.has('agent_connections')
+  })
 
   useEffect(() => {
     const search = new URLSearchParams(window.location.search)
-    const result = search.get('model_auth')
-    if (!result) return
+    const modelResult = search.get('model_auth')
+    const nexusDockResult = search.get('agent_connections')
+    if (!modelResult && !nexusDockResult) return
 
-    if (result === 'chatgpt_connected') {
+    if (modelResult === 'chatgpt_connected') {
       toast.success('ChatGPT account connected')
       void queryClient.invalidateQueries({ queryKey: queryKeys.modelAuth })
-    } else if (result === 'chatgpt_denied') {
+    } else if (modelResult === 'chatgpt_denied') {
       toast.error('ChatGPT sign-in was cancelled')
-    } else {
+    } else if (modelResult) {
       toast.error('ChatGPT sign-in could not be completed')
     }
 
+    if (nexusDockResult === 'nexusdock-connected') {
+      toast.success('NexusDock remote devices connected')
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentNexusDock })
+    } else if (nexusDockResult === 'nexusdock-denied') {
+      toast.info('NexusDock connection was not authorized')
+    } else if (nexusDockResult) {
+      toast.error('Could not connect NexusDock remote devices')
+    }
+
     search.delete('model_auth')
+    search.delete('agent_connections')
     const query = search.toString()
     window.history.replaceState(
       window.history.state,

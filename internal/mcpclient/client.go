@@ -29,10 +29,12 @@ const (
 )
 
 type Connection struct {
-	Name        string
-	URL         string
-	BearerToken string
-	Timeout     time.Duration
+	Name              string
+	URL               string
+	BearerToken       string
+	Timeout           time.Duration
+	NativeToolNames   bool
+	HiddenRemoteTools map[string]bool
 }
 
 type Tool struct {
@@ -41,6 +43,7 @@ type Tool struct {
 	RemoteName  string
 	Description string
 	InputSchema map[string]any
+	Hidden      bool
 }
 
 type ConnectPhase string
@@ -121,6 +124,9 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 				continue
 			}
 			name := modelToolName(connection.Name, remote.Name)
+			if connection.NativeToolNames {
+				name = nativeToolName(remote.Name)
+			}
 			if previous, exists := set.tools[name]; exists {
 				set.Close()
 				return nil, fmt.Errorf(
@@ -132,6 +138,7 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 				ModelName: name, ServerName: connection.Name, RemoteName: remote.Name,
 				Description: strings.TrimSpace(remote.Description),
 				InputSchema: jsonMap(remote.InputSchema),
+				Hidden:      connection.HiddenRemoteTools[remote.Name],
 			}
 			if tool.InputSchema == nil {
 				tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
@@ -147,6 +154,9 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 func (s *SessionSet) ToolDefinitions() []modelclient.ToolDefinition {
 	definitions := make([]modelclient.ToolDefinition, 0, len(s.ordered))
 	for _, tool := range s.ordered {
+		if tool.Hidden {
+			continue
+		}
 		description := tool.Description
 		if description == "" {
 			description = "MCP tool " + tool.RemoteName + " from " + tool.ServerName
@@ -162,8 +172,8 @@ func (s *SessionSet) ToolDefinitions() []modelclient.ToolDefinition {
 }
 
 func (s *SessionSet) HasTool(modelName string) bool {
-	_, ok := s.tools[modelName]
-	return ok
+	tool, ok := s.tools[modelName]
+	return ok && !tool.Hidden
 }
 
 func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[string]any) (string, error) {
@@ -171,24 +181,74 @@ func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[s
 	if !ok {
 		return "", fmt.Errorf("unknown MCP tool %q", modelName)
 	}
-	connected := s.sessions[tool.ServerName]
-	if connected == nil {
-		return "", fmt.Errorf("MCP session %q is unavailable", tool.ServerName)
+	if tool.Hidden {
+		return "", fmt.Errorf("MCP tool %q is runtime-only", modelName)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, connected.config.Timeout)
-	defer cancel()
-	result, err := connected.session.CallTool(callCtx, &mcp.CallToolParams{
-		Name: tool.RemoteName, Arguments: arguments,
-	})
+	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
 	if err != nil {
-		return "", fmt.Errorf("call MCP %s/%s: %w", tool.ServerName, tool.RemoteName, err)
+		return "", err
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("encode MCP result %s/%s: %w", tool.ServerName, tool.RemoteName, err)
 	}
+	return boundedModelResult(raw), nil
+}
+
+// CallInternal invokes a discovered tool without exposing it to the model.
+func (s *SessionSet) CallInternal(
+	ctx context.Context,
+	serverName, remoteName string,
+	arguments map[string]any,
+) (map[string]any, error) {
+	found := false
+	for _, tool := range s.ordered {
+		if tool.ServerName == serverName && tool.RemoteName == remoteName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("MCP runtime tool %s/%s is unavailable", serverName, remoteName)
+	}
+	result, err := s.callRemote(ctx, serverName, remoteName, arguments)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("encode MCP runtime result %s/%s: %w", serverName, remoteName, err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return nil, fmt.Errorf("decode MCP runtime result %s/%s: %w", serverName, remoteName, err)
+	}
+	return output, nil
+}
+
+func (s *SessionSet) callRemote(
+	ctx context.Context,
+	serverName, remoteName string,
+	arguments map[string]any,
+) (*mcp.CallToolResult, error) {
+	connected := s.sessions[serverName]
+	if connected == nil {
+		return nil, fmt.Errorf("MCP session %q is unavailable", serverName)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, connected.config.Timeout)
+	defer cancel()
+	result, err := connected.session.CallTool(callCtx, &mcp.CallToolParams{
+		Name: remoteName, Arguments: arguments,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("call MCP %s/%s: %w", serverName, remoteName, err)
+	}
+	return result, nil
+}
+
+func boundedModelResult(raw []byte) string {
 	if len(raw) <= maxModelToolResultBytes {
-		return string(raw), nil
+		return string(raw)
 	}
 	preview := raw[:maxModelToolResultBytes]
 	for len(preview) > 0 && !utf8.Valid(preview) {
@@ -199,7 +259,7 @@ func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[s
 		"message":   "MCP result exceeded CycleDock's per-tool model-context limit.",
 		"preview":   string(preview),
 	})
-	return string(truncated), nil
+	return string(truncated)
 }
 
 func (s *SessionSet) Close() error {
@@ -230,6 +290,16 @@ func modelToolName(serverName, remoteName string) string {
 		return base
 	}
 	sum := sha256.Sum256([]byte(serverName + "\x00" + remoteName))
+	suffix := "_" + hex.EncodeToString(sum[:4])
+	return strings.TrimRight(base[:64-len(suffix)], "_") + suffix
+}
+
+func nativeToolName(remoteName string) string {
+	base := safeName(remoteName)
+	if len(base) <= 64 {
+		return base
+	}
+	sum := sha256.Sum256([]byte(remoteName))
 	suffix := "_" + hex.EncodeToString(sum[:4])
 	return strings.TrimRight(base[:64-len(suffix)], "_") + suffix
 }

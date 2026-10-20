@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Bot, CircleAlert, CircleCheck, ExternalLink, LoaderCircle, LogOut, Plus, Save, TestTube2, Trash2, X } from 'lucide-react'
+import { Bot, Cable, CircleAlert, CircleCheck, ExternalLink, LoaderCircle, LogOut, Plus, Save, TestTube2, Trash2, Unplug, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import {
@@ -38,6 +38,11 @@ export function AgentSettingsDialog({
   const connections = useQuery({
     queryKey: queryKeys.agentMCPConnections,
     queryFn: api.agentMCPConnections,
+    enabled: open,
+  })
+  const nexusDock = useQuery({
+    queryKey: queryKeys.agentNexusDock,
+    queryFn: api.agentNexusDock,
     enabled: open,
   })
   const modelAuth = useQuery({
@@ -145,6 +150,21 @@ export function AgentSettingsDialog({
       toast.success('Model account disconnected')
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not disconnect model account'),
+  })
+
+  const connectNexusDock = useMutation({
+    mutationFn: api.connectAgentNexusDock,
+    onSuccess: (start) => window.location.assign(start.authorization_url),
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not connect NexusDock'),
+  })
+
+  const disconnectNexusDock = useMutation({
+    mutationFn: api.disconnectAgentNexusDock,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agentNexusDock })
+      toast.success('NexusDock remote devices disconnected')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not disconnect NexusDock'),
   })
 
   const providerReady = draft
@@ -404,9 +424,97 @@ export function AgentSettingsDialog({
               </section>
 
               <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold">Agent connections</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    First-party services and custom MCP servers extend what the built-in Agent can use.
+                  </p>
+                </div>
+
+                {nexusDock.isPending ? (
+                  <p className="mt-4 text-xs text-slate-600">Loading first-party connections…</p>
+                ) : nexusDock.isError ? (
+                  <p className="mt-4 text-xs text-rose-700">
+                    {nexusDock.error instanceof Error ? nexusDock.error.message : 'Could not load NexusDock connection.'}
+                  </p>
+                ) : nexusDock.data?.available ? (
+                  <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex min-w-0 gap-3">
+                        <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-sky-200 bg-white text-sky-700">
+                          <Cable className="size-4" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">NexusDock remote devices</p>
+                            <span className="rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                              Official
+                            </span>
+                            <span
+                              className={
+                                'text-[10px] font-semibold uppercase tracking-wide ' +
+                                (nexusDock.data.connected ? 'text-emerald-700' : 'text-slate-500')
+                              }
+                            >
+                              {nexusDock.data.connected ? 'Connected' : 'Not connected'}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-slate-600">
+                            Let Cycle Agent use devices already paired with your NexusDock account. No MCP URL or token setup is required.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {nexusDock.data.connected ? (
+                        <>
+                          {nexusDock.data.manage_url ? (
+                            <a
+                              href={nexusDock.data.manage_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-slate-400"
+                            >
+                              <ExternalLink className="size-3.5" /> Manage in NexusDock
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={disconnectNexusDock.isPending}
+                            onClick={() => disconnectNexusDock.mutate()}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-slate-400 disabled:opacity-40"
+                          >
+                            {disconnectNexusDock.isPending ? (
+                              <LoaderCircle className="size-3.5 animate-spin" />
+                            ) : (
+                              <Unplug className="size-3.5" />
+                            )}
+                            Disconnect
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={connectNexusDock.isPending}
+                          onClick={() => connectNexusDock.mutate()}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-sky-700 px-3 text-xs font-semibold text-white disabled:opacity-40"
+                        >
+                          {connectNexusDock.isPending ? (
+                            <LoaderCircle className="size-3.5 animate-spin" />
+                          ) : (
+                            <Cable className="size-3.5" />
+                          )}
+                          Connect NexusDock
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 flex items-center justify-between gap-4 border-t border-slate-200 pt-4">
                   <div>
-                    <p className="text-sm font-semibold">MCP connections</p>
+                    <p className="text-sm font-semibold">Custom MCP connections</p>
                     <p className="mt-1 text-xs text-slate-600">
                       Tools are discovered at Run start. Bearer tokens are resolved from environment only.
                     </p>

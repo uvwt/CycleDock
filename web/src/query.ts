@@ -17,6 +17,7 @@ export const queryKeys = {
   cards: (projectID: string) => ['projects', projectID, 'cards'] as const,
   card: (cardID: string) => ['cards', cardID] as const,
   agentSettings: ['agent-settings'] as const,
+  agentNexusDock: ['agent-nexusdock'] as const,
   modelAuth: ['model-auth'] as const,
   agentModels: (provider: string) => ['agent-models', provider] as const,
   agentMCPConnections: ['agent-mcp-connections'] as const,

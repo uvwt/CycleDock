@@ -227,3 +227,35 @@ waiting_human 不继续 heartbeat，也不应该被 Scheduler 自动抢占。
 - Agent 重试 → 新 Trigger / Run，而不是复活旧 Run。
 - 定时执行 → Schedule 生成 Trigger，而不是另一套 Job Runtime。
 - 外部 Agent → MCP Adapter，而不是新的 Card 状态机。
+
+## 10. Hosted 第一方 NexusDock 设备连接
+
+CycleDock Hosted 把 NexusDock 远程设备作为 **First-party Agent Connection**，而不是普通 `workspace_mcp_connections`。
+
+边界如下：
+
+```text
+CycleDock OIDC login
+  -> 只建立 NexusDock account identity (`issuer + sub`)
+
+用户显式连接 NexusDock 远程设备
+  -> NexusDock MCP OAuth consent
+  -> Workspace-scoped MCP grant
+  -> CycleDock 加密保存 grant token
+
+Built-in Agent Run
+  -> CycleDock runtime 读取并刷新第一方 grant
+  -> 自动连接 NexusDock `/mcp`
+  -> 内部 bootstrap `agentdock_context`
+  -> 只把精简设备目录加入 Run context
+  -> 节点工具以原生 tool name 提供给模型
+```
+
+约束：
+
+- OIDC token 永远不能直接作为 NexusDock MCP/device credential。
+- NexusDock 授权不写入 `workspace_mcp_connections`，也不要求用户填写 URL、PAT 或 Token 环境变量。
+- 首次授权必须经过 NexusDock 自己的 consent；CycleDock 不复制 NexusDock 的设备权限模型。
+- `agentdock_context` 是第一方 runtime bootstrap 细节，正常不暴露给模型。设备存在性、`node_id`、在线状态与主要能力属于启动上下文；具体 Workspace/Skill/MCP 内容仍按需读取。
+- CycleDock 不复制 NexusDock 的设备管理页；“在 NexusDock 中管理设备”跳转到 NexusDock Web。
+- 当前传输继续复用 NexusDock 标准 MCP Gateway 与既有 AgentDock WebSocket。只有真实测量证明协议层成为瓶颈时才考虑额外 RPC。

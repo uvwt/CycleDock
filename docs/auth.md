@@ -134,3 +134,35 @@ Human 在浏览器中登录 CycleDock 后批准当前 Workspace。批准记录�
 Authorization Code、Access Token 与 Refresh Token 在数据库中只保存 SHA-256 digest。旧 refresh token 在轮换后被重放时会撤销整个 token family。
 
 远程 `CYCLEDOCK_PUBLIC_URL` 必须使用 HTTPS；localhost / loopback 开发允许 HTTP。
+
+## 10. Hosted NexusDock 设备授权
+
+Hosted 登录身份和设备控制授权是两个独立安全边界：
+
+- `issuer + sub` 只回答“谁登录了 CycleDock”。
+- NexusDock MCP OAuth grant 回答“这个 CycleDock Workspace 是否被用户允许调用对应 NexusDock Workspace 的 MCP/device 能力”。
+
+第一方设备连接复用 NexusDock 标准 MCP OAuth：
+
+1. CycleDock 自动读取 NexusDock Protected Resource / Authorization Server Metadata。
+2. CycleDock 自动注册或复用一个 public OAuth client。
+3. 用户从 Agent Connections 点击“连接 NexusDock 远程设备”。
+4. CycleDock 使用 Authorization Code + S256 PKCE 跳转到 NexusDock consent。
+5. NexusDock 从自己的登录 Session / Membership 决定 grant 的 Tenant；CycleDock 不提交 `tenant_id`。
+6. callback 换取 access/refresh token 后，CycleDock 才把该 Workspace 标记为已连接。
+
+Token 存储：
+
+- NexusDock access/refresh token 不写入普通 Settings，也不回显给 Web。
+- 两者使用 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY` 的 AES-256-GCM 密文持久化；AEAD associated data 绑定 CycleDock Workspace 与 token 用途。
+- refresh token 轮换由 PostgreSQL advisory lock 按 Workspace 串行化；拿锁后必须重新读取当前密文，再决定是否刷新，避免两个进程同时使用同一 refresh token 触发 NexusDock replay-revocation。
+- 断开连接先调用 NexusDock revoke；远端撤销成功后才删除本地连接记录。
+- 日志与 API 错误永远不包含 token、authorization code、PKCE verifier 或上游原始敏感响应。
+
+Hosted 第一方连接由部署层配置：
+
+- `CYCLEDOCK_NEXUSDOCK_MCP_URL`
+- `CYCLEDOCK_NEXUSDOCK_WEB_URL`
+- `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`
+
+这些是 Hosted 服务配置，不是终端用户需要填写的 MCP 设置。未配置时第一方 NexusDock 设备卡片不可用，Self-hosted 的普通 MCP 能力不受影响。

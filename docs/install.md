@@ -120,3 +120,15 @@ CycleDock 不把 Model API Key / MCP Bearer Token 明文存入数据库，因此
 ChatGPT / Grok OAuth credential 是加密后的业务配置；备份数据库时还必须安全备份 CYCLEDOCK_MODEL_SECRET_KEY。
 
 不要把临时测试数据库、raw model/tool trace 或日志当作业务备份。
+
+### Hosted NexusDock 远程设备连接
+
+Hosted 部署若要启用 Agent Connections 中的 NexusDock 第一方设备能力，额外配置：
+
+```env
+CYCLEDOCK_NEXUSDOCK_MCP_URL=https://mcp.nexusdock.co/mcp
+CYCLEDOCK_NEXUSDOCK_WEB_URL=https://www.nexusdock.co
+CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<32-byte random key, base64>
+```
+
+`CYCLEDOCK_CONNECTION_ENCRYPTION_KEY` 只用于服务端可逆加密第一方 OAuth token，不发送给浏览器或 NexusDock。变更该 key 前必须先完成密钥迁移；直接替换会让已有连接无法解密，需要重新授权。

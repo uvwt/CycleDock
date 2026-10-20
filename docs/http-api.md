@@ -103,3 +103,14 @@ MCP Test 只执行 connect / initialize / ListTools，返回工具数量，**不
 
 POST / PUT / PATCH 必须使用 `Content-Type: application/json`。
 浏览器跨站写请求会被拒绝；再结合 SameSite=Lax Session Cookie，避免普通跨站表单触发状态变化。
+
+## NexusDock First-party Agent Connection
+
+以下接口只允许当前 Workspace owner 调用：
+
+- `GET /api/v1/agent/nexusdock`：读取第一方连接是否可用、是否已连接与 NexusDock 管理页 URL；不返回 token。
+- `POST /api/v1/agent/nexusdock/connect`：创建一次 PKCE 授权流程，返回 NexusDock authorization URL。
+- `DELETE /api/v1/agent/nexusdock`：撤销远端 OAuth grant 后删除本地连接。
+- `GET /auth/nexusdock-device/callback`：要求已有 CycleDock Human Session；校验 state 与 Workspace/Human 绑定后兑换 code，并重定向回 Agent Connections。
+
+该连接不是普通 MCP Connection；终端用户不会提交 NexusDock MCP URL、PAT、Bearer Token 或 `tenant_id`。
