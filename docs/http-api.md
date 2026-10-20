@@ -74,7 +74,8 @@ Workspace owner：
 - `POST /api/v1/agent/mcp-test`
 
 - GET /api/v1/agent/model-auth：只返回 available / connected / expiry，不返回 token。
-- POST /api/v1/agent/model-auth/chatgpt/start：返回官方 authorization URL。
+- POST /api/v1/agent/model-auth/chatgpt/start：返回官方 authorization URL；临时 Hosted dynamic-registration 测试模式还会返回 `manual_callback=true`。
+- POST /api/v1/agent/model-auth/chatgpt/complete：仅供上述临时 Hosted 测试模式使用；Workspace owner 粘贴完整 localhost callback URL，由服务端校验 loopback URL、Workspace-scoped state 并完成 PKCE token exchange。
 - POST /api/v1/agent/model-auth/grok/start：返回 xAI verification URL / user code / flow ID。
 - POST /api/v1/agent/model-auth/grok/poll：完成 device-code 连接。
 - DELETE /api/v1/agent/model-auth/{provider}：断开账号。

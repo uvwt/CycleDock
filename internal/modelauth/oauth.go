@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	chatGPTAuthorizeURL = "https://auth.openai.com/api/accounts/authorize"
-	chatGPTTokenURL     = "https://auth.openai.com/api/accounts/oauth/token"
-	chatGPTResource     = "https://api.openai.com/v1"
-	chatGPTDynamicID    = "dynamic_agent_client"
-	chatGPTScope        = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+	chatGPTAuthorizeURL          = "https://auth.openai.com/api/accounts/authorize"
+	chatGPTTokenURL              = "https://auth.openai.com/api/accounts/oauth/token"
+	chatGPTResource              = "https://api.openai.com/v1"
+	chatGPTDynamicID             = "dynamic_agent_client"
+	chatGPTHostedTestRedirectURI = "http://localhost:1455/auth/callback"
+	chatGPTScope                 = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 
 	xaiIssuer   = "https://auth.x.ai"
 	xaiClientID = "b1a00492-073a-47ea-816f-4c329264a828"
@@ -35,6 +36,19 @@ type chatGPTFlow struct {
 	CodeVerifier string `json:"code_verifier"`
 	Nonce        string `json:"nonce"`
 	ClientID     string `json:"client_id"`
+	RedirectURI  string `json:"redirect_uri"`
+}
+
+type ChatGPTStart struct {
+	AuthorizationURL string `json:"authorization_url"`
+	ManualCallback   bool   `json:"manual_callback,omitempty"`
+}
+
+type chatGPTAuthorizationConfig struct {
+	ClientID       string
+	RedirectURI    string
+	ManualCallback bool
+	IncludeHostID  bool
 }
 
 type grokFlow struct {
@@ -65,45 +79,43 @@ type DevicePollResult struct {
 	IntervalSeconds int    `json:"interval_seconds,omitempty"`
 }
 
-func (s *Service) StartChatGPT(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+func (s *Service) StartChatGPT(ctx context.Context, workspaceID uuid.UUID) (ChatGPTStart, error) {
 	if s.vault == nil {
-		return "", ErrUnavailable
+		return ChatGPTStart{}, ErrUnavailable
 	}
-	if s.publicURL == "" {
-		return "", errors.New("CYCLEDOCK_PUBLIC_URL is required for ChatGPT sign-in")
+	authConfig, err := s.chatGPTAuthorizationConfig()
+	if err != nil {
+		return ChatGPTStart{}, err
 	}
 	if err := s.deleteExpiredFlows(ctx, workspaceID, ProviderChatGPT); err != nil {
-		return "", err
-	}
-
-	clientID := s.chatGPTClientID
-	if clientID == "" {
-		if !s.allowsDynamicChatGPTRegistration() {
-			return "", errors.New("CYCLEDOCK_CHATGPT_CLIENT_ID is required for remotely hosted ChatGPT sign-in")
-		}
-		clientID = chatGPTDynamicID
+		return ChatGPTStart{}, err
 	}
 
 	state, err := randomURLToken(32)
 	if err != nil {
-		return "", err
+		return ChatGPTStart{}, err
 	}
 	verifier, err := randomURLToken(48)
 	if err != nil {
-		return "", err
+		return ChatGPTStart{}, err
 	}
 	nonce, err := randomURLToken(32)
 	if err != nil {
-		return "", err
+		return ChatGPTStart{}, err
 	}
 	challengeBytes := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(challengeBytes[:])
 	flowID := uuid.New()
 	expiresAt := time.Now().Add(10 * time.Minute)
-	payload := chatGPTFlow{CodeVerifier: verifier, Nonce: nonce, ClientID: clientID}
+	payload := chatGPTFlow{
+		CodeVerifier: verifier,
+		Nonce:        nonce,
+		ClientID:     authConfig.ClientID,
+		RedirectURI:  authConfig.RedirectURI,
+	}
 	encrypted, err := s.vault.seal(payload, flowAAD(flowID, workspaceID, ProviderChatGPT))
 	if err != nil {
-		return "", err
+		return ChatGPTStart{}, err
 	}
 	stateDigest := sha256.Sum256([]byte(state))
 	if _, err := s.pool.Exec(ctx, `
@@ -111,15 +123,13 @@ func (s *Service) StartChatGPT(ctx context.Context, workspaceID uuid.UUID) (stri
 			id, workspace_id, provider, state_digest, payload_ciphertext, expires_at
 		) VALUES ($1, $2, $3, $4, $5, $6)
 	`, flowID, workspaceID, string(ProviderChatGPT), stateDigest[:], encrypted, expiresAt); err != nil {
-		return "", err
+		return ChatGPTStart{}, err
 	}
 
-	redirectURI := s.publicURL + "/auth/model/chatgpt/callback"
 	params := url.Values{
-		"client_id":             {clientID},
-		"ext_agent_host_id":     {s.hostID},
+		"client_id":             {authConfig.ClientID},
 		"response_type":         {"code"},
-		"redirect_uri":          {redirectURI},
+		"redirect_uri":          {authConfig.RedirectURI},
 		"scope":                 {chatGPTScope},
 		"resource":              {chatGPTResource},
 		"state":                 {state},
@@ -127,14 +137,44 @@ func (s *Service) StartChatGPT(ctx context.Context, workspaceID uuid.UUID) (stri
 		"code_challenge_method": {"S256"},
 		"code_challenge":        {challenge},
 	}
-	if clientID == chatGPTDynamicID {
+	if authConfig.IncludeHostID {
+		params.Set("ext_agent_host_id", s.hostID)
+	}
+	if authConfig.ClientID == chatGPTDynamicID {
 		params.Set("agent_name_hint", "CycleDock")
 	}
-	return chatGPTAuthorizeURL + "?" + params.Encode(), nil
+	return ChatGPTStart{
+		AuthorizationURL: chatGPTAuthorizeURL + "?" + params.Encode(),
+		ManualCallback:   authConfig.ManualCallback,
+	}, nil
+}
+
+func (s *Service) chatGPTAuthorizationConfig() (chatGPTAuthorizationConfig, error) {
+	if s.publicURL == "" {
+		return chatGPTAuthorizationConfig{}, errors.New("CYCLEDOCK_PUBLIC_URL is required for ChatGPT sign-in")
+	}
+	publicCallback := s.publicURL + "/auth/model/chatgpt/callback"
+	if s.chatGPTClientID != "" {
+		return chatGPTAuthorizationConfig{
+			ClientID: s.chatGPTClientID, RedirectURI: publicCallback, IncludeHostID: true,
+		}, nil
+	}
+	if !s.allowsDynamicChatGPTRegistration() {
+		return chatGPTAuthorizationConfig{}, errors.New("CYCLEDOCK_CHATGPT_CLIENT_ID is required for remotely hosted ChatGPT sign-in")
+	}
+	if isLoopbackURL(s.publicURL) {
+		return chatGPTAuthorizationConfig{
+			ClientID: chatGPTDynamicID, RedirectURI: publicCallback,
+		}, nil
+	}
+	return chatGPTAuthorizationConfig{
+		ClientID: chatGPTDynamicID, RedirectURI: chatGPTHostedTestRedirectURI, ManualCallback: true,
+	}, nil
 }
 
 func (s *Service) CompleteChatGPT(
 	ctx context.Context,
+	expectedWorkspaceID uuid.UUID,
 	state string,
 	code string,
 	returnedClientID string,
@@ -149,13 +189,26 @@ func (s *Service) CompleteChatGPT(
 
 	var flowID, workspaceID uuid.UUID
 	var encrypted []byte
-	err := s.pool.QueryRow(ctx, `
-		DELETE FROM model_auth_flows
-		WHERE state_digest=$1
-		  AND provider=$2
-		  AND expires_at > now()
-		RETURNING id, workspace_id, payload_ciphertext
-	`, stateDigest[:], string(ProviderChatGPT)).Scan(&flowID, &workspaceID, &encrypted)
+	var row pgx.Row
+	if expectedWorkspaceID == uuid.Nil {
+		row = s.pool.QueryRow(ctx, `
+			DELETE FROM model_auth_flows
+			WHERE state_digest=$1
+			  AND provider=$2
+			  AND expires_at > now()
+			RETURNING id, workspace_id, payload_ciphertext
+		`, stateDigest[:], string(ProviderChatGPT))
+	} else {
+		row = s.pool.QueryRow(ctx, `
+			DELETE FROM model_auth_flows
+			WHERE state_digest=$1
+			  AND provider=$2
+			  AND workspace_id=$3
+			  AND expires_at > now()
+			RETURNING id, workspace_id, payload_ciphertext
+		`, stateDigest[:], string(ProviderChatGPT), expectedWorkspaceID)
+	}
+	err := row.Scan(&flowID, &workspaceID, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrFlowNotFound
 	}
@@ -177,12 +230,17 @@ func (s *Service) CompleteChatGPT(
 		return uuid.Nil, errors.New("ChatGPT returned a different client_id")
 	}
 
+	redirectURI := flow.RedirectURI
+	if redirectURI == "" {
+		// 兼容升级前已经创建、但仍处于十分钟有效期内的旧授权 flow。
+		redirectURI = s.publicURL + "/auth/model/chatgpt/callback"
+	}
 	token, err := s.exchangeToken(ctx, chatGPTTokenURL, url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
 		"code":          {code},
 		"code_verifier": {flow.CodeVerifier},
-		"redirect_uri":  {s.publicURL + "/auth/model/chatgpt/callback"},
+		"redirect_uri":  {redirectURI},
 		"resource":      {chatGPTResource},
 	})
 	if err != nil {

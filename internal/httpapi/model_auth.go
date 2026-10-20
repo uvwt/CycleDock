@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -46,14 +47,55 @@ func (api *API) startChatGPTModelAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
 		return
 	}
-	authorizationURL, err := api.modelAuth.StartChatGPT(r.Context(), identity.WorkspaceID)
+	start, err := api.modelAuth.StartChatGPT(r.Context(), identity.WorkspaceID)
 	if err != nil {
 		api.writeModelAuthError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"authorization_url": authorizationURL})
+	writeJSON(w, http.StatusOK, start)
 }
 
+func (api *API) completeChatGPTHostedTest(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	if api.modelAuth == nil {
+		writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
+		return
+	}
+	var request struct {
+		CallbackURL string `json:"callback_url"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	callbackURL, err := url.Parse(strings.TrimSpace(request.CallbackURL))
+	if err != nil ||
+		callbackURL.Scheme != "http" ||
+		strings.ToLower(callbackURL.Hostname()) != "localhost" ||
+		callbackURL.Port() != "1455" ||
+		callbackURL.Path != "/auth/callback" {
+		writeError(w, http.StatusBadRequest, "invalid_callback_url", "Paste the complete localhost callback URL from the ChatGPT sign-in tab.")
+		return
+	}
+	query := callbackURL.Query()
+	if query.Get("error") != "" {
+		writeError(w, http.StatusBadRequest, "chatgpt_authorization_denied", "ChatGPT authorization was not completed.")
+		return
+	}
+	if _, err := api.modelAuth.CompleteChatGPT(
+		r.Context(),
+		identity.WorkspaceID,
+		query.Get("state"),
+		query.Get("code"),
+		query.Get("client_id"),
+	); err != nil {
+		api.writeModelAuthError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "connected"})
+}
 func (api *API) modelChatGPTCallback(w http.ResponseWriter, r *http.Request) {
 	if api.modelAuth == nil {
 		http.Redirect(w, r, "/?model_auth=chatgpt_error", http.StatusFound)
@@ -66,6 +108,7 @@ func (api *API) modelChatGPTCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := api.modelAuth.CompleteChatGPT(
 		r.Context(),
+		uuid.Nil,
 		query.Get("state"),
 		query.Get("code"),
 		query.Get("client_id"),
