@@ -96,6 +96,13 @@ func (s *Service) configureOIDC(config OIDCConfig) error {
 		publicURL.User != nil || (publicURL.Path != "" && publicURL.Path != "/") {
 		return fmt.Errorf("%w: CYCLEDOCK_PUBLIC_URL must be an absolute origin", ErrInvalidConfig)
 	}
+	if publicURL.Scheme != "https" {
+		host := publicURL.Hostname()
+		ip := net.ParseIP(host)
+		if publicURL.Scheme != "http" || (host != "localhost" && (ip == nil || !ip.IsLoopback())) {
+			return fmt.Errorf("%w: CYCLEDOCK_PUBLIC_URL must use HTTPS except localhost/loopback development", ErrInvalidConfig)
+		}
+	}
 
 	client := config.HTTPClient
 	if client == nil {

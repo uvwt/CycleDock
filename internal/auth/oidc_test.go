@@ -42,3 +42,14 @@ func TestOIDCConfigRejectsInsecureRemoteIssuer(t *testing.T) {
 		t.Fatal("remote HTTP issuer must be rejected")
 	}
 }
+
+func TestOIDCConfigRejectsInsecureRemotePublicURL(t *testing.T) {
+	service := &Service{}
+	if err := service.configureOIDC(OIDCConfig{
+		Issuer:    "https://nexusdock.example",
+		ClientID:  "cycledock",
+		PublicURL: "http://cycle.example",
+	}); err == nil {
+		t.Fatal("remote HTTP public URL must be rejected")
+	}
+}

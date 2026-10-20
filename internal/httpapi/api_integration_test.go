@@ -154,6 +154,11 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if reply.Code != http.StatusCreated {
 		t.Fatalf("reply and continue: %d %s", reply.Code, reply.Body.String())
 	}
+	var replyResult commentResultResponse
+	decodeRecorder(t, reply, &replyResult)
+	if replyResult.EventID == "" || replyResult.TriggerID == "" || replyResult.RunID == "" {
+		t.Fatalf("reply response does not expose snake_case IDs: %+v body=%s", replyResult, reply.Body.String())
+	}
 	continued, err := dataStore.CurrentRun(context.Background(), workspaceID, uuid.MustParse(runCard.ID))
 	if err != nil || continued == nil || continued.ID == current.ID || continued.RunnerSourceID != agent.ID {
 		t.Fatalf("reply did not continue with runner: run=%+v err=%v", continued, err)
@@ -175,6 +180,22 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if scheduleData.NextTriggerAt.IsZero() || scheduleData.Timezone != "Asia/Shanghai" {
 		t.Fatalf("unexpected schedule: %+v", scheduleData)
 	}
+	if _, created, err := dataStore.ProcessDueSchedule(
+		context.Background(),
+		workspaceID,
+		uuid.MustParse(scheduleData.ID),
+		scheduleData.NextTriggerAt.Add(time.Second),
+	); err != nil || !created {
+		t.Fatalf("create scheduled trigger history: created=%v err=%v", created, err)
+	}
+	deleteWithHistory := doJSON(
+		t, handler, http.MethodDelete,
+		"/api/v1/cards/"+ongoing.ID+"/schedules/"+scheduleData.ID,
+		nil, cookie, nil,
+	)
+	if deleteWithHistory.Code != http.StatusConflict {
+		t.Fatalf("schedule with trigger history was deletable: %d %s", deleteWithHistory.Code, deleteWithHistory.Body.String())
+	}
 
 	otherWorkspace, err := dataStore.CreateWorkspace(context.Background(), "Other Workspace")
 	if err != nil {
@@ -187,6 +208,15 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	crossProjectCreate := doJSON(
+		t, handler, http.MethodPost,
+		"/api/v1/projects/"+otherProject.ID.String()+"/cards",
+		map[string]any{"kind": "normal", "title": "Should not exist", "description": ""},
+		cookie, nil,
+	)
+	if crossProjectCreate.Code != http.StatusNotFound {
+		t.Fatalf("cross-workspace project accepted card creation: %d %s", crossProjectCreate.Code, crossProjectCreate.Body.String())
 	}
 	otherCard, err := dataStore.CreateNormalCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Other private card", "")
 	if err != nil {

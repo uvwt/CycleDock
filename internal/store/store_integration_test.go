@@ -528,6 +528,12 @@ func TestSchedulerDuplicateOccurrenceCreatesOneTriggerAndPausedSkips(t *testing.
 	if triggerCount != 1 {
 		t.Fatalf("duplicate occurrence trigger count=%d, want 1", triggerCount)
 	}
+	if _, err := s.pool.Exec(ctx, `
+		DELETE FROM card_schedules
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, f.WorkspaceID, f.CardID, schedule.ID); err == nil {
+		t.Fatal("database cascade-deleted schedule trigger history")
+	}
 	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, schedule.ID); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("delete schedule with trigger history error=%v, want ErrConflict", err)
 	}

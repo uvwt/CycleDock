@@ -11,13 +11,16 @@ import {
   Settings2,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, type Card, type Identity, type NormalColumn, type Project } from '../api'
-import { Board } from '../components/Board'
-import { CardDetailDialog } from '../components/CardDetailDialog'
 import { queryClient, queryKeys } from '../query'
+
+const Board = lazy(() => import('../components/Board').then((module) => ({ default: module.Board })))
+const CardDetailDialog = lazy(() =>
+  import('../components/CardDetailDialog').then((module) => ({ default: module.CardDetailDialog })),
+)
 
 export function WorkspacePage({ identity }: { identity: Identity }) {
   const navigate = useNavigate()
@@ -210,11 +213,17 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                   <p className="mt-2 max-w-xl text-xs leading-5 text-slate-600">{activeProject.description}</p>
                 </div>
               </div>
-              <Board
-                cards={cards.data ?? []}
-                onOpen={openCard}
-                onMove={(cardID, column) => move.mutate({ cardID, column })}
-              />
+              <Suspense
+                fallback={
+                  <div className="min-h-[420px] rounded-2xl border border-slate-800 bg-slate-900/40" />
+                }
+              >
+                <Board
+                  cards={cards.data ?? []}
+                  onOpen={openCard}
+                  onMove={(cardID, column) => move.mutate({ cardID, column })}
+                />
+              </Suspense>
             </>
           )}
         </div>
@@ -237,11 +246,13 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
         </>
       ) : null}
       {activeProjectID && params.cardID ? (
-        <CardDetailDialog
-          projectID={activeProjectID}
-          cardID={params.cardID}
-          onClose={() => navigate(`/projects/${activeProjectID}`)}
-        />
+        <Suspense fallback={null}>
+          <CardDetailDialog
+            projectID={activeProjectID}
+            cardID={params.cardID}
+            onClose={() => navigate(`/projects/${activeProjectID}`)}
+          />
+        </Suspense>
       ) : null}
     </main>
   )

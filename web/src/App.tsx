@@ -1,10 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { LoaderCircle } from 'lucide-react'
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { APIError, api } from './api'
 import { LoginPage } from './pages/LoginPage'
-import { WorkspacePage } from './pages/WorkspacePage'
 import { queryKeys } from './query'
+
+const WorkspacePage = lazy(() =>
+  import('./pages/WorkspacePage').then((module) => ({ default: module.WorkspacePage })),
+)
 
 export default function App() {
   const me = useQuery({
@@ -40,11 +44,23 @@ export default function App() {
     )
   }
 
+  const workspace = (
+    <Suspense
+      fallback={
+        <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-400">
+          <LoaderCircle className="size-5 animate-spin" />
+        </main>
+      }
+    >
+      <WorkspacePage identity={me.data} />
+    </Suspense>
+  )
+
   return (
     <Routes>
-      <Route path="/projects/:projectID/cards/:cardID" element={<WorkspacePage identity={me.data} />} />
-      <Route path="/projects/:projectID" element={<WorkspacePage identity={me.data} />} />
-      <Route path="/" element={<WorkspacePage identity={me.data} />} />
+      <Route path="/projects/:projectID/cards/:cardID" element={workspace} />
+      <Route path="/projects/:projectID" element={workspace} />
+      <Route path="/" element={workspace} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

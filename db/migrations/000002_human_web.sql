@@ -1,5 +1,13 @@
 -- +goose Up
 
+-- Schedule / Trigger / Run 构成长期审计链。Phase 1 的 CASCADE 会让直接删除
+-- Schedule 同时删除已经发生过的 Trigger，因此 Phase 2 收紧为 RESTRICT/NO ACTION。
+ALTER TABLE triggers DROP CONSTRAINT triggers_schedule_fk;
+ALTER TABLE triggers
+    ADD CONSTRAINT triggers_schedule_fk
+    FOREIGN KEY (workspace_id, card_id, schedule_id)
+    REFERENCES card_schedules(workspace_id, card_id, id);
+
 CREATE TABLE human_accounts (
     id uuid PRIMARY KEY,
     display_name text NOT NULL CHECK (btrim(display_name) <> ''),
@@ -84,3 +92,10 @@ DROP TABLE IF EXISTS web_sessions;
 DROP TABLE IF EXISTS workspace_memberships;
 DROP TABLE IF EXISTS oidc_identities;
 DROP TABLE IF EXISTS human_accounts;
+
+ALTER TABLE triggers DROP CONSTRAINT triggers_schedule_fk;
+ALTER TABLE triggers
+    ADD CONSTRAINT triggers_schedule_fk
+    FOREIGN KEY (workspace_id, card_id, schedule_id)
+    REFERENCES card_schedules(workspace_id, card_id, id)
+    ON DELETE CASCADE;

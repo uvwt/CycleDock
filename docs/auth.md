@@ -101,6 +101,8 @@ Hosted NexusDock OIDC：
 Hosted 三项必须一起配置；配置 OIDC 后本地 Administrator password 登录不会暴露。
 
 `CYCLEDOCK_PUBLIC_URL` 为 HTTPS 时 Web Session 与 OIDC state Cookie 自动启用 Secure。
-特殊反代环境可通过 `CYCLEDOCK_SECURE_COOKIE` 显式覆盖。
+OIDC 的远程 issuer 与 Public URL 都必须使用 HTTPS；仅 localhost / loopback 开发环境允许 HTTP。
+Self-hosted 未配置 Public URL 但由 HTTPS 反代暴露时，可通过 `CYCLEDOCK_SECURE_COOKIE=true` 强制启用 Secure。
+该开关不能关闭 HTTPS Public URL 自动启用的 Secure。
 
 OIDC Authorization Code 流程使用 S256 PKCE + nonce；state 与 Web Session token 都只以 SHA-256 digest 形式落库。

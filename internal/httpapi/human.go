@@ -505,7 +505,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
 }
 
 type scheduleRequest struct {

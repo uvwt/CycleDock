@@ -58,8 +58,10 @@ func main() {
 		logger.Error("invalid CYCLEDOCK_SECURE_COOKIE", "error", err)
 		os.Exit(1)
 	}
-	if ok {
-		secureCookie = configured
+	if ok && configured {
+		// HTTPS Public URL 永远不能被显式降级为不安全 Cookie。
+		// 此开关只用于在无 Public URL 的 Self-hosted HTTPS 反代场景强制启用 Secure。
+		secureCookie = true
 	}
 	router := httpapi.NewRouter(pool, store.New(pool), authService, httpapi.Config{
 		SecureCookie: secureCookie,
