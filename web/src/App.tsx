@@ -20,8 +20,8 @@ export default function App() {
 
   if (me.isPending) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-200">
-        <div className="flex items-center gap-3 text-sm text-slate-400">
+      <main className="grid min-h-screen place-items-center bg-slate-50 text-slate-800">
+        <div className="flex items-center gap-3 text-sm text-slate-600">
           <LoaderCircle className="size-5 animate-spin" />
           {t('app.loading')}
         </div>
@@ -35,10 +35,10 @@ export default function App() {
 
   if (me.isError || !me.data) {
     return (
-      <main className="grid min-h-screen place-items-center bg-slate-950 px-6 text-slate-200">
-        <div className="max-w-md rounded-2xl border border-rose-900/60 bg-rose-950/20 p-6">
-          <h1 className="font-semibold text-rose-200">{t('app.sessionError')}</h1>
-          <p className="mt-2 text-sm text-rose-300/80">
+      <main className="grid min-h-screen place-items-center bg-slate-50 px-6 text-slate-800">
+        <div className="max-w-md rounded-2xl border border-rose-200 bg-rose-50 p-6">
+          <h1 className="font-semibold text-rose-800">{t('app.sessionError')}</h1>
+          <p className="mt-2 text-sm text-rose-700/80">
             {me.error instanceof Error ? me.error.message : t('app.unknownSessionError')}
           </p>
         </div>
@@ -49,7 +49,7 @@ export default function App() {
   const workspace = (
     <Suspense
       fallback={
-        <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-400">
+        <main className="grid min-h-screen place-items-center bg-slate-50 text-slate-600">
           <LoaderCircle className="size-5 animate-spin" />
         </main>
       }

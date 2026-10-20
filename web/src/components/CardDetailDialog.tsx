@@ -66,17 +66,17 @@ export function CardDetailDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm" />
-        <Dialog.Content className="fixed inset-x-3 bottom-3 top-3 z-50 mx-auto flex max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-slate-100 shadow-2xl outline-none md:inset-x-8">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35 backdrop-blur-sm" />
+        <Dialog.Content className="fixed inset-x-3 bottom-3 top-3 z-50 mx-auto flex max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 text-slate-900 shadow-2xl outline-none md:inset-x-8">
           {detail.isPending ? (
             <div className="grid flex-1 place-items-center">
-              <LoaderCircle className="size-6 animate-spin text-cyan-300" />
+              <LoaderCircle className="size-6 animate-spin text-sky-700" />
             </div>
           ) : detail.isError || !detail.data ? (
             <div className="grid flex-1 place-items-center px-8 text-center">
               <div>
-                <CircleAlert className="mx-auto size-8 text-rose-300" />
-                <p className="mt-4 text-sm text-rose-200">
+                <CircleAlert className="mx-auto size-8 text-rose-700" />
+                <p className="mt-4 text-sm text-rose-800">
                   {detail.error instanceof Error ? detail.error.message : 'Could not load this card.'}
                 </p>
               </div>
@@ -84,7 +84,7 @@ export function CardDetailDialog({
           ) : (
             <CardDetailContent key={detail.data.card.id} detail={detail.data} refresh={refresh} />
           )}
-          <Dialog.Close className="absolute right-5 top-5 grid size-9 place-items-center rounded-xl border border-slate-800 bg-slate-900 text-slate-400 transition hover:text-white">
+          <Dialog.Close className="absolute right-5 top-5 grid size-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:text-slate-950">
             <X className="size-4" />
             <span className="sr-only">Close</span>
           </Dialog.Close>
@@ -161,8 +161,8 @@ function CardDetailContent({
 
   return (
     <>
-      <header className="border-b border-slate-800 px-6 py-5 pr-20">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      <header className="border-b border-slate-200 px-6 py-5 pr-20">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="uppercase tracking-[0.12em]">{card.kind}</span>
           <span>•</span>
           {card.kind === 'normal' ? (
@@ -177,26 +177,26 @@ function CardDetailContent({
           {detail.current_run ? (
             <>
               <span>•</span>
-              <span className="text-cyan-300">{detail.current_run.status.replace('_', ' ')}</span>
+              <span className="text-sky-700">{detail.current_run.status.replace('_', ' ')}</span>
             </>
           ) : null}
         </div>
         <Dialog.Title className="mt-2 text-xl font-semibold tracking-tight">{card.title}</Dialog.Title>
-        <Dialog.Description className="mt-1 text-sm text-slate-500">
+        <Dialog.Description className="mt-1 text-sm text-slate-600">
           Durable card context and meaningful work history. Raw agent traces are intentionally not stored here.
         </Dialog.Description>
       </header>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-h-0 overflow-y-auto px-6 py-6">
-          <section className="rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Card</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Card</h3>
               <button
                 type="button"
                 onClick={() => edit.mutate()}
                 disabled={edit.isPending || !title.trim()}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-slate-600 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 transition hover:border-slate-400 disabled:opacity-50"
               >
                 <Save className="size-3.5" /> Save
               </button>
@@ -211,7 +211,7 @@ function CardDetailContent({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={3}
-              className="mt-3 w-full resize-none rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm leading-6 text-slate-300 outline-none focus:border-cyan-500/60"
+              className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm leading-6 text-slate-700 outline-none focus:border-cyan-500/60"
               placeholder="Describe the durable task context…"
             />
 
@@ -229,8 +229,8 @@ function CardDetailContent({
                       onClick={() => move.mutate(column.id)}
                       className={`rounded-lg border px-2.5 py-1.5 text-xs transition ${
                         column.id === card.normal_column
-                          ? 'border-cyan-500/40 bg-cyan-400/10 text-cyan-300'
-                          : 'border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200 disabled:opacity-35'
+                          ? 'border-cyan-500/40 bg-sky-50 text-sky-700'
+                          : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-35'
                       }`}
                     >
                       {column.label}
@@ -248,8 +248,8 @@ function CardDetailContent({
                     onClick={() => ongoingState.mutate(state)}
                     className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs capitalize transition ${
                       state === card.ongoing_state
-                        ? 'border-cyan-500/40 bg-cyan-400/10 text-cyan-300'
-                        : 'border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                        ? 'border-cyan-500/40 bg-sky-50 text-sky-700'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800'
                     }`}
                   >
                     {state === 'active' ? <Play className="size-3" /> : state === 'paused' ? <Pause className="size-3" /> : null}
@@ -262,20 +262,20 @@ function CardDetailContent({
 
           <section className="mt-5">
             <div className="mb-3 flex items-center gap-2">
-              <MessageSquareText className="size-4 text-slate-500" />
+              <MessageSquareText className="size-4 text-slate-600" />
               <h3 className="text-sm font-semibold">Timeline</h3>
             </div>
             {detail.timeline.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-600">
+              <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-600">
                 No meaningful events yet.
               </div>
             ) : (
               <div className="space-y-3">
                 {detail.timeline.map((event) => (
-                  <article key={event.id} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                    <div className="flex items-center justify-between gap-3 text-[11px] text-slate-500">
+                  <article key={event.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3 text-[11px] text-slate-600">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-slate-400">{event.actor_name}</span>
+                        <span className="font-medium text-slate-600">{event.actor_name}</span>
                         <span>•</span>
                         <span className="uppercase tracking-[0.08em]">{event.type.replace('_', ' ')}</span>
                         {event.checkin_status ? <HealthPill health={event.checkin_status} /> : null}
@@ -284,7 +284,7 @@ function CardDetailContent({
                         {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
                       </time>
                     </div>
-                    <div className="prose prose-invert prose-sm mt-3 max-w-none text-sm leading-6 text-slate-300 prose-p:my-1 prose-pre:bg-slate-950">
+                    <div className="prose prose-slate prose-sm mt-3 max-w-none text-sm leading-6 text-slate-700 prose-p:my-1 prose-pre:bg-slate-100">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{event.content}</ReactMarkdown>
                     </div>
                   </article>
@@ -294,20 +294,20 @@ function CardDetailContent({
           </section>
         </div>
 
-        <aside className="min-h-0 overflow-y-auto border-t border-slate-800 bg-slate-900/35 px-5 py-5 lg:border-l lg:border-t-0">
+        <aside className="min-h-0 overflow-y-auto border-t border-slate-200 bg-slate-50 px-5 py-5 lg:border-l lg:border-t-0">
           {card.kind === 'ongoing' ? (
-            <section className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">Cycle health</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">Cycle health</span>
                 <HealthPill health={detail.health} />
               </div>
-              <p className="mt-3 text-xs text-slate-500">
+              <p className="mt-3 text-xs text-slate-600">
                 Last check-in:{' '}
                 {detail.last_checkin
                   ? formatDistanceToNow(new Date(detail.last_checkin.created_at), { addSuffix: true })
                   : 'Never'}
               </p>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-slate-600">
                 Next run:{' '}
                 {detail.schedules.filter((item) => item.enabled).length > 0
                   ? new Date(
@@ -323,31 +323,31 @@ function CardDetailContent({
           {detail.current_run ? (
             <section className={`rounded-2xl border border-cyan-900/60 bg-cyan-950/20 p-4 ${card.kind === 'ongoing' ? 'mt-4' : ''}`}>
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-cyan-300">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-700">
                   <Activity className="size-4" /> Current run
                 </div>
                 <button
                   type="button"
                   disabled={cancelWork.isPending}
                   onClick={() => cancelWork.mutate({ kind: 'run', id: detail.current_run!.id })}
-                  className="rounded-lg border border-rose-900/70 px-2 py-1 text-[10px] font-medium text-rose-300 transition hover:border-rose-700 disabled:opacity-40"
+                  className="rounded-lg border border-rose-300 px-2 py-1 text-[10px] font-medium text-rose-700 transition hover:border-rose-400 disabled:opacity-40"
                   aria-label="Cancel current run"
                 >
                   Cancel
                 </button>
               </div>
-              <p className="mt-3 text-sm font-medium capitalize text-slate-200">{detail.current_run.status.replace('_', ' ')}</p>
-              {detail.current_run.current_stage ? <p className="mt-1 text-xs text-slate-400">{detail.current_run.current_stage}</p> : null}
+              <p className="mt-3 text-sm font-medium capitalize text-slate-800">{detail.current_run.status.replace('_', ' ')}</p>
+              {detail.current_run.current_stage ? <p className="mt-1 text-xs text-slate-600">{detail.current_run.current_stage}</p> : null}
               {detail.current_run.progress_summary ? (
-                <p className="mt-3 rounded-xl bg-slate-950/60 px-3 py-2 text-xs leading-5 text-slate-400">
+                <p className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-600">
                   {detail.current_run.progress_summary}
                 </p>
               ) : null}
             </section>
           ) : null}
 
-          <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">
+          <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
               <Send className="size-3.5" />
               {waitingHuman ? 'Reply and continue' : hasCurrentRun ? 'New direction' : 'Add direction'}
             </div>
@@ -355,7 +355,7 @@ function CardDetailContent({
               value={comment}
               onChange={(event) => setComment(event.target.value)}
               rows={4}
-              className="mt-3 w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm leading-6 text-slate-200 outline-none focus:border-cyan-500/60"
+              className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-cyan-500/60"
               placeholder={waitingHuman ? 'Reply with the information the agent needs…' : 'Add context or a new direction…'}
             />
             {waitingHuman ? (
@@ -373,7 +373,7 @@ function CardDetailContent({
                   type="button"
                   disabled={!comment.trim() || submitDirection.isPending}
                   onClick={() => submitDirection.mutate('enqueue')}
-                  className="h-9 rounded-lg border border-slate-700 text-xs font-medium text-slate-300 disabled:opacity-40"
+                  className="h-9 rounded-lg border border-slate-300 text-xs font-medium text-slate-700 disabled:opacity-40"
                 >
                   Add to queue
                 </button>
@@ -398,9 +398,9 @@ function CardDetailContent({
             )}
           </section>
 
-          <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+          <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
                 <ListTodo className="size-3.5" /> Queue
               </div>
               <span className="text-[11px] text-slate-600">{detail.queue.length}</span>
@@ -410,17 +410,17 @@ function CardDetailContent({
             ) : (
               <div className="space-y-2">
                 {detail.queue.map((item) => (
-                  <div key={item.id} className="rounded-xl border border-slate-800 px-3 py-2">
+                  <div key={item.id} className="rounded-xl border border-slate-200 px-3 py-2">
                     <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
-                        <p className="line-clamp-2 text-xs leading-5 text-slate-300">{item.content || item.cause.replace('_', ' ')}</p>
+                        <p className="line-clamp-2 text-xs leading-5 text-slate-700">{item.content || item.cause.replace('_', ' ')}</p>
                         <p className="mt-1 text-[10px] text-slate-600">#{item.sequence} · {item.dispatch_mode}</p>
                       </div>
                       <button
                         type="button"
                         disabled={cancelWork.isPending}
                         onClick={() => cancelWork.mutate({ kind: 'trigger', id: item.id })}
-                        className="shrink-0 rounded-lg border border-slate-800 px-2 py-1 text-[10px] text-slate-500 transition hover:border-rose-900 hover:text-rose-300 disabled:opacity-40"
+                        className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-[10px] text-slate-600 transition hover:border-rose-300 hover:text-rose-700 disabled:opacity-40"
                         aria-label={`Cancel queued trigger ${item.sequence}`}
                       >
                         Cancel
@@ -432,9 +432,9 @@ function CardDetailContent({
             )}
           </section>
 
-          <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+          <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
                 <Clock3 className="size-3.5" /> Recent work
               </div>
               <span className="text-[11px] text-slate-600">{detail.work_history.length}</span>
@@ -444,24 +444,24 @@ function CardDetailContent({
             ) : (
               <div className="space-y-2">
                 {detail.work_history.map((item) => (
-                  <div key={item.trigger_id} className="rounded-xl border border-slate-800 px-3 py-2.5">
+                  <div key={item.trigger_id} className="rounded-xl border border-slate-200 px-3 py-2.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-slate-600">
                           #{item.sequence} · {item.cause.replace('_', ' ')} ·{' '}
                           <span
                             className={
                               item.status === 'failed' || item.status === 'expired'
-                                ? 'text-amber-300'
+                                ? 'text-amber-700'
                                 : item.status === 'cancelled'
-                                  ? 'text-rose-300'
-                                  : 'text-slate-400'
+                                  ? 'text-rose-700'
+                                  : 'text-slate-600'
                             }
                           >
                             {item.status.replace('_', ' ')}
                           </span>
                         </p>
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-700">
                           {item.error_summary ||
                             item.result_summary ||
                             item.progress_summary ||
@@ -475,7 +475,7 @@ function CardDetailContent({
                           type="button"
                           disabled={retryWork.isPending}
                           onClick={() => retryWork.mutate(item.trigger_id)}
-                          className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition hover:border-cyan-700 hover:text-cyan-300 disabled:opacity-40"
+                          className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[10px] font-medium text-slate-700 transition hover:border-cyan-700 hover:text-sky-700 disabled:opacity-40"
                           aria-label={`Retry work ${item.sequence}`}
                         >
                           <RotateCcw className="size-3" /> Retry
@@ -540,21 +540,21 @@ function SchedulePanel({
   })
 
   return (
-    <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">
+    <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
         <CalendarClock className="size-3.5" /> Schedule
       </div>
 
       <div className="mt-3 space-y-2">
         {schedules.map((schedule) => (
-          <div key={schedule.id} className="rounded-xl border border-slate-800 px-3 py-2.5">
+          <div key={schedule.id} className="rounded-xl border border-slate-200 px-3 py-2.5">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <p className="text-xs font-medium capitalize text-slate-300">{schedule.frequency}</p>
+                <p className="text-xs font-medium capitalize text-slate-700">{schedule.frequency}</p>
                 <p className="mt-1 text-[10px] text-slate-600">
                   {String(schedule.hour).padStart(2, '0')}:{String(schedule.minute).padStart(2, '0')} · {schedule.timezone}
                 </p>
-                <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
+                <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-600">
                   <Clock3 className="size-3" /> Next {new Date(schedule.next_trigger_at).toLocaleString()}
                 </p>
               </div>
@@ -562,7 +562,7 @@ function SchedulePanel({
                 <button
                   type="button"
                   onClick={() => update.mutate(schedule)}
-                  className="grid size-7 place-items-center rounded-lg border border-slate-800 text-slate-500 hover:text-slate-200"
+                  className="grid size-7 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:text-slate-800"
                   title={schedule.enabled ? 'Pause schedule' : 'Enable schedule'}
                 >
                   {schedule.enabled ? <Pause className="size-3" /> : <Play className="size-3" />}
@@ -570,7 +570,7 @@ function SchedulePanel({
                 <button
                   type="button"
                   onClick={() => remove.mutate(schedule.id)}
-                  className="grid size-7 place-items-center rounded-lg border border-slate-800 text-slate-500 hover:text-rose-300"
+                  className="grid size-7 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:text-rose-700"
                   title="Delete schedule"
                 >
                   <Trash2 className="size-3" />
@@ -585,7 +585,7 @@ function SchedulePanel({
         <select
           value={frequency}
           onChange={(event) => setFrequency(event.target.value as ScheduleInput['frequency'])}
-          className="h-9 rounded-lg border border-slate-800 bg-slate-900 px-2 text-xs text-slate-300 outline-none"
+          className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"
         >
           <option value="daily">Daily</option>
           <option value="weekly">Weekly</option>
@@ -595,13 +595,13 @@ function SchedulePanel({
           type="time"
           value={timeValue}
           onChange={(event) => setTimeValue(event.target.value)}
-          className="h-9 rounded-lg border border-slate-800 bg-slate-900 px-2 text-xs text-slate-300 outline-none"
+          className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"
         />
         {frequency !== 'daily' ? (
           <select
             value={dayValue}
             onChange={(event) => setDayValue(Number(event.target.value))}
-            className="col-span-2 h-9 rounded-lg border border-slate-800 bg-slate-900 px-2 text-xs text-slate-300 outline-none"
+            className="col-span-2 h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none"
           >
             {frequency === 'weekly'
               ? ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
@@ -617,7 +617,7 @@ function SchedulePanel({
         type="button"
         onClick={() => create.mutate()}
         disabled={create.isPending}
-        className="mt-2 h-9 w-full rounded-lg border border-slate-700 text-xs font-medium text-slate-300 transition hover:border-slate-600 disabled:opacity-50"
+        className="mt-2 h-9 w-full rounded-lg border border-slate-300 text-xs font-medium text-slate-700 transition hover:border-slate-400 disabled:opacity-50"
       >
         Add schedule
       </button>
@@ -646,12 +646,12 @@ function scheduleInput(
 function HealthPill({ health }: { health: string }) {
   const className =
     health === 'healthy'
-      ? 'bg-emerald-400/10 text-emerald-300'
+      ? 'bg-emerald-400/10 text-emerald-700'
       : health === 'warning'
-        ? 'bg-amber-400/10 text-amber-300'
+        ? 'bg-amber-400/10 text-amber-700'
         : health === 'critical'
-          ? 'bg-rose-400/10 text-rose-300'
-          : 'bg-slate-800 text-slate-500'
+          ? 'bg-rose-400/10 text-rose-700'
+          : 'bg-slate-100 text-slate-600'
   return <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium capitalize ${className}`}>{health}</span>
 }
 

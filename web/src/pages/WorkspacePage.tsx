@@ -94,9 +94,9 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   }
 
   return (
-    <main className="flex min-h-screen bg-slate-950 text-slate-100">
-      <aside className="hidden w-64 shrink-0 border-r border-slate-800 bg-slate-950/95 lg:flex lg:flex-col">
-        <div className="flex h-16 items-center gap-3 border-b border-slate-800 px-5">
+    <main className="flex min-h-screen bg-slate-50 text-slate-900">
+      <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white/95 lg:flex lg:flex-col">
+        <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-5">
           <span className="grid size-9 place-items-center rounded-xl bg-cyan-400 text-sm font-black text-slate-950">C</span>
           <div>
             <p className="text-sm font-semibold">CycleDock</p>
@@ -110,7 +110,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
             <button
               type="button"
               onClick={() => setCreateProjectOpen(true)}
-              className="grid size-7 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-900 hover:text-cyan-300"
+              className="grid size-7 place-items-center rounded-lg text-slate-600 transition hover:bg-white hover:text-sky-700"
               title="Create project"
             >
               <Plus className="size-3.5" />
@@ -124,8 +124,8 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                 onClick={() => chooseProject(project.id)}
                 className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition ${
                   project.id === activeProjectID
-                    ? 'bg-slate-900 text-slate-100'
-                    : 'text-slate-500 hover:bg-slate-900/60 hover:text-slate-300'
+                    ? 'bg-white text-slate-900'
+                    : 'text-slate-600 hover:bg-white hover:text-slate-700'
                 }`}
               >
                 <FolderKanban className="size-4 shrink-0" />
@@ -135,15 +135,15 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
           </nav>
         </div>
 
-        <div className="border-t border-slate-800 p-3">
-          <div className="rounded-xl bg-slate-900/60 px-3 py-2.5">
-            <p className="truncate text-xs font-medium text-slate-300">{identity.display_name}</p>
+        <div className="border-t border-slate-200 p-3">
+          <div className="rounded-xl bg-white px-3 py-2.5">
+            <p className="truncate text-xs font-medium text-slate-700">{identity.display_name}</p>
             <p className="mt-0.5 truncate text-[10px] text-slate-600">{identity.workspace.name}</p>
           </div>
           <button
             type="button"
             onClick={() => logout.mutate()}
-            className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs text-slate-500 transition hover:bg-slate-900 hover:text-slate-300"
+            className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs text-slate-600 transition hover:bg-white hover:text-slate-700"
           >
             <LogOut className="size-3.5" /> {t('nav.signOut')}
           </button>
@@ -151,10 +151,10 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
       </aside>
 
       <section className="min-w-0 flex-1">
-        <header className="flex h-16 items-center justify-between border-b border-slate-800 px-4 md:px-6">
+        <header className="flex h-16 items-center justify-between border-b border-slate-200 px-4 md:px-6">
           <div className="min-w-0">
             <div className="flex items-center gap-2 lg:hidden">
-              <RefreshCw className="size-4 text-cyan-300" />
+              <RefreshCw className="size-4 text-sky-700" />
               <span className="text-sm font-semibold">CycleDock</span>
             </div>
             <div className="hidden lg:block">
@@ -168,7 +168,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
             <button
               type="button"
               onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}
-              className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-800 px-2.5 text-[11px] font-medium text-slate-500 transition hover:border-slate-700 hover:text-slate-200"
+              className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800"
               title={locale === 'en' ? t('locale.switchToChinese') : t('locale.switchToEnglish')}
               aria-label={locale === 'en' ? t('locale.switchToChinese') : t('locale.switchToEnglish')}
             >
@@ -179,7 +179,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
               <button
                 type="button"
                 onClick={() => setAgentSettingsOpen(true)}
-                className="grid size-9 place-items-center rounded-xl border border-slate-800 text-slate-500 transition hover:border-slate-700 hover:text-cyan-300"
+                className="grid size-9 place-items-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:text-sky-700"
                 title={t('nav.agent')}
                 aria-label={t('nav.agent')}
               >
@@ -191,7 +191,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                 <button
                   type="button"
                   onClick={() => setProjectSettingsOpen(true)}
-                  className="grid size-9 place-items-center rounded-xl border border-slate-800 text-slate-500 transition hover:border-slate-700 hover:text-slate-300"
+                  className="grid size-9 place-items-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-slate-300 hover:text-slate-700"
                   title={t('nav.projectSettings')}
                   aria-label={t('nav.projectSettings')}
                 >
@@ -250,7 +250,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
               </div>
               <Suspense
                 fallback={
-                  <div className="min-h-[420px] rounded-2xl border border-slate-800 bg-slate-900/40" />
+                  <div className="min-h-[420px] rounded-2xl border border-slate-200 bg-white" />
                 }
               >
                 <Board
@@ -317,13 +317,13 @@ function LoadError({
   onRetry: () => void
 }) {
   return (
-    <div className="mx-auto my-16 max-w-md rounded-2xl border border-rose-900/50 bg-rose-950/15 p-5 text-center" role="alert">
-      <CircleAlert className="mx-auto size-6 text-rose-300" />
-      <p className="mt-3 text-sm text-rose-200">{message}</p>
+    <div className="mx-auto my-16 max-w-md rounded-2xl border border-rose-200 bg-rose-50 p-5 text-center" role="alert">
+      <CircleAlert className="mx-auto size-6 text-rose-700" />
+      <p className="mt-3 text-sm text-rose-800">{message}</p>
       <button
         type="button"
         onClick={onRetry}
-        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-rose-900/60 px-3 text-xs font-semibold text-rose-200 transition hover:border-rose-700"
+        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-rose-200 px-3 text-xs font-semibold text-rose-800 transition hover:border-rose-400"
       >
         <RefreshCw className="size-3.5" /> {retryLabel}
       </button>
@@ -333,10 +333,10 @@ function LoadError({
 
 function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="mx-auto mt-24 max-w-lg rounded-3xl border border-dashed border-slate-800 p-10 text-center">
+    <div className="mx-auto mt-24 max-w-lg rounded-3xl border border-dashed border-slate-200 p-10 text-center">
       <FolderKanban className="mx-auto size-9 text-slate-700" />
       <h1 className="mt-5 text-xl font-semibold">Create your first project</h1>
-      <p className="mt-2 text-sm leading-6 text-slate-500">
+      <p className="mt-2 text-sm leading-6 text-slate-600">
         A Project is the board. Cards hold durable work context, while Triggers and Runs capture each execution cycle.
       </p>
       <button
@@ -364,13 +364,13 @@ function ProjectPicker({
       <select
         value={activeProjectID}
         onChange={(event) => onChoose(event.target.value)}
-        className="h-9 appearance-none rounded-xl border border-slate-800 bg-slate-900 py-0 pl-3 pr-9 text-sm font-medium outline-none"
+        className="h-9 appearance-none rounded-xl border border-slate-200 bg-white py-0 pl-3 pr-9 text-sm font-medium outline-none"
       >
         {projects.map((project) => (
           <option key={project.id} value={project.id}>{project.name}</option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-3 top-2.5 size-4 text-slate-500" />
+      <ChevronDown className="pointer-events-none absolute right-3 top-2.5 size-4 text-slate-600" />
     </div>
   )
 }
@@ -400,18 +400,18 @@ function CreateProjectDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/80" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-800 bg-slate-950 p-5 shadow-2xl outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,480px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl outline-none">
           <Dialog.Title className="text-lg font-semibold">New project</Dialog.Title>
-          <Dialog.Description className="mt-1 text-sm text-slate-500">The project itself is the board—there is no extra Board layer.</Dialog.Description>
-          <label className="mt-5 block text-xs font-medium text-slate-400">Name</label>
-          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus className="mt-2 h-10 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-sm outline-none focus:border-cyan-500/60" />
-          <label className="mt-4 block text-xs font-medium text-slate-400">Description</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
+          <Dialog.Description className="mt-1 text-sm text-slate-600">The project itself is the board—there is no extra Board layer.</Dialog.Description>
+          <label className="mt-5 block text-xs font-medium text-slate-600">Name</label>
+          <input value={name} onChange={(event) => setName(event.target.value)} autoFocus className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-cyan-500/60" />
+          <label className="mt-4 block text-xs font-medium text-slate-600">Description</label>
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
           <button type="button" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()} className="mt-5 h-10 w-full rounded-xl bg-cyan-400 text-sm font-semibold text-slate-950 disabled:opacity-40">
             Create project
           </button>
-          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300"><X className="size-4" /></Dialog.Close>
+          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700"><X className="size-4" /></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -445,10 +445,10 @@ function CreateCardDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/80" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-800 bg-slate-950 p-5 shadow-2xl outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl outline-none">
           <Dialog.Title className="text-lg font-semibold">New card</Dialog.Title>
-          <Dialog.Description className="mt-1 text-sm text-slate-500">Choose a finite task or an ongoing cycle.</Dialog.Description>
+          <Dialog.Description className="mt-1 text-sm text-slate-600">Choose a finite task or an ongoing cycle.</Dialog.Description>
           <div className="mt-5 grid grid-cols-2 gap-2">
             {(['normal', 'ongoing'] as Card['kind'][]).map((item) => (
               <button
@@ -456,21 +456,21 @@ function CreateCardDialog({
                 type="button"
                 onClick={() => setKind(item)}
                 className={`rounded-xl border px-3 py-2.5 text-sm capitalize ${
-                  kind === item ? 'border-cyan-500/50 bg-cyan-400/10 text-cyan-300' : 'border-slate-800 text-slate-500'
+                  kind === item ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-slate-200 text-slate-600'
                 }`}
               >
                 {item}
               </button>
             ))}
           </div>
-          <label className="mt-4 block text-xs font-medium text-slate-400">Title</label>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus className="mt-2 h-10 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-sm outline-none focus:border-cyan-500/60" />
-          <label className="mt-4 block text-xs font-medium text-slate-400">Description</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
+          <label className="mt-4 block text-xs font-medium text-slate-600">Title</label>
+          <input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-cyan-500/60" />
+          <label className="mt-4 block text-xs font-medium text-slate-600">Description</label>
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
           <button type="button" disabled={!title.trim() || create.isPending} onClick={() => create.mutate()} className="mt-5 h-10 w-full rounded-xl bg-cyan-400 text-sm font-semibold text-slate-950 disabled:opacity-40">
             Create {kind} card
           </button>
-          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300"><X className="size-4" /></Dialog.Close>
+          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700"><X className="size-4" /></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -507,20 +507,20 @@ function ProjectSettingsDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/80" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,560px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-800 bg-slate-950 p-5 shadow-2xl outline-none">
-          <Dialog.Title className="flex items-center gap-2 text-lg font-semibold"><Pencil className="size-4 text-cyan-300" /> Project settings</Dialog.Title>
-          <Dialog.Description className="mt-1 text-sm text-slate-500">Project instructions are durable context for future Agent runs.</Dialog.Description>
-          <label className="mt-5 block text-xs font-medium text-slate-400">Name</label>
-          <input value={name} onChange={(event) => setName(event.target.value)} className="mt-2 h-10 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-sm outline-none focus:border-cyan-500/60" />
-          <label className="mt-4 block text-xs font-medium text-slate-400">Description</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
-          <label className="mt-4 block text-xs font-medium text-slate-400">Agent instructions</label>
-          <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,560px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl outline-none">
+          <Dialog.Title className="flex items-center gap-2 text-lg font-semibold"><Pencil className="size-4 text-sky-700" /> Project settings</Dialog.Title>
+          <Dialog.Description className="mt-1 text-sm text-slate-600">Project instructions are durable context for future Agent runs.</Dialog.Description>
+          <label className="mt-5 block text-xs font-medium text-slate-600">Name</label>
+          <input value={name} onChange={(event) => setName(event.target.value)} className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-cyan-500/60" />
+          <label className="mt-4 block text-xs font-medium text-slate-600">Description</label>
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
+          <label className="mt-4 block text-xs font-medium text-slate-600">Agent instructions</label>
+          <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={5} className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
           <button type="button" disabled={!name.trim() || update.isPending} onClick={() => update.mutate()} className="mt-5 h-10 w-full rounded-xl bg-slate-100 text-sm font-semibold text-slate-950 disabled:opacity-40">
             Save project
           </button>
-          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300"><X className="size-4" /></Dialog.Close>
+          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700"><X className="size-4" /></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -13,7 +13,7 @@ import {
 import { queryClient, queryKeys } from '../query'
 
 const inputClass =
-  'h-10 w-full rounded-xl border border-slate-800 bg-slate-900 px-3 text-sm text-slate-200 outline-none transition focus:border-cyan-500/60'
+  'h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-cyan-500/60'
 
 export function AgentSettingsDialog({
   open,
@@ -74,32 +74,32 @@ export function AgentSettingsDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/80" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[min(94vw,760px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-5 shadow-2xl outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[min(94vw,760px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl outline-none">
           <Dialog.Title className="flex items-center gap-2 text-lg font-semibold">
-            <Bot className="size-5 text-cyan-300" /> Built-in Cycle Agent
+            <Bot className="size-5 text-sky-700" /> Built-in Cycle Agent
           </Dialog.Title>
-          <Dialog.Description className="mt-1 text-sm leading-6 text-slate-500">
+          <Dialog.Description className="mt-1 text-sm leading-6 text-slate-600">
             Provider and MCP secrets stay in process environment variables. CycleDock stores only their environment variable names.
           </Dialog.Description>
 
           {settings.isPending || !draft ? (
             <div className="py-12 text-center text-sm text-slate-600">Loading Agent settings…</div>
           ) : settings.isError ? (
-            <div className="py-12 text-center text-sm text-rose-300">
+            <div className="py-12 text-center text-sm text-rose-700">
               {settings.error instanceof Error ? settings.error.message : 'Could not load Agent settings.'}
             </div>
           ) : (
             <>
-              <section className="mt-5 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-semibold">Runtime</p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       Enabled workspaces automatically claim pending Triggers with their dedicated cycle_agent Source.
                     </p>
                   </div>
-                  <label className="flex items-center gap-2 text-xs text-slate-400">
+                  <label className="flex items-center gap-2 text-xs text-slate-600">
                     <input
                       type="checkbox"
                       checked={draft.enabled}
@@ -180,7 +180,7 @@ export function AgentSettingsDialog({
                     type="button"
                     disabled={testProvider.isPending || !draft.provider_base_url.trim() || !draft.model.trim()}
                     onClick={() => testProvider.mutate()}
-                    className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-700 px-4 text-xs font-semibold text-slate-300 transition hover:border-slate-600 disabled:opacity-40"
+                    className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-300 px-4 text-xs font-semibold text-slate-700 transition hover:border-slate-400 disabled:opacity-40"
                   >
                     {testProvider.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <TestTube2 className="size-3.5" />}
                     Test provider
@@ -189,18 +189,18 @@ export function AgentSettingsDialog({
                 {testProvider.data ? <ConnectionTestStatus result={testProvider.data} /> : null}
               </section>
 
-              <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+              <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm font-semibold">MCP connections</p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-slate-600">
                       Tools are discovered at Run start. Bearer tokens are resolved from environment only.
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setNewConnectionOpen(true)}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 text-xs text-slate-300 hover:border-slate-600"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 text-xs text-slate-700 hover:border-slate-400"
                   >
                     <Plus className="size-3.5" /> Add
                   </button>
@@ -209,11 +209,11 @@ export function AgentSettingsDialog({
                 {connections.isPending ? (
                   <p className="mt-5 text-xs text-slate-600">Loading connections…</p>
                 ) : connections.isError ? (
-                  <p className="mt-5 text-xs text-rose-300">
+                  <p className="mt-5 text-xs text-rose-700">
                     {connections.error instanceof Error ? connections.error.message : 'Could not load connections.'}
                   </p>
                 ) : (connections.data ?? []).length === 0 ? (
-                  <p className="mt-5 rounded-xl border border-dashed border-slate-800 p-4 text-xs text-slate-600">
+                  <p className="mt-5 rounded-xl border border-dashed border-slate-200 p-4 text-xs text-slate-600">
                     No outbound MCP connections configured.
                   </p>
                 ) : (
@@ -223,10 +223,10 @@ export function AgentSettingsDialog({
                         type="button"
                         key={connection.id}
                         onClick={() => setEditing(connection)}
-                        className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-800 px-3 py-3 text-left transition hover:border-slate-700"
+                        className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-200 px-3 py-3 text-left transition hover:border-slate-300"
                       >
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-200">{connection.name}</p>
+                          <p className="truncate text-sm font-medium text-slate-800">{connection.name}</p>
                           <p className="mt-1 truncate text-[11px] text-slate-600">{connection.url}</p>
                         </div>
                         <span
@@ -242,7 +242,7 @@ export function AgentSettingsDialog({
             </>
           )}
 
-          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300">
+          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700">
             <X className="size-4" />
           </Dialog.Close>
 
@@ -316,11 +316,11 @@ function MCPConnectionEditor({
   })
 
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/95 p-5">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-2xl">
+    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-5">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-2xl">
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold">{connection ? 'Edit MCP connection' : 'New MCP connection'}</p>
-          <button type="button" onClick={onClose} aria-label="Close MCP connection editor" className="grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900">
+          <button type="button" onClick={onClose} aria-label="Close MCP connection editor" className="grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white">
             <X className="size-4" />
           </button>
         </div>
@@ -337,7 +337,7 @@ function MCPConnectionEditor({
           <Field label="Timeout (ms)">
             <input type="number" min={1000} max={300000} value={draft.timeout_ms} onChange={(event) => setDraft({ ...draft, timeout_ms: Number(event.target.value) })} className={inputClass} />
           </Field>
-          <label className="flex items-center gap-2 text-xs text-slate-400">
+          <label className="flex items-center gap-2 text-xs text-slate-600">
             <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} className="size-4 accent-cyan-400" />
             Enabled
           </label>
@@ -355,7 +355,7 @@ function MCPConnectionEditor({
             type="button"
             onClick={() => testConnection.mutate()}
             disabled={testConnection.isPending || !draft.name.trim() || !draft.url.trim()}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 transition hover:border-slate-600 disabled:opacity-40"
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:border-slate-400 disabled:opacity-40"
           >
             {testConnection.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <TestTube2 className="size-3.5" />}
             Test
@@ -365,7 +365,7 @@ function MCPConnectionEditor({
               type="button"
               onClick={() => remove.mutate()}
               disabled={remove.isPending}
-              className="grid size-9 place-items-center rounded-xl border border-rose-950 text-rose-400 hover:bg-rose-950/30"
+              className="grid size-9 place-items-center rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50"
               aria-label="Delete MCP connection"
             >
               <Trash2 className="size-3.5" />
@@ -384,8 +384,8 @@ function ConnectionTestStatus({ result }: { result: ConnectionTestResult }) {
       className={
         'mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs leading-5 ' +
         (result.ok
-          ? 'border-emerald-900/60 bg-emerald-950/25 text-emerald-200'
-          : 'border-amber-900/60 bg-amber-950/25 text-amber-200')
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+          : 'border-amber-200 bg-amber-50 text-amber-800')
       }
       role="status"
       aria-live="polite"
@@ -414,7 +414,7 @@ function Field({
 }) {
   return (
     <label className={'block ' + className}>
-      <span className="mb-2 block text-xs font-medium text-slate-400">{label}</span>
+      <span className="mb-2 block text-xs font-medium text-slate-600">{label}</span>
       {children}
     </label>
   )
