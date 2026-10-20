@@ -54,6 +54,13 @@ export function AgentSettingsDialog({
 
   const subscriptionProvider =
     draft?.provider_type === 'chatgpt' || draft?.provider_type === 'grok' ? draft.provider_type : null
+  const chatGPTStatus = modelAuth.data?.find((item) => item.provider === 'chatgpt')
+  const visibleProviderOptions = providerOptions.filter(
+    (provider) =>
+      provider.id !== 'chatgpt' ||
+      chatGPTStatus?.available ||
+      draft?.provider_type === 'chatgpt',
+  )
   const subscriptionStatus = subscriptionProvider
     ? modelAuth.data?.find((item) => item.provider === subscriptionProvider)
     : undefined
@@ -192,8 +199,12 @@ export function AgentSettingsDialog({
                   </label>
                 </div>
 
-                <div className="mt-4 grid gap-2 md:grid-cols-3">
-                  {providerOptions.map((provider) => (
+                <div
+                  className={
+                    'mt-4 grid gap-2 ' + (visibleProviderOptions.length === 2 ? 'md:grid-cols-2' : 'md:grid-cols-3')
+                  }
+                >
+                  {visibleProviderOptions.map((provider) => (
                     <button
                       key={provider.id}
                       type="button"
@@ -248,6 +259,11 @@ export function AgentSettingsDialog({
                               ? 'Connected. Inference uses this account’s subscription entitlement.'
                               : 'Not connected.'}
                         </p>
+                        {subscriptionStatus?.warning ? (
+                          <p className="mt-2 text-[11px] leading-4 text-amber-700">
+                            {authWarning(subscriptionStatus.warning)}
+                          </p>
+                        ) : null}
                       </div>
                       {subscriptionStatus?.connected ? (
                         <button
@@ -497,6 +513,16 @@ function authReason(reason?: string) {
       return 'Model account sign-in is unavailable.'
   }
 }
+
+function authWarning(warning?: string) {
+  switch (warning) {
+    case 'hosted_dynamic_registration_test_mode':
+      return 'Temporary Hosted test mode: dynamic ChatGPT registration is enabled. Replace this with an approved CYCLEDOCK_CHATGPT_CLIENT_ID before wider or production use.'
+    default:
+      return ''
+  }
+}
+
 function MCPConnectionEditor({
   connection,
   onClose,

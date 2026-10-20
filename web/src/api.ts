@@ -181,6 +181,7 @@ export type ModelAuthStatus = {
   available: boolean
   connected: boolean
   reason?: string
+  warning?: string
   display_label?: string
   expires_at?: string
 }
