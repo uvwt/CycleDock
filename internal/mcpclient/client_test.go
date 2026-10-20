@@ -64,6 +64,61 @@ func TestConnectDiscoverAndCallUsesBearer(t *testing.T) {
 	}
 }
 
+func TestFirstPartyNativeToolsHideRuntimeBootstrap(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{
+		Name: "first-party-test", Version: "1.0.0",
+	}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "agentdock_context", Description: "runtime context"},
+		func(ctx context.Context, request *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, map[string]any, error) {
+			return nil, map[string]any{"nodes": []any{}}, nil
+		},
+	)
+	type echoInput struct {
+		Value string `json:"value"`
+	}
+	type echoOutput struct {
+		Echo string `json:"echo"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "exec_command", Description: "run a command"},
+		func(ctx context.Context, request *mcp.CallToolRequest, input echoInput) (*mcp.CallToolResult, echoOutput, error) {
+			return nil, echoOutput{Echo: input.Value}, nil
+		},
+	)
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+	defer httpServer.Close()
+
+	set, err := Connect(context.Background(), []Connection{{
+		Name: "__nexusdock_first_party", URL: httpServer.URL, Timeout: 2 * time.Second,
+		NativeToolNames:   true,
+		HiddenRemoteTools: map[string]bool{"agentdock_context": true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+
+	definitions := set.ToolDefinitions()
+	if len(definitions) != 1 || definitions[0].Function.Name != "exec_command" {
+		t.Fatalf("definitions=%+v", definitions)
+	}
+	if set.HasTool("agentdock_context") {
+		t.Fatal("runtime-only agentdock_context was exposed to the model")
+	}
+	if _, err := set.Call(context.Background(), "agentdock_context", map[string]any{}); err == nil {
+		t.Fatal("model-facing call reached runtime-only agentdock_context")
+	}
+	if _, err := set.CallInternal(context.Background(), "__nexusdock_first_party", "agentdock_context", map[string]any{}); err != nil {
+		t.Fatalf("runtime bootstrap call failed: %v", err)
+	}
+	result, err := set.Call(context.Background(), "exec_command", map[string]any{"value": "ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "ok") {
+		t.Fatalf("native tool result=%s", result)
+	}
+}
+
 func TestMCPClientRefusesCrossOriginRedirect(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("cross-origin redirect reached target")

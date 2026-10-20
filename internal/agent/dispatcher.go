@@ -12,6 +12,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -21,6 +22,7 @@ type DispatcherConfig struct {
 	MaxConcurrent    int
 	LeaseDuration    time.Duration
 	ModelAuth        *modelauth.Service
+	NexusDock        *nexusdock.Service
 }
 
 type Dispatcher struct {
@@ -58,6 +60,7 @@ func NewDispatcher(
 		HeartbeatInterval: config.LeaseDuration / 4,
 		LeaseDuration:     config.LeaseDuration,
 		ModelAuth:         config.ModelAuth,
+		NexusDock:         config.NexusDock,
 	})
 	return &Dispatcher{
 		store: dataStore, runner: runner, logger: logger,

@@ -168,6 +168,18 @@ export type MCPConnection = {
 
 export type MCPConnectionInput = Omit<MCPConnection, 'id'>
 
+export type NexusDockConnection = {
+  available: boolean
+  connected: boolean
+  manage_url?: string
+  connected_at?: string
+}
+
+export type NexusDockConnectStart = {
+  authorization_url: string
+  expires_at: string
+}
+
 export type ConnectionTestResult = {
   ok: boolean
   code: string
@@ -371,4 +383,12 @@ export const api = {
     }),
   deleteAgentMCPConnection: (connectionID: string) =>
     request<void>(`/api/v1/agent/mcp-connections/${connectionID}`, { method: 'DELETE' }),
+  agentNexusDock: () => request<NexusDockConnection>('/api/v1/agent/nexusdock'),
+  connectAgentNexusDock: () =>
+    request<NexusDockConnectStart>('/api/v1/agent/nexusdock/connect', {
+      method: 'POST',
+      body: '{}',
+    }),
+  disconnectAgentNexusDock: () =>
+    request<void>('/api/v1/agent/nexusdock', { method: 'DELETE' }),
 }

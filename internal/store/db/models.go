@@ -109,6 +109,24 @@ type ModelOauthCredential struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
+type NexusdockAuthFlow struct {
+	StateDigest    []byte             `json:"state_digest"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	SourceID       uuid.UUID          `json:"source_id"`
+	ClientID       string             `json:"client_id"`
+	CodeVerifier   string             `json:"code_verifier"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type NexusdockOauthClient struct {
+	Resource  string             `json:"resource"`
+	ClientID  string             `json:"client_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type OauthAuthorizationCode struct {
 	CodeDigest    []byte             `json:"code_digest"`
 	GrantID       uuid.UUID          `json:"grant_id"`
@@ -262,4 +280,15 @@ type WorkspaceMembership struct {
 	IsPersonal     bool               `json:"is_personal"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceNexusdockConnection struct {
+	WorkspaceID            uuid.UUID          `json:"workspace_id"`
+	Resource               string             `json:"resource"`
+	ClientID               string             `json:"client_id"`
+	AccessTokenCiphertext  []byte             `json:"access_token_ciphertext"`
+	RefreshTokenCiphertext []byte             `json:"refresh_token_ciphertext"`
+	AccessExpiresAt        pgtype.Timestamptz `json:"access_expires_at"`
+	ConnectedAt            pgtype.Timestamptz `json:"connected_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 }

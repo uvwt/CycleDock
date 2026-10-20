@@ -50,6 +50,9 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/agent/mcp-connections", api.createAgentMCPConnection)
 	r.Put("/agent/mcp-connections/{connectionID}", api.updateAgentMCPConnection)
 	r.Delete("/agent/mcp-connections/{connectionID}", api.deleteAgentMCPConnection)
+	r.Get("/agent/nexusdock", api.getNexusDockConnection)
+	r.Post("/agent/nexusdock/connect", api.connectNexusDock)
+	r.Delete("/agent/nexusdock", api.disconnectNexusDock)
 }
 
 type projectResponse struct {

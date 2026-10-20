@@ -16,6 +16,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -30,12 +31,14 @@ type RunnerConfig struct {
 	HeartbeatInterval time.Duration
 	LeaseDuration     time.Duration
 	ModelAuth         *modelauth.Service
+	NexusDock         *nexusdock.Service
 }
 
 type Runner struct {
 	store             *store.Store
 	model             *modelclient.Client
 	modelAuth         *modelauth.Service
+	nexusDock         *nexusdock.Service
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
 	leaseDuration     time.Duration
@@ -57,6 +60,7 @@ func NewRunner(dataStore *store.Store, model *modelclient.Client, logger *slog.L
 	return &Runner{
 		store: dataStore, model: model, logger: logger,
 		modelAuth:         config.ModelAuth,
+		nexusDock:         config.NexusDock,
 		heartbeatInterval: config.HeartbeatInterval,
 		leaseDuration:     config.LeaseDuration,
 	}
@@ -112,6 +116,28 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 			Timeout: time.Duration(connection.TimeoutMs) * time.Millisecond,
 		})
 	}
+	nexusDockMounted := false
+	if r.nexusDock != nil {
+		connection, err := r.nexusDock.Runtime(runCtx, claim.WorkspaceID)
+		switch {
+		case errors.Is(err, nexusdock.ErrNotConnected):
+			// First-party remote devices are optional for each Workspace.
+		case err != nil:
+			return fmt.Errorf("load NexusDock remote device connection: %w", err)
+		default:
+			mcpConnections = append(mcpConnections, mcpclient.Connection{
+				Name:            firstPartyNexusDockServerName,
+				URL:             connection.URL,
+				BearerToken:     connection.AccessToken,
+				Timeout:         30 * time.Second,
+				NativeToolNames: true,
+				HiddenRemoteTools: map[string]bool{
+					"agentdock_context": true,
+				},
+			})
+			nexusDockMounted = true
+		}
+	}
 	mcpSessions, err := mcpclient.Connect(runCtx, mcpConnections)
 	if err != nil {
 		return err
@@ -119,7 +145,19 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 	defer mcpSessions.Close()
 
 	messages := BuildContext(runContext, settings)
-	tools := append(internalToolDefinitions(), mcpSessions.ToolDefinitions()...)
+	if nexusDockMounted {
+		bootstrap, err := nexusDockExecutionTargets(runCtx, mcpSessions)
+		if err != nil {
+			return fmt.Errorf("bootstrap NexusDock remote devices: %w", err)
+		}
+		if bootstrap != "" {
+			messages[0].Content += "\n\n" + bootstrap
+		}
+	}
+	tools, err := mergeToolDefinitions(internalToolDefinitions(), mcpSessions.ToolDefinitions())
+	if err != nil {
+		return err
+	}
 
 	for round := int32(0); ; round++ {
 		if err := heartbeatFailure(heartbeatErrors); err != nil {
@@ -520,4 +558,27 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			},
 		},
 	}
+}
+
+func mergeToolDefinitions(groups ...[]modelclient.ToolDefinition) ([]modelclient.ToolDefinition, error) {
+	seen := make(map[string]struct{})
+	total := 0
+	for _, group := range groups {
+		total += len(group)
+	}
+	merged := make([]modelclient.ToolDefinition, 0, total)
+	for _, group := range groups {
+		for _, tool := range group {
+			name := strings.TrimSpace(tool.Function.Name)
+			if name == "" {
+				return nil, errors.New("tool definition has empty name")
+			}
+			if _, exists := seen[name]; exists {
+				return nil, fmt.Errorf("tool name collision: %q", name)
+			}
+			seen[name] = struct{}{}
+			merged = append(merged, tool)
+		}
+	}
+	return merged, nil
 }

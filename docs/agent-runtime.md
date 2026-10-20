@@ -315,3 +315,19 @@ Runner：
 后续可以增加 Card Artifact / Resource 概念，让 Event 只保存资源引用，Agent 按需读取。
 
 Artifact 不属于第一阶段必须 schema，避免提前扩展。
+
+## 14. NexusDock First-party Runtime Bootstrap
+
+如果当前 Workspace 已授权 NexusDock 远程设备，Runner 在第一次模型请求前完成以下动作：
+
+1. 获取当前有效的 NexusDock MCP access token；必要时安全刷新。
+2. 把 NexusDock 作为 first-party MCP session 自动连接，不读取 `workspace_mcp_connections`。
+3. NexusDock 节点工具使用原始工具名；普通用户 MCP 连接继续使用 `mcp_<connection>_<tool>` 命名空间。
+4. `agentdock_context` 保留在 MCP session 内，但从模型 Tool Definitions 隐藏。
+5. Runtime 内部调用一次 `agentdock_context`，只提取设备名、`node_id`、online、OS/arch/version、主要 capabilities，以及受预算限制的 Skill / dynamic MCP 名称。
+6. 精简后的 `NexusDock execution targets` 追加到本次 Run 的 system context。
+7. 模型从第一轮起即可直接选择 `node_id` 并调用节点工具；无需先做一次 `agentdock_context` 检索。
+
+完整 node-local rules、Workspace context、Skill 正文和 dynamic MCP schema 不在启动时全部注入。它们仍通过 `workspace_context`、Skill/MCP 相关工具按需读取，避免设备增多后 system prompt 无界增长。
+
+第一方 bootstrap 的原始 MCP result 仍属于当前 Run 的临时执行材料，不写入 Card Timeline。
