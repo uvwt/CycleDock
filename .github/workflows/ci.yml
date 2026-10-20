@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: cycledock_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cycledock_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cycledock_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install Go tools
+        run: |
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+          go install github.com/pressly/goose/v3/cmd/goose@v3.29.0
+      - name: Generate and verify Go
+        run: |
+          sqlc generate
+          git diff --exit-code
+          go test ./...
+          go vet ./...
+      - name: Migration smoke
+        run: |
+          goose -dir db/migrations postgres "$TEST_DATABASE_URL" up
+          goose -dir db/migrations postgres "$TEST_DATABASE_URL" down
+          goose -dir db/migrations postgres "$TEST_DATABASE_URL" up
+      - name: Verify web
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - name: Docker Compose smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker compose logs --no-color || true; docker compose down -v' EXIT
+
+          docker compose up -d --build
+
+          ready=0
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          test "$ready" -eq 1
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/ >/dev/null

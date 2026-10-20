@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: cycledock
+      POSTGRES_USER: cycledock
+      POSTGRES_PASSWORD: cycledock
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cycledock -d cycledock"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - cycledock_postgres:/var/lib/postgresql/data
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
+      MIGRATIONS_DIR: /app/db/migrations
+    entrypoint: ["/usr/local/bin/cycledock-migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
+      HTTP_ADDR: :8080
+      WEB_DIR: /app/web
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+volumes:
+  cycledock_postgres:

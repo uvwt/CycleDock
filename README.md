@@ -53,4 +53,12 @@ Workspace
 
 ## 当前阶段
 
-当前处于新项目架构基线阶段。第一步从干净的 `000001_initial.sql`、Go 服务骨架和 React 前端骨架开始。
+Phase 0 Foundation 与 Phase 1 Work Core 已形成首个可运行基线：
+
+- 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
+- Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
+- Ongoing Schedule / Check-in / Health 与 Human-only Done。
+- 真实 PostgreSQL 并发 integration tests。
+- Go + React 单镜像、Docker Compose migration 流程与 CI 骨架。
+
+下一阶段进入 [Phase 2 — Human Web](docs/development.md#4-phase-2--human-web)，在当前统一 Domain / Store 状态机之上实现认证、看板与 Card Detail，不另起一套业务状态模型。

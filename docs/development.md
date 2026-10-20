@@ -10,6 +10,12 @@
 
 > 先把数据模型与并发规则做正确，再做 Agent Runtime 和 UI 丰富度。
 
+当前实现进度：
+
+- Phase 0 Foundation：已建立工程、数据库、Web、Docker Compose、CI 与 migration 基线。
+- Phase 1 Work Core：已实现核心 Domain / Store，并以真实 PostgreSQL integration tests 覆盖关键并发一致性。
+- 下一阶段：Phase 2 Human Web。
+
 ## 2. Phase 0 — Foundation
 
 目标：得到干净、可运行、可测试的工程骨架。
