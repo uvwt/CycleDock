@@ -7,6 +7,7 @@ import {
   api,
   type AgentProviderType,
   type AgentSettings,
+  type ChatGPTAuthStart,
   type ConnectionTestResult,
   type GrokDeviceFlow,
   type MCPConnection,
@@ -55,6 +56,8 @@ export function AgentSettingsDialog({
   const draft = draftOverride ?? settings.data ?? null
   const [editing, setEditing] = useState<MCPConnection | null>(null)
   const [newConnectionOpen, setNewConnectionOpen] = useState(false)
+  const [chatGPTManualStart, setChatGPTManualStart] = useState<ChatGPTAuthStart | null>(null)
+  const [chatGPTCallbackURL, setChatGPTCallbackURL] = useState('')
   const [grokFlow, setGrokFlow] = useState<GrokDeviceFlow | null>(null)
 
   const subscriptionProvider =
@@ -118,8 +121,27 @@ export function AgentSettingsDialog({
 
   const connectChatGPT = useMutation({
     mutationFn: api.startChatGPTModelAuth,
-    onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
+    onSuccess: (start) => {
+      if (start.manual_callback) {
+        setChatGPTManualStart(start)
+        setChatGPTCallbackURL('')
+        return
+      }
+      window.location.assign(start.authorization_url)
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not start ChatGPT sign-in'),
+  })
+
+  const completeChatGPT = useMutation({
+    mutationFn: () => api.completeChatGPTModelAuth(chatGPTCallbackURL.trim()),
+    onSuccess: async () => {
+      setChatGPTManualStart(null)
+      setChatGPTCallbackURL('')
+      await queryClient.invalidateQueries({ queryKey: queryKeys.modelAuth })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agentModels('chatgpt') })
+      toast.success('ChatGPT account connected')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not finish ChatGPT sign-in'),
   })
 
   const connectGrok = useMutation({
@@ -230,6 +252,8 @@ export function AgentSettingsDialog({
                       type="button"
                       onClick={() => {
                         setDraft({ ...draft, provider_type: provider.id, model: '' })
+                        setChatGPTManualStart(null)
+                        setChatGPTCallbackURL('')
                         setGrokFlow(null)
                         testProvider.reset()
                       }}
@@ -316,6 +340,43 @@ export function AgentSettingsDialog({
                         </button>
                       )}
                     </div>
+
+                    {draft.provider_type === 'chatgpt' && chatGPTManualStart ? (
+                      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-slate-700">
+                        <p className="leading-5">
+                          Temporary Hosted test flow: open OpenAI in a new tab and finish authorization. The browser will
+                          eventually navigate to localhost and may show that it cannot connect. Copy the complete URL from
+                          the address bar and paste it below.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <a
+                            href={chatGPTManualStart.authorization_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 font-semibold"
+                          >
+                            <ExternalLink className="size-3.5" /> Open OpenAI sign-in
+                          </a>
+                        </div>
+                        <input
+                          value={chatGPTCallbackURL}
+                          onChange={(event) => setChatGPTCallbackURL(event.target.value)}
+                          placeholder="http://localhost:1455/auth/callback?code=..."
+                          autoComplete="off"
+                          spellCheck={false}
+                          className={inputClass + ' mt-3 font-mono text-[11px]'}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => completeChatGPT.mutate()}
+                          disabled={!chatGPTCallbackURL.trim() || completeChatGPT.isPending}
+                          className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-lg bg-slate-900 px-3 font-semibold text-white disabled:opacity-40"
+                        >
+                          {completeChatGPT.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+                          Finish ChatGPT connection
+                        </button>
+                      </div>
+                    ) : null}
 
                     {draft.provider_type === 'grok' && grokFlow ? (
                       <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-slate-700">
@@ -625,7 +686,7 @@ function authReason(reason?: string) {
 function authWarning(warning?: string) {
   switch (warning) {
     case 'hosted_dynamic_registration_test_mode':
-      return 'Temporary Hosted test mode: dynamic ChatGPT registration is enabled. Replace this with an approved CYCLEDOCK_CHATGPT_CLIENT_ID before wider or production use.'
+      return 'Temporary Hosted test mode: ChatGPT uses a loopback callback and manual callback paste. Replace this with an approved CYCLEDOCK_CHATGPT_CLIENT_ID before wider or production use.'
     default:
       return ''
   }

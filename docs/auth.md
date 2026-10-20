@@ -97,7 +97,7 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - ChatGPT 使用 OpenAI 官方 Sign in with ChatGPT。授权码流使用 PKCE + state + nonce；state 只保存 SHA-256 digest，flow payload 加密保存。
 - ChatGPT plan inference 只请求公开 api.openai.com/v1/responses，不调用 ChatGPT backend-api。
 - Hosted / remotely hosted CycleDock 正式使用时必须配置 OpenAI 批准的 CYCLEDOCK_CHATGPT_CLIENT_ID；loopback Self-hosted 开发可直接使用 dynamic_agent_client。
-- CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION=true 是**临时测试逃生口**：仅允许受控 Hosted DEV 在尚未取得正式 Client ID 时验证流程，默认关闭，不能作为生产方案。取得正式 Client ID 后必须删除/关闭该开关。
+- CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION=true 是**临时测试逃生口**：仅允许受控 Hosted DEV 在尚未取得正式 Client ID 时验证流程，默认关闭，不能作为生产方案。该模式使用 OpenAI 接受的 `http://localhost:1455/auth/callback` loopback redirect，不发送 `ext_agent_host_id`；授权完成后用户把浏览器地址栏里的完整 localhost callback URL 粘回 CycleDock，由 owner-authenticated API 在原 Workspace 内完成 PKCE token exchange。取得正式 Client ID 后必须删除/关闭该开关。
 - Hosted 未配置正式 Client ID 且未开启上述临时测试开关时，Web 不展示 ChatGPT Plan 入口。
 - Grok 使用 auth.x.ai 的 OAuth2 device-code flow；token endpoint 必须来自 xAI OIDC discovery 且 host 限定为 x.ai / *.x.ai。
 - Grok subscription inference 固定发送到 cli-chat-proxy.grok.com/v1，OAuth token 不允许被用户配置转发到任意 endpoint。

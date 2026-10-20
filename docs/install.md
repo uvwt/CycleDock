@@ -56,7 +56,7 @@ Settings 页面保存的是环境变量**名称**，不是 secret 明文。更�
 
 ChatGPT Plan 的远程 / Hosted 正式接入需要 OpenAI 批准的 CYCLEDOCK_CHATGPT_CLIENT_ID。仅 loopback Self-hosted 开发默认可以留空并走 OpenAI dynamic_agent_client 流程。
 
-如果只是小规模 Hosted DEV 验证，可临时设置 CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION=true。这是明确的测试逃生口，默认关闭，不应带入生产；取得正式 CYCLEDOCK_CHATGPT_CLIENT_ID 后必须删除/关闭。未配置正式 Client ID 且未启用临时开关时，ChatGPT Plan 入口会隐藏。
+如果只是小规模 Hosted DEV 验证，可临时设置 CYCLEDOCK_CHATGPT_ALLOW_HOSTED_DYNAMIC_REGISTRATION=true。这是明确的测试逃生口，默认关闭，不应带入生产。开启后 CycleDock 使用 `http://localhost:1455/auth/callback` 作为 OpenAI dynamic client 的 loopback redirect：完成 OpenAI 授权后，localhost 页面可能显示无法连接；把浏览器地址栏里的完整 callback URL 粘回 CycleDock 即可由服务端完成 PKCE token exchange。这个流程不依赖本地模型 CLI/runtime。取得正式 CYCLEDOCK_CHATGPT_CLIENT_ID 后必须删除/关闭。未配置正式 Client ID 且未启用临时开关时，ChatGPT Plan 入口会隐藏。
 
 Grok device-code 使用 xAI Grok Build 的公开 OAuth client，不需要本地 Grok CLI。
 

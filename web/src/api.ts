@@ -198,6 +198,11 @@ export type ModelAuthStatus = {
   expires_at?: string
 }
 
+export type ChatGPTAuthStart = {
+  authorization_url: string
+  manual_callback?: boolean
+}
+
 export type AgentModel = {
   id: string
   name: string
@@ -351,9 +356,14 @@ export const api = {
     }),
   modelAuthStatus: () => request<ModelAuthStatus[]>('/api/v1/agent/model-auth'),
   startChatGPTModelAuth: () =>
-    request<{ authorization_url: string }>('/api/v1/agent/model-auth/chatgpt/start', {
+    request<ChatGPTAuthStart>('/api/v1/agent/model-auth/chatgpt/start', {
       method: 'POST',
       body: '{}',
+    }),
+  completeChatGPTModelAuth: (callbackURL: string) =>
+    request<{ status: 'connected' }>('/api/v1/agent/model-auth/chatgpt/complete', {
+      method: 'POST',
+      body: jsonBody({ callback_url: callbackURL }),
     }),
   startGrokModelAuth: () =>
     request<GrokDeviceFlow>('/api/v1/agent/model-auth/grok/start', { method: 'POST', body: '{}' }),

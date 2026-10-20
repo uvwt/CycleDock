@@ -41,6 +41,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/agent/provider-test", api.testAgentProvider)
 	r.Get("/agent/model-auth", api.getModelAuthStatus)
 	r.Post("/agent/model-auth/chatgpt/start", api.startChatGPTModelAuth)
+	r.Post("/agent/model-auth/chatgpt/complete", api.completeChatGPTHostedTest)
 	r.Post("/agent/model-auth/grok/start", api.startGrokModelAuth)
 	r.Post("/agent/model-auth/grok/poll", api.pollGrokModelAuth)
 	r.Delete("/agent/model-auth/{provider}", api.disconnectModelAuth)
