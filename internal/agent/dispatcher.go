@@ -106,8 +106,8 @@ func (d *Dispatcher) maintain(ctx context.Context) error {
 		if _, err := d.store.ProcessDueSchedules(ctx, workspaceID, now, 100); err != nil {
 			return fmt.Errorf("process schedules for workspace %s: %w", workspaceID, err)
 		}
-		if _, err := d.store.ExpireLeases(ctx, workspaceID, now); err != nil {
-			return fmt.Errorf("expire leases for workspace %s: %w", workspaceID, err)
+		if _, err := d.store.ExpireAndRecoverBuiltInLeases(ctx, workspaceID, now, 100); err != nil {
+			return fmt.Errorf("recover expired leases for workspace %s: %w", workspaceID, err)
 		}
 	}
 	return nil
@@ -187,6 +187,14 @@ func publicRunError(err error) string {
 		return fmt.Sprintf("Model provider request failed with HTTP %d.", apiErr.StatusCode)
 	case errors.Is(err, context.DeadlineExceeded):
 		return "Built-in Agent operation timed out."
+	case errors.Is(err, modelclient.ErrMalformedResponse),
+		errors.Is(err, modelclient.ErrEmptyResponse),
+		errors.Is(err, errMalformedModelResult):
+		return "Model provider returned an invalid response."
+	case errors.Is(err, modelclient.ErrResponseTooLarge):
+		return "Model provider response exceeded the safety limit."
+	case errors.Is(err, errMaxToolRoundsExceeded):
+		return "Built-in Agent reached the configured maximum tool rounds before completion."
 	case strings.Contains(err.Error(), "environment variable"):
 		return "Built-in Agent secret environment variable is not configured."
 	case strings.Contains(err.Error(), "MCP"):

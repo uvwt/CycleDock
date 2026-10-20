@@ -80,6 +80,7 @@ func (s *Store) ClaimNextTrigger(
 		FROM triggers t
 		WHERE t.workspace_id = $1
 		  AND t.card_id = $2
+		  AND t.cancelled_at IS NULL
 		  AND NOT EXISTS (
 			SELECT 1 FROM agent_runs r
 			WHERE r.workspace_id = t.workspace_id AND r.trigger_id = t.id

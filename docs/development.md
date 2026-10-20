@@ -17,7 +17,7 @@
 - Phase 2 Human Web：已实现 Human 身份、NexusDock OIDC / Administrator fallback、Web Session、HTTP API 与 Project/Card Web 工作台。
 - Phase 3 External MCP：已实现标准 Streamable HTTP MCP、OAuth metadata/DCR/S256 PKCE/token rotation、Workspace approval、统一 Store 工具面、官方 Skill 与 AI Connect。
 - Phase 4 Built-in Cycle Agent：已实现 Workspace Agent settings、Dispatcher、Runner、Context Builder、OpenAI-compatible Model Client 与 outbound MCP Client。
-- 下一阶段：Phase 5 Product Polish。
+- Phase 5 Product Polish / Release Preparation：已实现运行恢复、retry/cancel、连接测试、长历史治理、基础 i18n/mobile/accessibility 与发布前强化验证。
 
 ## 2. Phase 0 — Foundation
 
@@ -182,24 +182,26 @@ Human Comment
 
 ## 7. Phase 5 — Product Polish
 
-- better failure recovery。
-- retry / cancel queue。
-- Provider / MCP connection test action 与状态反馈。
+- expired queued/running lease 不复活旧 Run；Built-in Agent 通过新的 `system_followup` Trigger 恢复。
+- Human cancel pending Trigger / current Run；failed / expired / cancelled work 通过新的 `manual_retry` Trigger retry。
+- Provider / MCP connection test action 与状态反馈；测试不执行任何 MCP Tool。
+- provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都进入明确 failed Run。
 - 如真实部署需要在数据库内托管 secret，再设计独立 encrypted secret storage；现阶段继续使用部署环境注入。
-- i18n。
-- mobile。
-- empty states。
-- accessibility。
-- SSE（如果 polling 体验不足）。
-- 长历史 context summary。
+- 基础中英 i18n、mobile Board、loading/error/empty states、键盘拖拽、focus-visible、reduced-motion。
+- 长历史 context 使用 bounded recent Timeline；窗口外 durable facts 原样保留，旧 Comment / Progress 只形成派生 compaction。
+- DST gap / overlap 有明确 occurrence 语义。
+- migration 带数据 up/down/up、production binary、race、OAuth/MCP security 与 cross-workspace isolation 均纳入发布验证。
+
+SSE 目前没有加入。现有交互未出现必须为 polling 增加第二套实时通道的产品需求，避免为“可能需要”提前扩展协议面。
 
 只在真实需求出现后考虑 Card Artifact。
 
-## 8. Phase 6 — Release
+## 8. Release Gate
 
 发布前必须：
 
 - 全量 Go test / vet。
+- 核心 Store / Agent / OAuth / HTTP `-race`。
 - sqlc regenerate clean。
 - Web build / lint / audit。
 - migration empty DB smoke。
@@ -214,6 +216,8 @@ Human Comment
 - Human-only Done 权限测试。
 - 跨 Workspace 访问隔离测试。
 - 文档与实际工具一致。
+- `npm audit --omit=dev --audit-level=high`。
+- release flags 构建的 production binary 真实启动 smoke。
 
 ## 9. Git 工作方式
 

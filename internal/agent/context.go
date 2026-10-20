@@ -58,27 +58,37 @@ func BuildContext(run store.AgentRunContext, settings db.WorkspaceAgentSetting) 
 	fmt.Fprintf(&context, "- Required confirmations: %d\n", run.RequiredConfirmations)
 	fmt.Fprintf(&context, "- Pending Trigger count behind this Run: %d\n", run.PendingTriggerCount)
 
+	if len(run.HistoricalFacts) > 0 {
+		context.WriteString("\nHistorical durable facts retained from before the recent Timeline window:\n")
+		context.WriteString("These are raw durable facts from the Card audit Timeline, not generated model memory.\n")
+		for _, event := range run.HistoricalFacts {
+			writeContextEvent(&context, event, 2000)
+		}
+	}
+
+	if run.HistoryCompaction.BeforeSequence > 0 &&
+		(run.HistoryCompaction.OlderCommentCount > 0 || run.HistoryCompaction.OlderProgressCount > 0) {
+		context.WriteString("\nDerived history compaction for older Comment/Progress events:\n")
+		fmt.Fprintf(
+			&context,
+			"- Before sequence %d: %d older comments, %d older progress events.\n",
+			run.HistoryCompaction.BeforeSequence,
+			run.HistoryCompaction.OlderCommentCount,
+			run.HistoryCompaction.OlderProgressCount,
+		)
+		if len(run.HistoryCompaction.RecentContextEvents) > 0 {
+			context.WriteString("- Most recent excerpts from that compacted range:\n")
+			for _, event := range run.HistoryCompaction.RecentContextEvents {
+				writeContextEvent(&context, event, 1200)
+			}
+		}
+		context.WriteString("- The original Timeline remains the audit source; this section is derived context only.\n")
+	}
+
 	if len(run.Events) > 0 {
 		context.WriteString("\nDurable Timeline (oldest to newest within the bounded context window):\n")
 		for _, event := range run.Events {
-			content := trimContextText(event.Content, 4000)
-			if content == "" && event.CheckinStatus == "" {
-				continue
-			}
-			fmt.Fprintf(
-				&context,
-				"[%d %s %s/%s %s] %s",
-				event.Sequence,
-				event.CreatedAt.UTC().Format(time.RFC3339),
-				event.ActorKind,
-				event.ActorName,
-				event.Type,
-				content,
-			)
-			if event.CheckinStatus != "" {
-				fmt.Fprintf(&context, " (health=%s)", event.CheckinStatus)
-			}
-			context.WriteByte('\n')
+			writeContextEvent(&context, event, 4000)
 		}
 	}
 
@@ -92,6 +102,27 @@ func BuildContext(run store.AgentRunContext, settings db.WorkspaceAgentSetting) 
 		{Role: "system", Content: system.String()},
 		{Role: "user", Content: context.String()},
 	}
+}
+
+func writeContextEvent(builder *strings.Builder, event store.AgentContextEvent, maxRunes int) {
+	content := trimContextText(event.Content, maxRunes)
+	if content == "" && event.CheckinStatus == "" {
+		return
+	}
+	fmt.Fprintf(
+		builder,
+		"[%d %s %s/%s %s] %s",
+		event.Sequence,
+		event.CreatedAt.UTC().Format(time.RFC3339),
+		event.ActorKind,
+		event.ActorName,
+		event.Type,
+		content,
+	)
+	if event.CheckinStatus != "" {
+		fmt.Fprintf(builder, " (health=%s)", event.CheckinStatus)
+	}
+	builder.WriteByte('\n')
 }
 
 func trimContextText(value string, maxRunes int) string {

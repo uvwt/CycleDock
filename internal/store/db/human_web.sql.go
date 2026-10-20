@@ -69,7 +69,7 @@ func (q *Queries) GetCardSchedule(ctx context.Context, arg GetCardScheduleParams
 }
 
 const getCurrentRun = `-- name: GetCurrentRun :one
-SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash
+SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash, cancelled_by_source_id, cancel_reason
 FROM agent_runs
 WHERE workspace_id = $1
   AND card_id = $2
@@ -104,6 +104,8 @@ func (q *Queries) GetCurrentRun(ctx context.Context, arg GetCurrentRunParams) (A
 		&i.UpdatedAt,
 		&i.FinishIdempotencyKey,
 		&i.FinishRequestHash,
+		&i.CancelledBySourceID,
+		&i.CancelReason,
 	)
 	return i, err
 }
@@ -306,6 +308,7 @@ LEFT JOIN agent_runs r
  AND r.trigger_id = t.id
 WHERE t.workspace_id = $1
   AND t.card_id = $2
+  AND t.cancelled_at IS NULL
   AND r.id IS NULL
 ORDER BY t.sequence
 `
@@ -508,6 +511,118 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 			&i.Instructions,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentCardWork = `-- name: ListRecentCardWork :many
+SELECT
+    t.id AS trigger_id,
+    t.sequence,
+    t.cause,
+    t.dispatch_mode,
+    COALESCE(e.content, '') AS content,
+    t.retry_of_trigger_id,
+    t.cancelled_at,
+    t.cancel_reason,
+    t.created_at AS trigger_created_at,
+    r.id AS run_id,
+    r.status AS run_status,
+    r.current_stage,
+    r.progress_summary,
+    r.result_summary,
+    r.error_summary,
+    r.cancel_reason AS run_cancel_reason,
+    r.created_at AS run_created_at,
+    r.finished_at,
+    EXISTS (
+        SELECT 1
+        FROM triggers child
+        WHERE child.workspace_id = t.workspace_id
+          AND child.card_id = t.card_id
+          AND child.retry_of_trigger_id = t.id
+    ) AS has_retry
+FROM triggers t
+LEFT JOIN events e
+  ON e.workspace_id = t.workspace_id
+ AND e.card_id = t.card_id
+ AND e.id = t.cause_event_id
+LEFT JOIN agent_runs r
+  ON r.workspace_id = t.workspace_id
+ AND r.trigger_id = t.id
+WHERE t.workspace_id = $1
+  AND t.card_id = $2
+  AND (
+      t.cancelled_at IS NOT NULL
+      OR r.status IN ('completed', 'failed', 'superseded', 'expired', 'cancelled')
+  )
+ORDER BY t.sequence DESC
+LIMIT 20
+`
+
+type ListRecentCardWorkParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+type ListRecentCardWorkRow struct {
+	TriggerID        uuid.UUID          `json:"trigger_id"`
+	Sequence         pgtype.Int8        `json:"sequence"`
+	Cause            string             `json:"cause"`
+	DispatchMode     string             `json:"dispatch_mode"`
+	Content          string             `json:"content"`
+	RetryOfTriggerID uuid.NullUUID      `json:"retry_of_trigger_id"`
+	CancelledAt      pgtype.Timestamptz `json:"cancelled_at"`
+	CancelReason     string             `json:"cancel_reason"`
+	TriggerCreatedAt pgtype.Timestamptz `json:"trigger_created_at"`
+	RunID            uuid.NullUUID      `json:"run_id"`
+	RunStatus        pgtype.Text        `json:"run_status"`
+	CurrentStage     pgtype.Text        `json:"current_stage"`
+	ProgressSummary  pgtype.Text        `json:"progress_summary"`
+	ResultSummary    pgtype.Text        `json:"result_summary"`
+	ErrorSummary     pgtype.Text        `json:"error_summary"`
+	RunCancelReason  pgtype.Text        `json:"run_cancel_reason"`
+	RunCreatedAt     pgtype.Timestamptz `json:"run_created_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	HasRetry         bool               `json:"has_retry"`
+}
+
+func (q *Queries) ListRecentCardWork(ctx context.Context, arg ListRecentCardWorkParams) ([]ListRecentCardWorkRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCardWork, arg.WorkspaceID, arg.CardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentCardWorkRow{}
+	for rows.Next() {
+		var i ListRecentCardWorkRow
+		if err := rows.Scan(
+			&i.TriggerID,
+			&i.Sequence,
+			&i.Cause,
+			&i.DispatchMode,
+			&i.Content,
+			&i.RetryOfTriggerID,
+			&i.CancelledAt,
+			&i.CancelReason,
+			&i.TriggerCreatedAt,
+			&i.RunID,
+			&i.RunStatus,
+			&i.CurrentStage,
+			&i.ProgressSummary,
+			&i.ResultSummary,
+			&i.ErrorSummary,
+			&i.RunCancelReason,
+			&i.RunCreatedAt,
+			&i.FinishedAt,
+			&i.HasRetry,
 		); err != nil {
 			return nil, err
 		}

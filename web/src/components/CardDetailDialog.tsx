@@ -12,6 +12,7 @@ import {
   MessageSquareText,
   Pause,
   Play,
+  RotateCcw,
   Save,
   Send,
   Trash2,
@@ -131,6 +132,25 @@ function CardDetailContent({
       mode === 'reply' ? api.reply(card.id, comment.trim()) : api.comment(card.id, comment.trim(), mode),
     onSuccess: async () => {
       setComment('')
+      await refresh()
+    },
+    onError: showError,
+  })
+
+  const cancelWork = useMutation({
+    mutationFn: ({ kind, id }: { kind: 'trigger' | 'run'; id: string }) =>
+      kind === 'trigger' ? api.cancelPendingTrigger(card.id, id) : api.cancelRun(card.id, id),
+    onSuccess: async () => {
+      toast.success('Work cancelled')
+      await refresh()
+    },
+    onError: showError,
+  })
+
+  const retryWork = useMutation({
+    mutationFn: (triggerID: string) => api.retryTrigger(card.id, triggerID),
+    onSuccess: async () => {
+      toast.success('Retry queued as new work')
       await refresh()
     },
     onError: showError,
@@ -302,8 +322,19 @@ function CardDetailContent({
 
           {detail.current_run ? (
             <section className={`rounded-2xl border border-cyan-900/60 bg-cyan-950/20 p-4 ${card.kind === 'ongoing' ? 'mt-4' : ''}`}>
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-cyan-300">
-                <Activity className="size-4" /> Current run
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-cyan-300">
+                  <Activity className="size-4" /> Current run
+                </div>
+                <button
+                  type="button"
+                  disabled={cancelWork.isPending}
+                  onClick={() => cancelWork.mutate({ kind: 'run', id: detail.current_run!.id })}
+                  className="rounded-lg border border-rose-900/70 px-2 py-1 text-[10px] font-medium text-rose-300 transition hover:border-rose-700 disabled:opacity-40"
+                  aria-label="Cancel current run"
+                >
+                  Cancel
+                </button>
               </div>
               <p className="mt-3 text-sm font-medium capitalize text-slate-200">{detail.current_run.status.replace('_', ' ')}</p>
               {detail.current_run.current_stage ? <p className="mt-1 text-xs text-slate-400">{detail.current_run.current_stage}</p> : null}
@@ -380,8 +411,77 @@ function CardDetailContent({
               <div className="space-y-2">
                 {detail.queue.map((item) => (
                   <div key={item.id} className="rounded-xl border border-slate-800 px-3 py-2">
-                    <p className="line-clamp-2 text-xs leading-5 text-slate-300">{item.content || item.cause.replace('_', ' ')}</p>
-                    <p className="mt-1 text-[10px] text-slate-600">#{item.sequence} · {item.dispatch_mode}</p>
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 text-xs leading-5 text-slate-300">{item.content || item.cause.replace('_', ' ')}</p>
+                        <p className="mt-1 text-[10px] text-slate-600">#{item.sequence} · {item.dispatch_mode}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={cancelWork.isPending}
+                        onClick={() => cancelWork.mutate({ kind: 'trigger', id: item.id })}
+                        className="shrink-0 rounded-lg border border-slate-800 px-2 py-1 text-[10px] text-slate-500 transition hover:border-rose-900 hover:text-rose-300 disabled:opacity-40"
+                        aria-label={`Cancel queued trigger ${item.sequence}`}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">
+                <Clock3 className="size-3.5" /> Recent work
+              </div>
+              <span className="text-[11px] text-slate-600">{detail.work_history.length}</span>
+            </div>
+            {detail.work_history.length === 0 ? (
+              <p className="text-xs leading-5 text-slate-600">No completed, failed, expired, superseded, or cancelled work yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {detail.work_history.map((item) => (
+                  <div key={item.trigger_id} className="rounded-xl border border-slate-800 px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                          #{item.sequence} · {item.cause.replace('_', ' ')} ·{' '}
+                          <span
+                            className={
+                              item.status === 'failed' || item.status === 'expired'
+                                ? 'text-amber-300'
+                                : item.status === 'cancelled'
+                                  ? 'text-rose-300'
+                                  : 'text-slate-400'
+                            }
+                          >
+                            {item.status.replace('_', ' ')}
+                          </span>
+                        </p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
+                          {item.error_summary ||
+                            item.result_summary ||
+                            item.progress_summary ||
+                            item.cancel_reason ||
+                            item.content ||
+                            'No summary'}
+                        </p>
+                      </div>
+                      {item.can_retry ? (
+                        <button
+                          type="button"
+                          disabled={retryWork.isPending}
+                          onClick={() => retryWork.mutate(item.trigger_id)}
+                          className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition hover:border-cyan-700 hover:text-cyan-300 disabled:opacity-40"
+                          aria-label={`Retry work ${item.sequence}`}
+                        >
+                          <RotateCcw className="size-3" /> Retry
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>

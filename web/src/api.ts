@@ -90,6 +90,24 @@ export type QueueItem = {
   created_at: string
 }
 
+export type WorkHistoryItem = {
+  trigger_id: string
+  run_id?: string
+  sequence: number
+  cause: string
+  status: RunStatus
+  content: string
+  retry_of_trigger_id?: string
+  current_stage?: string
+  progress_summary?: string
+  result_summary?: string
+  error_summary?: string
+  cancel_reason?: string
+  can_retry: boolean
+  created_at: string
+  finished_at?: string
+}
+
 export type Schedule = {
   id: string
   enabled: boolean
@@ -108,6 +126,7 @@ export type CardDetail = {
   current_run: CurrentRun | null
   timeline: TimelineEvent[]
   queue: QueueItem[]
+  work_history: WorkHistoryItem[]
   schedules: Schedule[]
   health: Health
   last_checkin: TimelineEvent | null
@@ -145,6 +164,14 @@ export type MCPConnection = {
 }
 
 export type MCPConnectionInput = Omit<MCPConnection, 'id'>
+
+export type ConnectionTestResult = {
+  ok: boolean
+  code: string
+  message: string
+  tool_count?: number
+  duration_ms: number
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
@@ -235,6 +262,25 @@ export const api = {
         body: jsonBody({ content }),
       },
     ),
+  cancelPendingTrigger: (cardID: string, triggerID: string, reason = '') =>
+    request<void>(`/api/v1/cards/${cardID}/triggers/${triggerID}/cancel`, {
+      method: 'POST',
+      body: jsonBody({ reason }),
+    }),
+  retryTrigger: (cardID: string, triggerID: string) =>
+    request<{ trigger_id: string; reused: boolean }>(
+      `/api/v1/cards/${cardID}/triggers/${triggerID}/retry`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders(),
+        body: '{}',
+      },
+    ),
+  cancelRun: (cardID: string, runID: string, reason = '') =>
+    request<void>(`/api/v1/cards/${cardID}/runs/${runID}/cancel`, {
+      method: 'POST',
+      body: jsonBody({ reason }),
+    }),
 
   createSchedule: (cardID: string, input: ScheduleInput) =>
     request<Schedule>(`/api/v1/cards/${cardID}/schedules`, {
@@ -253,6 +299,16 @@ export const api = {
   saveAgentSettings: (input: Omit<AgentSettings, 'configured' | 'source_id'>) =>
     request<AgentSettings>('/api/v1/agent/settings', {
       method: 'PUT',
+      body: jsonBody(input),
+    }),
+  testAgentProvider: (input: Pick<AgentSettings, 'provider_base_url' | 'model' | 'api_key_env' | 'request_timeout_ms'>) =>
+    request<ConnectionTestResult>('/api/v1/agent/provider-test', {
+      method: 'POST',
+      body: jsonBody(input),
+    }),
+  testAgentMCP: (input: Pick<MCPConnectionInput, 'name' | 'url' | 'bearer_token_env' | 'timeout_ms'>) =>
+    request<ConnectionTestResult>('/api/v1/agent/mcp-test', {
+      method: 'POST',
       body: jsonBody(input),
     }),
   agentMCPConnections: () => request<MCPConnection[]>('/api/v1/agent/mcp-connections'),

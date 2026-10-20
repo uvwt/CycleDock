@@ -111,7 +111,7 @@ Result:
 
 不要简单把完整 Event 表全部拼进 Prompt。
 
-当前实现使用最近最多 50 条 meaningful Event，事件类型只包含：
+当前实现使用最近最多 50 条 meaningful Event 作为 bounded recent window，事件类型只包含：
 
 - comment。
 - progress。
@@ -125,28 +125,19 @@ tool call、tool arguments、raw tool result 从不进入该查询。
 
 ## 5. 长历史压缩
 
-Card 使用几个月后可能积累大量 Event。
+Card 历史超过 recent window 后采用两层策略：
 
-第一版先用简单策略：
+1. **历史 durable facts 原样保留**：窗口以前的 Finding / Result / Check-in / Confirm / Reject / Status change 仍从原始 Timeline 读取并进入上下文。
+2. **旧 Comment / Progress 派生压缩**：记录窗口以前 Comment / Progress 的数量，并最多保留最近 8 条 excerpt 作为 compacted context。
 
-- Project Context。
-- Card title / description。
-- 关键长期事实。
-- 最近 N 条 meaningful Event。
-- 当前 Trigger。
+这套 compaction 不写回 Event 表，也不替代 Timeline：
 
-当历史明显变长后，再引入 Card durable summary / context summary。
+- 原始 Timeline 永远是审计事实源。
+- compaction 是每次 Run 构建时的派生 context。
+- Finding / Result / Check-in 不会因为窗口滚动而丢失。
+- raw model messages / tool trace 从不因为 summary 被重新持久化。
 
-summary 只能保存：
-
-- 已确认事实。
-- 已完成结论。
-- 未解决问题。
-- 当前约束。
-
-不能保存 chain-of-thought 或 raw tool trace。
-
-第一版不需要向量数据库。
+后续只有当事件规模真实达到需要缓存时，才考虑单独持久化可重建的 derived summary；第一版不需要向量数据库。
 
 ## 6. Queue
 
@@ -244,19 +235,27 @@ waiting_human 表示：
 失败：
 
 - Run → failed。
-- error_summary 写可供用户理解的失败摘要。
-- 是否重试由显式 manual_retry / system_followup Trigger 决定。
+- error_summary 写可供用户理解、且不包含 secret / 原始上游响应的失败摘要。
+- provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都有明确失败分类。
+- retry 创建新的 `manual_retry` Trigger，旧 Run/Trigger 不复活。
 
 过期：
 
-- Run → expired。
+- queued / running lease 到期后 Run → expired。
 - 原 Trigger 不重新 Claim。
-- 需要恢复则创建新 Trigger。
+- Built-in `cycle_agent` 在仍可执行时创建新的 `system_followup` Trigger；并发 maintenance 只能创建一条恢复方向。
+- waiting_human 不维护 lease，也不会被 restart recovery 当成 expired。
+
+取消：
+
+- pending Trigger cancel 只记录 Trigger 取消元数据，不伪造 Run。
+- queued / running / waiting_human current Run 可由 Human 终结为 cancelled。
+- cancel 不自动创建新方向；需要继续时显式 retry。
 
 被替代：
 
 - Run → superseded。
-- 迟到结果不得修改当前 Card 状态。
+- 迟到 Finding / Result / finish 不得修改当前 Card 状态。
 
 ## 12. 当前 Built-in Runtime
 
@@ -281,6 +280,12 @@ Dispatcher：
 - 优先启动已经绑定 `cycle_agent` 的 queued Run。
 - 没有 current Run 时，再原子 Claim 最早 pending Trigger。
 - waiting_human 仍占 current Run 槽位，不会被自动越过。
+
+Connection test：
+
+- Provider Test 对配置 endpoint / model 发最小 OpenAI-compatible `/chat/completions` 请求。
+- MCP Test 复用正式 MCP Client，只做 initialize + ListTools 并返回工具数量，不执行 Tool。
+- endpoint / auth / timeout / malformed / initialize / ListTools 错误只返回安全分类消息。
 
 Runner：
 

@@ -9,6 +9,7 @@ SELECT
         FROM triggers t
         WHERE t.workspace_id = c.workspace_id
           AND t.card_id = c.id
+          AND t.cancelled_at IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM agent_runs r
               WHERE r.workspace_id = t.workspace_id

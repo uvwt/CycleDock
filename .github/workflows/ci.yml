@@ -44,6 +44,9 @@ jobs:
           git diff --exit-code
           go test ./...
           go vet ./...
+      - name: Race-sensitive integration tests
+        run: |
+          go test -race ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi -count=1
       - name: Migration smoke
         run: |
           goose -dir db/migrations postgres "$TEST_DATABASE_URL" up
@@ -55,6 +58,7 @@ jobs:
           npm ci
           npm run lint
           npm run build
+          npm audit --omit=dev --audit-level=high
       - name: Docker Compose smoke
         shell: bash
         env:

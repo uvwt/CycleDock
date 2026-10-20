@@ -296,11 +296,12 @@ func (q *Queries) ListCardEvents(ctx context.Context, arg ListCardEventsParams) 
 }
 
 const listPendingTriggers = `-- name: ListPendingTriggers :many
-SELECT t.id, t.sequence, t.workspace_id, t.card_id, t.cause, t.cause_event_id, t.created_by_source_id, t.dispatch_mode, t.schedule_id, t.scheduled_for, t.idempotency_key, t.request_hash, t.created_at
+SELECT t.id, t.sequence, t.workspace_id, t.card_id, t.cause, t.cause_event_id, t.created_by_source_id, t.dispatch_mode, t.schedule_id, t.scheduled_for, t.idempotency_key, t.request_hash, t.created_at, t.retry_of_trigger_id, t.cancelled_at, t.cancelled_by_source_id, t.cancel_reason
 FROM triggers t
 LEFT JOIN agent_runs r ON r.trigger_id = t.id
 WHERE t.workspace_id = $1
   AND t.card_id = $2
+  AND t.cancelled_at IS NULL
   AND r.id IS NULL
 ORDER BY t.sequence
 `
@@ -333,6 +334,10 @@ func (q *Queries) ListPendingTriggers(ctx context.Context, arg ListPendingTrigge
 			&i.IdempotencyKey,
 			&i.RequestHash,
 			&i.CreatedAt,
+			&i.RetryOfTriggerID,
+			&i.CancelledAt,
+			&i.CancelledBySourceID,
+			&i.CancelReason,
 		); err != nil {
 			return nil, err
 		}

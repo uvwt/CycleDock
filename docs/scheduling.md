@@ -18,7 +18,7 @@ Schedule 本身不执行 Agent，也不拥有另一套 Job Runtime。
 - 每周固定星期 + 时间。
 - 每月固定日期 + 时间。
 
-所有计划必须有明确 timezone。
+所有计划必须有明确 timezone，并使用 IANA 名称，例如 `Asia/Shanghai`、`America/Los_Angeles`。
 
 UI 不暴露 Cron 表达式。
 
@@ -109,6 +109,19 @@ Trigger 必须携带：
 并由数据库唯一约束保证同一 schedule occurrence 只能创建一个 Trigger。
 
 不能只依赖“扫描前先查询有没有”。
+
+### DST 语义
+
+Schedule 保持“本地 wall-clock 时间”而不是固定 UTC offset：
+
+- Spring-forward 导致目标本地时间不存在时，跳过该日/周/月 occurrence。
+- Fall-back 导致同一本地时间出现两次时，只使用第一次 occurrence。
+- 因此一个 calendar occurrence 最多生成一条 Trigger，不会因为回拨重复执行。
+
+例如 `America/Los_Angeles`：
+
+- `Daily 02:30` 在 2026-03-08 不存在，因此下一次是 2026-03-09 02:30。
+- `Daily 01:30` 在 2026-11-01 出现两次，只触发第一次 01:30；当天第二次 01:30 不再次执行。
 
 ## 8. Scheduler Loop
 

@@ -3,6 +3,7 @@ import { LoaderCircle } from 'lucide-react'
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { APIError, api } from './api'
+import { useI18n } from './i18n-context'
 import { LoginPage } from './pages/LoginPage'
 import { queryKeys } from './query'
 
@@ -11,6 +12,7 @@ const WorkspacePage = lazy(() =>
 )
 
 export default function App() {
+  const { t } = useI18n()
   const me = useQuery({
     queryKey: queryKeys.me,
     queryFn: api.me,
@@ -21,7 +23,7 @@ export default function App() {
       <main className="grid min-h-screen place-items-center bg-slate-950 text-slate-200">
         <div className="flex items-center gap-3 text-sm text-slate-400">
           <LoaderCircle className="size-5 animate-spin" />
-          Loading CycleDock…
+          {t('app.loading')}
         </div>
       </main>
     )
@@ -35,9 +37,9 @@ export default function App() {
     return (
       <main className="grid min-h-screen place-items-center bg-slate-950 px-6 text-slate-200">
         <div className="max-w-md rounded-2xl border border-rose-900/60 bg-rose-950/20 p-6">
-          <h1 className="font-semibold text-rose-200">CycleDock could not load your session.</h1>
+          <h1 className="font-semibold text-rose-200">{t('app.sessionError')}</h1>
           <p className="mt-2 text-sm text-rose-300/80">
-            {me.error instanceof Error ? me.error.message : 'Unknown session error.'}
+            {me.error instanceof Error ? me.error.message : t('app.unknownSessionError')}
           </p>
         </div>
       </main>

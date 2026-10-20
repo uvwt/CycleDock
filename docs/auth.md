@@ -89,6 +89,8 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - Runner 在每个 Run 开始时从 CycleDock 进程环境解析对应变量；变量缺失时 Run 以脱敏摘要失败。
 - 默认 Docker Compose 提供 `CYCLEDOCK_MODEL_API_KEY` 与 `CYCLEDOCK_MCP_TOKEN` 两个可直接转发的环境变量。更多连接需要由部署层显式把对应变量注入 app container。
 - 只有 Workspace owner 可以读取或修改 Agent settings / MCP connections。
+- Provider / MCP connection test 同样要求 Workspace owner；测试结果只返回分类状态，不回显 secret 或上游原始错误体。
+- MCP connection test 只做 initialize + ListTools，不执行任何有副作用 Tool。
 
 ## 8. 当前 Human Web 配置
 

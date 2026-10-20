@@ -107,6 +107,7 @@ func (s *Store) ClaimNextBuiltInRun(
 			FROM triggers t
 			WHERE t.workspace_id = c.workspace_id
 			  AND t.card_id = c.id
+			  AND t.cancelled_at IS NULL
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM agent_runs r
@@ -181,7 +182,16 @@ type AgentRunContext struct {
 	TriggerContent        string
 	TriggeredAt           time.Time
 	Events                []AgentContextEvent
+	HistoricalFacts       []AgentContextEvent
+	HistoryCompaction     AgentHistoryCompaction
 	PendingTriggerCount   int64
+}
+
+type AgentHistoryCompaction struct {
+	BeforeSequence      int64
+	OlderCommentCount   int64
+	OlderProgressCount  int64
+	RecentContextEvents []AgentContextEvent
 }
 
 func (s *Store) LoadAgentRunContext(
@@ -209,6 +219,7 @@ func (s *Store) LoadAgentRunContext(
 				FROM triggers pending
 				WHERE pending.workspace_id = c.workspace_id
 				  AND pending.card_id = c.id
+				  AND pending.cancelled_at IS NULL
 				  AND NOT EXISTS (
 					SELECT 1 FROM agent_runs existing
 					WHERE existing.workspace_id = pending.workspace_id
@@ -271,13 +282,13 @@ func (s *Store) LoadAgentRunContext(
 		  )
 		ORDER BY e.sequence DESC
 		LIMIT $3
-	`, workspaceID, result.CardID, eventLimit)
+	`, workspaceID, result.CardID, eventLimit+1)
 	if err != nil {
 		return AgentRunContext{}, err
 	}
 	defer rows.Close()
 
-	reverse := make([]AgentContextEvent, 0, eventLimit)
+	reverse := make([]AgentContextEvent, 0, eventLimit+1)
 	for rows.Next() {
 		var event AgentContextEvent
 		var eventType, actorKind string
@@ -296,11 +307,120 @@ func (s *Store) LoadAgentRunContext(
 	if err := rows.Err(); err != nil {
 		return AgentRunContext{}, err
 	}
+	hasOlder := len(reverse) > eventLimit
+	if hasOlder {
+		reverse = reverse[:eventLimit]
+	}
 	result.Events = make([]AgentContextEvent, len(reverse))
 	for i := range reverse {
 		result.Events[len(reverse)-1-i] = reverse[i]
 	}
+	if hasOlder && len(result.Events) > 0 {
+		if err := s.loadHistoricalAgentContext(
+			ctx, workspaceID, result.CardID, result.Events[0].Sequence, &result,
+		); err != nil {
+			return AgentRunContext{}, err
+		}
+	}
 	return result, nil
+}
+
+func (s *Store) loadHistoricalAgentContext(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	beforeSequence int64,
+	result *AgentRunContext,
+) error {
+	result.HistoryCompaction.BeforeSequence = beforeSequence
+
+	factRows, err := s.pool.Query(ctx, `
+		SELECT e.sequence, e.event_type, src.name, src.kind, e.content,
+		       COALESCE(e.checkin_status, ''), e.created_at
+		FROM events e
+		JOIN sources src
+		  ON src.workspace_id = e.workspace_id
+		 AND src.id = e.actor_source_id
+		WHERE e.workspace_id=$1
+		  AND e.card_id=$2
+		  AND e.sequence < $3
+		  AND e.event_type IN ('finding','result','checkin','confirm','reject','status_change')
+		ORDER BY e.sequence
+	`, workspaceID, cardID, beforeSequence)
+	if err != nil {
+		return err
+	}
+	result.HistoricalFacts, err = scanAgentContextEvents(factRows)
+	factRows.Close()
+	if err != nil {
+		return err
+	}
+
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE event_type = 'comment'),
+			count(*) FILTER (WHERE event_type = 'progress')
+		FROM events
+		WHERE workspace_id=$1
+		  AND card_id=$2
+		  AND sequence < $3
+		  AND event_type IN ('comment','progress')
+	`, workspaceID, cardID, beforeSequence).Scan(
+		&result.HistoryCompaction.OlderCommentCount,
+		&result.HistoryCompaction.OlderProgressCount,
+	); err != nil {
+		return err
+	}
+
+	compactRows, err := s.pool.Query(ctx, `
+		SELECT e.sequence, e.event_type, src.name, src.kind, e.content,
+		       COALESCE(e.checkin_status, ''), e.created_at
+		FROM events e
+		JOIN sources src
+		  ON src.workspace_id = e.workspace_id
+		 AND src.id = e.actor_source_id
+		WHERE e.workspace_id=$1
+		  AND e.card_id=$2
+		  AND e.sequence < $3
+		  AND e.event_type IN ('comment','progress')
+		ORDER BY e.sequence DESC
+		LIMIT 8
+	`, workspaceID, cardID, beforeSequence)
+	if err != nil {
+		return err
+	}
+	recentReverse, err := scanAgentContextEvents(compactRows)
+	compactRows.Close()
+	if err != nil {
+		return err
+	}
+	result.HistoryCompaction.RecentContextEvents = make([]AgentContextEvent, len(recentReverse))
+	for i := range recentReverse {
+		result.HistoryCompaction.RecentContextEvents[len(recentReverse)-1-i] = recentReverse[i]
+	}
+	return nil
+}
+
+func scanAgentContextEvents(rows pgx.Rows) ([]AgentContextEvent, error) {
+	events := make([]AgentContextEvent, 0)
+	for rows.Next() {
+		var event AgentContextEvent
+		var eventType, actorKind string
+		var createdAt pgtype.Timestamptz
+		if err := rows.Scan(
+			&event.Sequence, &eventType, &event.ActorName, &actorKind,
+			&event.Content, &event.CheckinStatus, &createdAt,
+		); err != nil {
+			return nil, err
+		}
+		event.Type = domain.EventType(eventType)
+		event.ActorKind = domain.SourceKind(actorKind)
+		event.CreatedAt = createdAt.Time
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (s *Store) ListEnabledAgentSettings(ctx context.Context) ([]db.WorkspaceAgentSetting, error) {

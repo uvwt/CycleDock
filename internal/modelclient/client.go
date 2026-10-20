@@ -15,8 +15,9 @@ import (
 const maxResponseBytes int64 = 4 << 20
 
 var (
-	ErrEmptyResponse    = errors.New("model returned no choices")
-	ErrResponseTooLarge = errors.New("model response too large")
+	ErrEmptyResponse     = errors.New("model returned no choices")
+	ErrMalformedResponse = errors.New("malformed model response")
+	ErrResponseTooLarge  = errors.New("model response too large")
 )
 
 type Config struct {
@@ -157,7 +158,7 @@ func (c *Client) Complete(
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return Completion{}, fmt.Errorf("decode model response: %w", err)
+		return Completion{}, fmt.Errorf("%w: %v", ErrMalformedResponse, err)
 	}
 	if len(decoded.Choices) == 0 {
 		return Completion{}, ErrEmptyResponse

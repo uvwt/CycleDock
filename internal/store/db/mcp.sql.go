@@ -164,7 +164,7 @@ VALUES (
     $5, $6, 'enqueue',
     $7, $8
 )
-RETURNING id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at
+RETURNING id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at, retry_of_trigger_id, cancelled_at, cancelled_by_source_id, cancel_reason
 `
 
 type CreateAgentFollowupTriggerParams struct {
@@ -204,6 +204,10 @@ func (q *Queries) CreateAgentFollowupTrigger(ctx context.Context, arg CreateAgen
 		&i.IdempotencyKey,
 		&i.RequestHash,
 		&i.CreatedAt,
+		&i.RetryOfTriggerID,
+		&i.CancelledAt,
+		&i.CancelledBySourceID,
+		&i.CancelReason,
 	)
 	return i, err
 }
@@ -250,7 +254,7 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 }
 
 const getAgentFollowupRequest = `-- name: GetAgentFollowupRequest :one
-SELECT id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at, retry_of_trigger_id, cancelled_at, cancelled_by_source_id, cancel_reason
 FROM triggers
 WHERE workspace_id = $1
   AND created_by_source_id = $2
@@ -281,6 +285,10 @@ func (q *Queries) GetAgentFollowupRequest(ctx context.Context, arg GetAgentFollo
 		&i.IdempotencyKey,
 		&i.RequestHash,
 		&i.CreatedAt,
+		&i.RetryOfTriggerID,
+		&i.CancelledAt,
+		&i.CancelledBySourceID,
+		&i.CancelReason,
 	)
 	return i, err
 }
@@ -322,7 +330,7 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 }
 
 const getRunByID = `-- name: GetRunByID :one
-SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash
+SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash, cancelled_by_source_id, cancel_reason
 FROM agent_runs
 WHERE workspace_id = $1
   AND id = $2
@@ -355,6 +363,8 @@ func (q *Queries) GetRunByID(ctx context.Context, arg GetRunByIDParams) (AgentRu
 		&i.UpdatedAt,
 		&i.FinishIdempotencyKey,
 		&i.FinishRequestHash,
+		&i.CancelledBySourceID,
+		&i.CancelReason,
 	)
 	return i, err
 }
@@ -447,6 +457,7 @@ SELECT
         FROM triggers t
         WHERE t.workspace_id = c.workspace_id
           AND t.card_id = c.id
+          AND t.cancelled_at IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM agent_runs r
               WHERE r.workspace_id = t.workspace_id

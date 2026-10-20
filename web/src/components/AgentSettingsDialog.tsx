@@ -1,9 +1,15 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Bot, Plus, Save, Trash2, X } from 'lucide-react'
+import { Bot, CircleAlert, CircleCheck, LoaderCircle, Plus, Save, TestTube2, Trash2, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { api, type AgentSettings, type MCPConnection, type MCPConnectionInput } from '../api'
+import {
+  api,
+  type AgentSettings,
+  type ConnectionTestResult,
+  type MCPConnection,
+  type MCPConnectionInput,
+} from '../api'
 import { queryClient, queryKeys } from '../query'
 
 const inputClass =
@@ -50,6 +56,19 @@ export function AgentSettingsDialog({
       toast.success('Cycle Agent settings saved')
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not save Agent settings'),
+  })
+
+  const testProvider = useMutation({
+    mutationFn: () => {
+      if (!draft) throw new Error('Agent settings are not loaded')
+      return api.testAgentProvider({
+        provider_base_url: draft.provider_base_url.trim(),
+        model: draft.model.trim(),
+        api_key_env: draft.api_key_env.trim(),
+        request_timeout_ms: draft.request_timeout_ms,
+      })
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not test provider'),
   })
 
   return (
@@ -148,14 +167,26 @@ export function AgentSettingsDialog({
                   />
                 </Field>
 
-                <button
-                  type="button"
-                  disabled={saveSettings.isPending || (draft.enabled && (!draft.provider_base_url.trim() || !draft.model.trim()))}
-                  onClick={() => saveSettings.mutate()}
-                  className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-4 text-xs font-semibold text-slate-950 disabled:opacity-40"
-                >
-                  <Save className="size-3.5" /> Save runtime
-                </button>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={saveSettings.isPending || (draft.enabled && (!draft.provider_base_url.trim() || !draft.model.trim()))}
+                    onClick={() => saveSettings.mutate()}
+                    className="inline-flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-4 text-xs font-semibold text-slate-950 disabled:opacity-40"
+                  >
+                    <Save className="size-3.5" /> Save runtime
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testProvider.isPending || !draft.provider_base_url.trim() || !draft.model.trim()}
+                    onClick={() => testProvider.mutate()}
+                    className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-700 px-4 text-xs font-semibold text-slate-300 transition hover:border-slate-600 disabled:opacity-40"
+                  >
+                    {testProvider.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <TestTube2 className="size-3.5" />}
+                    Test provider
+                  </button>
+                </div>
+                {testProvider.data ? <ConnectionTestStatus result={testProvider.data} /> : null}
               </section>
 
               <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
@@ -211,7 +242,7 @@ export function AgentSettingsDialog({
             </>
           )}
 
-          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300">
+          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300">
             <X className="size-4" />
           </Dialog.Close>
 
@@ -273,13 +304,23 @@ function MCPConnectionEditor({
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not remove MCP connection'),
   })
+  const testConnection = useMutation({
+    mutationFn: () =>
+      api.testAgentMCP({
+        name: draft.name.trim(),
+        url: draft.url.trim(),
+        bearer_token_env: draft.bearer_token_env.trim(),
+        timeout_ms: draft.timeout_ms,
+      }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not test MCP connection'),
+  })
 
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/95 p-5">
       <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-2xl">
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold">{connection ? 'Edit MCP connection' : 'New MCP connection'}</p>
-          <button type="button" onClick={onClose} className="grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900">
+          <button type="button" onClick={onClose} aria-label="Close MCP connection editor" className="grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900">
             <X className="size-4" />
           </button>
         </div>
@@ -301,16 +342,62 @@ function MCPConnectionEditor({
             Enabled
           </label>
         </div>
-        <div className="mt-5 flex gap-2">
-          <button type="button" onClick={() => save.mutate()} disabled={save.isPending || !draft.name.trim() || !draft.url.trim()} className="flex h-9 flex-1 items-center justify-center gap-2 rounded-xl bg-slate-100 text-xs font-semibold text-slate-950 disabled:opacity-40">
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => save.mutate()}
+            disabled={save.isPending || !draft.name.trim() || !draft.url.trim()}
+            className="flex h-9 flex-1 items-center justify-center gap-2 rounded-xl bg-slate-100 text-xs font-semibold text-slate-950 disabled:opacity-40"
+          >
             <Save className="size-3.5" /> Save
           </button>
+          <button
+            type="button"
+            onClick={() => testConnection.mutate()}
+            disabled={testConnection.isPending || !draft.name.trim() || !draft.url.trim()}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-700 px-3 text-xs font-semibold text-slate-300 transition hover:border-slate-600 disabled:opacity-40"
+          >
+            {testConnection.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <TestTube2 className="size-3.5" />}
+            Test
+          </button>
           {connection ? (
-            <button type="button" onClick={() => remove.mutate()} disabled={remove.isPending} className="grid size-9 place-items-center rounded-xl border border-rose-950 text-rose-400 hover:bg-rose-950/30">
+            <button
+              type="button"
+              onClick={() => remove.mutate()}
+              disabled={remove.isPending}
+              className="grid size-9 place-items-center rounded-xl border border-rose-950 text-rose-400 hover:bg-rose-950/30"
+              aria-label="Delete MCP connection"
+            >
               <Trash2 className="size-3.5" />
             </button>
           ) : null}
         </div>
+        {testConnection.data ? <ConnectionTestStatus result={testConnection.data} /> : null}
+      </div>
+    </div>
+  )
+}
+
+function ConnectionTestStatus({ result }: { result: ConnectionTestResult }) {
+  return (
+    <div
+      className={
+        'mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs leading-5 ' +
+        (result.ok
+          ? 'border-emerald-900/60 bg-emerald-950/25 text-emerald-200'
+          : 'border-amber-900/60 bg-amber-950/25 text-amber-200')
+      }
+      role="status"
+      aria-live="polite"
+    >
+      {result.ok ? <CircleCheck className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" />}
+      <div>
+        <p>{result.message}</p>
+        <p className="mt-0.5 text-[10px] opacity-70">
+          {result.code}
+          {typeof result.tool_count === 'number' ? ` · ${result.tool_count} tools` : ''}
+          {` · ${result.duration_ms} ms`}
+        </p>
       </div>
     </div>
   )

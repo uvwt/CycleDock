@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -438,6 +440,180 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 	if staleResultCount != 0 {
 		t.Fatalf("stale model result persisted %d times", staleResultCount)
 	}
+}
+
+func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
+	dataStore, _ := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	t.Run("provider timeout", func(t *testing.T) {
+		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(1200 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			writeModelResponse(t, w, "late response", nil)
+		}))
+		defer modelHTTP.Close()
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 1000, 4, "")
+		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent operation timed out." {
+			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+	})
+
+	t.Run("malformed provider response", func(t *testing.T) {
+		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{not-json"))
+		}))
+		defer modelHTTP.Close()
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, "")
+		if status != string(domain.RunStatusFailed) || summary != "Model provider returned an invalid response." {
+			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+	})
+
+	t.Run("max tool rounds", func(t *testing.T) {
+		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "loop", Type: "function",
+				Function: modelclient.ToolFunction{Name: "unknown_loop_tool", Arguments: "{}"},
+			}})
+		}))
+		defer modelHTTP.Close()
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 1, "")
+		if status != string(domain.RunStatusFailed) ||
+			summary != "Built-in Agent reached the configured maximum tool rounds before completion." {
+			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+	})
+
+	t.Run("MCP initialize failure", func(t *testing.T) {
+		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			writeModelResponse(t, w, "should not execute", nil)
+		}))
+		defer modelHTTP.Close()
+		mcpHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "MCP unavailable", http.StatusBadGateway)
+		}))
+		defer mcpHTTP.Close()
+
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, mcpHTTP.URL)
+		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
+			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+	})
+
+	t.Run("MCP tool transport failure", func(t *testing.T) {
+		mcpServer := mcp.NewServer(&mcp.Implementation{Name: "failure-test", Version: "1.0.0"}, nil)
+		type input struct {
+			Value string `json:"value"`
+		}
+		type output struct {
+			Value string `json:"value"`
+		}
+		mcp.AddTool(mcpServer, &mcp.Tool{Name: "boom"},
+			func(context.Context, *mcp.CallToolRequest, input) (*mcp.CallToolResult, output, error) {
+				return nil, output{Value: "unexpected"}, nil
+			},
+		)
+		streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)
+		mcpHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "read failed", http.StatusInternalServerError)
+				return
+			}
+			_ = r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			if bytes.Contains(raw, []byte(`"method":"tools/call"`)) {
+				http.Error(w, "tool transport failed", http.StatusBadGateway)
+				return
+			}
+			streamable.ServeHTTP(w, r)
+		}))
+		defer mcpHTTP.Close()
+
+		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "external-failure", Type: "function",
+				Function: modelclient.ToolFunction{Name: "mcp_failtool_boom", Arguments: `{"value":"x"}`},
+			}})
+		}))
+		defer modelHTTP.Close()
+
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, mcpHTTP.URL)
+		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
+			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+	})
+}
+
+func runFailureScenario(
+	t *testing.T,
+	dataStore *store.Store,
+	ctx context.Context,
+	modelURL string,
+	timeoutMS int32,
+	maxToolRounds int32,
+	mcpURL string,
+) (string, string) {
+	t.Helper()
+	workspace, err := dataStore.CreateWorkspace(ctx, "Failure "+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Failure card", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
+		Enabled: true, ProviderBaseURL: modelURL, Model: "failure-model",
+		RequestTimeoutMS: timeoutMS, MaxToolRounds: maxToolRounds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mcpURL != "" {
+		if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
+			Name: "failtool", URL: mcpURL, Enabled: true, TimeoutMS: 2000,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dataStore.SubmitComment(ctx, store.SubmitCommentParams{
+		WorkspaceID: workspace.ID, CardID: card.ID, AuthorSourceID: human.ID,
+		Content: "exercise failure recovery", IdempotencyKey: "failure-" + uuid.NewString(),
+		DispatchMode: domain.DispatchModeEnqueue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextBuiltInRun(ctx, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.SourceID != settings.SourceID {
+		t.Fatalf("claim source=%s settings source=%s", claim.SourceID, settings.SourceID)
+	}
+
+	dispatcher := NewDispatcher(dataStore, modelclient.New(), nil, DispatcherConfig{
+		MaxConcurrent: 1, LeaseDuration: time.Minute,
+	})
+	dispatcher.runClaim(ctx, *claim)
+	run, err := dataStore.GetRun(ctx, workspace.ID, claim.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return run.Status, run.ErrorSummary
 }
 
 type modelRequest struct {

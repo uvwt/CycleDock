@@ -43,6 +43,26 @@ type Tool struct {
 	InputSchema map[string]any
 }
 
+type ConnectPhase string
+
+const (
+	ConnectPhaseInitialize ConnectPhase = "initialize"
+	ConnectPhaseListTools  ConnectPhase = "list_tools"
+)
+
+type ConnectError struct {
+	Phase ConnectPhase
+	Err   error
+}
+
+func (e *ConnectError) Error() string {
+	return fmt.Sprintf("MCP %s failed: %v", e.Phase, e.Err)
+}
+
+func (e *ConnectError) Unwrap() error {
+	return e.Err
+}
+
 type SessionSet struct {
 	sessions map[string]*serverSession
 	tools    map[string]Tool
@@ -85,7 +105,7 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 		cancel()
 		if err != nil {
 			set.Close()
-			return nil, fmt.Errorf("connect MCP %s: %w", connection.Name, err)
+			return nil, &ConnectError{Phase: ConnectPhaseInitialize, Err: err}
 		}
 		set.sessions[connection.Name] = &serverSession{config: connection, session: session}
 
@@ -94,7 +114,7 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 		cancel()
 		if err != nil {
 			set.Close()
-			return nil, fmt.Errorf("list MCP tools %s: %w", connection.Name, err)
+			return nil, &ConnectError{Phase: ConnectPhaseListTools, Err: err}
 		}
 		for _, remote := range result.Tools {
 			if remote == nil {

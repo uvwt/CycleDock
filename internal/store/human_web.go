@@ -132,6 +132,19 @@ func (s *Store) ListPendingQueue(ctx context.Context, workspaceID, cardID uuid.U
 	return items, nil
 }
 
+func (s *Store) ListRecentCardWork(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+) ([]db.ListRecentCardWorkRow, error) {
+	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
+		return nil, err
+	}
+	return s.queries.ListRecentCardWork(ctx, db.ListRecentCardWorkParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+	})
+}
+
 func (s *Store) ListSchedules(ctx context.Context, workspaceID, cardID uuid.UUID) ([]db.CardSchedule, error) {
 	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
 		return nil, err

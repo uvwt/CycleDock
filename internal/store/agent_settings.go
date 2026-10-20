@@ -4,19 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
-
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type AgentSettingsInput struct {
 	Enabled            bool
@@ -55,11 +51,11 @@ func (s *Store) SaveAgentSettings(
 		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: provider_base_url and model are required when built-in agent is enabled", domain.ErrConflict)
 	}
 	if input.ProviderBaseURL != "" {
-		if err := validateAgentEndpoint(input.ProviderBaseURL); err != nil {
-			return db.WorkspaceAgentSetting{}, err
+		if err := agentconfig.ValidateEndpoint(input.ProviderBaseURL); err != nil {
+			return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
 		}
 	}
-	if input.APIKeyEnv != "" && !envNamePattern.MatchString(input.APIKeyEnv) {
+	if input.APIKeyEnv != "" && !agentconfig.ValidEnvName(input.APIKeyEnv) {
 		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: api_key_env must be an environment variable name", domain.ErrConflict)
 	}
 	if input.RequestTimeoutMS < 1000 || input.RequestTimeoutMS > 600000 {
@@ -161,10 +157,10 @@ func (s *Store) SaveMCPConnection(
 	if input.Name == "" || len(input.Name) > 80 {
 		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: MCP connection name must contain 1-80 characters", domain.ErrConflict)
 	}
-	if err := validateAgentEndpoint(input.URL); err != nil {
-		return db.WorkspaceMcpConnection{}, err
+	if err := agentconfig.ValidateEndpoint(input.URL); err != nil {
+		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
-	if input.BearerTokenEnv != "" && !envNamePattern.MatchString(input.BearerTokenEnv) {
+	if input.BearerTokenEnv != "" && !agentconfig.ValidEnvName(input.BearerTokenEnv) {
 		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: bearer_token_env must be an environment variable name", domain.ErrConflict)
 	}
 	if input.TimeoutMS == 0 {
@@ -210,28 +206,4 @@ func (s *Store) DeleteMCPConnection(ctx context.Context, workspaceID, connection
 		return domain.ErrNotFound
 	}
 	return nil
-}
-
-func validateAgentEndpoint(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
-		return fmt.Errorf("%w: endpoint must be an absolute URL", domain.ErrConflict)
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("%w: endpoint cannot contain user info, query, or fragment", domain.ErrConflict)
-	}
-	switch parsed.Scheme {
-	case "https":
-		return nil
-	case "http":
-		host := strings.ToLower(parsed.Hostname())
-		if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-			return nil
-		}
-		ip := net.ParseIP(host)
-		if ip != nil && ip.IsLoopback() {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: endpoint must use HTTPS, except localhost/loopback development", domain.ErrConflict)
 }

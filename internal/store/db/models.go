@@ -28,6 +28,8 @@ type AgentRun struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	FinishIdempotencyKey pgtype.Text        `json:"finish_idempotency_key"`
 	FinishRequestHash    pgtype.Text        `json:"finish_request_hash"`
+	CancelledBySourceID  uuid.NullUUID      `json:"cancelled_by_source_id"`
+	CancelReason         string             `json:"cancel_reason"`
 }
 
 type Card struct {
@@ -159,19 +161,23 @@ type Source struct {
 }
 
 type Trigger struct {
-	ID                uuid.UUID          `json:"id"`
-	Sequence          pgtype.Int8        `json:"sequence"`
-	WorkspaceID       uuid.UUID          `json:"workspace_id"`
-	CardID            uuid.UUID          `json:"card_id"`
-	Cause             string             `json:"cause"`
-	CauseEventID      uuid.NullUUID      `json:"cause_event_id"`
-	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
-	DispatchMode      string             `json:"dispatch_mode"`
-	ScheduleID        uuid.NullUUID      `json:"schedule_id"`
-	ScheduledFor      pgtype.Timestamptz `json:"scheduled_for"`
-	IdempotencyKey    pgtype.Text        `json:"idempotency_key"`
-	RequestHash       pgtype.Text        `json:"request_hash"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ID                  uuid.UUID          `json:"id"`
+	Sequence            pgtype.Int8        `json:"sequence"`
+	WorkspaceID         uuid.UUID          `json:"workspace_id"`
+	CardID              uuid.UUID          `json:"card_id"`
+	Cause               string             `json:"cause"`
+	CauseEventID        uuid.NullUUID      `json:"cause_event_id"`
+	CreatedBySourceID   uuid.NullUUID      `json:"created_by_source_id"`
+	DispatchMode        string             `json:"dispatch_mode"`
+	ScheduleID          uuid.NullUUID      `json:"schedule_id"`
+	ScheduledFor        pgtype.Timestamptz `json:"scheduled_for"`
+	IdempotencyKey      pgtype.Text        `json:"idempotency_key"`
+	RequestHash         pgtype.Text        `json:"request_hash"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	RetryOfTriggerID    uuid.NullUUID      `json:"retry_of_trigger_id"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
+	CancelReason        string             `json:"cancel_reason"`
 }
 
 type WebAuthFlow struct {

@@ -106,7 +106,8 @@ func mapConstraintError(err error) error {
 		"cards_source_create_idempotency_uq",
 		"events_source_type_idempotency_uq",
 		"events_confirm_source_uq",
-		"triggers_source_followup_idempotency_uq":
+		"triggers_source_followup_idempotency_uq",
+		"triggers_retry_once_uq":
 		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
 	default:
 		return err

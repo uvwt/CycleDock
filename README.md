@@ -40,6 +40,8 @@ Workspace
 - [认证与租户](docs/auth.md)
 - [Human Web HTTP API](docs/http-api.md)
 - [AI Connect](docs/ai-connect.md)
+- [Self-host 安装](docs/install.md)
+- [升级指南](docs/upgrade.md)
 - [技术栈](docs/stack.md)
 - [开发路线](docs/development.md)
 - [旧项目参考边界](docs/legacy-reference.md)
@@ -55,7 +57,7 @@ Workspace
 
 ## 当前阶段
 
-Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MCP 与 Phase 4 Built-in Cycle Agent 已形成可运行基线：
+Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MCP、Phase 4 Built-in Cycle Agent 与 Phase 5 Product Polish / Release Preparation 已形成可运行基线：
 
 - 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
 - Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
@@ -69,5 +71,9 @@ Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MC
 - Workspace-scoped Built-in Cycle Agent settings、Dispatcher、Runner 与 Context Builder。
 - OpenAI-compatible Model Client 与 outbound MCP Client；模型/tool raw trace 只存在于当前 Run 内存。
 - Built-in Agent secret 配置只保存环境变量名，API/数据库不保存 Model API Key 或 MCP Bearer Token 明文。
-
-下一阶段进入 [Phase 5 — Product Polish](docs/development.md#7-phase-5--product-polish)，重点做运行恢复、配置体验、可访问性与长历史上下文治理。
+- expired lease 恢复、Human retry / cancel 与 stale Run 防回写采用统一 Trigger / Run 生命周期。
+- Provider / MCP connection test 只做最小模型请求与 MCP initialize + ListTools，不执行 MCP Tool。
+- Card Detail 展示 current Run、pending queue 与终态 work history，并支持 Human cancel / retry。
+- 长历史上下文采用 bounded recent Timeline + durable historical facts + 派生 Comment/Progress compaction；原 Timeline 始终是审计事实源。
+- Web 已具备基础中英 i18n、移动端 Board、loading/error/empty states、键盘拖拽与 reduced-motion / focus-visible 基础。
+- CI 同时执行 PostgreSQL integration、核心 race、Web lint/build/audit 与 Linux Docker Compose smoke。

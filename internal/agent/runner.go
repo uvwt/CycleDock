@@ -18,7 +18,11 @@ import (
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
-var errWaitingHuman = errors.New("agent run is waiting for human")
+var (
+	errWaitingHuman          = errors.New("agent run is waiting for human")
+	errMalformedModelResult  = errors.New("model returned an invalid final result")
+	errMaxToolRoundsExceeded = errors.New("model exceeded max tool rounds")
+)
 
 type RunnerConfig struct {
 	HeartbeatInterval time.Duration
@@ -135,7 +139,7 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 		if len(response.ToolCalls) == 0 {
 			result := strings.TrimSpace(response.Content)
 			if result == "" {
-				return errors.New("model returned neither tool calls nor a final result")
+				return errMalformedModelResult
 			}
 			return r.store.FinishRun(runCtx, store.FinishRunParams{
 				WorkspaceID: claim.WorkspaceID, RunID: claim.RunID, RunnerSourceID: claim.SourceID,
@@ -143,7 +147,7 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 			})
 		}
 		if round >= settings.MaxToolRounds {
-			return fmt.Errorf("model exceeded max tool rounds (%d)", settings.MaxToolRounds)
+			return fmt.Errorf("%w (%d)", errMaxToolRoundsExceeded, settings.MaxToolRounds)
 		}
 
 		messages = append(messages, modelclient.Message{
@@ -168,6 +172,9 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 				result, err = mcpSessions.Call(runCtx, call.Function.Name, arguments)
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) && runCtx.Err() != nil {
 					return err
+				}
+				if err != nil {
+					return fmt.Errorf("MCP tool call failed: %w", err)
 				}
 			} else {
 				err = fmt.Errorf("unknown tool %q", call.Function.Name)

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -126,6 +127,88 @@ func TestBuiltInAgentConcurrentClaimAndContextUsesLatestCardState(t *testing.T) 
 	}
 	if !sawFinding || !sawResult {
 		t.Fatalf("durable prior knowledge missing: finding=%v result=%v events=%+v", sawFinding, sawResult, contextSnapshot.Events)
+	}
+}
+
+func TestAgentContextCompactionRetainsHistoricalDurableFacts(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindNormal)
+	ctx := context.Background()
+
+	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
+		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubmitComment(ctx, SubmitCommentParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
+		Content: "original old comment", IdempotencyKey: "compaction-root",
+		DispatchMode: domain.DispatchModeEnqueue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimNextBuiltInRun(ctx, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddRunEvent(ctx, RunEventParams{
+		WorkspaceID: f.WorkspaceID, RunID: claim.RunID, RunnerSourceID: settings.SourceID,
+		Type: domain.EventTypeFinding, Content: "EARLY_DURABLE_FINDING",
+		IdempotencyKey: "compaction-finding",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubmitComment(ctx, SubmitCommentParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
+		Content: "EARLY_COMPACTED_COMMENT", IdempotencyKey: "compaction-comment",
+		DispatchMode: domain.DispatchModeEnqueue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		if _, err := s.AddRunEvent(ctx, RunEventParams{
+			WorkspaceID: f.WorkspaceID, RunID: claim.RunID, RunnerSourceID: settings.SourceID,
+			Type:           domain.EventTypeProgress,
+			Content:        "progress " + fmt.Sprint(i),
+			IdempotencyKey: "compaction-progress-" + fmt.Sprint(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	snapshot, err := s.LoadAgentRunContext(
+		ctx, f.WorkspaceID, claim.RunID, settings.SourceID, 10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Events) != 10 {
+		t.Fatalf("recent event window=%d, want 10", len(snapshot.Events))
+	}
+	var foundEarlyFact bool
+	for _, event := range snapshot.HistoricalFacts {
+		if event.Type == domain.EventTypeFinding && event.Content == "EARLY_DURABLE_FINDING" {
+			foundEarlyFact = true
+			break
+		}
+	}
+	if !foundEarlyFact {
+		t.Fatalf("historical finding was lost: facts=%+v", snapshot.HistoricalFacts)
+	}
+	if snapshot.HistoryCompaction.BeforeSequence == 0 ||
+		snapshot.HistoryCompaction.OlderCommentCount < 1 ||
+		snapshot.HistoryCompaction.OlderProgressCount < 1 {
+		t.Fatalf("history compaction metadata=%+v", snapshot.HistoryCompaction)
+	}
+	if len(snapshot.HistoryCompaction.RecentContextEvents) == 0 ||
+		len(snapshot.HistoryCompaction.RecentContextEvents) > 8 {
+		t.Fatalf("compacted excerpts=%d", len(snapshot.HistoryCompaction.RecentContextEvents))
+	}
+	for _, event := range snapshot.Events {
+		if event.Content == "EARLY_DURABLE_FINDING" {
+			t.Fatal("early finding should be outside the bounded recent window")
+		}
 	}
 }
 

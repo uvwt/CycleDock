@@ -3,8 +3,10 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Bot,
   ChevronDown,
+  CircleAlert,
   CirclePlus,
   FolderKanban,
+  Languages,
   LogOut,
   Pencil,
   Plus,
@@ -16,6 +18,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, type Card, type Identity, type NormalColumn, type Project } from '../api'
+import { useI18n } from '../i18n-context'
 import { queryClient, queryKeys } from '../query'
 
 const Board = lazy(() => import('../components/Board').then((module) => ({ default: module.Board })))
@@ -27,6 +30,7 @@ const AgentSettingsDialog = lazy(() =>
 )
 
 export function WorkspacePage({ identity }: { identity: Identity }) {
+  const { locale, setLocale, t } = useI18n()
   const navigate = useNavigate()
   const params = useParams<{ projectID?: string; cardID?: string }>()
   const projects = useQuery({
@@ -102,7 +106,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
 
         <div className="flex-1 overflow-y-auto p-3">
           <div className="mb-2 flex items-center justify-between px-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600">Projects</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-600">{t('nav.projects')}</p>
             <button
               type="button"
               onClick={() => setCreateProjectOpen(true)}
@@ -141,7 +145,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
             onClick={() => logout.mutate()}
             className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs text-slate-500 transition hover:bg-slate-900 hover:text-slate-300"
           >
-            <LogOut className="size-3.5" /> Sign out
+            <LogOut className="size-3.5" /> {t('nav.signOut')}
           </button>
         </div>
       </aside>
@@ -161,12 +165,23 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}
+              className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-800 px-2.5 text-[11px] font-medium text-slate-500 transition hover:border-slate-700 hover:text-slate-200"
+              title={locale === 'en' ? t('locale.switchToChinese') : t('locale.switchToEnglish')}
+              aria-label={locale === 'en' ? t('locale.switchToChinese') : t('locale.switchToEnglish')}
+            >
+              <Languages className="size-3.5" />
+              {locale === 'en' ? '中文' : 'EN'}
+            </button>
             {identity.role === 'owner' ? (
               <button
                 type="button"
                 onClick={() => setAgentSettingsOpen(true)}
                 className="grid size-9 place-items-center rounded-xl border border-slate-800 text-slate-500 transition hover:border-slate-700 hover:text-cyan-300"
-                title="Built-in Cycle Agent"
+                title={t('nav.agent')}
+                aria-label={t('nav.agent')}
               >
                 <Bot className="size-4" />
               </button>
@@ -177,7 +192,8 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                   type="button"
                   onClick={() => setProjectSettingsOpen(true)}
                   className="grid size-9 place-items-center rounded-xl border border-slate-800 text-slate-500 transition hover:border-slate-700 hover:text-slate-300"
-                  title="Project settings"
+                  title={t('nav.projectSettings')}
+                  aria-label={t('nav.projectSettings')}
                 >
                   <Settings2 className="size-4" />
                 </button>
@@ -186,7 +202,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                   onClick={() => setCreateCardOpen(true)}
                   className="flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-3.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-300"
                 >
-                  <CirclePlus className="size-4" /> New card
+                  <CirclePlus className="size-4" /> {t('nav.newCard')}
                 </button>
               </>
             ) : (
@@ -195,27 +211,31 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                 onClick={() => setCreateProjectOpen(true)}
                 className="flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-3.5 text-xs font-semibold text-slate-950"
               >
-                <Plus className="size-4" /> New project
+                <Plus className="size-4" /> {t('nav.newProject')}
               </button>
             )}
           </div>
         </header>
 
-        <div className="overflow-x-auto px-4 py-5 md:px-6">
+        <div className="min-w-0 overflow-x-hidden px-4 py-5 md:px-6">
           {projects.isPending ? (
-            <div className="py-20 text-center text-sm text-slate-600">Loading projects…</div>
+            <LoadingState message={t('state.loadingProjects')} />
           ) : projects.isError ? (
-            <div className="py-20 text-center text-sm text-rose-300">
-              {projects.error instanceof Error ? projects.error.message : 'Could not load projects.'}
-            </div>
+            <LoadError
+              message={projects.error instanceof Error ? projects.error.message : t('state.projectsError')}
+              retryLabel={t('action.retry')}
+              onRetry={() => void projects.refetch()}
+            />
           ) : !activeProject ? (
             <EmptyWorkspace onCreate={() => setCreateProjectOpen(true)} />
           ) : cards.isPending ? (
-            <div className="py-20 text-center text-sm text-slate-600">Loading board…</div>
+            <LoadingState message={t('state.loadingBoard')} />
           ) : cards.isError ? (
-            <div className="py-20 text-center text-sm text-rose-300">
-              {cards.error instanceof Error ? cards.error.message : 'Could not load cards.'}
-            </div>
+            <LoadError
+              message={cards.error instanceof Error ? cards.error.message : t('state.cardsError')}
+              retryLabel={t('action.retry')}
+              onRetry={() => void cards.refetch()}
+            />
           ) : (
             <>
               <div className="mb-5 flex items-start justify-between gap-5 lg:hidden">
@@ -275,6 +295,39 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
         </Suspense>
       ) : null}
     </main>
+  )
+}
+
+function LoadingState({ message }: { message: string }) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-20 text-sm text-slate-600" role="status" aria-live="polite">
+      <RefreshCw className="size-4 animate-spin" />
+      {message}
+    </div>
+  )
+}
+
+function LoadError({
+  message,
+  retryLabel,
+  onRetry,
+}: {
+  message: string
+  retryLabel: string
+  onRetry: () => void
+}) {
+  return (
+    <div className="mx-auto my-16 max-w-md rounded-2xl border border-rose-900/50 bg-rose-950/15 p-5 text-center" role="alert">
+      <CircleAlert className="mx-auto size-6 text-rose-300" />
+      <p className="mt-3 text-sm text-rose-200">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 inline-flex h-9 items-center gap-2 rounded-xl border border-rose-900/60 px-3 text-xs font-semibold text-rose-200 transition hover:border-rose-700"
+      >
+        <RefreshCw className="size-3.5" /> {retryLabel}
+      </button>
+    </div>
   )
 }
 
@@ -358,7 +411,7 @@ function CreateProjectDialog({
           <button type="button" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()} className="mt-5 h-10 w-full rounded-xl bg-cyan-400 text-sm font-semibold text-slate-950 disabled:opacity-40">
             Create project
           </button>
-          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300"><X className="size-4" /></Dialog.Close>
+          <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-900 hover:text-slate-300"><X className="size-4" /></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

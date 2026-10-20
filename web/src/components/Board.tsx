@@ -1,15 +1,19 @@
-import { DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { Activity, Circle, Clock3 } from 'lucide-react'
 import type { Card, NormalColumn } from '../api'
+import { useI18n } from '../i18n-context'
 
-const columns: Array<{ id: NormalColumn; label: string }> = [
-  { id: 'discussion', label: 'Discussion' },
-  { id: 'todo', label: 'Todo' },
-  { id: 'working', label: 'Working' },
-  { id: 'review', label: 'Review' },
-  { id: 'done', label: 'Done' },
-]
+const columns: NormalColumn[] = ['discussion', 'todo', 'working', 'review', 'done']
 
 export function Board({
   cards,
@@ -20,7 +24,11 @@ export function Board({
   onOpen: (card: Card) => void
   onMove: (cardID: string, column: NormalColumn) => void
 }) {
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const { t } = useI18n()
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor),
+  )
   const normalCards = cards.filter((card) => card.kind === 'normal')
   const ongoingCards = cards.filter((card) => card.kind === 'ongoing')
 
@@ -28,7 +36,8 @@ export function Board({
     const cardID = String(event.active.id)
     const column = event.over?.id as NormalColumn | undefined
     const card = normalCards.find((item) => item.id === cardID)
-    if (card && column && columns.some((item) => item.id === column) && card.normal_column !== column) {
+    const blockedDone = column === 'done' && card?.normal_column !== 'review'
+    if (card && column && columns.includes(column) && card.normal_column !== column && !blockedDone) {
       onMove(cardID, column)
     }
   }
@@ -36,12 +45,14 @@ export function Board({
   return (
     <div className="space-y-8">
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="grid min-w-[980px] grid-cols-5 gap-3">
+        <div className="grid snap-x snap-mandatory auto-cols-[minmax(260px,85vw)] grid-flow-col gap-3 overflow-x-auto pb-2 lg:min-w-[980px] lg:snap-none lg:grid-flow-row lg:grid-cols-5 lg:overflow-visible lg:pb-0">
           {columns.map((column) => (
             <BoardColumn
-              key={column.id}
+              key={column}
               column={column}
-              cards={normalCards.filter((card) => card.normal_column === column.id)}
+              label={t(`board.${column}`)}
+              emptyLabel={t('board.emptyColumn')}
+              cards={normalCards.filter((card) => card.normal_column === column)}
               onOpen={onOpen}
             />
           ))}
@@ -51,12 +62,12 @@ export function Board({
       <section>
         <div className="mb-3 flex items-center gap-2">
           <Activity className="size-4 text-cyan-300" />
-          <h2 className="text-sm font-semibold text-slate-200">Ongoing cycles</h2>
+          <h2 className="text-sm font-semibold text-slate-200">{t('board.ongoing')}</h2>
           <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">{ongoingCards.length}</span>
         </div>
         {ongoingCards.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-800 px-5 py-7 text-sm text-slate-500">
-            No active ongoing cards yet.
+            {t('board.emptyOngoing')}
           </div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -71,13 +82,15 @@ export function Board({
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-medium text-slate-100">{card.title}</p>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{card.description || 'No description'}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+                      {card.description || t('board.noDescription')}
+                    </p>
                   </div>
                   <HealthBadge health={card.health ?? 'unknown'} />
                 </div>
                 <div className="mt-4 flex items-center justify-between text-[11px] text-slate-500">
                   <span className="capitalize">{card.ongoing_state}</span>
-                  {card.current_run_status ? <RunBadge status={card.current_run_status} /> : <span>Idle</span>}
+                  {card.current_run_status ? <RunBadge status={card.current_run_status} /> : <span>{t('board.idle')}</span>}
                 </div>
               </button>
             ))}
@@ -90,32 +103,41 @@ export function Board({
 
 function BoardColumn({
   column,
+  label,
+  emptyLabel,
   cards,
   onOpen,
 }: {
-  column: { id: NormalColumn; label: string }
+  column: NormalColumn
+  label: string
+  emptyLabel: string
   cards: Card[]
   onOpen: (card: Card) => void
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: column.id })
+  const { setNodeRef, isOver } = useDroppable({ id: column })
   return (
     <section
       ref={setNodeRef}
-      className={`min-h-[420px] rounded-2xl border p-2 transition ${
+      className={`min-h-[360px] snap-start rounded-2xl border p-2 transition lg:min-h-[420px] ${
         isOver ? 'border-cyan-400/70 bg-cyan-400/5' : 'border-slate-800 bg-slate-900/45'
       }`}
+      aria-label={label}
     >
       <header className="mb-2 flex items-center justify-between px-2 py-1.5">
         <div className="flex items-center gap-2">
           <Circle className="size-2.5 fill-current text-slate-500" />
-          <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">{column.label}</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-400">{label}</h2>
         </div>
         <span className="text-[11px] tabular-nums text-slate-600">{cards.length}</span>
       </header>
       <div className="space-y-2">
-        {cards.map((card) => (
-          <DraggableCard key={card.id} card={card} onOpen={onOpen} />
-        ))}
+        {cards.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-slate-800 px-3 py-6 text-center text-[11px] text-slate-600">
+            {emptyLabel}
+          </p>
+        ) : (
+          cards.map((card) => <DraggableCard key={card.id} card={card} onOpen={onOpen} />)
+        )}
       </div>
     </section>
   )

@@ -4,9 +4,11 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/agentcheck"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
@@ -80,6 +82,66 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agentSettingsToResponse(settings))
+}
+
+func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	var request struct {
+		ProviderBaseURL  string `json:"provider_base_url"`
+		Model            string `json:"model"`
+		APIKeyEnv        string `json:"api_key_env"`
+		RequestTimeoutMS int32  `json:"request_timeout_ms"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if request.RequestTimeoutMS == 0 {
+		request.RequestTimeoutMS = 120000
+	}
+	if request.RequestTimeoutMS < 1000 || request.RequestTimeoutMS > 600000 {
+		writeError(w, http.StatusBadRequest, "invalid_timeout", "request_timeout_ms must be between 1000 and 600000")
+		return
+	}
+	result := agentcheck.New().Provider(r.Context(), agentcheck.ProviderInput{
+		BaseURL:   request.ProviderBaseURL,
+		Model:     request.Model,
+		APIKeyEnv: request.APIKeyEnv,
+		Timeout:   time.Duration(request.RequestTimeoutMS) * time.Millisecond,
+	})
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (api *API) testAgentMCP(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	var request struct {
+		Name           string `json:"name"`
+		URL            string `json:"url"`
+		BearerTokenEnv string `json:"bearer_token_env"`
+		TimeoutMS      int32  `json:"timeout_ms"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if request.TimeoutMS == 0 {
+		request.TimeoutMS = 30000
+	}
+	if request.TimeoutMS < 1000 || request.TimeoutMS > 300000 {
+		writeError(w, http.StatusBadRequest, "invalid_timeout", "timeout_ms must be between 1000 and 300000")
+		return
+	}
+	result := agentcheck.New().MCP(r.Context(), agentcheck.MCPInput{
+		Name:           request.Name,
+		URL:            request.URL,
+		BearerTokenEnv: request.BearerTokenEnv,
+		Timeout:        time.Duration(request.TimeoutMS) * time.Millisecond,
+	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (api *API) listAgentMCPConnections(w http.ResponseWriter, r *http.Request) {

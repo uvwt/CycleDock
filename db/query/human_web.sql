@@ -121,8 +121,53 @@ LEFT JOIN agent_runs r
  AND r.trigger_id = t.id
 WHERE t.workspace_id = sqlc.arg(workspace_id)
   AND t.card_id = sqlc.arg(card_id)
+  AND t.cancelled_at IS NULL
   AND r.id IS NULL
 ORDER BY t.sequence;
+
+-- name: ListRecentCardWork :many
+SELECT
+    t.id AS trigger_id,
+    t.sequence,
+    t.cause,
+    t.dispatch_mode,
+    COALESCE(e.content, '') AS content,
+    t.retry_of_trigger_id,
+    t.cancelled_at,
+    t.cancel_reason,
+    t.created_at AS trigger_created_at,
+    r.id AS run_id,
+    r.status AS run_status,
+    r.current_stage,
+    r.progress_summary,
+    r.result_summary,
+    r.error_summary,
+    r.cancel_reason AS run_cancel_reason,
+    r.created_at AS run_created_at,
+    r.finished_at,
+    EXISTS (
+        SELECT 1
+        FROM triggers child
+        WHERE child.workspace_id = t.workspace_id
+          AND child.card_id = t.card_id
+          AND child.retry_of_trigger_id = t.id
+    ) AS has_retry
+FROM triggers t
+LEFT JOIN events e
+  ON e.workspace_id = t.workspace_id
+ AND e.card_id = t.card_id
+ AND e.id = t.cause_event_id
+LEFT JOIN agent_runs r
+  ON r.workspace_id = t.workspace_id
+ AND r.trigger_id = t.id
+WHERE t.workspace_id = sqlc.arg(workspace_id)
+  AND t.card_id = sqlc.arg(card_id)
+  AND (
+      t.cancelled_at IS NOT NULL
+      OR r.status IN ('completed', 'failed', 'superseded', 'expired', 'cancelled')
+  )
+ORDER BY t.sequence DESC
+LIMIT 20;
 
 -- name: UpdateCardSchedule :execrows
 UPDATE card_schedules

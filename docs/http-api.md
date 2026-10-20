@@ -26,7 +26,7 @@ Project 即 Board，不存在独立 Board API。
 
 ## Card
 
-- `GET /api/v1/cards/{cardID}`：返回 Card、current Run、Timeline、pending Trigger queue、Schedule、Health / Last Check-in。
+- `GET /api/v1/cards/{cardID}`：返回 Card、current Run、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。
 - `PATCH /api/v1/cards/{cardID}`
 - `POST /api/v1/cards/{cardID}/move`
 - `POST /api/v1/cards/{cardID}/ongoing-state`
@@ -37,6 +37,9 @@ Normal Card 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP 
 
 - `POST /api/v1/cards/{cardID}/comments`
 - `POST /api/v1/cards/{cardID}/reply`
+- `POST /api/v1/cards/{cardID}/triggers/{triggerID}/cancel`
+- `POST /api/v1/cards/{cardID}/triggers/{triggerID}/retry`
+- `POST /api/v1/cards/{cardID}/runs/{runID}/cancel`
 
 Comment 请求要求 `Idempotency-Key` Header。
 
@@ -48,6 +51,33 @@ Comment 请求要求 `Idempotency-Key` Header。
 Human Web 不提交 runner source。interrupt 与 waiting_human reply 在 Store 的 Card 锁内沿用 current Run 的 Runner，避免 Handler “先查再写”造成并发竞态。
 
 没有 AgentRun 的 Trigger 即 pending queue item。
+
+取消与 retry 不复写旧历史：
+
+- pending Trigger cancel 只记录该 Trigger 的取消元数据，不伪造 AgentRun。
+- current queued / running / waiting_human Run cancel 后进入 `cancelled`。
+- retry failed / expired / cancelled work 时创建新的 `manual_retry` Trigger。
+- 同一个原 Trigger 只允许一条 retry lineage；幂等请求复用已创建的新 Trigger。
+- `interrupt` 表达“立即换方向继续”，`cancel` 表达“停止当前工作”，两者不混用。
+
+## Built-in Agent settings / connection test
+
+Workspace owner：
+
+- `GET /api/v1/agent/settings`
+- `PUT /api/v1/agent/settings`
+- `POST /api/v1/agent/provider-test`
+- `GET /api/v1/agent/mcp-connections`
+- `POST /api/v1/agent/mcp-connections`
+- `PUT /api/v1/agent/mcp-connections/{connectionID}`
+- `DELETE /api/v1/agent/mcp-connections/{connectionID}`
+- `POST /api/v1/agent/mcp-test`
+
+Provider Test 使用当前 endpoint / model / API key env 做最小 `/chat/completions` 请求。
+
+MCP Test 只执行 connect / initialize / ListTools，返回工具数量，**不执行任何 Tool**。
+
+测试响应只返回分类后的状态、消息、耗时与工具数量，不回显 secret 或上游原始响应体。
 
 ## Ongoing Schedule
 
