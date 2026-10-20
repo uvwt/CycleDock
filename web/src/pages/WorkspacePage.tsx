@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
+  Bot,
   ChevronDown,
   CirclePlus,
   FolderKanban,
@@ -20,6 +21,9 @@ import { queryClient, queryKeys } from '../query'
 const Board = lazy(() => import('../components/Board').then((module) => ({ default: module.Board })))
 const CardDetailDialog = lazy(() =>
   import('../components/CardDetailDialog').then((module) => ({ default: module.CardDetailDialog })),
+)
+const AgentSettingsDialog = lazy(() =>
+  import('../components/AgentSettingsDialog').then((module) => ({ default: module.AgentSettingsDialog })),
 )
 
 export function WorkspacePage({ identity }: { identity: Identity }) {
@@ -73,6 +77,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [createCardOpen, setCreateCardOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
 
   function chooseProject(projectID: string) {
     navigate(`/projects/${projectID}`)
@@ -156,6 +161,16 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {identity.role === 'owner' ? (
+              <button
+                type="button"
+                onClick={() => setAgentSettingsOpen(true)}
+                className="grid size-9 place-items-center rounded-xl border border-slate-800 text-slate-500 transition hover:border-slate-700 hover:text-cyan-300"
+                title="Built-in Cycle Agent"
+              >
+                <Bot className="size-4" />
+              </button>
+            ) : null}
             {activeProject ? (
               <>
                 <button
@@ -230,6 +245,11 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
       </section>
 
       <CreateProjectDialog open={createProjectOpen} onOpenChange={setCreateProjectOpen} />
+      {agentSettingsOpen ? (
+        <Suspense fallback={null}>
+          <AgentSettingsDialog open={agentSettingsOpen} onOpenChange={setAgentSettingsOpen} />
+        </Suspense>
+      ) : null}
       {activeProject ? (
         <>
           <CreateCardDialog

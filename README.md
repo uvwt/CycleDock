@@ -55,7 +55,7 @@ Workspace
 
 ## 当前阶段
 
-Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web 与 Phase 3 External MCP 已形成可运行基线：
+Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MCP 与 Phase 4 Built-in Cycle Agent 已形成可运行基线：
 
 - 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
 - Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
@@ -66,5 +66,8 @@ Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web 与 Phase 3 External 
 - Project Board、Card Detail、Timeline、Queue、Human Review/Done 与 Ongoing Schedule Human Web。
 - 标准 Remote Streamable HTTP MCP、OAuth metadata / DCR / S256 PKCE / refresh rotation。
 - Workspace-scoped MCP tools、原子 Claim、Progress/Finding/Check-in/Finish/Confirm 与官方 CycleDock Skill。
+- Workspace-scoped Built-in Cycle Agent settings、Dispatcher、Runner 与 Context Builder。
+- OpenAI-compatible Model Client 与 outbound MCP Client；模型/tool raw trace 只存在于当前 Run 内存。
+- Built-in Agent secret 配置只保存环境变量名，API/数据库不保存 Model API Key 或 MCP Bearer Token 明文。
 
-下一阶段进入 [Phase 4 — Built-in Cycle Agent](docs/development.md#6-phase-4--built-in-cycle-agent)，实现内置 Dispatcher / Runner / Context Builder。
+下一阶段进入 [Phase 5 — Product Polish](docs/development.md#7-phase-5--product-polish)，重点做运行恢复、配置体验、可访问性与长历史上下文治理。

@@ -14,9 +14,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -93,6 +95,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	dispatcher := agent.NewDispatcher(dataStore, modelclient.New(), logger, agent.DispatcherConfig{})
+	go func() {
+		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("Cycle Agent dispatcher stopped", "error", err)
+		}
+	}()
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

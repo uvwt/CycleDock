@@ -84,7 +84,11 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - 不通过普通 GET Settings 回显。
 - 日志中不得输出。
 - DB 中如需持久化，必须与普通展示配置分离，并采用明确的 secret storage / encryption 方案。
-- 第一阶段在 Built-in Agent 尚未落地前，不提前设计复杂 secrets framework。
+- 当前 Built-in Agent **不把 Model API Key / MCP Bearer Token 写入数据库**。
+- Workspace Agent settings 只保存 `api_key_env`；MCP connection 只保存 `bearer_token_env`。
+- Runner 在每个 Run 开始时从 CycleDock 进程环境解析对应变量；变量缺失时 Run 以脱敏摘要失败。
+- 默认 Docker Compose 提供 `CYCLEDOCK_MODEL_API_KEY` 与 `CYCLEDOCK_MCP_TOKEN` 两个可直接转发的环境变量。更多连接需要由部署层显式把对应变量注入 app container。
+- 只有 Workspace owner 可以读取或修改 Agent settings / MCP connections。
 
 ## 8. 当前 Human Web 配置
 

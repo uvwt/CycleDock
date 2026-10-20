@@ -111,6 +111,18 @@ Result:
 
 不要简单把完整 Event 表全部拼进 Prompt。
 
+当前实现使用最近最多 50 条 meaningful Event，事件类型只包含：
+
+- comment。
+- progress。
+- finding。
+- result。
+- checkin。
+- confirm / reject。
+- status_change。
+
+tool call、tool arguments、raw tool result 从不进入该查询。
+
 ## 5. 长历史压缩
 
 Card 使用几个月后可能积累大量 Event。
@@ -246,7 +258,41 @@ waiting_human 表示：
 - Run → superseded。
 - 迟到结果不得修改当前 Card 状态。
 
-## 12. Artifact
+## 12. 当前 Built-in Runtime
+
+Workspace owner 可以配置：
+
+- OpenAI-compatible Provider Base URL。
+- Model。
+- Model API Key 对应的环境变量名。
+- request timeout。
+- max tool rounds。
+- Workspace Agent instructions。
+- 零个或多个 outbound MCP connection。
+
+MCP connection 保存 URL、timeout、enabled 与 Bearer Token 环境变量名。
+
+敏感值本身不进入 Settings API、PostgreSQL 或普通日志。Runner 开始 Run 时才从 CycleDock 进程环境读取。
+
+Dispatcher：
+
+- 周期处理所有 Workspace 的 due Schedule 与 lease expiry。
+- 只为启用 Built-in Agent 的 Workspace 自动执行 Trigger。
+- 优先启动已经绑定 `cycle_agent` 的 queued Run。
+- 没有 current Run 时，再原子 Claim 最早 pending Trigger。
+- waiting_human 仍占 current Run 槽位，不会被自动越过。
+
+Runner：
+
+- Claim 后先把 Normal Card 推进 Working（如果尚未进入 Working）。
+- Run 开始时重新构建最新 durable context。
+- 每个 Run 重新 discovery 已启用 outbound MCP tools。
+- heartbeat 只更新 lease，不写 Timeline。
+- MCP raw result 只追加到当前内存 model message。
+- 最终 assistant response 作为 Result 通过统一 Store 完成 Run。
+- Human interrupt / supersede 后，旧 Runner 即使模型晚返回，`FinishRun` 仍因 current Run 校验失败而不能污染 Card。
+
+## 13. Artifact
 
 如果执行产生真正需要后续继续使用的文件，例如 patch、诊断报告、截图或配置产物，不应通过继承完整 tool response 传递。
 

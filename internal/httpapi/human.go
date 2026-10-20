@@ -32,6 +32,13 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/schedules", api.createSchedule)
 	r.Put("/cards/{cardID}/schedules/{scheduleID}", api.updateSchedule)
 	r.Delete("/cards/{cardID}/schedules/{scheduleID}", api.deleteSchedule)
+
+	r.Get("/agent/settings", api.getAgentSettings)
+	r.Put("/agent/settings", api.saveAgentSettings)
+	r.Get("/agent/mcp-connections", api.listAgentMCPConnections)
+	r.Post("/agent/mcp-connections", api.createAgentMCPConnection)
+	r.Put("/agent/mcp-connections/{connectionID}", api.updateAgentMCPConnection)
+	r.Delete("/agent/mcp-connections/{connectionID}", api.deleteAgentMCPConnection)
 }
 
 type projectResponse struct {

@@ -201,6 +201,32 @@ type Workspace struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type WorkspaceAgentSetting struct {
+	WorkspaceID        uuid.UUID          `json:"workspace_id"`
+	SourceID           uuid.UUID          `json:"source_id"`
+	Enabled            bool               `json:"enabled"`
+	ProviderBaseUrl    string             `json:"provider_base_url"`
+	Model              string             `json:"model"`
+	ApiKeyEnv          string             `json:"api_key_env"`
+	RequestTimeoutMs   int32              `json:"request_timeout_ms"`
+	MaxToolRounds      int32              `json:"max_tool_rounds"`
+	SystemInstructions string             `json:"system_instructions"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceMcpConnection struct {
+	ID             uuid.UUID          `json:"id"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	Name           string             `json:"name"`
+	Url            string             `json:"url"`
+	BearerTokenEnv string             `json:"bearer_token_env"`
+	Enabled        bool               `json:"enabled"`
+	TimeoutMs      int32              `json:"timeout_ms"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WorkspaceMembership struct {
 	WorkspaceID    uuid.UUID          `json:"workspace_id"`
 	HumanAccountID uuid.UUID          `json:"human_account_id"`

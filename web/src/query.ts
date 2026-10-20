@@ -16,4 +16,6 @@ export const queryKeys = {
   projects: ['projects'] as const,
   cards: (projectID: string) => ['projects', projectID, 'cards'] as const,
   card: (cardID: string) => ['cards', cardID] as const,
+  agentSettings: ['agent-settings'] as const,
+  agentMCPConnections: ['agent-mcp-connections'] as const,
 }

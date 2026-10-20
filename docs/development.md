@@ -16,7 +16,8 @@
 - Phase 1 Work Core：已实现核心 Domain / Store，并以真实 PostgreSQL integration tests 覆盖关键并发一致性。
 - Phase 2 Human Web：已实现 Human 身份、NexusDock OIDC / Administrator fallback、Web Session、HTTP API 与 Project/Card Web 工作台。
 - Phase 3 External MCP：已实现标准 Streamable HTTP MCP、OAuth metadata/DCR/S256 PKCE/token rotation、Workspace approval、统一 Store 工具面、官方 Skill 与 AI Connect。
-- 下一阶段：Phase 4 Built-in Cycle Agent。
+- Phase 4 Built-in Cycle Agent：已实现 Workspace Agent settings、Dispatcher、Runner、Context Builder、OpenAI-compatible Model Client 与 outbound MCP Client。
+- 下一阶段：Phase 5 Product Polish。
 
 ## 2. Phase 0 — Foundation
 
@@ -165,13 +166,26 @@ Human Comment
 - 排队 Trigger 开始时读取最新 Card Context。
 - superseded Run 晚返回不污染当前 Card。
 
+当前实现：
+
+- 每个 Workspace 最多一条专用 `cycle_agent` Source，只有 Workspace owner 可以读取/修改 Built-in Agent settings。
+- provider / model / timeout / max tool rounds / Workspace Agent instructions 持久化到 PostgreSQL。
+- Model API Key 与 MCP Bearer Token 不写数据库；配置只保存 `api_key_env` / `bearer_token_env`，运行时从进程环境解析。
+- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 启用了 Built-in Agent 的 Workspace。
+- queued Run（例如 interrupt / waiting_human reply）优先恢复；普通 pending Trigger 按 sequence 原子 Claim。
+- Context Builder 每个 Run 从最新 Project / Card / bounded meaningful Timeline / 当前 Trigger 重建上下文。
+- OpenAI-compatible Client 使用非流式 `/chat/completions` tool-call loop，具备 timeout 与响应体上限。
+- outbound MCP Client 使用官方 MCP Go SDK Streamable HTTP；Bearer 只发送到配置 origin，跨 origin redirect 被拒绝，响应有大小上限。
+- raw model messages / tool args / raw MCP results 只存在于当前 Run 内存；只有 Finding / Result / Check-in / meaningful Progress 进入 Timeline。
+- waiting_human 停止本 Run；Human reply 创建新 Trigger / Run。superseded Run 的迟到模型返回无法写 Result。
+- 两 Dispatcher 并发、Context 边界、waiting_human、late model response、Model/MCP HTTP 协议均有 integration tests。
+
 ## 7. Phase 5 — Product Polish
 
-- Provider Settings。
-- MCP Connections。
-- Secret handling。
 - better failure recovery。
 - retry / cancel queue。
+- Provider / MCP connection test action 与状态反馈。
+- 如真实部署需要在数据库内托管 secret，再设计独立 encrypted secret storage；现阶段继续使用部署环境注入。
 - i18n。
 - mobile。
 - empty states。

@@ -123,6 +123,29 @@ export type ScheduleInput = {
   timezone: string
 }
 
+export type AgentSettings = {
+  configured: boolean
+  enabled: boolean
+  provider_base_url: string
+  model: string
+  api_key_env: string
+  request_timeout_ms: number
+  max_tool_rounds: number
+  system_instructions: string
+  source_id?: string
+}
+
+export type MCPConnection = {
+  id: string
+  name: string
+  url: string
+  bearer_token_env: string
+  enabled: boolean
+  timeout_ms: number
+}
+
+export type MCPConnectionInput = Omit<MCPConnection, 'id'>
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has('Content-Type')) {
@@ -225,4 +248,24 @@ export const api = {
     }),
   deleteSchedule: (cardID: string, scheduleID: string) =>
     request<void>(`/api/v1/cards/${cardID}/schedules/${scheduleID}`, { method: 'DELETE' }),
+
+  agentSettings: () => request<AgentSettings>('/api/v1/agent/settings'),
+  saveAgentSettings: (input: Omit<AgentSettings, 'configured' | 'source_id'>) =>
+    request<AgentSettings>('/api/v1/agent/settings', {
+      method: 'PUT',
+      body: jsonBody(input),
+    }),
+  agentMCPConnections: () => request<MCPConnection[]>('/api/v1/agent/mcp-connections'),
+  createAgentMCPConnection: (input: MCPConnectionInput) =>
+    request<MCPConnection>('/api/v1/agent/mcp-connections', {
+      method: 'POST',
+      body: jsonBody(input),
+    }),
+  updateAgentMCPConnection: (connectionID: string, input: MCPConnectionInput) =>
+    request<MCPConnection>(`/api/v1/agent/mcp-connections/${connectionID}`, {
+      method: 'PUT',
+      body: jsonBody(input),
+    }),
+  deleteAgentMCPConnection: (connectionID: string) =>
+    request<void>(`/api/v1/agent/mcp-connections/${connectionID}`, { method: 'DELETE' }),
 }

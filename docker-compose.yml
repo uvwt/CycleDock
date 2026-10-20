@@ -34,6 +34,9 @@ services:
       CYCLEDOCK_OIDC_ISSUER: ${CYCLEDOCK_OIDC_ISSUER:-}
       CYCLEDOCK_OIDC_CLIENT_ID: ${CYCLEDOCK_OIDC_CLIENT_ID:-}
       CYCLEDOCK_SECURE_COOKIE: ${CYCLEDOCK_SECURE_COOKIE:-}
+      # Built-in Agent settings 只保存变量名；secret 值由部署环境注入。
+      CYCLEDOCK_MODEL_API_KEY: ${CYCLEDOCK_MODEL_API_KEY:-}
+      CYCLEDOCK_MCP_TOKEN: ${CYCLEDOCK_MCP_TOKEN:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
