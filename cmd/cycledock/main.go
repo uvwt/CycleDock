@@ -18,6 +18,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
+	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -68,6 +69,17 @@ func main() {
 		secureCookie = true
 	}
 	dataStore := store.New(pool)
+	modelAuthService, err := modelauth.New(pool, modelauth.Config{
+		PublicURL:       publicURL,
+		SecretKey:       os.Getenv("CYCLEDOCK_MODEL_SECRET_KEY"),
+		ChatGPTClientID: os.Getenv("CYCLEDOCK_CHATGPT_CLIENT_ID"),
+	})
+	if err != nil {
+		logger.Error("configure model account authentication", "error", err)
+		os.Exit(1)
+	}
+	modelClient := modelclient.New()
+
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
 	if publicURL != "" {
@@ -85,6 +97,8 @@ func main() {
 		OAuth:        oauthService,
 		MCP:          mcpHandlers.MCP,
 		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
+		ModelAuth:    modelAuthService,
+		ModelClient:  modelClient,
 	})
 
 	server := &http.Server{
@@ -95,7 +109,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	dispatcher := agent.NewDispatcher(dataStore, modelclient.New(), logger, agent.DispatcherConfig{})
+	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
+		ModelAuth: modelAuthService,
+	})
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("Cycle Agent dispatcher stopped", "error", err)

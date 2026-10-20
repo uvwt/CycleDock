@@ -20,12 +20,21 @@ var (
 	ErrResponseTooLarge  = errors.New("model response too large")
 )
 
+type Transport string
+
+const (
+	TransportChatCompletions Transport = "chat_completions"
+	TransportResponses       Transport = "responses"
+)
+
 type Config struct {
 	BaseURL     string
 	Model       string
 	APIKey      string
 	Timeout     time.Duration
 	Temperature float64
+	Transport   Transport
+	Headers     map[string]string
 }
 
 type Message struct {
@@ -102,6 +111,9 @@ func (c *Client) Complete(
 	timeout := config.Timeout
 	if timeout <= 0 {
 		timeout = 120 * time.Second
+	}
+	if config.Transport == TransportResponses {
+		return c.completeResponses(ctx, config, messages, tools, timeout)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

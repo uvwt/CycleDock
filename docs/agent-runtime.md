@@ -261,9 +261,10 @@ waiting_human 表示：
 
 Workspace owner 可以配置：
 
-- OpenAI-compatible Provider Base URL。
+- Provider 类型：OpenAI-compatible API、ChatGPT Plan、Grok Subscription。
+- OpenAI-compatible Provider Base URL / API Key 环境变量名（仅 API Provider）。
+- ChatGPT / Grok model account connection（仅订阅 Provider）。
 - Model。
-- Model API Key 对应的环境变量名。
 - request timeout。
 - max tool rounds。
 - Workspace Agent instructions。
@@ -271,7 +272,16 @@ Workspace owner 可以配置：
 
 MCP connection 保存 URL、timeout、enabled 与 Bearer Token 环境变量名。
 
-敏感值本身不进入 Settings API、PostgreSQL 或普通日志。Runner 开始 Run 时才从 CycleDock 进程环境读取。
+Model API Key 与 MCP Bearer Token 本身不进入 Settings API / PostgreSQL；Runner 开始 Run 时从 CycleDock 进程环境读取。
+
+ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨 Run 刷新，因此存放在独立 credential 表并用 CYCLEDOCK_MODEL_SECRET_KEY 做 AES-256-GCM 加密。Workspace Agent settings 只保存所选 provider / model，不复制 OAuth secret。
+
+模型协议：
+
+- openai_compatible：保持非流式 /chat/completions tool-call loop。
+- chatgpt：官方 SIWC OAuth token + api.openai.com/v1/responses，固定 store=false + stream=true。
+- grok：xAI OAuth token + cli-chat-proxy.grok.com/v1/responses，附带 Grok proxy 所需认证/模型 header。
+- subscription /models 与 inference 使用同一账号 access token。
 
 Dispatcher：
 
@@ -283,7 +293,8 @@ Dispatcher：
 
 Connection test：
 
-- Provider Test 对配置 endpoint / model 发最小 OpenAI-compatible `/chat/completions` 请求。
+- OpenAI-compatible Provider Test 对配置 endpoint / model 发最小 /chat/completions 请求。
+- ChatGPT / Grok Provider Test 使用已连接账号与正式 Responses transport 发最小请求。
 - MCP Test 复用正式 MCP Client，只做 initialize + ListTools 并返回工具数量，不执行 Tool。
 - endpoint / auth / timeout / malformed / initialize / ListTools 错误只返回安全分类消息。
 

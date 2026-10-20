@@ -70,9 +70,10 @@ Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MC
 - Workspace-scoped MCP tools、原子 Claim、Progress/Finding/Check-in/Finish/Confirm 与官方 CycleDock Skill。
 - Workspace-scoped Built-in Cycle Agent settings、Dispatcher、Runner 与 Context Builder。
 - OpenAI-compatible Model Client 与 outbound MCP Client；模型/tool raw trace 只存在于当前 Run 内存。
-- Built-in Agent secret 配置只保存环境变量名，API/数据库不保存 Model API Key 或 MCP Bearer Token 明文。
+- Built-in Agent 支持 OpenAI-compatible API Key、ChatGPT Plan（Sign in with ChatGPT + Responses API）与 Grok Subscription（xAI OAuth + inference proxy）三类模型接入。
+- Model API Key / MCP Bearer Token 继续只保存环境变量名；ChatGPT / Grok OAuth 凭据与普通 Settings 分离，并使用部署主密钥加密后持久化。
 - expired lease 恢复、Human retry / cancel 与 stale Run 防回写采用统一 Trigger / Run 生命周期。
-- Provider / MCP connection test 只做最小模型请求与 MCP initialize + ListTools，不执行 MCP Tool。
+- Provider / MCP connection test 只做当前 Provider 的最小模型请求与 MCP initialize + ListTools，不执行 MCP Tool。
 - Card Detail 展示 current Run、pending queue 与终态 work history，并支持 Human cancel / retry。
 - 长历史上下文采用 bounded recent Timeline + durable historical facts + 派生 Comment/Progress compaction；原 Timeline 始终是审计事实源。
 - Web 已具备基础中英 i18n、移动端 Board、loading/error/empty states、键盘拖拽与 reduced-motion / focus-visible 基础。

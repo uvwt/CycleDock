@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/modelauth"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -26,6 +28,8 @@ type Config struct {
 	OAuth        *oauth.Service
 	MCP          http.Handler
 	MCPMetadata  http.Handler
+	ModelAuth    *modelauth.Service
+	ModelClient  *modelclient.Client
 }
 
 type API struct {
@@ -33,6 +37,8 @@ type API struct {
 	store        *store.Store
 	auth         *auth.Service
 	oauth        *oauth.Service
+	modelAuth    *modelauth.Service
+	model        *modelclient.Client
 	secureCookie bool
 	logger       *slog.Logger
 }
@@ -42,9 +48,14 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	if logger == nil {
 		logger = slog.Default()
 	}
+	model := config.ModelClient
+	if model == nil {
+		model = modelclient.New()
+	}
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
-		oauth: config.OAuth, secureCookie: config.SecureCookie, logger: logger,
+		oauth: config.OAuth, modelAuth: config.ModelAuth, model: model,
+		secureCookie: config.SecureCookie, logger: logger,
 	}
 
 	router := chi.NewRouter()
@@ -54,6 +65,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	router.Get("/readyz", api.ready)
 	router.Get("/auth/nexusdock/start", api.oidcLoginStart)
 	router.Get("/auth/nexusdock/callback", api.oidcLoginCallback)
+	router.Get("/auth/model/chatgpt/callback", api.modelChatGPTCallback)
 	if config.OAuth != nil {
 		router.Get("/docs/ai-connect", api.aiConnectGuide)
 		router.Get("/docs/ai-connect/", api.aiConnectGuide)

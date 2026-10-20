@@ -334,6 +334,8 @@ Model Provider / MCP Connection 不强行塞进 initial core schema。
 - model_providers
 - mcp_connections
 - workspace_agent_settings
+- model_oauth_credentials
+- model_auth_flows
 
 Secret 与普通展示配置分离，不能通过普通 Settings API 回显。
 

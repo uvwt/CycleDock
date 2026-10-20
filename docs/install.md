@@ -50,6 +50,12 @@ CYCLEDOCK_MCP_TOKEN=<secret>
 
 Settings 页面保存的是环境变量**名称**，不是 secret 明文。更多 Provider / MCP connection 使用其他 env 名称时，需要在部署层显式把对应变量传入 app container。
 
+要允许 Workspace 连接 ChatGPT / Grok subscription account，还必须配置固定部署主密钥 CYCLEDOCK_MODEL_SECRET_KEY。该值应由 32-byte 随机数据做 base64 编码，例如可用 openssl rand -base64 32 生成。
+
+该 key 用于 AES-256-GCM 加密 OAuth access / refresh token。生产部署必须把它与数据库备份一起安全保存；丢失后现有 subscription account connection 无法解密，需要用户重新登录。
+
+ChatGPT Plan 的远程 / Hosted 接入还需要 OpenAI 批准的 CYCLEDOCK_CHATGPT_CLIENT_ID。仅 loopback Self-hosted 开发可以留空并走 OpenAI dynamic_agent_client 流程。Grok device-code 使用 xAI Grok Build 的公开 OAuth client，不需要本地 Grok CLI。
+
 ## 4. 启动
 
 ```bash
@@ -98,15 +104,19 @@ Remote MCP（配置 Public URL 后）：
 Built-in Agent：
 
 1. Workspace owner 打开 Agent Settings。
-2. 配置 Provider endpoint、model 与 API key env 名称。
-3. 使用 **Test provider** 做最小模型请求。
-4. MCP connection 使用 **Test**；测试只做 initialize + ListTools，不执行 Tool。
-5. 测试通过后再启用 Agent。
+2. 选择 ChatGPT Plan、Grok Subscription 或 API Provider。
+3. ChatGPT / Grok：先完成官方账号授权，再从账号模型目录选择 model。
+4. API Provider：配置 endpoint、model 与 API key env 名称。
+5. 使用 **Test provider** 做最小模型请求。
+6. MCP connection 使用 **Test**；测试只做 initialize + ListTools，不执行 Tool。
+7. 测试通过后再启用 Agent。
 
 ## 7. 备份
 
 至少备份 PostgreSQL volume / database。升级前必须先做可恢复备份。
 
 CycleDock 不把 Model API Key / MCP Bearer Token 明文存入数据库，因此同时要保留部署侧 secret 配置。
+
+ChatGPT / Grok OAuth credential 是加密后的业务配置；备份数据库时还必须安全备份 CYCLEDOCK_MODEL_SECRET_KEY。
 
 不要把临时测试数据库、raw model/tool trace 或日志当作业务备份。

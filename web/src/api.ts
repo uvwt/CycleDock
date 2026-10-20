@@ -142,9 +142,12 @@ export type ScheduleInput = {
   timezone: string
 }
 
+export type AgentProviderType = 'openai_compatible' | 'chatgpt' | 'grok'
+
 export type AgentSettings = {
   configured: boolean
   enabled: boolean
+  provider_type: AgentProviderType
   provider_base_url: string
   model: string
   api_key_env: string
@@ -171,6 +174,33 @@ export type ConnectionTestResult = {
   message: string
   tool_count?: number
   duration_ms: number
+}
+
+export type ModelAuthStatus = {
+  provider: 'chatgpt' | 'grok'
+  available: boolean
+  connected: boolean
+  reason?: string
+  display_label?: string
+  expires_at?: string
+}
+
+export type AgentModel = {
+  id: string
+  name: string
+}
+
+export type GrokDeviceFlow = {
+  flow_id: string
+  verification_url: string
+  user_code: string
+  expires_at: string
+  interval_seconds: number
+}
+
+export type GrokDevicePoll = {
+  status: 'pending' | 'connected'
+  interval_seconds?: number
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -301,11 +331,28 @@ export const api = {
       method: 'PUT',
       body: jsonBody(input),
     }),
-  testAgentProvider: (input: Pick<AgentSettings, 'provider_base_url' | 'model' | 'api_key_env' | 'request_timeout_ms'>) =>
+  testAgentProvider: (input: Pick<AgentSettings, 'provider_type' | 'provider_base_url' | 'model' | 'api_key_env' | 'request_timeout_ms'>) =>
     request<ConnectionTestResult>('/api/v1/agent/provider-test', {
       method: 'POST',
       body: jsonBody(input),
     }),
+  modelAuthStatus: () => request<ModelAuthStatus[]>('/api/v1/agent/model-auth'),
+  startChatGPTModelAuth: () =>
+    request<{ authorization_url: string }>('/api/v1/agent/model-auth/chatgpt/start', {
+      method: 'POST',
+      body: '{}',
+    }),
+  startGrokModelAuth: () =>
+    request<GrokDeviceFlow>('/api/v1/agent/model-auth/grok/start', { method: 'POST', body: '{}' }),
+  pollGrokModelAuth: (flowID: string) =>
+    request<GrokDevicePoll>('/api/v1/agent/model-auth/grok/poll', {
+      method: 'POST',
+      body: jsonBody({ flow_id: flowID }),
+    }),
+  disconnectModelAuth: (provider: 'chatgpt' | 'grok') =>
+    request<void>(`/api/v1/agent/model-auth/${provider}`, { method: 'DELETE' }),
+  agentModels: (provider: 'chatgpt' | 'grok') =>
+    request<AgentModel[]>(`/api/v1/agent/models?provider=${encodeURIComponent(provider)}`),
   testAgentMCP: (input: Pick<MCPConnectionInput, 'name' | 'url' | 'bearer_token_env' | 'timeout_ms'>) =>
     request<ConnectionTestResult>('/api/v1/agent/mcp-test', {
       method: 'POST',

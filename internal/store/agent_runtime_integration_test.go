@@ -293,6 +293,19 @@ func TestAgentSettingsReuseOneCycleSourceAndMCPUpdateIsWorkspaceScoped(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	subscription, err := s.SaveAgentSettings(ctx, workspace.ID, AgentSettingsInput{
+		Enabled: false, ProviderType: "chatgpt", ProviderBaseURL: "https://must-not-persist.example/v1",
+		Model: "subscription-model", APIKeyEnv: "MUST_NOT_PERSIST",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subscription.ProviderType != "chatgpt" || subscription.ProviderBaseUrl != "" || subscription.ApiKeyEnv != "" {
+		t.Fatalf("subscription settings leaked API provider fields: %+v", subscription)
+	}
+	if subscription.SourceID != first.SourceID {
+		t.Fatalf("subscription provider switch changed cycle_agent source: %s vs %s", subscription.SourceID, first.SourceID)
+	}
 	if first.SourceID != second.SourceID {
 		t.Fatalf("settings created multiple cycle_agent sources: %s vs %s", first.SourceID, second.SourceID)
 	}

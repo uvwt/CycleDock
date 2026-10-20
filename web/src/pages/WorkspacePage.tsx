@@ -81,7 +81,32 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [createCardOpen, setCreateCardOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
-  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(
+    () => new URLSearchParams(window.location.search).has('model_auth'),
+  )
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search)
+    const result = search.get('model_auth')
+    if (!result) return
+
+    if (result === 'chatgpt_connected') {
+      toast.success('ChatGPT account connected')
+      void queryClient.invalidateQueries({ queryKey: queryKeys.modelAuth })
+    } else if (result === 'chatgpt_denied') {
+      toast.error('ChatGPT sign-in was cancelled')
+    } else {
+      toast.error('ChatGPT sign-in could not be completed')
+    }
+
+    search.delete('model_auth')
+    const query = search.toString()
+    window.history.replaceState(
+      window.history.state,
+      '',
+      window.location.pathname + (query ? `?${query}` : '') + window.location.hash,
+    )
+  }, [])
 
   function chooseProject(projectID: string) {
     navigate(`/projects/${projectID}`)

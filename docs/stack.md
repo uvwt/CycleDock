@@ -50,18 +50,22 @@
 
 ### Model Client
 
-第一版只需要 OpenAI-compatible provider 边界。
+当前 Built-in Agent 有三种明确的 Provider 路径：
 
-可以参考 ChatDock 已验证实现中的：
+- openai_compatible：保留 /chat/completions + 部署环境 API Key，兼容既有自定义 Provider。
+- chatgpt：使用 OpenAI Sign in with ChatGPT OAuth access token，直接请求 api.openai.com/v1/responses。
+- grok：使用 xAI OAuth access token，直接请求 cli-chat-proxy.grok.com/v1/responses。
 
-- request/response。
-- streaming。
-- timeout。
-- context cancellation。
-- provider error mapping。
-- /models 获取。
+订阅 Provider 共用 Responses transport，但认证流程与固定官方 origin 保持各自明确，不引入大型通用 multi-provider framework。
 
-不要一开始做大型 multi-provider abstraction。
+Responses transport：
+
+- 固定 store=false、stream=true 并消费 SSE。
+- 每轮发送当前 Run 所需完整上下文，不依赖服务端持久会话。
+- function/custom tool 转换为 Responses function_call / function_call_output。
+- 继续执行 timeout、context cancellation、响应大小上限和脱敏 provider error mapping。
+
+模型目录使用与正式推理相同的 OAuth access token 读取，避免展示当前账号不可用的模型。
 
 ### MCP Client
 

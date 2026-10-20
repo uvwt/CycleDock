@@ -92,6 +92,16 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - Provider / MCP connection test 同样要求 Workspace owner；测试结果只返回分类状态，不回显 secret 或上游原始错误体。
 - MCP connection test 只做 initialize + ListTools，不执行任何有副作用 Tool。
 
+### Model account OAuth
+
+- ChatGPT 使用 OpenAI 官方 Sign in with ChatGPT。授权码流使用 PKCE + state + nonce；state 只保存 SHA-256 digest，flow payload 加密保存。
+- ChatGPT plan inference 只请求公开 api.openai.com/v1/responses，不调用 ChatGPT backend-api。
+- Hosted / remotely hosted CycleDock 必须配置 OpenAI 批准的 CYCLEDOCK_CHATGPT_CLIENT_ID；loopback Self-hosted 开发才使用 dynamic_agent_client。
+- Grok 使用 auth.x.ai 的 OAuth2 device-code flow；token endpoint 必须来自 xAI OIDC discovery 且 host 限定为 x.ai / *.x.ai。
+- Grok subscription inference 固定发送到 cli-chat-proxy.grok.com/v1，OAuth token 不允许被用户配置转发到任意 endpoint。
+- ChatGPT / Grok access token、refresh token 与 flow payload 存入独立表，并使用 CYCLEDOCK_MODEL_SECRET_KEY 提供的 32-byte key 做 AES-256-GCM 加密；AAD 绑定 Workspace + Provider。
+- Refresh token 轮换在数据库 row lock 内串行完成，避免并发 Run 同时消费同一 rotating refresh token。
+
 ## 8. 当前 Human Web 配置
 
 Self-hosted 未配置 OIDC 时：

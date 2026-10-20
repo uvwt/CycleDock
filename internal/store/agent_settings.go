@@ -16,6 +16,7 @@ import (
 
 type AgentSettingsInput struct {
 	Enabled            bool
+	ProviderType       string
 	ProviderBaseURL    string
 	Model              string
 	APIKeyEnv          string
@@ -37,6 +38,10 @@ func (s *Store) SaveAgentSettings(
 	workspaceID uuid.UUID,
 	input AgentSettingsInput,
 ) (db.WorkspaceAgentSetting, error) {
+	input.ProviderType = strings.TrimSpace(input.ProviderType)
+	if input.ProviderType == "" {
+		input.ProviderType = "openai_compatible"
+	}
 	input.ProviderBaseURL = strings.TrimRight(strings.TrimSpace(input.ProviderBaseURL), "/")
 	input.Model = strings.TrimSpace(input.Model)
 	input.APIKeyEnv = strings.TrimSpace(input.APIKeyEnv)
@@ -47,15 +52,27 @@ func (s *Store) SaveAgentSettings(
 	if input.MaxToolRounds == 0 {
 		input.MaxToolRounds = 12
 	}
-	if input.Enabled && (input.ProviderBaseURL == "" || input.Model == "") {
-		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: provider_base_url and model are required when built-in agent is enabled", domain.ErrConflict)
+	switch input.ProviderType {
+	case "openai_compatible", "chatgpt", "grok":
+	default:
+		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: unsupported provider_type", domain.ErrConflict)
 	}
-	if input.ProviderBaseURL != "" {
+	if input.ProviderType != "openai_compatible" {
+		input.ProviderBaseURL = ""
+		input.APIKeyEnv = ""
+	}
+	if input.Enabled && input.Model == "" {
+		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: model is required when built-in agent is enabled", domain.ErrConflict)
+	}
+	if input.ProviderType == "openai_compatible" && input.Enabled && input.ProviderBaseURL == "" {
+		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: provider_base_url is required for OpenAI-compatible provider", domain.ErrConflict)
+	}
+	if input.ProviderType == "openai_compatible" && input.ProviderBaseURL != "" {
 		if err := agentconfig.ValidateEndpoint(input.ProviderBaseURL); err != nil {
 			return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
 		}
 	}
-	if input.APIKeyEnv != "" && !agentconfig.ValidEnvName(input.APIKeyEnv) {
+	if input.ProviderType == "openai_compatible" && input.APIKeyEnv != "" && !agentconfig.ValidEnvName(input.APIKeyEnv) {
 		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: api_key_env must be an environment variable name", domain.ErrConflict)
 	}
 	if input.RequestTimeoutMS < 1000 || input.RequestTimeoutMS > 600000 {
@@ -112,7 +129,8 @@ func (s *Store) SaveAgentSettings(
 
 	settings, err := q.UpsertWorkspaceAgentSettings(ctx, db.UpsertWorkspaceAgentSettingsParams{
 		WorkspaceID: workspaceID, SourceID: sourceID, Enabled: input.Enabled,
-		ProviderBaseUrl: input.ProviderBaseURL, Model: input.Model, ApiKeyEnv: input.APIKeyEnv,
+		ProviderType: input.ProviderType, ProviderBaseUrl: input.ProviderBaseURL,
+		Model: input.Model, ApiKeyEnv: input.APIKeyEnv,
 		RequestTimeoutMs: input.RequestTimeoutMS, MaxToolRounds: input.MaxToolRounds,
 		SystemInstructions: input.SystemInstructions,
 	})

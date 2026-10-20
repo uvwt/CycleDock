@@ -46,7 +46,7 @@ jobs:
           go vet ./...
       - name: Race-sensitive integration tests
         run: |
-          go test -race ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi -count=1
+          go test -race ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi ./internal/modelauth ./internal/modelclient -count=1
       - name: Migration smoke
         run: |
           goose -dir db/migrations postgres "$TEST_DATABASE_URL" up

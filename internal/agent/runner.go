@@ -14,8 +14,10 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
+	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 var (
@@ -27,11 +29,13 @@ var (
 type RunnerConfig struct {
 	HeartbeatInterval time.Duration
 	LeaseDuration     time.Duration
+	ModelAuth         *modelauth.Service
 }
 
 type Runner struct {
 	store             *store.Store
 	model             *modelclient.Client
+	modelAuth         *modelauth.Service
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
 	leaseDuration     time.Duration
@@ -52,6 +56,7 @@ func NewRunner(dataStore *store.Store, model *modelclient.Client, logger *slog.L
 	}
 	return &Runner{
 		store: dataStore, model: model, logger: logger,
+		modelAuth:         config.ModelAuth,
 		heartbeatInterval: config.HeartbeatInterval,
 		leaseDuration:     config.LeaseDuration,
 	}
@@ -64,10 +69,6 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 	}
 	if !settings.Enabled || settings.SourceID != claim.SourceID {
 		return errors.New("built-in agent settings are disabled or changed")
-	}
-	apiKey, err := secretFromEnv(settings.ApiKeyEnv, "model API key")
-	if err != nil {
-		return err
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -119,14 +120,13 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 
 	messages := BuildContext(runContext, settings)
 	tools := append(internalToolDefinitions(), mcpSessions.ToolDefinitions()...)
-	modelConfig := modelclient.Config{
-		BaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKey: apiKey,
-		Timeout:     time.Duration(settings.RequestTimeoutMs) * time.Millisecond,
-		Temperature: 0,
-	}
 
 	for round := int32(0); ; round++ {
 		if err := heartbeatFailure(heartbeatErrors); err != nil {
+			return err
+		}
+		modelConfig, err := r.modelConfig(runCtx, claim.WorkspaceID, settings)
+		if err != nil {
 			return err
 		}
 		response, err := r.model.Complete(runCtx, modelConfig, messages, tools)
@@ -184,6 +184,37 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 			}
 			messages = append(messages, toolMessage(call, result))
 		}
+	}
+}
+
+func (r *Runner) modelConfig(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	settings db.WorkspaceAgentSetting,
+) (modelclient.Config, error) {
+	timeout := time.Duration(settings.RequestTimeoutMs) * time.Millisecond
+	switch settings.ProviderType {
+	case "", "openai_compatible":
+		apiKey, err := secretFromEnv(settings.ApiKeyEnv, "model API key")
+		if err != nil {
+			return modelclient.Config{}, err
+		}
+		return modelclient.Config{
+			BaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKey: apiKey,
+			Timeout: timeout, Temperature: 0,
+		}, nil
+	case string(modelauth.ProviderChatGPT):
+		if r.modelAuth != nil {
+			return r.modelAuth.ModelConfig(ctx, workspaceID, modelauth.ProviderChatGPT, settings.Model, timeout)
+		}
+		return modelclient.Config{}, modelauth.ErrUnavailable
+	case string(modelauth.ProviderGrok):
+		if r.modelAuth != nil {
+			return r.modelAuth.ModelConfig(ctx, workspaceID, modelauth.ProviderGrok, settings.Model, timeout)
+		}
+		return modelclient.Config{}, modelauth.ErrUnavailable
+	default:
+		return modelclient.Config{}, fmt.Errorf("unsupported model provider %q", settings.ProviderType)
 	}
 }
 

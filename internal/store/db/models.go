@@ -89,6 +89,26 @@ type HumanAccount struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ModelAuthFlow struct {
+	ID                uuid.UUID          `json:"id"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	Provider          string             `json:"provider"`
+	StateDigest       []byte             `json:"state_digest"`
+	PayloadCiphertext []byte             `json:"payload_ciphertext"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type ModelOauthCredential struct {
+	WorkspaceID          uuid.UUID          `json:"workspace_id"`
+	Provider             string             `json:"provider"`
+	CredentialCiphertext []byte             `json:"credential_ciphertext"`
+	ExpiresAt            pgtype.Timestamptz `json:"expires_at"`
+	DisplayLabel         string             `json:"display_label"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OauthAuthorizationCode struct {
 	CodeDigest    []byte             `json:"code_digest"`
 	GrantID       uuid.UUID          `json:"grant_id"`
@@ -219,6 +239,7 @@ type WorkspaceAgentSetting struct {
 	SystemInstructions string             `json:"system_instructions"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ProviderType       string             `json:"provider_type"`
 }
 
 type WorkspaceMcpConnection struct {
