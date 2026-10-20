@@ -31,7 +31,7 @@ func (q *Queries) DeleteWorkspaceMCPConnection(ctx context.Context, arg DeleteWo
 }
 
 const getWorkspaceAgentSettings = `-- name: GetWorkspaceAgentSettings :one
-SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
+SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
 FROM workspace_agent_settings
 WHERE workspace_id = $1
 `
@@ -51,6 +51,7 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProviderType,
 	)
 	return i, err
 }
@@ -85,7 +86,7 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 }
 
 const listEnabledWorkspaceAgentSettings = `-- name: ListEnabledWorkspaceAgentSettings :many
-SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
+SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
 FROM workspace_agent_settings
 WHERE enabled
 ORDER BY workspace_id
@@ -112,6 +113,7 @@ func (q *Queries) ListEnabledWorkspaceAgentSettings(ctx context.Context) ([]Work
 			&i.SystemInstructions,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ProviderType,
 		); err != nil {
 			return nil, err
 		}
@@ -200,16 +202,17 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
-    workspace_id, source_id, enabled, provider_base_url, model,
+    workspace_id, source_id, enabled, provider_type, provider_base_url, model,
     api_key_env, request_timeout_ms, max_tool_rounds, system_instructions
 )
 VALUES (
     $1, $2, $3,
-    $4, $5, $6,
-    $7, $8, $9
+    $4, $5, $6, $7,
+    $8, $9, $10
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET enabled = EXCLUDED.enabled,
+    provider_type = EXCLUDED.provider_type,
     provider_base_url = EXCLUDED.provider_base_url,
     model = EXCLUDED.model,
     api_key_env = EXCLUDED.api_key_env,
@@ -217,13 +220,14 @@ SET enabled = EXCLUDED.enabled,
     max_tool_rounds = EXCLUDED.max_tool_rounds,
     system_instructions = EXCLUDED.system_instructions,
     updated_at = now()
-RETURNING workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
+RETURNING workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
 `
 
 type UpsertWorkspaceAgentSettingsParams struct {
 	WorkspaceID        uuid.UUID `json:"workspace_id"`
 	SourceID           uuid.UUID `json:"source_id"`
 	Enabled            bool      `json:"enabled"`
+	ProviderType       string    `json:"provider_type"`
 	ProviderBaseUrl    string    `json:"provider_base_url"`
 	Model              string    `json:"model"`
 	ApiKeyEnv          string    `json:"api_key_env"`
@@ -237,6 +241,7 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		arg.WorkspaceID,
 		arg.SourceID,
 		arg.Enabled,
+		arg.ProviderType,
 		arg.ProviderBaseUrl,
 		arg.Model,
 		arg.ApiKeyEnv,
@@ -257,6 +262,7 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProviderType,
 	)
 	return i, err
 }

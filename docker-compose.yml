@@ -37,6 +37,8 @@ services:
       # Built-in Agent settings 只保存变量名；secret 值由部署环境注入。
       CYCLEDOCK_MODEL_API_KEY: ${CYCLEDOCK_MODEL_API_KEY:-}
       CYCLEDOCK_MCP_TOKEN: ${CYCLEDOCK_MCP_TOKEN:-}
+      CYCLEDOCK_MODEL_SECRET_KEY: ${CYCLEDOCK_MODEL_SECRET_KEY:-}
+      CYCLEDOCK_CHATGPT_CLIENT_ID: ${CYCLEDOCK_CHATGPT_CLIENT_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

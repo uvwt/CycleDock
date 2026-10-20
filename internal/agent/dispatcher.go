@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -19,6 +20,7 @@ type DispatcherConfig struct {
 	MaintenanceEvery time.Duration
 	MaxConcurrent    int
 	LeaseDuration    time.Duration
+	ModelAuth        *modelauth.Service
 }
 
 type Dispatcher struct {
@@ -55,6 +57,7 @@ func NewDispatcher(
 	runner := NewRunner(dataStore, model, logger, RunnerConfig{
 		HeartbeatInterval: config.LeaseDuration / 4,
 		LeaseDuration:     config.LeaseDuration,
+		ModelAuth:         config.ModelAuth,
 	})
 	return &Dispatcher{
 		store: dataStore, runner: runner, logger: logger,
@@ -197,6 +200,10 @@ func publicRunError(err error) string {
 		return "Built-in Agent reached the configured maximum tool rounds before completion."
 	case strings.Contains(err.Error(), "environment variable"):
 		return "Built-in Agent secret environment variable is not configured."
+	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):
+		return "Built-in Agent model account must be connected again."
+	case errors.Is(err, modelauth.ErrUnavailable):
+		return "Built-in Agent model account authentication is not configured."
 	case strings.Contains(err.Error(), "MCP"):
 		return "Built-in Agent MCP connection or tool call failed."
 	default:

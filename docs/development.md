@@ -169,12 +169,14 @@ Human Comment
 当前实现：
 
 - 每个 Workspace 最多一条专用 `cycle_agent` Source，只有 Workspace owner 可以读取/修改 Built-in Agent settings。
-- provider / model / timeout / max tool rounds / Workspace Agent instructions 持久化到 PostgreSQL。
+- provider type / model / timeout / max tool rounds / Workspace Agent instructions 持久化到 PostgreSQL。
 - Model API Key 与 MCP Bearer Token 不写数据库；配置只保存 `api_key_env` / `bearer_token_env`，运行时从进程环境解析。
 - Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 启用了 Built-in Agent 的 Workspace。
 - queued Run（例如 interrupt / waiting_human reply）优先恢复；普通 pending Trigger 按 sequence 原子 Claim。
 - Context Builder 每个 Run 从最新 Project / Card / bounded meaningful Timeline / 当前 Trigger 重建上下文。
 - OpenAI-compatible Client 使用非流式 `/chat/completions` tool-call loop，具备 timeout 与响应体上限。
+- ChatGPT Plan 使用官方 Sign in with ChatGPT + public Responses API；Grok Subscription 使用 xAI OAuth + Grok inference proxy；两者都不依赖本地 CLI/runtime。
+- subscription transport 使用 store=false / stream=true Responses SSE，并把 current Run 的 tool-call loop 映射为 function call items。
 - outbound MCP Client 使用官方 MCP Go SDK Streamable HTTP；Bearer 只发送到配置 origin，跨 origin redirect 被拒绝，响应有大小上限。
 - raw model messages / tool args / raw MCP results 只存在于当前 Run 内存；只有 Finding / Result / Check-in / meaningful Progress 进入 Timeline。
 - waiting_human 停止本 Run；Human reply 创建新 Trigger / Run。superseded Run 的迟到模型返回无法写 Result。
@@ -186,13 +188,13 @@ Human Comment
 - Human cancel pending Trigger / current Run；failed / expired / cancelled work 通过新的 `manual_retry` Trigger retry。
 - Provider / MCP connection test action 与状态反馈；测试不执行任何 MCP Tool。
 - provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都进入明确 failed Run。
-- 如真实部署需要在数据库内托管 secret，再设计独立 encrypted secret storage；现阶段继续使用部署环境注入。
+- API Key / MCP token 继续使用部署环境注入；需要跨 Run refresh 的 subscription OAuth token 已使用独立 encrypted credential storage。
 - 基础中英 i18n、mobile Board、loading/error/empty states、键盘拖拽、focus-visible、reduced-motion。
 - 长历史 context 使用 bounded recent Timeline；窗口外 durable facts 原样保留，旧 Comment / Progress 只形成派生 compaction。
 - DST gap / overlap 有明确 occurrence 语义。
 - migration 带数据 up/down/up、production binary、race、OAuth/MCP security 与 cross-workspace isolation 均纳入发布验证。
 
-SSE 目前没有加入。现有交互未出现必须为 polling 增加第二套实时通道的产品需求，避免为“可能需要”提前扩展协议面。
+Human Web 的实时更新 SSE 目前没有加入；Responses Provider 的 SSE 仅是上游模型 transport，不新增产品侧实时通道。
 
 只在真实需求出现后考虑 Card Artifact。
 

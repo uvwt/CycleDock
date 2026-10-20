@@ -73,7 +73,16 @@ Workspace owner：
 - `DELETE /api/v1/agent/mcp-connections/{connectionID}`
 - `POST /api/v1/agent/mcp-test`
 
-Provider Test 使用当前 endpoint / model / API key env 做最小 `/chat/completions` 请求。
+- GET /api/v1/agent/model-auth：只返回 available / connected / expiry，不返回 token。
+- POST /api/v1/agent/model-auth/chatgpt/start：返回官方 authorization URL。
+- POST /api/v1/agent/model-auth/grok/start：返回 xAI verification URL / user code / flow ID。
+- POST /api/v1/agent/model-auth/grok/poll：完成 device-code 连接。
+- DELETE /api/v1/agent/model-auth/{provider}：断开账号。
+- GET /api/v1/agent/models?provider=chatgpt|grok：读取当前账号模型目录。
+
+ChatGPT OAuth callback 为 GET /auth/model/chatgpt/callback，完成后重定向回 Web。
+
+Provider Test 使用正式 provider transport：OpenAI-compatible 为 /chat/completions，ChatGPT / Grok 为 Responses SSE。
 
 MCP Test 只执行 connect / initialize / ListTools，返回工具数量，**不执行任何 Tool**。
 

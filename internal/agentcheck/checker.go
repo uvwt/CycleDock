@@ -71,13 +71,32 @@ func (c *Checker) Provider(ctx context.Context, input ProviderInput) Result {
 	if input.Timeout <= 0 {
 		input.Timeout = 120 * time.Second
 	}
-
-	_, err := c.model.Complete(ctx, modelclient.Config{
+	return c.checkProvider(ctx, started, modelclient.Config{
 		BaseURL: input.BaseURL,
 		Model:   input.Model,
 		APIKey:  apiKey,
 		Timeout: input.Timeout,
-	}, []modelclient.Message{{
+	})
+}
+
+func (c *Checker) ProviderConfig(ctx context.Context, config modelclient.Config) Result {
+	started := time.Now()
+	config.BaseURL = strings.TrimSpace(config.BaseURL)
+	config.Model = strings.TrimSpace(config.Model)
+	if err := agentconfig.ValidateEndpoint(config.BaseURL); err != nil {
+		return failure(started, "invalid_endpoint", err.Error())
+	}
+	if config.Model == "" {
+		return failure(started, "invalid_model", "Model is required.")
+	}
+	if config.Timeout <= 0 {
+		config.Timeout = 120 * time.Second
+	}
+	return c.checkProvider(ctx, started, config)
+}
+
+func (c *Checker) checkProvider(ctx context.Context, started time.Time, config modelclient.Config) Result {
+	_, err := c.model.Complete(ctx, config, []modelclient.Message{{
 		Role:    "user",
 		Content: "Connection test. Reply with OK.",
 	}}, nil)
@@ -104,7 +123,7 @@ func (c *Checker) Provider(ctx context.Context, input ProviderInput) Result {
 			return failure(started, "provider_http_error", fmt.Sprintf("Provider returned HTTP %d.", apiErr.StatusCode))
 		}
 	case errors.Is(err, modelclient.ErrMalformedResponse), errors.Is(err, modelclient.ErrEmptyResponse):
-		return failure(started, "malformed_response", "Provider returned an invalid chat completion response.")
+		return failure(started, "malformed_response", "Provider returned an invalid model response.")
 	case errors.Is(err, modelclient.ErrResponseTooLarge):
 		return failure(started, "response_too_large", "Provider response exceeded the safety limit.")
 	default:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/agentcheck"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -17,6 +18,7 @@ import (
 type agentSettingsResponse struct {
 	Configured         bool   `json:"configured"`
 	Enabled            bool   `json:"enabled"`
+	ProviderType       string `json:"provider_type"`
 	ProviderBaseURL    string `json:"provider_base_url"`
 	Model              string `json:"model"`
 	APIKeyEnv          string `json:"api_key_env"`
@@ -43,7 +45,8 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
-			Configured: false, RequestTimeoutMS: 120000, MaxToolRounds: 12,
+			Configured: false, ProviderType: "openai_compatible",
+			RequestTimeoutMS: 120000, MaxToolRounds: 12,
 		})
 		return
 	}
@@ -61,6 +64,7 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		Enabled            bool   `json:"enabled"`
+		ProviderType       string `json:"provider_type"`
 		ProviderBaseURL    string `json:"provider_base_url"`
 		Model              string `json:"model"`
 		APIKeyEnv          string `json:"api_key_env"`
@@ -71,9 +75,33 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	request.ProviderType = strings.TrimSpace(request.ProviderType)
+	if request.ProviderType == "" {
+		request.ProviderType = "openai_compatible"
+	}
+	if request.Enabled &&
+		(request.ProviderType == string(modelauth.ProviderChatGPT) ||
+			request.ProviderType == string(modelauth.ProviderGrok)) {
+		if api.modelAuth == nil {
+			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
+			return
+		}
+		status, err := api.modelAuth.Status(
+			r.Context(), identity.WorkspaceID, modelauth.Provider(request.ProviderType),
+		)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		if !status.Available || !status.Connected {
+			writeError(w, http.StatusConflict, "model_account_not_connected", "Connect the selected model account before enabling the Cycle Agent.")
+			return
+		}
+	}
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
-		Enabled: request.Enabled, ProviderBaseURL: request.ProviderBaseURL,
-		Model: request.Model, APIKeyEnv: request.APIKeyEnv,
+		Enabled: request.Enabled, ProviderType: request.ProviderType,
+		ProviderBaseURL: request.ProviderBaseURL,
+		Model:           request.Model, APIKeyEnv: request.APIKeyEnv,
 		RequestTimeoutMS: request.RequestTimeoutMS, MaxToolRounds: request.MaxToolRounds,
 		SystemInstructions: request.SystemInstructions,
 	})
@@ -90,6 +118,7 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
+		ProviderType     string `json:"provider_type"`
 		ProviderBaseURL  string `json:"provider_base_url"`
 		Model            string `json:"model"`
 		APIKeyEnv        string `json:"api_key_env"`
@@ -105,12 +134,36 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_timeout", "request_timeout_ms must be between 1000 and 600000")
 		return
 	}
-	result := agentcheck.New().Provider(r.Context(), agentcheck.ProviderInput{
-		BaseURL:   request.ProviderBaseURL,
-		Model:     request.Model,
-		APIKeyEnv: request.APIKeyEnv,
-		Timeout:   time.Duration(request.RequestTimeoutMS) * time.Millisecond,
-	})
+	timeout := time.Duration(request.RequestTimeoutMS) * time.Millisecond
+	providerType := strings.TrimSpace(request.ProviderType)
+	if providerType == "" {
+		providerType = "openai_compatible"
+	}
+	checker := agentcheck.NewWithModelClient(api.model)
+	var result agentcheck.Result
+	switch providerType {
+	case "openai_compatible":
+		result = checker.Provider(r.Context(), agentcheck.ProviderInput{
+			BaseURL: request.ProviderBaseURL, Model: request.Model,
+			APIKeyEnv: request.APIKeyEnv, Timeout: timeout,
+		})
+	case string(modelauth.ProviderChatGPT), string(modelauth.ProviderGrok):
+		if api.modelAuth == nil {
+			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
+			return
+		}
+		config, err := api.modelAuth.ModelConfig(
+			r.Context(), identity.WorkspaceID, modelauth.Provider(providerType), request.Model, timeout,
+		)
+		if err != nil {
+			api.writeModelAuthError(w, err)
+			return
+		}
+		result = checker.ProviderConfig(r.Context(), config)
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_provider", "Unsupported model provider.")
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -235,6 +288,7 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 func agentSettingsToResponse(settings db.WorkspaceAgentSetting) agentSettingsResponse {
 	return agentSettingsResponse{
 		Configured: true, Enabled: settings.Enabled,
+		ProviderType:    settings.ProviderType,
 		ProviderBaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKeyEnv: settings.ApiKeyEnv,
 		RequestTimeoutMS: settings.RequestTimeoutMs, MaxToolRounds: settings.MaxToolRounds,
 		SystemInstructions: settings.SystemInstructions, SourceID: settings.SourceID.String(),
