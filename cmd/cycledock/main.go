@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/httpapi"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func main() {
@@ -35,24 +39,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	router := chi.NewRouter()
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CYCLEDOCK_PUBLIC_URL")), "/")
+	authService, err := auth.New(pool, auth.Config{
+		AdminPassword: os.Getenv("CYCLEDOCK_ADMIN_PASSWORD"),
+		OIDC: auth.OIDCConfig{
+			Issuer:    os.Getenv("CYCLEDOCK_OIDC_ISSUER"),
+			ClientID:  os.Getenv("CYCLEDOCK_OIDC_CLIENT_ID"),
+			PublicURL: publicURL,
+		},
 	})
-	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := pool.Ping(ctx); err != nil {
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
-	})
-	if webDir := os.Getenv("WEB_DIR"); webDir != "" {
-		router.Handle("/*", http.FileServer(http.Dir(webDir)))
+	if err != nil {
+		logger.Error("configure authentication", "error", err)
+		os.Exit(1)
 	}
+	secureCookie := strings.HasPrefix(strings.ToLower(publicURL), "https://")
+	configured, ok, err := envBool("CYCLEDOCK_SECURE_COOKIE")
+	if err != nil {
+		logger.Error("invalid CYCLEDOCK_SECURE_COOKIE", "error", err)
+		os.Exit(1)
+	}
+	if ok {
+		secureCookie = configured
+	}
+	router := httpapi.NewRouter(pool, store.New(pool), authService, httpapi.Config{
+		SecureCookie: secureCookie,
+		WebDir:       os.Getenv("WEB_DIR"),
+		Logger:       logger,
+	})
 
 	server := &http.Server{
 		Addr:              envOr("HTTP_ADDR", ":8080"),
@@ -83,4 +96,16 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(key string) (bool, bool, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return false, false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, false, err
+	}
+	return parsed, true, nil
 }

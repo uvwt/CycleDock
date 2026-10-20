@@ -85,3 +85,22 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - 日志中不得输出。
 - DB 中如需持久化，必须与普通展示配置分离，并采用明确的 secret storage / encryption 方案。
 - 第一阶段在 Built-in Agent 尚未落地前，不提前设计复杂 secrets framework。
+
+## 8. 当前 Human Web 配置
+
+Self-hosted 未配置 OIDC 时：
+
+- `CYCLEDOCK_ADMIN_PASSWORD`：至少 12 个字符。
+
+Hosted NexusDock OIDC：
+
+- `CYCLEDOCK_PUBLIC_URL`
+- `CYCLEDOCK_OIDC_ISSUER`
+- `CYCLEDOCK_OIDC_CLIENT_ID`
+
+Hosted 三项必须一起配置；配置 OIDC 后本地 Administrator password 登录不会暴露。
+
+`CYCLEDOCK_PUBLIC_URL` 为 HTTPS 时 Web Session 与 OIDC state Cookie 自动启用 Secure。
+特殊反代环境可通过 `CYCLEDOCK_SECURE_COOKIE` 显式覆盖。
+
+OIDC Authorization Code 流程使用 S256 PKCE + nonce；state 与 Web Session token 都只以 SHA-256 digest 形式落库。

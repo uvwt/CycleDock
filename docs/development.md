@@ -14,7 +14,8 @@
 
 - Phase 0 Foundation：已建立工程、数据库、Web、Docker Compose、CI 与 migration 基线。
 - Phase 1 Work Core：已实现核心 Domain / Store，并以真实 PostgreSQL integration tests 覆盖关键并发一致性。
-- 下一阶段：Phase 2 Human Web。
+- Phase 2 Human Web：已实现 Human 身份、NexusDock OIDC / Administrator fallback、Web Session、HTTP API 与 Project/Card Web 工作台。
+- 下一阶段：Phase 3 External MCP。
 
 ## 2. Phase 0 — Foundation
 

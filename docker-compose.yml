@@ -29,6 +29,11 @@ services:
       DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
       HTTP_ADDR: :8080
       WEB_DIR: /app/web
+      CYCLEDOCK_ADMIN_PASSWORD: ${CYCLEDOCK_ADMIN_PASSWORD:-}
+      CYCLEDOCK_PUBLIC_URL: ${CYCLEDOCK_PUBLIC_URL:-}
+      CYCLEDOCK_OIDC_ISSUER: ${CYCLEDOCK_OIDC_ISSUER:-}
+      CYCLEDOCK_OIDC_CLIENT_ID: ${CYCLEDOCK_OIDC_CLIENT_ID:-}
+      CYCLEDOCK_SECURE_COOKIE: ${CYCLEDOCK_SECURE_COOKIE:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

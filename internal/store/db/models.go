@@ -74,6 +74,22 @@ type Event struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type HumanAccount struct {
+	ID            uuid.UUID          `json:"id"`
+	DisplayName   string             `json:"display_name"`
+	EmailSnapshot pgtype.Text        `json:"email_snapshot"`
+	IsLocalAdmin  bool               `json:"is_local_admin"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OidcIdentity struct {
+	Issuer         string             `json:"issuer"`
+	Subject        string             `json:"subject"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Project struct {
 	ID           uuid.UUID          `json:"id"`
 	WorkspaceID  uuid.UUID          `json:"workspace_id"`
@@ -109,9 +125,39 @@ type Trigger struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
+type WebAuthFlow struct {
+	StateDigest  []byte             `json:"state_digest"`
+	Provider     string             `json:"provider"`
+	CodeVerifier string             `json:"code_verifier"`
+	Nonce        string             `json:"nonce"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt   pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type WebSession struct {
+	ID             uuid.UUID          `json:"id"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	SourceID       uuid.UUID          `json:"source_id"`
+	TokenDigest    []byte             `json:"token_digest"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Workspace struct {
 	ID        uuid.UUID          `json:"id"`
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceMembership struct {
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	SourceID       uuid.UUID          `json:"source_id"`
+	Role           string             `json:"role"`
+	IsPersonal     bool               `json:"is_personal"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

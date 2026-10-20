@@ -47,9 +47,6 @@ func (s *Store) submitComment(ctx context.Context, p SubmitCommentParams, requir
 	if p.DispatchMode != domain.DispatchModeEnqueue && p.DispatchMode != domain.DispatchModeInterrupt {
 		return SubmitCommentResult{}, fmt.Errorf("invalid dispatch mode %q", p.DispatchMode)
 	}
-	if p.DispatchMode == domain.DispatchModeInterrupt && p.RunnerSourceID == nil {
-		return SubmitCommentResult{}, fmt.Errorf("interrupt requires runner source")
-	}
 	if p.LeaseDuration <= 0 {
 		p.LeaseDuration = DefaultClaimLease
 	}
@@ -92,20 +89,29 @@ func (s *Store) submitComment(ctx context.Context, p SubmitCommentParams, requir
 
 	var currentRunID uuid.UUID
 	var currentStatus string
+	var currentRunnerSourceID uuid.UUID
 	currentErr := tx.QueryRow(ctx, `
-		SELECT id, status
+		SELECT id, status, runner_source_id
 		FROM agent_runs
 		WHERE workspace_id = $1
 		  AND card_id = $2
 		  AND status IN ('queued', 'running', 'waiting_human')
 		FOR UPDATE
-	`, p.WorkspaceID, p.CardID).Scan(&currentRunID, &currentStatus)
+	`, p.WorkspaceID, p.CardID).Scan(&currentRunID, &currentStatus, &currentRunnerSourceID)
 	if currentErr != nil && !errors.Is(currentErr, pgx.ErrNoRows) {
 		return SubmitCommentResult{}, currentErr
 	}
 	hasCurrent := currentErr == nil
 	if requireWaitingHuman && (!hasCurrent || currentStatus != string(domain.RunStatusWaitingHuman)) {
 		return SubmitCommentResult{}, fmt.Errorf("%w: card is not waiting for human", domain.ErrConflict)
+	}
+	if p.DispatchMode == domain.DispatchModeInterrupt && !hasCurrent && p.RunnerSourceID == nil {
+		return SubmitCommentResult{}, fmt.Errorf("%w: interrupt without a current run requires an explicit runner", domain.ErrConflict)
+	}
+	if p.DispatchMode == domain.DispatchModeInterrupt && hasCurrent && p.RunnerSourceID == nil {
+		// Human Web 不应提交 runner_source_id。转向当前执行时默认沿用当前 Runner，
+		// 并且在 Card 锁内读取，避免 Handler 先查后写产生 TOCTOU。
+		p.RunnerSourceID = &currentRunnerSourceID
 	}
 
 	eventID := uuid.New()

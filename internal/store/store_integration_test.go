@@ -528,6 +528,9 @@ func TestSchedulerDuplicateOccurrenceCreatesOneTriggerAndPausedSkips(t *testing.
 	if triggerCount != 1 {
 		t.Fatalf("duplicate occurrence trigger count=%d, want 1", triggerCount)
 	}
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, schedule.ID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("delete schedule with trigger history error=%v, want ErrConflict", err)
+	}
 
 	if err := s.SetOngoingState(ctx, f.WorkspaceID, f.CardID, f.HumanID, domain.OngoingStatePaused, now); err != nil {
 		t.Fatal(err)

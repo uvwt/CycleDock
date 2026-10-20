@@ -38,6 +38,7 @@ Workspace
 - [Ongoing 调度](docs/scheduling.md)
 - [MCP 设计](docs/mcp.md)
 - [认证与租户](docs/auth.md)
+- [Human Web HTTP API](docs/http-api.md)
 - [技术栈](docs/stack.md)
 - [开发路线](docs/development.md)
 - [旧项目参考边界](docs/legacy-reference.md)
@@ -53,12 +54,14 @@ Workspace
 
 ## 当前阶段
 
-Phase 0 Foundation 与 Phase 1 Work Core 已形成首个可运行基线：
+Phase 0 Foundation、Phase 1 Work Core 与 Phase 2 Human Web 已形成可运行基线：
 
 - 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
 - Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
 - Ongoing Schedule / Check-in / Health 与 Human-only Done。
 - 真实 PostgreSQL 并发 integration tests。
 - Go + React 单镜像、Docker Compose migration 流程与 CI 骨架。
+- Hosted NexusDock OIDC / Self-hosted Administrator fallback 与 opaque Web Session。
+- Project Board、Card Detail、Timeline、Queue、Human Review/Done 与 Ongoing Schedule Human Web。
 
-下一阶段进入 [Phase 2 — Human Web](docs/development.md#4-phase-2--human-web)，在当前统一 Domain / Store 状态机之上实现认证、看板与 Card Detail，不另起一套业务状态模型。
+下一阶段进入 [Phase 3 — External MCP](docs/development.md#5-phase-3--external-mcp)，对外暴露同一套 Domain / Store 状态机。

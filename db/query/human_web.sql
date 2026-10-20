@@ -1,0 +1,154 @@
+-- name: ListProjects :many
+SELECT *
+FROM projects
+WHERE workspace_id = sqlc.arg(workspace_id)
+ORDER BY created_at, id;
+
+-- name: GetProject :one
+SELECT *
+FROM projects
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id);
+
+-- name: UpdateProject :one
+UPDATE projects
+SET name = sqlc.arg(name),
+    description = sqlc.arg(description),
+    instructions = sqlc.arg(instructions),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;
+
+-- name: ListProjectCards :many
+SELECT *
+FROM cards
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND project_id = sqlc.arg(project_id)
+ORDER BY created_at, id;
+
+-- name: ListProjectCardSummaries :many
+SELECT
+    c.*,
+    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    current_run.status AS current_run_status
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT e.checkin_status
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type = 'checkin'
+    ORDER BY e.sequence DESC
+    LIMIT 1
+) latest_checkin ON true
+LEFT JOIN agent_runs current_run
+  ON current_run.workspace_id = c.workspace_id
+ AND current_run.card_id = c.id
+ AND current_run.status IN ('queued', 'running', 'waiting_human')
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.project_id = sqlc.arg(project_id)
+ORDER BY c.created_at, c.id;
+
+-- name: UpdateCardText :one
+UPDATE cards
+SET title = sqlc.arg(title),
+    description = sqlc.arg(description),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;
+
+-- name: GetCurrentRun :one
+SELECT *
+FROM agent_runs
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND status IN ('queued', 'running', 'waiting_human')
+LIMIT 1;
+
+-- name: ListCardSchedules :many
+SELECT *
+FROM card_schedules
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+ORDER BY created_at, id;
+
+-- name: GetCardSchedule :one
+SELECT *
+FROM card_schedules
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id);
+
+-- name: LatestCheckinForCard :one
+SELECT *
+FROM events
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND event_type = 'checkin'
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: ListCardTimeline :many
+SELECT
+    e.*,
+    s.name AS actor_name,
+    s.kind AS actor_kind
+FROM events e
+JOIN sources s
+  ON s.workspace_id = e.workspace_id
+ AND s.id = e.actor_source_id
+WHERE e.workspace_id = sqlc.arg(workspace_id)
+  AND e.card_id = sqlc.arg(card_id)
+ORDER BY e.sequence;
+
+-- name: ListPendingQueue :many
+SELECT
+    t.id,
+    t.sequence,
+    t.cause,
+    t.dispatch_mode,
+    COALESCE(e.content, '') AS content,
+    t.created_at
+FROM triggers t
+LEFT JOIN events e
+  ON e.workspace_id = t.workspace_id
+ AND e.card_id = t.card_id
+ AND e.id = t.cause_event_id
+LEFT JOIN agent_runs r
+  ON r.workspace_id = t.workspace_id
+ AND r.trigger_id = t.id
+WHERE t.workspace_id = sqlc.arg(workspace_id)
+  AND t.card_id = sqlc.arg(card_id)
+  AND r.id IS NULL
+ORDER BY t.sequence;
+
+-- name: UpdateCardSchedule :execrows
+UPDATE card_schedules
+SET enabled = sqlc.arg(enabled),
+    frequency = sqlc.arg(frequency),
+    day_of_week = sqlc.narg(day_of_week),
+    day_of_month = sqlc.narg(day_of_month),
+    time_of_day = sqlc.arg(time_of_day),
+    timezone = sqlc.arg(timezone),
+    next_trigger_at = sqlc.arg(next_trigger_at),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id);
+
+-- name: DeleteCardSchedule :execrows
+DELETE FROM card_schedules
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id);
+
+-- name: ScheduleHasTriggers :one
+SELECT EXISTS (
+    SELECT 1
+    FROM triggers
+    WHERE workspace_id = sqlc.arg(workspace_id)
+      AND card_id = sqlc.arg(card_id)
+      AND schedule_id = sqlc.arg(schedule_id)::uuid
+);
