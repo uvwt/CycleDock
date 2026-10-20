@@ -15,7 +15,8 @@
 - Phase 0 Foundation：已建立工程、数据库、Web、Docker Compose、CI 与 migration 基线。
 - Phase 1 Work Core：已实现核心 Domain / Store，并以真实 PostgreSQL integration tests 覆盖关键并发一致性。
 - Phase 2 Human Web：已实现 Human 身份、NexusDock OIDC / Administrator fallback、Web Session、HTTP API 与 Project/Card Web 工作台。
-- 下一阶段：Phase 3 External MCP。
+- Phase 3 External MCP：已实现标准 Streamable HTTP MCP、OAuth metadata/DCR/S256 PKCE/token rotation、Workspace approval、统一 Store 工具面、官方 Skill 与 AI Connect。
+- 下一阶段：Phase 4 Built-in Cycle Agent。
 
 ## 2. Phase 0 — Foundation
 
@@ -122,8 +123,8 @@
 
 完成条件：
 
-- ChatGPT / Claude / AgentDock 至少一个真实外部客户端完成 OAuth。
-- 真正调用 list/get/claim/progress/finish。
+- 官方 MCP Go SDK 通过真实 HTTP 完成 Protected Resource Metadata、DCR、OAuth、Streamable HTTP Connect / ListTools。
+- 真正调用 list/create/followup/claim/progress/finish/get。
 - 并发 Claim 与 token rotation 验证。
 
 ## 6. Phase 4 — Built-in Cycle Agent

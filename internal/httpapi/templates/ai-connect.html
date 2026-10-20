@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>接入 CycleDock</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#020617;color:#e2e8f0}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 10%,rgba(34,211,238,.10),transparent 30%),#020617}
+.shell{width:min(940px,calc(100% - 32px));margin:auto;padding:24px 0 64px}.brand{font-weight:750;letter-spacing:-.03em}.hero{padding:72px 0 28px}
+.eyebrow{color:#67e8f9;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.14em}h1{font-size:clamp(38px,7vw,68px);line-height:1;letter-spacing:-.055em;margin:12px 0 0}
+.lead,p,li{color:#94a3b8;line-height:1.75}.card{margin-top:18px;border:1px solid #1e293b;border-radius:20px;background:rgba(15,23,42,.78);padding:24px}
+h2{margin:0;font-size:19px}h3{margin:0;font-size:14px}.prompt,.endpoint{display:block;margin-top:14px;padding:14px;border-radius:12px;background:#020617;border:1px solid #1e293b;overflow-wrap:anywhere}
+.prompt{white-space:pre-wrap;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}.endpoint{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cbd5e1}
+.steps{margin-top:12px}.step{display:grid;grid-template-columns:30px 1fr;gap:14px;padding:16px 0;border-top:1px solid #1e293b}.step:first-child{border-top:0}.num{display:grid;place-items:center;width:28px;height:28px;border-radius:9px;background:#164e63;color:#a5f3fc;font-size:11px;font-weight:800}
+.tools{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.tool{padding:6px 8px;border-radius:8px;background:#020617;color:#cbd5e1;font:11px ui-monospace,monospace}
+.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:16px}.button{display:inline-flex;align-items:center;min-height:38px;padding:0 13px;border:1px solid #334155;border-radius:10px;color:#cbd5e1;text-decoration:none;font-size:12px;font-weight:650;background:#0f172a}
+.button.primary{background:#22d3ee;color:#082f49;border-color:#22d3ee}code{background:#020617;border:1px solid #1e293b;border-radius:6px;padding:2px 5px;color:#cbd5e1}.notice{margin-top:18px;color:#64748b;font-size:12px}
+@media(max-width:720px){.hero{padding-top:44px}.card{padding:19px}}
+</style>
+</head>
+<body><div class="shell">
+<div class="brand">CycleDock</div>
+<section class="hero">
+<div class="eyebrow">AI Connection Guide</div>
+<h1>让 AI 原生接入 CycleDock。</h1>
+<p class="lead">把下面提示词交给你的 AI 助手。支持远程 MCP 的客户端应使用原生 MCP + OAuth 接入，不要用 curl、临时脚本或手写 Bearer Token 代替真正的工具注入。</p>
+</section>
+
+<section class="card">
+<h2>复制给 AI</h2>
+<div class="prompt">{{.Prompt}}</div>
+<div class="actions"><a class="button primary" href="{{.SkillURL}}">查看官方 Skill</a><a class="button" href="{{.SkillZIP}}">Skill ZIP</a></div>
+</section>
+
+<section class="card">
+<h2>接入步骤</h2>
+<div class="steps">
+<div class="step"><div class="num">1</div><div><h3>读取官方 Skill（客户端支持时）</h3><p>Skill 只描述如何正确使用 CycleDock。它不包含 Token，也不会替代 OAuth。</p><span class="endpoint">{{.SkillURL}}</span></div></div>
+<div class="step"><div class="num">2</div><div><h3>配置原生 Remote MCP</h3><p>把下面地址加入当前客户端的 MCP / Connector。客户端应自行进行标准 MCP OAuth discovery。</p><span class="endpoint">{{.MCPURL}}</span></div></div>
+<div class="step"><div class="num">3</div><div><h3>由用户登录并批准 Workspace</h3><p>OAuth 会为当前客户端创建独立的 OAuth Client Source。密码、验证码、Cookie、Token 和授权确认都不应交给 AI。</p></div></div>
+<div class="step"><div class="num">4</div><div><h3>验证原生工具真的出现</h3><p>OAuth 页面成功不等于接入成功。必须确认当前客户端真正发现 CycleDock 工具，并实际调用 <code>list_projects</code> 和 <code>list_cards</code>。</p></div></div>
+</div>
+</section>
+
+<section class="card">
+<h2>当前工具</h2>
+<div class="tools">
+<span class="tool">list_projects</span><span class="tool">list_cards</span><span class="tool">get_card</span><span class="tool">create_card</span><span class="tool">update_card</span><span class="tool">move_card</span><span class="tool">add_comment</span><span class="tool">create_followup</span><span class="tool">claim_work</span><span class="tool">heartbeat_run</span><span class="tool">report_progress</span><span class="tool">add_finding</span><span class="tool">check_in</span><span class="tool">finish_run</span><span class="tool">confirm_card</span>
+</div>
+</section>
+
+<section class="card">
+<h2>重要语义</h2>
+<ul>
+<li>Project 本身就是看板，没有独立 Board。</li>
+<li><code>add_comment</code> 只增加长期上下文；只有 <code>create_followup</code> 才创建新 Trigger。</li>
+<li>Claim 是原子的；一个 Card 同时最多一个 current Run。</li>
+<li>外部 MCP 不提供 interrupt。立即转向属于 Human Web 决策。</li>
+<li>Finding / Result / Check-in 是长期事实；不要上传 raw tool trace 或 chain-of-thought。</li>
+<li>Agent 只能 Confirm 到 Review；最终 Review → Done 由 Human 完成。</li>
+<li>CycleDock 的 Ongoing Schedule 只创建 scheduled_followup Trigger，不直接运行模型。若还使用客户端自身定时任务，先检查 pending queue，避免重复工作。</li>
+</ul>
+</section>
+<p class="notice">CycleDock · Shared durable work state for humans and AI agents</p>
+</div></body></html>

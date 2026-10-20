@@ -18,7 +18,7 @@ INSERT INTO cards (
     normal_column, ongoing_state, required_confirmations, created_by_source_id
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at
+RETURNING id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 `
 
 type CreateCardParams struct {
@@ -61,6 +61,8 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		&i.CreatedBySourceID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CreateIdempotencyKey,
+		&i.CreateRequestHash,
 	)
 	return i, err
 }
@@ -156,7 +158,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 }
 
 const getCard = `-- name: GetCard :one
-SELECT id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at
+SELECT id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 FROM cards
 WHERE workspace_id = $1 AND id = $2
 `
@@ -182,6 +184,8 @@ func (q *Queries) GetCard(ctx context.Context, arg GetCardParams) (Card, error) 
 		&i.CreatedBySourceID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CreateIdempotencyKey,
+		&i.CreateRequestHash,
 	)
 	return i, err
 }

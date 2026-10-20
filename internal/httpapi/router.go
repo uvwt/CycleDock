@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -22,12 +23,16 @@ type Config struct {
 	SecureCookie bool
 	WebDir       string
 	Logger       *slog.Logger
+	OAuth        *oauth.Service
+	MCP          http.Handler
+	MCPMetadata  http.Handler
 }
 
 type API struct {
 	pool         *pgxpool.Pool
 	store        *store.Store
 	auth         *auth.Service
+	oauth        *oauth.Service
 	secureCookie bool
 	logger       *slog.Logger
 }
@@ -39,7 +44,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	}
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
-		secureCookie: config.SecureCookie, logger: logger,
+		oauth: config.OAuth, secureCookie: config.SecureCookie, logger: logger,
 	}
 
 	router := chi.NewRouter()
@@ -49,6 +54,24 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	router.Get("/readyz", api.ready)
 	router.Get("/auth/nexusdock/start", api.oidcLoginStart)
 	router.Get("/auth/nexusdock/callback", api.oidcLoginCallback)
+	if config.OAuth != nil {
+		router.Get("/docs/ai-connect", api.aiConnectGuide)
+		router.Get("/docs/ai-connect/", api.aiConnectGuide)
+		router.Get("/skills/cycledock/SKILL.md", api.cycleDockSkillSource)
+		router.Get("/skills/cycledock.zip", api.cycleDockSkillZIP)
+		router.Get("/.well-known/oauth-authorization-server", api.oauthAuthorizationServerMetadata)
+		router.Post("/oauth/register", api.oauthRegisterClient)
+		router.Get("/oauth/authorize", api.oauthAuthorizeForm)
+		router.Post("/oauth/authorize", api.oauthAuthorizeSubmit)
+		router.Post("/oauth/token", api.oauthToken)
+	}
+	if config.MCPMetadata != nil {
+		router.Handle("/.well-known/oauth-protected-resource", config.MCPMetadata)
+		router.Handle("/.well-known/oauth-protected-resource/mcp", config.MCPMetadata)
+	}
+	if config.MCP != nil {
+		router.Handle("/mcp", config.MCP)
+	}
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(requireJSONWrites)
@@ -92,7 +115,9 @@ func (api *API) securityHeaders(next http.Handler) http.Handler {
 			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 		)
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") ||
+			strings.HasPrefix(r.URL.Path, "/auth/") ||
+			strings.HasPrefix(r.URL.Path, "/oauth/") {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)

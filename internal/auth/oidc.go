@@ -72,7 +72,9 @@ func (s *Service) configureOIDC(config OIDCConfig) error {
 	config.Issuer = strings.TrimRight(strings.TrimSpace(config.Issuer), "/")
 	config.ClientID = strings.TrimSpace(config.ClientID)
 	config.PublicURL = strings.TrimRight(strings.TrimSpace(config.PublicURL), "/")
-	if config.Issuer == "" && config.ClientID == "" && config.PublicURL == "" {
+	// Public URL 也是 Remote MCP OAuth 的 canonical origin。Self-hosted 可以
+	// 只配置 Public URL + Administrator password，而不启用 NexusDock OIDC。
+	if config.Issuer == "" && config.ClientID == "" {
 		s.oidc = oidcRuntime{}
 		return nil
 	}

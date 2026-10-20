@@ -106,3 +106,15 @@ Self-hosted 未配置 Public URL 但由 HTTPS 反代暴露时，可通过 `CYCLE
 该开关不能关闭 HTTPS Public URL 自动启用的 Secure。
 
 OIDC Authorization Code 流程使用 S256 PKCE + nonce；state 与 Web Session token 都只以 SHA-256 digest 形式落库。
+
+## 9. 当前 Remote MCP OAuth
+
+配置 `CYCLEDOCK_PUBLIC_URL` 后启用 Remote MCP OAuth 与 `/mcp`。Self-hosted 可以只配置 Public URL + Administrator password，不需要为了 Remote MCP 同时开启 NexusDock OIDC。
+
+Remote MCP 使用 Protected Resource Metadata、Authorization Server Metadata、Dynamic Client Registration、Authorization Code + S256 PKCE、`resource` audience 绑定、opaque access / refresh token 与 refresh rotation。
+
+Human 在浏览器中登录 CycleDock 后批准当前 Workspace。批准记录创建或复用一个 Workspace-scoped `oauth_client` Source；MCP 的 Workspace / Source 都从 Bearer grant 派生，不接受工具参数覆盖。
+
+Authorization Code、Access Token 与 Refresh Token 在数据库中只保存 SHA-256 digest。旧 refresh token 在轮换后被重放时会撤销整个 token family。
+
+远程 `CYCLEDOCK_PUBLIC_URL` 必须使用 HTTPS；localhost / loopback 开发允许 HTTP。

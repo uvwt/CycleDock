@@ -16,6 +16,8 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
+	"github.com/uvwt/CycleDock/internal/mcpserver"
+	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -63,10 +65,24 @@ func main() {
 		// 此开关只用于在无 Public URL 的 Self-hosted HTTPS 反代场景强制启用 Secure。
 		secureCookie = true
 	}
-	router := httpapi.NewRouter(pool, store.New(pool), authService, httpapi.Config{
+	dataStore := store.New(pool)
+	var oauthService *cycledockoauth.Service
+	var mcpHandlers mcpserver.Handlers
+	if publicURL != "" {
+		oauthService, err = cycledockoauth.New(pool, cycledockoauth.Config{PublicURL: publicURL})
+		if err != nil {
+			logger.Error("configure MCP OAuth", "error", err)
+			os.Exit(1)
+		}
+		mcpHandlers = mcpserver.New(dataStore, oauthService, logger)
+	}
+	router := httpapi.NewRouter(pool, dataStore, authService, httpapi.Config{
 		SecureCookie: secureCookie,
 		WebDir:       os.Getenv("WEB_DIR"),
 		Logger:       logger,
+		OAuth:        oauthService,
+		MCP:          mcpHandlers.MCP,
+		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
 	})
 
 	server := &http.Server{

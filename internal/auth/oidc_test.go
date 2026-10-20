@@ -32,6 +32,17 @@ func TestOIDCConfigKeepsSelfHostedPasswordWithoutOIDC(t *testing.T) {
 	}
 }
 
+func TestOIDCConfigAllowsPublicURLForSelfHostedRemoteMCP(t *testing.T) {
+	service := &Service{adminPassword: []byte("local-admin-password")}
+	if err := service.configureOIDC(OIDCConfig{PublicURL: "https://cycle.example"}); err != nil {
+		t.Fatalf("public URL without hosted OIDC should be valid: %v", err)
+	}
+	methods := service.LoginMethods()
+	if !methods.Password || len(methods.Providers) != 0 {
+		t.Fatalf("unexpected self-hosted methods with Remote MCP public URL: %+v", methods)
+	}
+}
+
 func TestOIDCConfigRejectsInsecureRemoteIssuer(t *testing.T) {
 	service := &Service{}
 	if err := service.configureOIDC(OIDCConfig{

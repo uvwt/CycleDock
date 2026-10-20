@@ -1,138 +1,179 @@
-# MCP 设计
+# External MCP
 
-## 1. 定位
+## 定位
 
-CycleDock MCP 是给外部 AI / Agent 的 Adapter。
+CycleDock Remote MCP 是外部 AI / Agent 的 Adapter。外部客户端通过标准 Streamable HTTP MCP 访问与 Human Web、未来 Built-in Cycle Agent 相同的 Domain / Store。
 
-典型客户端：
-
-- ChatGPT
-- Claude
-- Codex
-- AgentDock
-- 其他支持 Remote MCP 的 Agent
-
-内置 Cycle Agent 不调用自己的 MCP，而直接调用内部 Domain / Store。
-
-## 2. MCP 必须遵守领域规则
-
-MCP 不能绕过：
+MCP Handler 不复制业务状态机，不能绕过：
 
 - Workspace scope。
-- Card 状态机。
-- Human-only Done。
-- Trigger 唯一 Claim。
-- current Run 唯一性。
-- waiting_human。
-- superseded stale result 防护。
-- 幂等规则。
+- Trigger 单 Claim。
+- Card 单 current Run。
+- runner ownership。
+- supersede stale-write 防护。
+- Human-only Review → Done。
+- 幂等与并发约束。
 
-MCP handler 不复制这些规则，只调用统一领域能力。
+## 接入地址
 
-## 3. 第一版能力方向
+配置 `CYCLEDOCK_PUBLIC_URL` 后启用：
 
-最终 JSON schema 在 Phase 3 实现时确定，当前只固定能力边界。
+- MCP Resource：`{PUBLIC_URL}/mcp`
+- Protected Resource Metadata：`{PUBLIC_URL}/.well-known/oauth-protected-resource/mcp`
+- Authorization Server Metadata：`{PUBLIC_URL}/.well-known/oauth-authorization-server`
+- DCR：`{PUBLIC_URL}/oauth/register`
+- Authorization：`{PUBLIC_URL}/oauth/authorize`
+- Token：`{PUBLIC_URL}/oauth/token`
+- AI Connect：`{PUBLIC_URL}/docs/ai-connect/`
+- Skill：`{PUBLIC_URL}/skills/cycledock/SKILL.md`
 
-建议能力：
+远程 Public URL 必须 HTTPS；localhost / loopback 开发环境允许 HTTP。
 
-- list_projects
-- list_cards
-- get_card
-- create_card
-- update_card
-- move_card
-- add_comment
-- add_event
-- claim_card / claim_trigger
-- report_progress
-- finish_run
-- confirm_card
+## OAuth
 
-是否合并某些工具，以正式 MCP schema 的可读性和幂等性为准，不追求工具数量。
+Remote MCP 使用：
 
-## 4. 外部执行流程
-
-```text
-list_cards / get_card
-→ 找到可执行工作
-→ claim
-→ 执行外部工具
-→ report_progress / add finding
-→ finish_run
-→ confirm / 等待 Human Review
-```
-
-外部 Agent 不应该仅因为“看到了 Card”就直接执行而不 Claim。
-
-## 5. Claim 语义
-
-优先 Claim 当前最早的 pending Trigger。
-
-创建 AgentRun 成功即 Claim 成功。
-
-数据库 `UNIQUE(trigger_id)` 防止两个 Agent 同时 Claim 同一个 Trigger。
-
-同 Card current Run 的 partial unique index 防止多个 current Run 并行出现。
-
-如果外部 Scheduler 希望在没有 pending Trigger 时发起一次新的 follow-up，应通过显式、带幂等键的“创建 follow-up + Claim”语义完成；不要让普通 claim 在网络重试时静默制造无限新 Trigger。
-
-该接口在 Phase 3 设计具体 schema 时必须专门做并发/重试测试。
-
-## 6. Progress
-
-Progress 是用户有意义的阶段变化，而不是 tool trace。
-
-外部 Agent 可报告：
-
-- current_stage
-- progress_summary
-- optional progress Event
-
-不要逐个写：
-
-- 每次 shell 命令。
-- 每次 HTTP request。
-- 每次 tool call 参数。
-- heartbeat。
-
-## 7. Finish
-
-finish_run 需要明确区分：
-
-- completed
-- failed
-- waiting_human
-
-如果目标 Run 已 superseded / expired / cancelled，finish 必须拒绝其继续修改当前 Card。
-
-## 8. OAuth
-
-Remote MCP 使用标准 OAuth：
-
+- Protected Resource Metadata。
+- Authorization Server Metadata。
 - Dynamic Client Registration。
 - Authorization Code。
 - S256 PKCE。
-- Protected Resource Metadata。
-- Bearer Access Token。
-- Refresh Token rotation。
+- `resource` 参数绑定 MCP audience。
+- public client（`token_endpoint_auth_method=none`）。
+- opaque access token。
+- opaque refresh token。
+- refresh rotation。
 
-Human 在浏览器中批准当前 Workspace 授权。
+数据库只保存 Authorization Code、Access Token、Refresh Token 的 SHA-256 digest，不保存 raw secret。
 
-OAuth Client 在 Workspace 内对应一个 oauth_client Source，所有 MCP Event / Run 都可追溯到该 Source。
+Human 必须先通过 Human Web 身份认证，再在 OAuth consent 页面批准当前 Workspace。批准后：
 
-## 9. Skill
+`Human Membership → OAuth Grant → oauth_client Source`
 
-正式 CycleDock Skill 只在 MCP 行为实际存在后编写。
+所有 MCP Event / Run 都使用这个 OAuth Client Source。
 
-不要在代码尚未实现时继续沿用旧版 CycleDock Skill 中“CycleDock 不运行 Agent / 不内置 Scheduler”等已经过时的规则。
+Refresh token 每次使用都会轮换 access + refresh。已经轮换过的旧 refresh token 被再次使用时，CycleDock 撤销整个 token family，防止合法客户端与泄漏者继续竞速。
 
-新 Skill 应围绕：
+## Workspace / Source scope
 
-- 如何寻找工作。
-- 如何 Claim。
-- 如何报告 Progress / Finding / Result。
-- 如何处理 Ongoing Check-in。
-- 如何进入 waiting_human。
-- 如何 Confirm。
-- 为什么不能 Human-only Done。
-- 如何避免重复 Claim / 重复定时任务。
+MCP tool input 中没有 `workspace_id` 或 `source_id`。
+
+实际 scope 来自：
+
+`Bearer access token → OAuth Grant → Workspace + oauth_client Source`
+
+因此客户端不能通过工具参数切换租户，也不能用另一个 Source 的 `run_id` heartbeat / progress / finding / check-in / finish。
+
+## 当前工具
+
+### 读取
+
+- `list_projects`
+- `list_cards`
+- `get_card`
+
+`get_card` 返回 Card、最近 durable Timeline、pending Trigger queue、current Run；不会返回 raw model messages / tool trace。
+
+### Card / Context
+
+- `create_card`
+- `update_card`
+- `move_card`
+- `add_comment`
+- `create_followup`
+
+`add_comment` 只增加长期上下文，不创建 Trigger。
+
+`create_followup` 显式创建新的 Comment Event + pending `system_followup` Trigger；默认 enqueue，不 interrupt，也不自动 Claim。
+
+External MCP 第一版不提供 interrupt tool。立即转向是 Human Web 的显式人工决策。
+
+### Run
+
+- `claim_work`
+- `heartbeat_run`
+- `report_progress`
+- `add_finding`
+- `check_in`
+- `finish_run`
+
+`claim_work` 在同一个 Card 行锁中原子执行：
+
+1. 检查 current Run。
+2. 若当前 Run 已由同一 Source 持有，则作为网络重试返回同一 Run。
+3. 若由其他 Source 持有，返回 conflict。
+4. 否则选择最早 pending Trigger。
+5. 直接创建 running Run。
+
+因此网络重试不会静默领取下一条 Trigger。
+
+Heartbeat 只续 lease，不写 Timeline。
+
+Progress 可更新 `current_stage` / `progress_summary` 并续 lease；只有 `event_content` 非空时才生成 durable progress Event。
+
+Finding / Result / Check-in 是长期上下文。Raw tool output、临时日志、tool args、chain-of-thought 不应写入 CycleDock。
+
+`finish_run` 支持：
+
+- `completed`：写 durable Result。
+- `failed`：写 failure summary。
+- `waiting_human`：记录 stage / summary 并等待 Human。
+
+superseded / expired / cancelled Run，或另一个 Source 拥有的 Run，后续写入都会被拒绝。
+
+### Review
+
+- `confirm_card`
+
+Agent 不允许直接 `move_card → review`，必须通过 `confirm_card` 留下确认事实。
+
+达到 `required_confirmations` 后，CycleDock 自动将 Working → Review。Review → Done 始终 Human-only。
+
+## 幂等
+
+以下写操作使用 `idempotency_key`：
+
+- create_card。
+- add_comment。
+- create_followup。
+- meaningful progress Event。
+- add_finding。
+- check_in。
+- completed / failed finish_run。
+- confirm_card。
+
+同一逻辑操作网络重试必须复用同一个 key；同一个 key 配不同请求内容会返回 idempotency conflict。
+
+## Ongoing
+
+CycleDock 原生 Ongoing Schedule 支持 daily / weekly / monthly + IANA timezone。
+
+Schedule 只创建 `scheduled_followup` Trigger，不直接执行模型。外部 AI 客户端如果同时使用自己的定时任务，应先通过 `get_card` / `list_cards` 检查 pending queue，避免重复制造相同工作。
+
+## 官方 Skill
+
+正式 Skill 单一事实源：
+
+- `skills/cycledock/SKILL.md`
+- `skills/cycledock/references/tools.md`
+
+运行时公开：
+
+- `/skills/cycledock/SKILL.md`
+- `/skills/cycledock.zip`
+
+ZIP 由同一份嵌入源动态生成，不维护第二份 Skill 内容。
+
+## 验证基线
+
+Phase 3 必须同时验证：
+
+- OAuth PKCE / code 单次消费。
+- access / refresh digest storage。
+- refresh rotation / replay family revoke。
+- 并发 Workspace approval 只生成一个 oauth_client Source。
+- 两 Agent 并发 Claim 只有一个成功。
+- bearer Source 不能写另一个 Source 的 Run。
+- superseded Run late finish 被拒绝。
+- Confirm threshold 与 Human-only Done。
+- 官方 Go MCP SDK 通过真实 HTTP 完成 discovery / DCR / OAuth / Streamable HTTP / tool discovery / tool calls。

@@ -300,7 +300,7 @@ func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 	if err != nil || first.RunID == nil {
 		t.Fatalf("create first run: result=%+v err=%v", first, err)
 	}
-	if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, time.Minute); err != nil {
+	if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,7 +314,8 @@ func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 		<-start
 		move := domain.NormalColumnReview
 		finishErr = s.FinishRun(ctx, FinishRunParams{
-			WorkspaceID: f.WorkspaceID, RunID: *first.RunID, Result: "old result", MoveTo: &move,
+			WorkspaceID: f.WorkspaceID, RunID: *first.RunID, RunnerSourceID: f.AgentID,
+			Result: "old result", MoveTo: &move,
 		})
 	}()
 	go func() {
@@ -378,14 +379,14 @@ func TestWaitingHumanReplySupersedesOldRunAndHeartbeatHasNoTimelineEvent(t *test
 	if err != nil || first.RunID == nil {
 		t.Fatalf("create run: %+v %v", first, err)
 	}
-	if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, time.Minute); err != nil {
+	if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	var before int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE card_id = $1`, f.CardID).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Heartbeat(ctx, f.WorkspaceID, *first.RunID, 5*time.Minute); err != nil {
+	if err := s.Heartbeat(ctx, f.WorkspaceID, *first.RunID, f.AgentID, 5*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	var after int
@@ -396,10 +397,10 @@ func TestWaitingHumanReplySupersedesOldRunAndHeartbeatHasNoTimelineEvent(t *test
 		t.Fatalf("heartbeat added timeline event: before=%d after=%d", before, after)
 	}
 
-	if err := s.WaitForHuman(ctx, f.WorkspaceID, *first.RunID, "need_user_input", "choose target"); err != nil {
+	if err := s.WaitForHuman(ctx, f.WorkspaceID, *first.RunID, f.AgentID, "need_user_input", "choose target"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Heartbeat(ctx, f.WorkspaceID, *first.RunID, time.Minute); !errors.Is(err, domain.ErrRunNotCurrent) {
+	if err := s.Heartbeat(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); !errors.Is(err, domain.ErrRunNotCurrent) {
 		t.Fatalf("waiting_human heartbeat error=%v, want ErrRunNotCurrent", err)
 	}
 	reply, err := s.ReplyAndContinue(ctx, SubmitCommentParams{
@@ -431,7 +432,7 @@ func TestLeaseExpiryHealthAndHumanOnlyDone(t *testing.T) {
 	if err != nil || result.RunID == nil {
 		t.Fatalf("create run: %+v %v", result, err)
 	}
-	if err := s.StartRun(ctx, normal.WorkspaceID, *result.RunID, time.Minute); err != nil {
+	if err := s.StartRun(ctx, normal.WorkspaceID, *result.RunID, normal.AgentID, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	expired, err := s.ExpireLeases(ctx, normal.WorkspaceID, time.Now().Add(2*time.Minute))
@@ -459,12 +460,12 @@ func TestLeaseExpiryHealthAndHumanOnlyDone(t *testing.T) {
 	if err != nil || run.RunID == nil {
 		t.Fatalf("create ongoing run: %+v %v", run, err)
 	}
-	if err := s.StartRun(ctx, ongoing.WorkspaceID, *run.RunID, time.Minute); err != nil {
+	if err := s.StartRun(ctx, ongoing.WorkspaceID, *run.RunID, ongoing.AgentID, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	warning := domain.CheckinWarning
 	if _, err := s.AddRunEvent(ctx, RunEventParams{
-		WorkspaceID: ongoing.WorkspaceID, RunID: *run.RunID,
+		WorkspaceID: ongoing.WorkspaceID, RunID: *run.RunID, RunnerSourceID: ongoing.AgentID,
 		Type: domain.EventTypeCheckin, Content: "disk usage elevated", Checkin: &warning,
 	}); err != nil {
 		t.Fatal(err)

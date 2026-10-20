@@ -142,10 +142,10 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if err != nil || current == nil || current.ID == *initial.RunID || current.RunnerSourceID != agent.ID {
 		t.Fatalf("interrupt did not inherit current runner: run=%+v err=%v", current, err)
 	}
-	if err := dataStore.StartRun(context.Background(), workspaceID, current.ID, time.Minute); err != nil {
+	if err := dataStore.StartRun(context.Background(), workspaceID, current.ID, agent.ID, time.Minute); err != nil {
 		t.Fatalf("start interrupted run: %v", err)
 	}
-	if err := dataStore.WaitForHuman(context.Background(), workspaceID, current.ID, "clarification", "Need target"); err != nil {
+	if err := dataStore.WaitForHuman(context.Background(), workspaceID, current.ID, agent.ID, "clarification", "Need target"); err != nil {
 		t.Fatalf("wait for human: %v", err)
 	}
 	reply := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/reply", map[string]any{

@@ -59,6 +59,7 @@ jobs:
         shell: bash
         env:
           CYCLEDOCK_ADMIN_PASSWORD: ci-local-admin-password
+          CYCLEDOCK_PUBLIC_URL: http://127.0.0.1:8080
         run: |
           set -euo pipefail
           trap 'docker compose logs --no-color || true; docker compose down -v' EXIT
@@ -79,3 +80,7 @@ jobs:
           curl -fsS http://127.0.0.1:8080/ >/dev/null
           curl -fsS -H 'Content-Type: application/json' -c /tmp/cycledock-cookie -d '{"password":"ci-local-admin-password"}' http://127.0.0.1:8080/api/v1/auth/login >/dev/null
           curl -fsS -b /tmp/cycledock-cookie http://127.0.0.1:8080/api/v1/me >/dev/null
+          curl -fsS http://127.0.0.1:8080/.well-known/oauth-protected-resource/mcp >/dev/null
+          test "$(curl -sS -o /tmp/mcp-unauth -w '%{http_code}' http://127.0.0.1:8080/mcp)" = "401"
+          curl -fsS -H 'Content-Type: application/json' -d '{"client_name":"CI MCP Client","redirect_uris":["http://127.0.0.1:18084/callback"],"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}' http://127.0.0.1:8080/oauth/register >/tmp/cycledock-dcr.json
+          grep -q '"client_id"' /tmp/cycledock-dcr.json

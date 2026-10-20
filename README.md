@@ -39,6 +39,7 @@ Workspace
 - [MCP 设计](docs/mcp.md)
 - [认证与租户](docs/auth.md)
 - [Human Web HTTP API](docs/http-api.md)
+- [AI Connect](docs/ai-connect.md)
 - [技术栈](docs/stack.md)
 - [开发路线](docs/development.md)
 - [旧项目参考边界](docs/legacy-reference.md)
@@ -54,7 +55,7 @@ Workspace
 
 ## 当前阶段
 
-Phase 0 Foundation、Phase 1 Work Core 与 Phase 2 Human Web 已形成可运行基线：
+Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web 与 Phase 3 External MCP 已形成可运行基线：
 
 - 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
 - Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
@@ -63,5 +64,7 @@ Phase 0 Foundation、Phase 1 Work Core 与 Phase 2 Human Web 已形成可运行�
 - Go + React 单镜像、Docker Compose migration 流程与 CI 骨架。
 - Hosted NexusDock OIDC / Self-hosted Administrator fallback 与 opaque Web Session。
 - Project Board、Card Detail、Timeline、Queue、Human Review/Done 与 Ongoing Schedule Human Web。
+- 标准 Remote Streamable HTTP MCP、OAuth metadata / DCR / S256 PKCE / refresh rotation。
+- Workspace-scoped MCP tools、原子 Claim、Progress/Finding/Check-in/Finish/Confirm 与官方 CycleDock Skill。
 
-下一阶段进入 [Phase 3 — External MCP](docs/development.md#5-phase-3--external-mcp)，对外暴露同一套 Domain / Store 状态机。
+下一阶段进入 [Phase 4 — Built-in Cycle Agent](docs/development.md#6-phase-4--built-in-cycle-agent)，实现内置 Dispatcher / Runner / Context Builder。

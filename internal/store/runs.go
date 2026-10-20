@@ -111,7 +111,11 @@ func (s *Store) ClaimNextTrigger(
 	}, nil
 }
 
-func (s *Store) StartRun(ctx context.Context, workspaceID, runID uuid.UUID, leaseDuration time.Duration) error {
+func (s *Store) StartRun(
+	ctx context.Context,
+	workspaceID, runID, runnerSourceID uuid.UUID,
+	leaseDuration time.Duration,
+) error {
 	if leaseDuration <= 0 {
 		leaseDuration = DefaultClaimLease
 	}
@@ -121,9 +125,15 @@ func (s *Store) StartRun(ctx context.Context, workspaceID, runID uuid.UUID, leas
 	}
 	defer tx.Rollback(ctx)
 
-	_, status, _, err := lockRunCard(ctx, tx, workspaceID, runID)
+	_, status, actualRunnerSourceID, err := lockRunCard(ctx, tx, workspaceID, runID)
 	if err != nil {
 		return err
+	}
+	if actualRunnerSourceID != runnerSourceID {
+		return domain.ErrRunNotCurrent
+	}
+	if status == domain.RunStatusRunning {
+		return tx.Commit(ctx)
 	}
 	if status != domain.RunStatusQueued {
 		return fmt.Errorf("%w: queued run required", domain.ErrRunNotCurrent)
@@ -148,16 +158,20 @@ func (s *Store) StartRun(ctx context.Context, workspaceID, runID uuid.UUID, leas
 }
 
 // Heartbeat 只延长 lease，不写 Event/Timeline。
-func (s *Store) Heartbeat(ctx context.Context, workspaceID, runID uuid.UUID, leaseDuration time.Duration) error {
+func (s *Store) Heartbeat(
+	ctx context.Context,
+	workspaceID, runID, runnerSourceID uuid.UUID,
+	leaseDuration time.Duration,
+) error {
 	if leaseDuration <= 0 {
 		leaseDuration = DefaultClaimLease
 	}
 	now := time.Now().UTC()
 	command, err := s.pool.Exec(ctx, `
 		UPDATE agent_runs
-		SET heartbeat_at = $3, lease_expires_at = $4, updated_at = $3
-		WHERE workspace_id = $1 AND id = $2 AND status = 'running'
-	`, workspaceID, runID, now, now.Add(leaseDuration))
+		SET heartbeat_at = $4, lease_expires_at = $5, updated_at = $4
+		WHERE workspace_id = $1 AND id = $2 AND runner_source_id = $3 AND status = 'running'
+	`, workspaceID, runID, runnerSourceID, now, now.Add(leaseDuration))
 	if err != nil {
 		return err
 	}
@@ -167,16 +181,36 @@ func (s *Store) Heartbeat(ctx context.Context, workspaceID, runID uuid.UUID, lea
 	return nil
 }
 
-func (s *Store) WaitForHuman(ctx context.Context, workspaceID, runID uuid.UUID, stage, summary string) error {
+func (s *Store) WaitForHuman(
+	ctx context.Context,
+	workspaceID, runID, runnerSourceID uuid.UUID,
+	stage, summary string,
+) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	_, status, _, err := lockRunCard(ctx, tx, workspaceID, runID)
+	_, status, actualRunnerSourceID, err := lockRunCard(ctx, tx, workspaceID, runID)
 	if err != nil {
 		return err
+	}
+	if actualRunnerSourceID != runnerSourceID {
+		return domain.ErrRunNotCurrent
+	}
+	if status == domain.RunStatusWaitingHuman {
+		var currentStage, currentSummary string
+		if err := tx.QueryRow(ctx,
+			"SELECT current_stage, progress_summary FROM agent_runs WHERE workspace_id=$1 AND id=$2",
+			workspaceID, runID,
+		).Scan(&currentStage, &currentSummary); err != nil {
+			return err
+		}
+		if currentStage == stage && currentSummary == summary {
+			return tx.Commit(ctx)
+		}
+		return domain.ErrRunNotCurrent
 	}
 	if status != domain.RunStatusRunning {
 		return domain.ErrRunNotCurrent
@@ -201,11 +235,13 @@ func (s *Store) WaitForHuman(ctx context.Context, workspaceID, runID uuid.UUID, 
 }
 
 type RunEventParams struct {
-	WorkspaceID uuid.UUID
-	RunID       uuid.UUID
-	Type        domain.EventType
-	Content     string
-	Checkin     *domain.CheckinStatus
+	WorkspaceID    uuid.UUID
+	RunID          uuid.UUID
+	RunnerSourceID uuid.UUID
+	Type           domain.EventType
+	Content        string
+	Checkin        *domain.CheckinStatus
+	IdempotencyKey string
 }
 
 func (s *Store) AddRunEvent(ctx context.Context, p RunEventParams) (uuid.UUID, error) {
@@ -224,6 +260,9 @@ func (s *Store) AddRunEvent(ctx context.Context, p RunEventParams) (uuid.UUID, e
 	cardID, status, runnerSourceID, err := lockRunCard(ctx, tx, p.WorkspaceID, p.RunID)
 	if err != nil {
 		return uuid.Nil, err
+	}
+	if runnerSourceID != p.RunnerSourceID {
+		return uuid.Nil, domain.ErrRunNotCurrent
 	}
 	if status != domain.RunStatusQueued && status != domain.RunStatusRunning && status != domain.RunStatusWaitingHuman {
 		return uuid.Nil, domain.ErrRunNotCurrent
@@ -247,15 +286,52 @@ func (s *Store) AddRunEvent(ctx context.Context, p RunEventParams) (uuid.UUID, e
 		checkin = string(*p.Checkin)
 	}
 
+	var idempotencyKey any
+	var requestHash any
+	if p.IdempotencyKey != "" {
+		hash := stableRequestHash(
+			"run_event", p.WorkspaceID.String(), p.RunID.String(), p.RunnerSourceID.String(),
+			string(p.Type), p.Content, fmt.Sprint(checkin),
+		)
+		var existingID, existingCardID, existingRunID uuid.UUID
+		var existingHash string
+		err := tx.QueryRow(ctx, `
+			SELECT id, card_id, run_id, COALESCE(request_hash, '')
+			FROM events
+			WHERE workspace_id = $1
+			  AND actor_source_id = $2
+			  AND event_type = $3
+			  AND idempotency_key = $4
+		`, p.WorkspaceID, p.RunnerSourceID, string(p.Type), p.IdempotencyKey).Scan(
+			&existingID, &existingCardID, &existingRunID, &existingHash,
+		)
+		if err == nil {
+			if existingHash != hash || existingCardID != cardID || existingRunID != p.RunID {
+				return uuid.Nil, domain.ErrIdempotencyMismatch
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return uuid.Nil, err
+			}
+			return existingID, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, err
+		}
+		idempotencyKey = p.IdempotencyKey
+		requestHash = hash
+	}
+
 	eventID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events (
-			id, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status
+			id, workspace_id, card_id, event_type, actor_source_id, run_id,
+			content, checkin_status, idempotency_key, request_hash
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, eventID, p.WorkspaceID, cardID, string(p.Type), runnerSourceID, p.RunID, p.Content, checkin)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, eventID, p.WorkspaceID, cardID, string(p.Type), runnerSourceID, p.RunID,
+		p.Content, checkin, idempotencyKey, requestHash)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, mapConstraintError(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, err
@@ -264,10 +340,12 @@ func (s *Store) AddRunEvent(ctx context.Context, p RunEventParams) (uuid.UUID, e
 }
 
 type FinishRunParams struct {
-	WorkspaceID uuid.UUID
-	RunID       uuid.UUID
-	Result      string
-	MoveTo      *domain.NormalColumn
+	WorkspaceID    uuid.UUID
+	RunID          uuid.UUID
+	RunnerSourceID uuid.UUID
+	Result         string
+	MoveTo         *domain.NormalColumn
+	IdempotencyKey string
 }
 
 // FinishRun 与 interrupt 使用相同的 Card 行锁。谁先拿到锁谁先完成状态转换；
@@ -282,6 +360,31 @@ func (s *Store) FinishRun(ctx context.Context, p FinishRunParams) error {
 	cardID, status, runnerSourceID, err := lockRunCard(ctx, tx, p.WorkspaceID, p.RunID)
 	if err != nil {
 		return err
+	}
+	if runnerSourceID != p.RunnerSourceID {
+		return domain.ErrRunNotCurrent
+	}
+	moveTo := ""
+	if p.MoveTo != nil {
+		moveTo = string(*p.MoveTo)
+	}
+	requestHash := stableRequestHash(
+		"finish", "completed", p.WorkspaceID.String(), p.RunID.String(),
+		p.RunnerSourceID.String(), p.Result, moveTo,
+	)
+	if status == domain.RunStatusCompleted && p.IdempotencyKey != "" {
+		var storedKey, storedHash string
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(finish_idempotency_key, ''), COALESCE(finish_request_hash, '')
+			FROM agent_runs
+			WHERE workspace_id = $1 AND id = $2
+		`, p.WorkspaceID, p.RunID).Scan(&storedKey, &storedHash); err != nil {
+			return err
+		}
+		if storedKey != p.IdempotencyKey || storedHash != requestHash {
+			return domain.ErrIdempotencyMismatch
+		}
+		return tx.Commit(ctx)
 	}
 	if status != domain.RunStatusQueued && status != domain.RunStatusRunning && status != domain.RunStatusWaitingHuman {
 		return domain.ErrRunNotCurrent
@@ -302,17 +405,23 @@ func (s *Store) FinishRun(ctx context.Context, p FinishRunParams) error {
 		}
 	}
 
+	var finishKey, finishHash any
+	if p.IdempotencyKey != "" {
+		finishKey, finishHash = p.IdempotencyKey, requestHash
+	}
 	command, err := tx.Exec(ctx, `
 		UPDATE agent_runs
 		SET status = 'completed',
 			result_summary = $3,
+			finish_idempotency_key = $4,
+			finish_request_hash = $5,
 			finished_at = now(),
 			heartbeat_at = NULL,
 			lease_expires_at = NULL,
 			updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
 		  AND status IN ('queued', 'running', 'waiting_human')
-	`, p.WorkspaceID, p.RunID, p.Result)
+	`, p.WorkspaceID, p.RunID, p.Result, finishKey, finishHash)
 	if err != nil {
 		return err
 	}
@@ -322,30 +431,60 @@ func (s *Store) FinishRun(ctx context.Context, p FinishRunParams) error {
 	return tx.Commit(ctx)
 }
 
-func (s *Store) FailRun(ctx context.Context, workspaceID, runID uuid.UUID, summary string) error {
+func (s *Store) FailRun(
+	ctx context.Context,
+	workspaceID, runID, runnerSourceID uuid.UUID,
+	summary, idempotencyKey string,
+) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	_, status, _, err := lockRunCard(ctx, tx, workspaceID, runID)
+	_, status, actualRunnerSourceID, err := lockRunCard(ctx, tx, workspaceID, runID)
 	if err != nil {
 		return err
 	}
+	if actualRunnerSourceID != runnerSourceID {
+		return domain.ErrRunNotCurrent
+	}
+	requestHash := stableRequestHash(
+		"finish", "failed", workspaceID.String(), runID.String(), runnerSourceID.String(), summary,
+	)
+	if status == domain.RunStatusFailed && idempotencyKey != "" {
+		var storedKey, storedHash string
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(finish_idempotency_key, ''), COALESCE(finish_request_hash, '')
+			FROM agent_runs
+			WHERE workspace_id = $1 AND id = $2
+		`, workspaceID, runID).Scan(&storedKey, &storedHash); err != nil {
+			return err
+		}
+		if storedKey != idempotencyKey || storedHash != requestHash {
+			return domain.ErrIdempotencyMismatch
+		}
+		return tx.Commit(ctx)
+	}
 	if status != domain.RunStatusQueued && status != domain.RunStatusRunning && status != domain.RunStatusWaitingHuman {
 		return domain.ErrRunNotCurrent
+	}
+	var finishKey, finishHash any
+	if idempotencyKey != "" {
+		finishKey, finishHash = idempotencyKey, requestHash
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE agent_runs
 		SET status = 'failed',
 			error_summary = $3,
+			finish_idempotency_key = $4,
+			finish_request_hash = $5,
 			finished_at = now(),
 			heartbeat_at = NULL,
 			lease_expires_at = NULL,
 			updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, runID, summary)
+	`, workspaceID, runID, summary, finishKey, finishHash)
 	if err != nil {
 		return err
 	}

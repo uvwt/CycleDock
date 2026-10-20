@@ -100,7 +100,13 @@ func mapConstraintError(err error) error {
 	switch pgErr.ConstraintName {
 	case "agent_runs_trigger_uq", "agent_runs_one_current_per_card_uq":
 		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
-	case "events_comment_idempotency_uq", "triggers_cause_event_uq", "triggers_schedule_occurrence_uq":
+	case "events_comment_idempotency_uq",
+		"triggers_cause_event_uq",
+		"triggers_schedule_occurrence_uq",
+		"cards_source_create_idempotency_uq",
+		"events_source_type_idempotency_uq",
+		"events_confirm_source_uq",
+		"triggers_source_followup_idempotency_uq":
 		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
 	default:
 		return err

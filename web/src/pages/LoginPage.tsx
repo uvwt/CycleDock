@@ -39,6 +39,10 @@ export function LoginPage() {
     },
     onSuccess: (identity) => {
       queryClient.setQueryData(queryKeys.me, identity)
+      const returnTo = safeReturnTo(new URLSearchParams(window.location.search).get('return_to'))
+      if (returnTo !== '/') {
+        window.location.assign(returnTo)
+      }
     },
     onError: (error) => {
       toast.error(
@@ -53,6 +57,7 @@ export function LoginPage() {
 
   const params = new URLSearchParams(window.location.search)
   const authError = authErrorMessage(params.get('auth_error'))
+  const returnTo = safeReturnTo(params.get('return_to'))
   const providers = methods.data?.providers ?? []
   const passwordEnabled = methods.data?.password ?? false
 
@@ -108,7 +113,11 @@ export function LoginPage() {
               {providers.map((provider) => (
                 <a
                   key={provider.id}
-                  href={provider.start_url}
+                  href={
+                    returnTo === '/'
+                      ? provider.start_url
+                      : `${provider.start_url}?return_to=${encodeURIComponent(returnTo)}`
+                  }
                   className="flex h-11 items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
                 >
                   <RefreshCw className="size-4" />
@@ -152,4 +161,11 @@ export function LoginPage() {
       </section>
     </main>
   )
+}
+
+function safeReturnTo(raw: string | null) {
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
+    return '/'
+  }
+  return raw
 }

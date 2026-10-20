@@ -10,22 +10,24 @@ import (
 )
 
 type AgentRun struct {
-	ID              uuid.UUID          `json:"id"`
-	WorkspaceID     uuid.UUID          `json:"workspace_id"`
-	CardID          uuid.UUID          `json:"card_id"`
-	TriggerID       uuid.UUID          `json:"trigger_id"`
-	RunnerSourceID  uuid.UUID          `json:"runner_source_id"`
-	Status          string             `json:"status"`
-	CurrentStage    string             `json:"current_stage"`
-	ProgressSummary string             `json:"progress_summary"`
-	ResultSummary   string             `json:"result_summary"`
-	ErrorSummary    string             `json:"error_summary"`
-	StartedAt       pgtype.Timestamptz `json:"started_at"`
-	HeartbeatAt     pgtype.Timestamptz `json:"heartbeat_at"`
-	LeaseExpiresAt  pgtype.Timestamptz `json:"lease_expires_at"`
-	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID                   uuid.UUID          `json:"id"`
+	WorkspaceID          uuid.UUID          `json:"workspace_id"`
+	CardID               uuid.UUID          `json:"card_id"`
+	TriggerID            uuid.UUID          `json:"trigger_id"`
+	RunnerSourceID       uuid.UUID          `json:"runner_source_id"`
+	Status               string             `json:"status"`
+	CurrentStage         string             `json:"current_stage"`
+	ProgressSummary      string             `json:"progress_summary"`
+	ResultSummary        string             `json:"result_summary"`
+	ErrorSummary         string             `json:"error_summary"`
+	StartedAt            pgtype.Timestamptz `json:"started_at"`
+	HeartbeatAt          pgtype.Timestamptz `json:"heartbeat_at"`
+	LeaseExpiresAt       pgtype.Timestamptz `json:"lease_expires_at"`
+	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	FinishIdempotencyKey pgtype.Text        `json:"finish_idempotency_key"`
+	FinishRequestHash    pgtype.Text        `json:"finish_request_hash"`
 }
 
 type Card struct {
@@ -41,6 +43,8 @@ type Card struct {
 	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
 }
 
 type CardSchedule struct {
@@ -81,6 +85,51 @@ type HumanAccount struct {
 	IsLocalAdmin  bool               `json:"is_local_admin"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OauthAuthorizationCode struct {
+	CodeDigest    []byte             `json:"code_digest"`
+	GrantID       uuid.UUID          `json:"grant_id"`
+	RedirectUri   string             `json:"redirect_uri"`
+	CodeChallenge string             `json:"code_challenge"`
+	Scope         string             `json:"scope"`
+	Resource      string             `json:"resource"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt    pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthClient struct {
+	ClientID     string             `json:"client_id"`
+	ClientName   string             `json:"client_name"`
+	RedirectUris []string           `json:"redirect_uris"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type OauthGrant struct {
+	ID             uuid.UUID          `json:"id"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	HumanSourceID  uuid.UUID          `json:"human_source_id"`
+	ClientID       string             `json:"client_id"`
+	SourceID       uuid.UUID          `json:"source_id"`
+	Resource       string             `json:"resource"`
+	Scope          string             `json:"scope"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type OauthToken struct {
+	ID                 uuid.UUID          `json:"id"`
+	GrantID            uuid.UUID          `json:"grant_id"`
+	FamilyID           uuid.UUID          `json:"family_id"`
+	AccessTokenDigest  []byte             `json:"access_token_digest"`
+	RefreshTokenDigest []byte             `json:"refresh_token_digest"`
+	AccessExpiresAt    pgtype.Timestamptz `json:"access_expires_at"`
+	RefreshExpiresAt   pgtype.Timestamptz `json:"refresh_expires_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	RevokedAt          pgtype.Timestamptz `json:"revoked_at"`
 }
 
 type OidcIdentity struct {

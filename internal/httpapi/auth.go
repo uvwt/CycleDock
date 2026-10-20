@@ -130,9 +130,10 @@ func newIdentityResponse(identity auth.Identity) identityResponse {
 }
 
 const (
-	sessionCookieName   = "cycledock_session"
-	oidcStateCookieName = "cycledock_auth_state_oidc"
-	oidcStateCookiePath = "/auth/nexusdock/callback"
+	sessionCookieName    = "cycledock_session"
+	oidcStateCookieName  = "cycledock_auth_state_oidc"
+	oidcStateCookiePath  = "/auth/nexusdock/callback"
+	oidcReturnCookieName = "cycledock_auth_return"
 )
 
 func (api *API) setSessionCookie(w http.ResponseWriter, session auth.Session) {
@@ -168,22 +169,32 @@ func (api *API) oidcLoginStart(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, Secure: api.secureCookie, SameSite: http.SameSiteLaxMode,
 		Expires: start.ExpiresAt, MaxAge: maxAge,
 	})
+	returnTo := safeInternalReturnTo(r.URL.Query().Get("return_to"))
+	if returnTo != "/" {
+		http.SetCookie(w, &http.Cookie{
+			Name: oidcReturnCookieName, Value: returnTo, Path: oidcStateCookiePath,
+			HttpOnly: true, Secure: api.secureCookie, SameSite: http.SameSiteLaxMode,
+			Expires: start.ExpiresAt, MaxAge: maxAge,
+		})
+	}
 	http.Redirect(w, r, start.URL, http.StatusFound)
 }
 
 func (api *API) oidcLoginCallback(w http.ResponseWriter, r *http.Request) {
+	returnTo := api.oidcReturnTo(r)
 	state := r.URL.Query().Get("state")
 	if !api.oidcStateMatches(r, state) {
-		api.redirectAuthError(w, r, "invalid_state")
+		api.redirectAuthError(w, r, "invalid_state", returnTo)
 		return
 	}
 	api.clearOIDCStateCookie(w)
+	api.clearOIDCReturnCookie(w)
 	if r.URL.Query().Get("error") != "" {
 		if err := api.auth.ConsumeOIDCState(r.Context(), state); err != nil {
-			api.redirectAuthError(w, r, "invalid_state")
+			api.redirectAuthError(w, r, "invalid_state", returnTo)
 			return
 		}
-		api.redirectAuthError(w, r, "access_denied")
+		api.redirectAuthError(w, r, "access_denied", returnTo)
 		return
 	}
 	session, err := api.auth.CompleteOIDCLogin(r.Context(), state, r.URL.Query().Get("code"))
@@ -193,11 +204,11 @@ func (api *API) oidcLoginCallback(w http.ResponseWriter, r *http.Request) {
 			code = "invalid_state"
 		}
 		api.logger.Warn("OIDC login callback failed", "code", code, "error", err)
-		api.redirectAuthError(w, r, code)
+		api.redirectAuthError(w, r, code, returnTo)
 		return
 	}
 	api.setSessionCookie(w, session)
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 
 func (api *API) oidcStateMatches(r *http.Request, state string) bool {
@@ -217,7 +228,25 @@ func (api *API) clearOIDCStateCookie(w http.ResponseWriter) {
 	})
 }
 
-func (api *API) redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+func (api *API) oidcReturnTo(r *http.Request) string {
+	cookie, err := r.Cookie(oidcReturnCookieName)
+	if err != nil {
+		return "/"
+	}
+	return safeInternalReturnTo(cookie.Value)
+}
+
+func (api *API) clearOIDCReturnCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name: oidcReturnCookieName, Path: oidcStateCookiePath, HttpOnly: true,
+		Secure: api.secureCookie, SameSite: http.SameSiteLaxMode, MaxAge: -1,
+	})
+}
+
+func (api *API) redirectAuthError(w http.ResponseWriter, r *http.Request, code, returnTo string) {
 	values := url.Values{"auth_error": {code}, "provider": {"nexusdock"}}
+	if returnTo = safeInternalReturnTo(returnTo); returnTo != "/" {
+		values.Set("return_to", returnTo)
+	}
 	http.Redirect(w, r, "/?"+values.Encode(), http.StatusFound)
 }
