@@ -15,12 +15,15 @@ import (
 )
 
 type PendingTrigger struct {
-	ID           uuid.UUID
-	Sequence     int64
-	Cause        domain.TriggerCause
-	DispatchMode domain.DispatchMode
-	Content      string
-	CreatedAt    time.Time
+	ID               uuid.UUID
+	Sequence         int64
+	Cause            domain.TriggerCause
+	DispatchMode     domain.DispatchMode
+	CauseEventID     uuid.NullUUID
+	RetryOfTriggerID uuid.NullUUID
+	SourceEventID    uuid.NullUUID
+	Content          string
+	CreatedAt        time.Time
 }
 
 func (s *Store) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]db.Project, error) {
@@ -107,6 +110,24 @@ func (s *Store) CurrentRun(ctx context.Context, workspaceID, cardID uuid.UUID) (
 	return &run, nil
 }
 
+// GetTriggerLineage 把当前 Trigger 映射回最初的人类 Comment Event。
+// retry Trigger 自身没有 cause_event_id，因此必须沿 retry_of_trigger_id 链追溯，
+// 不能让 HTTP/UI 根据消息内容或时间位置猜测归属。
+func (s *Store) GetTriggerLineage(
+	ctx context.Context,
+	workspaceID, cardID, triggerID uuid.UUID,
+) (db.GetTriggerLineageRow, error) {
+	lineage, err := s.queries.GetTriggerLineage(ctx, db.GetTriggerLineageParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		TriggerID:   triggerID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.GetTriggerLineageRow{}, domain.ErrNotFound
+	}
+	return lineage, err
+}
+
 func (s *Store) ListPendingQueue(ctx context.Context, workspaceID, cardID uuid.UUID) ([]PendingTrigger, error) {
 	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
 		return nil, err
@@ -121,12 +142,15 @@ func (s *Store) ListPendingQueue(ctx context.Context, workspaceID, cardID uuid.U
 	items := make([]PendingTrigger, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, PendingTrigger{
-			ID:           row.ID,
-			Sequence:     row.Sequence.Int64,
-			Cause:        domain.TriggerCause(row.Cause),
-			DispatchMode: domain.DispatchMode(row.DispatchMode),
-			Content:      row.Content,
-			CreatedAt:    row.CreatedAt.Time,
+			ID:               row.ID,
+			Sequence:         row.Sequence.Int64,
+			Cause:            domain.TriggerCause(row.Cause),
+			DispatchMode:     domain.DispatchMode(row.DispatchMode),
+			CauseEventID:     row.CauseEventID,
+			RetryOfTriggerID: row.RetryOfTriggerID,
+			SourceEventID:    row.SourceEventID,
+			Content:          row.Content,
+			CreatedAt:        row.CreatedAt.Time,
 		})
 	}
 	return items, nil

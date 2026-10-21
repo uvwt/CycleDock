@@ -407,6 +407,77 @@ func (q *Queries) GetWebSessionIdentity(ctx context.Context, tokenDigest []byte)
 	return i, err
 }
 
+const listHumanWorkspaces = `-- name: ListHumanWorkspaces :many
+SELECT
+    wm.workspace_id,
+    wm.source_id,
+    wm.role,
+    wm.is_personal,
+    w.name AS workspace_name
+FROM workspace_memberships wm
+JOIN workspaces w ON w.id = wm.workspace_id
+WHERE wm.human_account_id = $1
+ORDER BY wm.is_personal DESC, w.created_at, w.id
+`
+
+type ListHumanWorkspacesRow struct {
+	WorkspaceID   uuid.UUID `json:"workspace_id"`
+	SourceID      uuid.UUID `json:"source_id"`
+	Role          string    `json:"role"`
+	IsPersonal    bool      `json:"is_personal"`
+	WorkspaceName string    `json:"workspace_name"`
+}
+
+func (q *Queries) ListHumanWorkspaces(ctx context.Context, humanAccountID uuid.UUID) ([]ListHumanWorkspacesRow, error) {
+	rows, err := q.db.Query(ctx, listHumanWorkspaces, humanAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHumanWorkspacesRow{}
+	for rows.Next() {
+		var i ListHumanWorkspacesRow
+		if err := rows.Scan(
+			&i.WorkspaceID,
+			&i.SourceID,
+			&i.Role,
+			&i.IsPersonal,
+			&i.WorkspaceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const switchWebSessionWorkspace = `-- name: SwitchWebSessionWorkspace :execrows
+UPDATE web_sessions ws
+SET workspace_id = membership.workspace_id,
+    source_id = membership.source_id
+FROM workspace_memberships membership
+WHERE ws.token_digest = $1
+  AND ws.expires_at > now()
+  AND membership.human_account_id = ws.human_account_id
+  AND membership.workspace_id = $2
+`
+
+type SwitchWebSessionWorkspaceParams struct {
+	TokenDigest []byte    `json:"token_digest"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SwitchWebSessionWorkspace(ctx context.Context, arg SwitchWebSessionWorkspaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, switchWebSessionWorkspace, arg.TokenDigest, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateHumanAccountSnapshot = `-- name: UpdateHumanAccountSnapshot :exec
 UPDATE human_accounts
 SET display_name = $1,

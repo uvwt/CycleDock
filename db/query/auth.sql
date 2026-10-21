@@ -126,6 +126,28 @@ JOIN sources s
 WHERE ws.token_digest = sqlc.arg(token_digest)
   AND ws.expires_at > now();
 
+-- name: ListHumanWorkspaces :many
+SELECT
+    wm.workspace_id,
+    wm.source_id,
+    wm.role,
+    wm.is_personal,
+    w.name AS workspace_name
+FROM workspace_memberships wm
+JOIN workspaces w ON w.id = wm.workspace_id
+WHERE wm.human_account_id = sqlc.arg(human_account_id)
+ORDER BY wm.is_personal DESC, w.created_at, w.id;
+
+-- name: SwitchWebSessionWorkspace :execrows
+UPDATE web_sessions ws
+SET workspace_id = membership.workspace_id,
+    source_id = membership.source_id
+FROM workspace_memberships membership
+WHERE ws.token_digest = sqlc.arg(token_digest)
+  AND ws.expires_at > now()
+  AND membership.human_account_id = ws.human_account_id
+  AND membership.workspace_id = sqlc.arg(workspace_id);
+
 -- name: DeleteWebSession :exec
 DELETE FROM web_sessions
 WHERE token_digest = sqlc.arg(token_digest);

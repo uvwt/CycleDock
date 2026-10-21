@@ -106,9 +106,7 @@ export function ConversationComposer({
                   aria-label={t("任务发送方式")}
                   value={submitMode}
                   onChange={(event) =>
-                    setSubmitMode(
-                      event.target.value as "enqueue" | "interrupt",
-                    )
+                    setSubmitMode(event.target.value as "enqueue" | "interrupt")
                   }
                   className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-600"
                 >

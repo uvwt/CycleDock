@@ -57,6 +57,8 @@ func (api *API) handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "login_disabled", "self-hosted login is not configured")
 	case errors.Is(err, auth.ErrMultipleWorkspaces):
 		writeError(w, http.StatusConflict, "workspace_conflict", "self-hosted login requires a single workspace")
+	case errors.Is(err, auth.ErrWorkspaceAccess):
+		writeError(w, http.StatusForbidden, "workspace_access_denied", "workspace membership is required")
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, domain.ErrIdempotencyMismatch):

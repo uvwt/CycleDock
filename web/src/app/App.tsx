@@ -63,7 +63,7 @@ function Authenticated() {
         }
       >
         <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
+          <Route path="/" element={<Navigate to="/board" replace />} />
           <Route path="/chat" element={<ChatHome />} />
           <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
           <Route path="/board" element={<BoardPage />} />
@@ -81,7 +81,7 @@ function Authenticated() {
             path="/projects/:projectID"
             element={<LegacyBoardRedirect />}
           />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
+          <Route path="*" element={<Navigate to="/board" replace />} />
         </Routes>
       </Suspense>
     </Shell>

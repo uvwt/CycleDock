@@ -30,6 +30,7 @@ var (
 	ErrInvalidConfig      = errors.New("invalid auth configuration")
 	ErrMultipleWorkspaces = errors.New("self-hosted login requires a single workspace")
 	ErrInvalidHumanSource = errors.New("session source is not human")
+	ErrWorkspaceAccess     = errors.New("workspace access denied")
 )
 
 type Config struct {
@@ -53,6 +54,13 @@ type Session struct {
 	Token     string
 	ExpiresAt time.Time
 	Identity  Identity
+}
+
+type WorkspaceMembership struct {
+	ID         uuid.UUID
+	Name       string
+	Role       string
+	IsPersonal bool
 }
 
 type Service struct {
@@ -347,6 +355,37 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Identity, err
 		SourceName:     row.SourceName,
 		Role:           row.Role,
 	}, nil
+}
+
+func (s *Service) ListWorkspaces(ctx context.Context, humanAccountID uuid.UUID) ([]WorkspaceMembership, error) {
+	rows, err := s.queries.ListHumanWorkspaces(ctx, humanAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("list human workspaces: %w", err)
+	}
+	items := make([]WorkspaceMembership, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, WorkspaceMembership{
+			ID: row.WorkspaceID, Name: row.WorkspaceName, Role: row.Role, IsPersonal: row.IsPersonal,
+		})
+	}
+	return items, nil
+}
+
+func (s *Service) SwitchWorkspace(ctx context.Context, token string, workspaceID uuid.UUID) (Identity, error) {
+	if token == "" {
+		return Identity{}, ErrUnauthorized
+	}
+	digest := sha256.Sum256([]byte(token))
+	changed, err := s.queries.SwitchWebSessionWorkspace(ctx, db.SwitchWebSessionWorkspaceParams{
+		TokenDigest: digest[:], WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return Identity{}, fmt.Errorf("switch web session workspace: %w", err)
+	}
+	if changed != 1 {
+		return Identity{}, ErrWorkspaceAccess
+	}
+	return s.Authenticate(ctx, token)
 }
 
 func (s *Service) Logout(ctx context.Context, token string) error {

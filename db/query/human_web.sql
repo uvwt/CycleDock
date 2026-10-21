@@ -67,6 +67,34 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND status IN ('queued', 'running', 'waiting_human')
 LIMIT 1;
 
+-- name: GetTriggerLineage :one
+WITH RECURSIVE lineage AS (
+    SELECT t.id, t.retry_of_trigger_id, t.cause_event_id, 0 AS depth
+    FROM triggers t
+    WHERE t.workspace_id = sqlc.arg(workspace_id)
+      AND t.card_id = sqlc.arg(card_id)
+      AND t.id = sqlc.arg(trigger_id)
+
+    UNION ALL
+
+    SELECT parent.id, parent.retry_of_trigger_id, parent.cause_event_id, lineage.depth + 1
+    FROM triggers parent
+    JOIN lineage ON lineage.retry_of_trigger_id = parent.id
+    WHERE parent.workspace_id = sqlc.arg(workspace_id)
+      AND parent.card_id = sqlc.arg(card_id)
+)
+SELECT
+    current.retry_of_trigger_id,
+    (
+        SELECT ancestor.cause_event_id
+        FROM lineage ancestor
+        WHERE ancestor.cause_event_id IS NOT NULL
+        ORDER BY ancestor.depth
+        LIMIT 1
+    ) AS source_event_id
+FROM lineage current
+WHERE current.depth = 0;
+
 -- name: ListCardSchedules :many
 SELECT *
 FROM card_schedules
@@ -94,24 +122,48 @@ LIMIT 1;
 SELECT
     e.*,
     s.name AS actor_name,
-    s.kind AS actor_kind
+    s.kind AS actor_kind,
+    t.id AS trigger_id
 FROM events e
 JOIN sources s
   ON s.workspace_id = e.workspace_id
  AND s.id = e.actor_source_id
+LEFT JOIN triggers t
+  ON t.workspace_id = e.workspace_id
+ AND t.card_id = e.card_id
+ AND t.cause_event_id = e.id
 WHERE e.workspace_id = sqlc.arg(workspace_id)
   AND e.card_id = sqlc.arg(card_id)
 ORDER BY e.sequence;
 
 -- name: ListPendingQueue :many
+WITH RECURSIVE trigger_roots AS (
+    SELECT root.id, root.cause_event_id AS source_event_id
+    FROM triggers root
+    WHERE root.workspace_id = sqlc.arg(workspace_id)
+      AND root.card_id = sqlc.arg(card_id)
+      AND root.retry_of_trigger_id IS NULL
+
+    UNION ALL
+
+    SELECT child.id, parent.source_event_id
+    FROM triggers child
+    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
+    WHERE child.workspace_id = sqlc.arg(workspace_id)
+      AND child.card_id = sqlc.arg(card_id)
+)
 SELECT
     t.id,
     t.sequence,
     t.cause,
     t.dispatch_mode,
+    t.cause_event_id,
+    t.retry_of_trigger_id,
+    trigger_roots.source_event_id,
     COALESCE(e.content, '') AS content,
     t.created_at
 FROM triggers t
+JOIN trigger_roots ON trigger_roots.id = t.id
 LEFT JOIN events e
   ON e.workspace_id = t.workspace_id
  AND e.card_id = t.card_id
@@ -126,11 +178,28 @@ WHERE t.workspace_id = sqlc.arg(workspace_id)
 ORDER BY t.sequence;
 
 -- name: ListRecentCardWork :many
+WITH RECURSIVE trigger_roots AS (
+    SELECT id, cause_event_id AS source_event_id
+    FROM triggers
+    WHERE workspace_id = sqlc.arg(workspace_id)
+      AND card_id = sqlc.arg(card_id)
+      AND retry_of_trigger_id IS NULL
+
+    UNION ALL
+
+    SELECT child.id, parent.source_event_id
+    FROM triggers child
+    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
+    WHERE child.workspace_id = sqlc.arg(workspace_id)
+      AND child.card_id = sqlc.arg(card_id)
+)
 SELECT
     t.id AS trigger_id,
     t.sequence,
     t.cause,
     t.dispatch_mode,
+    t.cause_event_id,
+    trigger_roots.source_event_id,
     COALESCE(e.content, '') AS content,
     t.retry_of_trigger_id,
     t.cancelled_at,
@@ -153,6 +222,7 @@ SELECT
           AND child.retry_of_trigger_id = t.id
     ) AS has_retry
 FROM triggers t
+JOIN trigger_roots ON trigger_roots.id = t.id
 LEFT JOIN events e
   ON e.workspace_id = t.workspace_id
  AND e.card_id = t.card_id

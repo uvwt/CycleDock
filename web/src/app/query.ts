@@ -6,6 +6,7 @@ export const queryClient = new QueryClient({
 });
 export const keys = {
   me: ["me"] as const,
+  workspaces: ["workspaces"] as const,
   projects: ["projects"] as const,
   cards: (id: string) => ["cards", id] as const,
   card: (id: string) => ["card", id] as const,

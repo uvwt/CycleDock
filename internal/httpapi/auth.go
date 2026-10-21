@@ -29,6 +29,13 @@ type loginProviderResponse struct {
 	StartURL string `json:"start_url"`
 }
 
+type workspaceResponse struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Role       string `json:"role"`
+	IsPersonal bool   `json:"is_personal"`
+}
+
 type identityResponse struct {
 	HumanAccountID string `json:"human_account_id"`
 	DisplayName    string `json:"display_name"`
@@ -92,6 +99,40 @@ func (api *API) logout(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newIdentityResponse(identityFromRequest(r)))
+}
+
+func (api *API) listWorkspaces(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	memberships, err := api.auth.ListWorkspaces(r.Context(), identity.HumanAccountID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	response := make([]workspaceResponse, 0, len(memberships))
+	for _, membership := range memberships {
+		response = append(response, workspaceResponse{
+			ID: membership.ID.String(), Name: membership.Name, Role: membership.Role, IsPersonal: membership.IsPersonal,
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) switchWorkspace(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := parseUUIDParam(w, r, "workspaceID")
+	if !ok {
+		return
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	identity, err := api.auth.SwitchWorkspace(r.Context(), cookie.Value, workspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newIdentityResponse(identity))
 }
 
 func (api *API) requireHuman(next http.Handler) http.Handler {

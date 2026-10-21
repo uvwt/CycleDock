@@ -17,6 +17,15 @@ const project = {
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
+const secondProject = {
+  id: "demo-project-b",
+  name: "产品发布",
+  description: "发布计划与上线检查",
+  instructions: "按发布清单推进",
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+};
+const projects = [project, secondProject];
 const now = () => new Date().toISOString();
 const hoursAgo = (hours) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -32,9 +41,31 @@ const cards = [
     updated_at: now(),
   },
   {
+    id: "discussion-b",
+    project_id: secondProject.id,
+    kind: "discussion",
+    title: "讨论版本发布",
+    description: "确认发布窗口、检查项与回滚条件。",
+    discussion_state: "active",
+    created_at: now(),
+    updated_at: now(),
+  },
+  {
+    id: "todo-b",
+    project_id: secondProject.id,
+    kind: "todo",
+    source_discussion_id: "discussion-b",
+    title: "准备发布清单",
+    description: "核对变更、备份和回滚步骤",
+    todo_state: "todo",
+    created_at: now(),
+    updated_at: now(),
+  },
+  {
     id: "todo-1",
     project_id: project.id,
     kind: "todo",
+    source_discussion_id: "discussion-1",
     title: "检查 RN 服务器异常日志",
     description: "重点检查最近24小时的 Docker 和系统错误日志",
     todo_state: "working",
@@ -46,6 +77,7 @@ const cards = [
     id: "ongoing-1",
     project_id: project.id,
     kind: "ongoing",
+    source_discussion_id: "discussion-1",
     title: "每天检查服务器健康",
     description: "CPU、内存、容器运行状态",
     ongoing_state: "active",
@@ -76,7 +108,28 @@ const events = {
       created_at: now(),
     },
   ],
+  "discussion-b": [
+    {
+      id: "event-b1",
+      sequence: 1,
+      type: "comment",
+      content: "这周安排一次版本发布。",
+      actor_kind: "human",
+      actor_name: "测试用户",
+      created_at: now(),
+    },
+  ],
+  "todo-b": [],
   "todo-1": [
+    {
+      id: "event-8",
+      sequence: 1,
+      type: "comment",
+      content: "先检查昨天的日志。",
+      actor_kind: "human",
+      actor_name: "测试用户",
+      created_at: hoursAgo(5),
+    },
     {
       id: "event-3",
       sequence: 3,
@@ -104,6 +157,15 @@ const events = {
       actor_name: "Cycle Agent",
       created_at: now(),
     },
+    {
+      id: "event-7",
+      sequence: 6,
+      type: "comment",
+      content: "顺便检查磁盘空间。",
+      actor_kind: "human",
+      actor_name: "测试用户",
+      created_at: now(),
+    },
   ],
   "ongoing-1": [
     {
@@ -118,6 +180,8 @@ const events = {
     },
   ],
 };
+const failFirstComment = new Set();
+let failNextDiscussionCreate = false;
 let settings = {
   configured: true,
   enabled: true,
@@ -137,6 +201,20 @@ const session = {
   workspace: { id: "demo-workspace", name: "演示空间" },
   source: { id: "demo-source", name: "测试用户", kind: "human" },
 };
+const workspaces = [
+  {
+    id: "demo-workspace",
+    name: "演示空间",
+    role: "owner",
+    is_personal: true,
+  },
+  {
+    id: "demo-workspace-2",
+    name: "第二空间",
+    role: "member",
+    is_personal: false,
+  },
+];
 let mcp = [
   {
     id: "mcp-demo",
@@ -174,14 +252,59 @@ function details(id) {
     current_run: card.current_run_status
       ? {
           id: "run-demo",
+          trigger_id: "trigger-running",
+          source_event_id: "event-3",
           status: card.current_run_status,
           current_stage: "分析错误日志",
           created_at: now(),
           started_at: new Date(Date.now() - 32000).toISOString(),
         }
       : null,
-    queue: [],
-    work_history: [],
+    queue:
+      id === "todo-1"
+        ? [
+            {
+              id: "trigger-queued",
+              trigger_id: "trigger-queued",
+              sequence: 6,
+              cause: "comment",
+              dispatch_mode: "enqueue",
+              cause_event_id: "event-7",
+              source_event_id: "event-7",
+              content: "顺便检查磁盘空间。",
+              created_at: now(),
+            },
+          ]
+        : [],
+    work_history:
+      id === "todo-1"
+        ? [
+            {
+              trigger_id: "trigger-failed",
+              cause_event_id: "event-8",
+              source_event_id: "event-8",
+              status: "failed",
+              sequence: 1,
+              content: "先检查昨天的日志。",
+              cause: "comment",
+              error_summary: "远程节点暂时不可用",
+              can_retry: true,
+              created_at: hoursAgo(5),
+              finished_at: hoursAgo(4.9),
+            },
+            {
+              trigger_id: "trigger-schedule-history",
+              status: "completed",
+              sequence: 2,
+              content: "定时巡检触发",
+              cause: "schedule",
+              result_summary: "巡检完成",
+              can_retry: false,
+              created_at: hoursAgo(2),
+              finished_at: hoursAgo(1.9),
+            },
+          ]
+        : [],
     schedules:
       card.kind === "ongoing"
         ? [
@@ -197,7 +320,7 @@ function details(id) {
           ]
         : [],
     health: card.health || "unknown",
-    last_checkin: null,
+    last_checkin: id === "ongoing-1" ? events[id][0] : null,
   };
 }
 http
@@ -208,10 +331,29 @@ http
       if (p.startsWith("/api/v1")) {
         const route = p.slice(7);
         if (route === "/me") return data(res, session);
+        if (route === "/workspaces" && req.method === "GET")
+          return data(res, workspaces);
+        const workspaceSwitch = route.match(/^\/workspaces\/([^/]+)\/switch$/);
+        if (workspaceSwitch && req.method === "POST") {
+          const workspace = workspaces.find(
+            (item) => item.id === workspaceSwitch[1],
+          );
+          if (!workspace) return failure(res);
+          session.workspace = { id: workspace.id, name: workspace.name };
+          session.role = workspace.role;
+          return data(res, session);
+        }
         if (route === "/auth/methods")
           return data(res, { password: true, providers: [] });
+        if (
+          route === "/__fixture/fail-next-discussion" &&
+          req.method === "POST"
+        ) {
+          failNextDiscussionCreate = true;
+          return data(res, { ok: true });
+        }
         if (route === "/projects" && req.method === "GET")
-          return data(res, [project]);
+          return data(res, projects);
         if (route === "/projects" && req.method === "POST") {
           return data(
             res,
@@ -223,11 +365,30 @@ http
           Object.assign(project, await body(req));
           return data(res, project);
         }
-        if (route === `/projects/${project.id}/cards`) return data(res, cards);
+        const projectCards = route.match(/^\/projects\/([^/]+)\/cards$/);
+        if (projectCards && req.method === "GET") {
+          return data(
+            res,
+            cards.filter((card) => card.project_id === projectCards[1]),
+          );
+        }
         if (
           route === `/projects/${project.id}/discussions` &&
           req.method === "POST"
         ) {
+          if (failNextDiscussionCreate) {
+            failNextDiscussionCreate = false;
+            return data(
+              res,
+              {
+                error: {
+                  code: "fixture_discussion_create_failure",
+                  message: "模拟 Discussion 创建失败",
+                },
+              },
+              503,
+            );
+          }
           const card = {
             id: "discussion-" + Date.now(),
             project_id: project.id,
@@ -240,6 +401,7 @@ http
           };
           cards.unshift(card);
           events[card.id] = [];
+          failFirstComment.add(card.id);
           return data(res, card, 201);
         }
         if (
@@ -340,6 +502,18 @@ http
           }
           if (rest === "comments" && req.method === "POST") {
             const input = await body(req);
+            if (failFirstComment.delete(id)) {
+              return data(
+                res,
+                {
+                  error: {
+                    code: "fixture_first_message_failure",
+                    message: "模拟首条消息网络失败，请重试",
+                  },
+                },
+                503,
+              );
+            }
             events[id].push({
               id: "event-" + ++seq,
               sequence: seq,
@@ -430,8 +604,23 @@ http
           // Match Go decodeJSON's strict contract; passing MCP.enabled would fail in production.
           const allowed = ["name", "url", "bearer_token_env", "timeout_ms"];
           if (Object.keys(input).some((key) => !allowed.includes(key)))
-            return data(res, { error: { code: "invalid_json", message: "unexpected MCP test field" } }, 400);
-          return data(res, { ok: true, code: "ok", message: "测试连接成功", duration_ms: 52, tool_count: 2 });
+            return data(
+              res,
+              {
+                error: {
+                  code: "invalid_json",
+                  message: "unexpected MCP test field",
+                },
+              },
+              400,
+            );
+          return data(res, {
+            ok: true,
+            code: "ok",
+            message: "测试连接成功",
+            duration_ms: 52,
+            tool_count: 2,
+          });
         }
         if (route === "/agent/provider-test")
           return data(res, {

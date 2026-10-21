@@ -6,6 +6,12 @@ export type Identity = {
   workspace: { id: string; name: string };
   source: { id: string; name: string; kind: string };
 };
+export type Workspace = {
+  id: string;
+  name: string;
+  role: string;
+  is_personal: boolean;
+};
 export type LoginMethods = {
   password: boolean;
   providers: { id: string; name: string; start_url: string }[];
@@ -53,10 +59,14 @@ export type TimelineEvent = {
   content: string;
   checkin_status?: string;
   run_id?: string;
+  trigger_id?: string;
   created_at: string;
 };
 export type Run = {
   id: string;
+  trigger_id: string;
+  retry_of_trigger_id?: string;
+  source_event_id?: string;
   status: string;
   current_stage?: string;
   progress_summary?: string;
@@ -68,22 +78,32 @@ export type Run = {
 };
 export type QueueItem = {
   id: string;
+  trigger_id: string;
   sequence: number;
   cause: string;
   dispatch_mode: string;
+  cause_event_id?: string;
+  retry_of_trigger_id?: string;
+  source_event_id?: string;
   content: string;
   created_at: string;
 };
 export type WorkItem = {
   trigger_id: string;
+  cause_event_id?: string;
+  source_event_id?: string;
+  retry_of_trigger_id?: string;
   run_id?: string;
   status: string;
   sequence: number;
   content: string;
   can_retry: boolean;
   cause: string;
-  error_summary?: string;
+  current_stage?: string;
+  progress_summary?: string;
   result_summary?: string;
+  error_summary?: string;
+  cancel_reason?: string;
   created_at: string;
   finished_at?: string;
 };

@@ -26,11 +26,14 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       `/api/v1/cards/${encodeURIComponent(cardID)}/stream`,
       { withCredentials: true },
     );
-    const refresh = () => Promise.all([
-      query.invalidateQueries({ queryKey: keys.card(cardID) }),
-      query.invalidateQueries({ queryKey: keys.cards(projectID) }),
-    ]);
-    const sync = () => { void refresh(); };
+    const refresh = () =>
+      Promise.all([
+        query.invalidateQueries({ queryKey: keys.card(cardID) }),
+        query.invalidateQueries({ queryKey: keys.cards(projectID) }),
+      ]);
+    const sync = () => {
+      void refresh();
+    };
     const parse = (event: Event) => {
       try {
         return JSON.parse((event as MessageEvent).data) as {
@@ -77,16 +80,17 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       const delta = v.text || "";
       setState((s) => ({
         ...s,
-        live: s.live && s.live.runID !== runID
-          ? s.live
-          : s.live
-            ? { ...s.live, text: s.live.text + delta }
-            : {
-                runID,
-                text: delta,
-                stage: "正在生成回复",
-                startedAt: v.started_at,
-              },
+        live:
+          s.live && s.live.runID !== runID
+            ? s.live
+            : s.live
+              ? { ...s.live, text: s.live.text + delta }
+              : {
+                  runID,
+                  text: delta,
+                  stage: "正在生成回复",
+                  startedAt: v.started_at,
+                },
       }));
     };
     const onSnapshot = (e: Event) => {
@@ -107,9 +111,11 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       if (!active) return;
       // 等持久 Timeline 更新完再撤掉临时输出，避免最终回复闪烁消失。
       void refresh().finally(() => {
-        if (active) setState((s) => ({
-          ...s, live: !runID || s.live?.runID === runID ? null : s.live,
-        }));
+        if (active)
+          setState((s) => ({
+            ...s,
+            live: !runID || s.live?.runID === runID ? null : s.live,
+          }));
       });
     };
     stream.addEventListener("run.started", onStarted);

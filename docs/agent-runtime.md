@@ -153,6 +153,8 @@ Trigger C → no Run
 
 Run A 完成后，Dispatcher 按 sequence Claim 最早的 pending Trigger。
 
+Human Web 展示队列/执行状态时，必须沿稳定的执行链关联：Human Comment Event 的 `id` → Trigger 的 `cause_event_id` → Run 的 `trigger_id`。manual retry 通过 `retry_of_trigger_id` 追溯到原 Trigger，并由 API 派生 `source_event_id` 指向最初 Comment Event。Schedule / system follow-up 等没有用户 Comment 来源的 Trigger 不强行归属到任意消息。
+
 ## 7. 队列执行时使用最新上下文
 
 Trigger 创建时只冻结原始意图。
@@ -238,6 +240,7 @@ waiting_human 表示：
 - error_summary 写可供用户理解、且不包含 secret / 原始上游响应的失败摘要。
 - provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都有明确失败分类。
 - retry 创建新的 `manual_retry` Trigger，旧 Run/Trigger 不复活。
+- `manual_retry` 保存 `retry_of_trigger_id`；旧失败记录继续保留。展示层可以把多个尝试附着到同一个 `source_event_id`，但不得覆盖旧状态，也不得按消息内容、时间或位置推断关联。
 
 过期：
 

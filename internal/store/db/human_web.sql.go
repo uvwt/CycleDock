@@ -137,6 +137,53 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 	return i, err
 }
 
+const getTriggerLineage = `-- name: GetTriggerLineage :one
+WITH RECURSIVE lineage AS (
+    SELECT t.id, t.retry_of_trigger_id, t.cause_event_id, 0 AS depth
+    FROM triggers t
+    WHERE t.workspace_id = $1
+      AND t.card_id = $2
+      AND t.id = $3
+
+    UNION ALL
+
+    SELECT parent.id, parent.retry_of_trigger_id, parent.cause_event_id, lineage.depth + 1
+    FROM triggers parent
+    JOIN lineage ON lineage.retry_of_trigger_id = parent.id
+    WHERE parent.workspace_id = $1
+      AND parent.card_id = $2
+)
+SELECT
+    current.retry_of_trigger_id,
+    (
+        SELECT ancestor.cause_event_id
+        FROM lineage ancestor
+        WHERE ancestor.cause_event_id IS NOT NULL
+        ORDER BY ancestor.depth
+        LIMIT 1
+    ) AS source_event_id
+FROM lineage current
+WHERE current.depth = 0
+`
+
+type GetTriggerLineageParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	TriggerID   uuid.UUID `json:"trigger_id"`
+}
+
+type GetTriggerLineageRow struct {
+	RetryOfTriggerID uuid.NullUUID `json:"retry_of_trigger_id"`
+	SourceEventID    uuid.NullUUID `json:"source_event_id"`
+}
+
+func (q *Queries) GetTriggerLineage(ctx context.Context, arg GetTriggerLineageParams) (GetTriggerLineageRow, error) {
+	row := q.db.QueryRow(ctx, getTriggerLineage, arg.WorkspaceID, arg.CardID, arg.TriggerID)
+	var i GetTriggerLineageRow
+	err := row.Scan(&i.RetryOfTriggerID, &i.SourceEventID)
+	return i, err
+}
+
 const latestCheckinForCard = `-- name: LatestCheckinForCard :one
 SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
 FROM events
@@ -223,11 +270,16 @@ const listCardTimeline = `-- name: ListCardTimeline :many
 SELECT
     e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.run_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
     s.name AS actor_name,
-    s.kind AS actor_kind
+    s.kind AS actor_kind,
+    t.id AS trigger_id
 FROM events e
 JOIN sources s
   ON s.workspace_id = e.workspace_id
  AND s.id = e.actor_source_id
+LEFT JOIN triggers t
+  ON t.workspace_id = e.workspace_id
+ AND t.card_id = e.card_id
+ AND t.cause_event_id = e.id
 WHERE e.workspace_id = $1
   AND e.card_id = $2
 ORDER BY e.sequence
@@ -253,6 +305,7 @@ type ListCardTimelineRow struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	ActorName      string             `json:"actor_name"`
 	ActorKind      string             `json:"actor_kind"`
+	TriggerID      uuid.NullUUID      `json:"trigger_id"`
 }
 
 func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelineParams) ([]ListCardTimelineRow, error) {
@@ -279,6 +332,7 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.CreatedAt,
 			&i.ActorName,
 			&i.ActorKind,
+			&i.TriggerID,
 		); err != nil {
 			return nil, err
 		}
@@ -291,14 +345,33 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 }
 
 const listPendingQueue = `-- name: ListPendingQueue :many
+WITH RECURSIVE trigger_roots AS (
+    SELECT root.id, root.cause_event_id AS source_event_id
+    FROM triggers root
+    WHERE root.workspace_id = $1
+      AND root.card_id = $2
+      AND root.retry_of_trigger_id IS NULL
+
+    UNION ALL
+
+    SELECT child.id, parent.source_event_id
+    FROM triggers child
+    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
+    WHERE child.workspace_id = $1
+      AND child.card_id = $2
+)
 SELECT
     t.id,
     t.sequence,
     t.cause,
     t.dispatch_mode,
+    t.cause_event_id,
+    t.retry_of_trigger_id,
+    trigger_roots.source_event_id,
     COALESCE(e.content, '') AS content,
     t.created_at
 FROM triggers t
+JOIN trigger_roots ON trigger_roots.id = t.id
 LEFT JOIN events e
   ON e.workspace_id = t.workspace_id
  AND e.card_id = t.card_id
@@ -319,12 +392,15 @@ type ListPendingQueueParams struct {
 }
 
 type ListPendingQueueRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Sequence     pgtype.Int8        `json:"sequence"`
-	Cause        string             `json:"cause"`
-	DispatchMode string             `json:"dispatch_mode"`
-	Content      string             `json:"content"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID               uuid.UUID          `json:"id"`
+	Sequence         pgtype.Int8        `json:"sequence"`
+	Cause            string             `json:"cause"`
+	DispatchMode     string             `json:"dispatch_mode"`
+	CauseEventID     uuid.NullUUID      `json:"cause_event_id"`
+	RetryOfTriggerID uuid.NullUUID      `json:"retry_of_trigger_id"`
+	SourceEventID    uuid.NullUUID      `json:"source_event_id"`
+	Content          string             `json:"content"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) ListPendingQueue(ctx context.Context, arg ListPendingQueueParams) ([]ListPendingQueueRow, error) {
@@ -341,6 +417,9 @@ func (q *Queries) ListPendingQueue(ctx context.Context, arg ListPendingQueuePara
 			&i.Sequence,
 			&i.Cause,
 			&i.DispatchMode,
+			&i.CauseEventID,
+			&i.RetryOfTriggerID,
+			&i.SourceEventID,
 			&i.Content,
 			&i.CreatedAt,
 		); err != nil {
@@ -529,11 +608,28 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 }
 
 const listRecentCardWork = `-- name: ListRecentCardWork :many
+WITH RECURSIVE trigger_roots AS (
+    SELECT id, cause_event_id AS source_event_id
+    FROM triggers
+    WHERE workspace_id = $1
+      AND card_id = $2
+      AND retry_of_trigger_id IS NULL
+
+    UNION ALL
+
+    SELECT child.id, parent.source_event_id
+    FROM triggers child
+    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
+    WHERE child.workspace_id = $1
+      AND child.card_id = $2
+)
 SELECT
     t.id AS trigger_id,
     t.sequence,
     t.cause,
     t.dispatch_mode,
+    t.cause_event_id,
+    trigger_roots.source_event_id,
     COALESCE(e.content, '') AS content,
     t.retry_of_trigger_id,
     t.cancelled_at,
@@ -556,6 +652,7 @@ SELECT
           AND child.retry_of_trigger_id = t.id
     ) AS has_retry
 FROM triggers t
+JOIN trigger_roots ON trigger_roots.id = t.id
 LEFT JOIN events e
   ON e.workspace_id = t.workspace_id
  AND e.card_id = t.card_id
@@ -583,6 +680,8 @@ type ListRecentCardWorkRow struct {
 	Sequence         pgtype.Int8        `json:"sequence"`
 	Cause            string             `json:"cause"`
 	DispatchMode     string             `json:"dispatch_mode"`
+	CauseEventID     uuid.NullUUID      `json:"cause_event_id"`
+	SourceEventID    uuid.NullUUID      `json:"source_event_id"`
 	Content          string             `json:"content"`
 	RetryOfTriggerID uuid.NullUUID      `json:"retry_of_trigger_id"`
 	CancelledAt      pgtype.Timestamptz `json:"cancelled_at"`
@@ -614,6 +713,8 @@ func (q *Queries) ListRecentCardWork(ctx context.Context, arg ListRecentCardWork
 			&i.Sequence,
 			&i.Cause,
 			&i.DispatchMode,
+			&i.CauseEventID,
+			&i.SourceEventID,
 			&i.Content,
 			&i.RetryOfTriggerID,
 			&i.CancelledAt,

@@ -1,6 +1,6 @@
 # Human Web HTTP API
 
-Phase 2 的 HTTP API 只服务 Human Web。所有业务路由的 Workspace 与 Human Source 都来自服务端 Web Session，不接受客户端通过 `workspace_id` / `source_id` 切换租户。
+Phase 2 的 HTTP API 只服务 Human Web。所有业务路由的 Workspace 与 Human Source 都来自服务端 Web Session；客户端不能在普通业务请求里提交 `workspace_id` / `source_id` 改写租户作用域。工作空间切换只能通过受 Membership 校验的专用 Session 接口完成。
 
 ## Auth
 
@@ -10,6 +10,8 @@ Phase 2 的 HTTP API 只服务 Human Web。所有业务路由的 Workspace 与 H
 - `GET /auth/nexusdock/start`
 - `GET /auth/nexusdock/callback`
 - `GET /api/v1/me`
+- `GET /api/v1/workspaces`：列出当前 Human Account 的 Workspace Membership。
+- `POST /api/v1/workspaces/{workspaceID}/switch`：仅当当前 Human Account 属于目标 Workspace 时，原子更新当前 Web Session 的 `workspace_id + source_id` 并返回新的 Identity；无 Membership 返回 403，失败不得改变原 Session scope。
 
 Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted HTTPS 同时启用 Secure。数据库只保存随机 token 的 SHA-256 digest。
 
@@ -27,7 +29,7 @@ Project 即 Board，不存在独立 Board API。
 
 ## Card
 
-- `GET /api/v1/cards/{cardID}`：返回 Card、current Run（包括运行起止时间）、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。
+- `GET /api/v1/cards/{cardID}`：返回 Card、current Run（包括运行起止时间）、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。执行关联同时返回稳定 ID：Timeline Event 可带 `trigger_id`；Queue / Work History 返回 `trigger_id`、`cause_event_id`、`source_event_id`、`retry_of_trigger_id`；current Run 返回 `trigger_id`、`source_event_id` 及重试来源。前端必须使用这些 ID 做 Comment Event → Trigger → Run / Retry 关联，不得按消息文字、时间或数组位置猜测。
 - `GET /api/v1/cards/{cardID}/stream`：Human Session 认证的 SSE，按 Card/Workspace 权限隔离。推送 run.started / run.stage / run.text.delta / run.finished / run.failed / event.created；模型增量是短暂状态，永久历史仍以 Timeline REST 为准。SSE 断线后重新拉取 Card，服务端单实例 Hub 支持在途流快照；提交新的任务不会从 SSE 发起。
 - `PATCH /api/v1/cards/{cardID}`
 - `POST /api/v1/cards/{cardID}/move`：仅 Todo 状态移动。
@@ -55,6 +57,13 @@ Comment 请求要求 `Idempotency-Key` Header。
 Human Web 不提交 runner source。interrupt 与 waiting_human reply 在 Store 的 Card 锁内沿用 current Run 的 Runner，避免 Handler “先查再写”造成并发竞态。
 
 没有 AgentRun 的 Trigger 即 pending queue item。
+
+执行链的展示关联规则：
+
+- 普通 Human Comment Trigger 的 `cause_event_id` 指向创建它的 Comment Event，同时该 Event 的 Timeline DTO 暴露 `trigger_id`。
+- retry Trigger 自身可以没有 `cause_event_id`，但通过 `retry_of_trigger_id` 向上追溯后，API 的 `source_event_id` 必须指向最初用户 Comment Event。
+- 没有用户 Event 来源的 Schedule / System Trigger 保留空 `source_event_id`，前端独立展示，不能错误挂到最近一条消息。
+- Work History 保留旧 Trigger / Run，不因 retry 覆盖历史；`can_retry` 仍由服务端根据真实终态和后继关系计算。
 
 取消与 retry 不复写旧历史：
 

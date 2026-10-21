@@ -16,6 +16,7 @@ import type {
   ScheduleInput,
   TestResult,
   TodoState,
+  Workspace,
 } from "./types";
 
 export class APIError extends Error {
@@ -31,11 +32,13 @@ async function request<T>(
   path: string,
   method = "GET",
   body?: unknown,
-  idempotent = false,
+  idempotency?: boolean | string,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (idempotent) headers["Idempotency-Key"] = crypto.randomUUID();
+  if (idempotency)
+    headers["Idempotency-Key"] =
+      typeof idempotency === "string" ? idempotency : crypto.randomUUID();
   const response = await fetch("/api/v1" + path, {
     method,
     credentials: "same-origin",
@@ -61,6 +64,9 @@ export const api = {
     request<Identity>("/auth/login", "POST", { password }),
   logout: () => request<void>("/auth/logout", "POST", {}),
   me: () => request<Identity>("/me"),
+  workspaces: () => request<Workspace[]>("/workspaces"),
+  switchWorkspace: (id: string) =>
+    request<Identity>(`/workspaces/${id}/switch`, "POST", {}),
   projects: () => request<Project[]>("/projects"),
   createProject: (value: {
     name: string;
@@ -91,12 +97,17 @@ export const api = {
   deleteDiscussion: (id: string) => request<void>(`/cards/${id}`, "DELETE"),
   ongoingState: (id: string, state: string) =>
     request<Card>(`/cards/${id}/ongoing-state`, "POST", { state }),
-  send: (id: string, content: string, dispatch_mode: "enqueue" | "interrupt") =>
+  send: (
+    id: string,
+    content: string,
+    dispatch_mode: "enqueue" | "interrupt",
+    idempotencyKey?: string,
+  ) =>
     request<{ event_id: string; trigger_id: string }>(
       `/cards/${id}/comments`,
       "POST",
       { content, dispatch_mode },
-      true,
+      idempotencyKey || true,
     ),
   reply: (id: string, content: string) =>
     request<{ event_id: string; trigger_id: string }>(

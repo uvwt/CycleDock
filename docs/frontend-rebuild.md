@@ -1,5 +1,7 @@
 # CycleDock 前端从零重建 · 产品与实现基线
 
+> 后续修订：本轮项目工作台优化以 [项目工作台优化方案与实施交接](project-workbench-plan.md) 为准。该方案已在 `feat/project-workbench-impl-20261021` 实现并进入验收收尾；其覆盖范围内的布局与交互决策替代本文早期的平级 Chat / Board 导航、桌面右侧详情常驻及从零重写要求，未涉及要求继续适用。
+
 > 状态：2026-10-21 用户确认。本文是本次新前端的唯一设计基线；旧 `web/src` 代码不作为实现参考。对接后端以最新 `main`（Discussion/Todo/Ongoing 已分离）为准。
 
 ## 1. 目标与边界
@@ -13,22 +15,22 @@
 
 ## 2. 页面与路由
 
-顶层是 Chat、Board、Settings 三个界面域。**桌面端只保留一条窄全局侧轨**承载 Chat / Board / Settings，不再叠加第二条全局顶栏；会话页自己的顶部只负责当前 Card 标题、Run 状态和局部面板入口，不重复全局导航。移动端的全局顶栏只出现在顶层页面，进入 Card 会话后隐藏，由会话自身单一工具栏接管。所有卡片进入独立 URL 页面，绝非 Dialog。
+当前顶层是“项目工作台 + Card 详情 + Settings”。旧全局导航侧栏已经移除；顶栏只保留 CycleDock 入口、项目选择器与账户菜单，账户菜单承载 Workspace 切换、设置与退出。Project 选择由 URL 驱动，Workspace 切换由服务端 Web Session scope 驱动。
 
-- `/chat`：桌面左侧固定 Discussion 列表，中间为大模型聊天式欢迎态和输入框；移动端列表按需从左侧抽屉打开。欢迎态直接输入第一句话会自动创建 Discussion、提交首条 Comment 并进入会话，标题与描述仍由 Agent 生成。
-- `/chat/:projectID/:cardID`：Discussion 的独立会话页，唯一 Generate task 操作，归档/删除。
-- `/board/:projectID`：看板（Todo、Working、Review、Done；Ongoing 单独区域）；拖拽遵守后端状态机。
-- `/cards/:projectID/:cardID`：Todo/Ongoing 独立工作会话页。
+- `/board/:projectID`：默认首页与项目工作台主体；Todo 四列 + Ongoing 区域，左侧复用同项目 Discussion 列表，右下角是新讨论输入框。
+- `/chat/:projectID/:cardID`：Discussion 独立详情页，继续使用统一 Timeline / Composer，并显示派生工作关系。
+- `/cards/:projectID/:cardID`：Todo/Ongoing 独立工作详情页，共用 Discussion 导航和工作摘要。
 - `/settings/*`：完整设置中心及二级导航。
-- 根路由跳转 Chat；现有旧 /projects 路由可作为不影响新架构的跳转兼容入口（非复用旧页面）。
-- 项目范围通过当前选择项目决定；不会设计新的 Board 数据模型。
+- 根路由跳转 `/board`；旧 `/chat` 顶层入口跳转到 Board，旧 `/projects` 路由仅保留兼容跳转。
+- URL 直达、刷新、浏览器前进后退和返回看板均保留当前 Project；Card URL 的 Project 与实际 Card 不一致时会校正到真实 Project。
+- 不引入新的 Board 实体或独立聊天 Session；Project 仍是看板领域实体。
 
 ## 3. 会话页（最高优先级）
 
-- 主要篇幅是统一对话流，左侧 AI / Agent 消息、右侧 Human 消息，系统事件在中间居中灰字显示。Discussion 桌面布局为“左 Discussion 列表 / 中聊天 / 右 Card 详情”，Todo / Ongoing 为“中聊天 / 右 Card 详情”；右侧详情默认常驻，不要求先点按钮。
+- 主要篇幅是统一对话流，左侧 AI / Agent 消息、右侧 Human 消息，系统事件在中间居中灰字显示。首页和三类 Card 详情共用同项目 Discussion 导航；桌面默认展开、可记忆收起，窄屏通过左侧抽屉打开。
 - 相同后端 `events` 表 / `timeline` 返回：comment(Human)=右，comment(Agent)、finding、result=左；status_change=居中小字；progress/checkin=简短阶段节点；confirm/reject 按重要性增强。
 - 事件按服务端 `sequence` 顺序排布，保留事件 ID 以去重；绝不可打乱用户消息、Agent 结果及任务状态的交错次序。
-- 标题与状态放在会话顶部；Description、当前 Run、Queue、Work History、Ongoing Schedule 在桌面右侧详情栏常驻，在窄屏/移动端才进入 **任务详情抽屉**。
+- Todo/Ongoing 顶部显示紧凑工作摘要：业务状态、Agent 状态、当前阶段、目标、来源 Discussion 与最新 Result 入口。任务信息在桌面和手机都默认关闭，不预留固定右列；通过“任务信息”按钮打开同一个 Sheet，默认只读，Todo/Ongoing 主动点击编辑后才显示保存/取消表单。
 - 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Run 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
 - Discussion 的 Generate task 只在输入框右上角显示 Sparkles 图标，通过 `title / aria-label` 保留可访问名称，不显示额外文字按钮。跳到最新同样只显示向下图标。
 - Discussion 仅能生成任务而非转换状态，一个 Discussion 可生成多个工作；Todo/Ongoing 不再产生工作。
@@ -81,18 +83,18 @@ React + TypeScript + Vite + React Router + TanStack Query + Tailwind CSS 4。基
 
 ## 8. 当前开发实现与未关闭事项（2026-10-21）
 
-前端从零重建已进入 `main`。2026-10-21 的会话工作台修订在独立 worktree / 分支 `feat/chat-workbench-20261021` 上继续演进；`docs/frontend-rebuild.md` 继续作为当前设计约束，不回退到旧版双顶栏、Discussion 卡片宫格或桌面 Drawer-only 详情。
+前端从零重建已进入 `main`。2026-10-21 的项目工作台优化以 `feat/chat-workbench-20261021@12966fb` 为实施基线，并在独立 worktree / 短期分支 `feat/project-workbench-impl-20261021` 完成；未推送、未合并、未部署。布局与交互以 `docs/project-workbench-plan.md` 为当前约束。
 
-**已实现：** ChatGPT 类 Discussion 工作台、桌面 Discussion 左列表 / 中聊天 / 右详情、Todo/Ongoing 桌面右详情常驻、移动端双抽屉、两态聚合输入框、图标式 Generate / Jump latest、超过 2 小时才显示的时间分隔、Human Board 手工创建 Todo，以及原有统一 Timeline、七项 Settings、同源认证 SSE、Go Runner 模型文本增量中转、Responses/Chat Completions 流解析、EventSource 重连 REST 恢复。设计系统继续基于 Tailwind + 自持 UI 组件 + Radix Sheet，Lucide 统一图标。
+**已实现：** 根路由默认进入 Project Board；旧全局侧栏移除，顶栏使用 Project 选择器 + Account 菜单，并提供受 Membership 校验的 Workspace Session 切换。Board 与 Discussion/Todo/Ongoing 详情共用可折叠 Discussion 导航；Board 右下角提供新 Discussion Composer，首条 Comment 失败时持久保留原文、已创建 Card ID 与幂等键并安全重试。Card 详情保留独立 URL 与持久 Timeline；Todo/Ongoing 增加工作摘要、来源 Discussion / 派生工作入口。任务信息在桌面和手机均默认关闭且不预留右列，打开后默认只读，Todo/Ongoing 需显式编辑；Ongoing Schedule 也先阅读、后新增/编辑。Queue / cancel / retry / current Run 状态按稳定的 `source_event_id / trigger_id / retry_of_trigger_id` 关联到用户 Comment 下，无用户来源或旧数据单独展示。
 
-**本轮验证：** React/TypeScript production build 与 Oxlint 已通过；`web/e2e/smoke.py` 对 `web/e2e/mock-server.mjs` 执行 6 条 Python Playwright E2E，覆盖 Discussion 三栏、两态输入框、2 小时时间分隔、首轮消息自动建 Discussion、Human 手工 Todo、桌面常驻详情、SSE 增量、移动端单导航 + 左右抽屉、语言和主题，6/6 通过。Go 全量 `go test ./...` 与 `go vet ./...` 通过；另使用 TianYi 本机 PostgreSQL 17 二进制创建独立临时数据库，执行真实 `TestHumanWebHTTPFlowAndTenantIsolation`，迁移 1–7 与 Human 手工 Todo HTTP 路径通过，测试后实例和数据目录已清理。TianYi Neo 对 1408px 桌面实际构建核验为：左 Discussion 约 279px、中间聊天约 704px、右详情 360px，`scrollWidth == viewport width`，无横向覆盖；Generate 只保留图标和可访问名称。
+**本轮验证：** `npm run lint` 为 0 warning / 0 error；`npm run build` production build 通过。更新后的 `web/e2e/smoke.py` 对 mock server 执行 12 条 Python Playwright 浏览器 E2E，覆盖 Board 主工作台、无旧全局导航、A/B Project 数据隔离、Human 手工 Todo、项目 URL 直达/刷新/前进后退、375×812 移动端 Discussion/任务信息双抽屉、新 Discussion 创建失败草稿保留/跨 Project 草稿恢复/首发失败后同 Card 重试、编辑保存失败保留输入、Ongoing Schedule 阅读→编辑、语言/主题回归、Timeline 执行状态稳定挂载、无用户来源 Trigger 独立展示及 Workspace 切换，12/12 通过。`sqlc generate`、`go test ./...`、`go vet ./...` 均通过；另外使用 TianYi 本机 PostgreSQL 17.11 测试实例真实执行 `TestHumanWorkControlHTTPFlowAndWorkspaceIsolation` 与 `TestHumanWorkspaceSwitchUsesMembershipScope`，每次均从 migration 000001 跑到 000007 后 PASS，确认并非因缺少 `TEST_DATABASE_URL` 而 skip。TianYi Neo 对 1408×757 桌面真实构建确认 Board/共享 Discussion/按需任务信息与时间线执行状态无控制台错误；375×812 手机布局另由 Playwright 实际 viewport E2E 验证，Neo 当前自动附着外部 Edge 时无法覆盖已有 viewport，因此不把其桌面尺寸冒充手机证据。
 
 **尚未通过生产级验收：**
-1. 本轮已跑新增 Human Todo 所在的真实 PostgreSQL HTTP 集成路径，但没有为所有包配置持久 `TEST_DATABASE_URL` 后重跑整套数据库集成矩阵；正式 SSE 网络断线/重连竞态仍需要在部署环境持续验证。
+1. 关键新增 HTTP 路径已在真实 PostgreSQL 17 上运行并通过；正式部署环境的 SSE 网络断线/重连、跨实例事件广播与长时间运行竞态仍需要持续验证。
 2. OpenAI-compatible、ChatGPT、Grok 真实外部账号及完整模型流需要授权环境再次验证；测试夹具不代表真实模型调用。
 3. 模型流多进程部署的即时增量采用当前单实例内存 Hub；跨实例一致的实时传输需要扩展。持久 Event 用服务端每 1.5 秒检查序列变化并推送 SSE，客户端没有继续使用 15 秒轮询。
 4. i18next 与主题切换已经落地并纳入 E2E，但高级设置仍未做到完整双语；Shiki、Motion、Vitest 等增强项仍按实际价值后续引入，不为了技术清单强行加依赖。
-5. 前端从零重建基线已于 2026-10-21 经 PR #7 squash 合并（7afb749）并部署 RN DEV；**本节描述的会话工作台修订仍在 `feat/chat-workbench-20261021`，尚未合并或部署。**
+5. 前端从零重建基线已于 2026-10-21 经 PR #7 squash 合并（7afb749）并部署 RN DEV；**本节描述的项目工作台优化仍只在本地短期分支 `feat/project-workbench-impl-20261021`，未经用户要求未推送、未合并、未部署。**
 
 ## 9. 语言与主题偏好（后续独立 PR）
 

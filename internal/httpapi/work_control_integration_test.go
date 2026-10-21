@@ -52,6 +52,22 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("unexpected pending result: %+v", original)
 	}
 
+	// UI 必须能用稳定 ID 把原始 Comment、Trigger 与排队状态关联起来。
+	detailRecorder := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	var detail cardDetailResponse
+	decodeRecorder(t, detailRecorder, &detail)
+	if len(detail.Timeline) != 1 || len(detail.Queue) != 1 {
+		t.Fatalf("pending linkage timeline=%d queue=%d", len(detail.Timeline), len(detail.Queue))
+	}
+	if detail.Timeline[0].ID != original.EventID || detail.Timeline[0].TriggerID != original.TriggerID {
+		t.Fatalf("comment linkage=%+v original=%+v", detail.Timeline[0], original)
+	}
+	if detail.Queue[0].TriggerID != original.TriggerID ||
+		detail.Queue[0].CauseEventID != original.EventID ||
+		detail.Queue[0].SourceEventID != original.EventID {
+		t.Fatalf("pending trigger linkage=%+v original=%+v", detail.Queue[0], original)
+	}
+
 	cancelPending := doJSON(
 		t, handler, http.MethodPost,
 		"/api/v1/cards/"+card.ID+"/triggers/"+original.TriggerID+"/cancel",
@@ -61,14 +77,16 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("cancel pending: %d %s", cancelPending.Code, cancelPending.Body.String())
 	}
 
-	detailRecorder := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
-	var detail cardDetailResponse
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
 	decodeRecorder(t, detailRecorder, &detail)
 	if len(detail.Queue) != 0 || len(detail.WorkHistory) != 1 {
 		t.Fatalf("after pending cancel queue=%d history=%d", len(detail.Queue), len(detail.WorkHistory))
 	}
 	if detail.WorkHistory[0].Status != string(domain.RunStatusCancelled) || !detail.WorkHistory[0].CanRetry {
 		t.Fatalf("cancelled pending history=%+v", detail.WorkHistory[0])
+	}
+	if detail.WorkHistory[0].SourceEventID != original.EventID || detail.WorkHistory[0].CauseEventID != original.EventID {
+		t.Fatalf("cancelled work linkage=%+v original=%+v", detail.WorkHistory[0], original)
 	}
 
 	retryHeaders := map[string]string{"Idempotency-Key": "http-retry-cancelled"}
@@ -93,6 +111,14 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("retry replay status=%d first=%+v replay=%+v", retryReplay.Code, retried, replay)
 	}
 
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	decodeRecorder(t, detailRecorder, &detail)
+	if len(detail.Queue) != 1 || detail.Queue[0].TriggerID != retried.TriggerID ||
+		detail.Queue[0].RetryOfTriggerID != original.TriggerID ||
+		detail.Queue[0].SourceEventID != original.EventID || detail.Queue[0].CauseEventID != "" {
+		t.Fatalf("retry queue linkage=%+v original=%+v retried=%+v", detail.Queue, original, retried)
+	}
+
 	agent, err := dataStore.CreateSource(context.Background(), workspaceID, domain.SourceKindCycleAgent, "HTTP Agent")
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +131,13 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	}
 	if err := dataStore.StartRun(context.Background(), workspaceID, run.ID, agent.ID, time.Minute); err != nil {
 		t.Fatal(err)
+	}
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	decodeRecorder(t, detailRecorder, &detail)
+	if detail.CurrentRun == nil || detail.CurrentRun.TriggerID != retried.TriggerID ||
+		detail.CurrentRun.RetryOfTriggerID != original.TriggerID ||
+		detail.CurrentRun.SourceEventID != original.EventID {
+		t.Fatalf("current retry linkage=%+v original=%+v retried=%+v", detail.CurrentRun, original, retried)
 	}
 	cancelRun := doJSON(
 		t, handler, http.MethodPost,

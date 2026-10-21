@@ -1,8 +1,11 @@
-"""Headless browser smoke tests against e2e/mock-server.mjs.
+"""Headless browser smoke tests for the project workbench.
 
-Run: MOCK_PORT=4190 node e2e/mock-server.mjs
-     python e2e/smoke.py http://127.0.0.1:4190
-This fixture is not a substitute for PostgreSQL integration testing.
+Run after npm run build:
+    set MOCK_PORT=4190 && node e2e/mock-server.mjs
+    python e2e/smoke.py http://127.0.0.1:4190
+
+The fixture validates browser behavior only. PostgreSQL/state-machine guarantees remain
+covered by Go integration tests.
 """
 import re
 import sys
@@ -27,7 +30,7 @@ class CycleDockSmoke(unittest.TestCase):
         cls.engine.stop()
 
     def setUp(self):
-        self.page = self.browser.new_page(viewport={"width": 1280, "height": 860})
+        self.page = self.browser.new_page(viewport={"width": 1440, "height": 900})
         self.errors = []
         self.page.on("pageerror", lambda error: self.errors.append(str(error)))
 
@@ -35,108 +38,277 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(self.errors, [], "Browser JavaScript errors")
         self.page.close()
 
-    def test_discussion_workbench_composer_and_time_separator(self):
-        self.page.goto(BASE + "/chat")
-        self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
+    def open_board(self):
+        self.page.goto(BASE + "/board/demo-project")
+        self.page.get_by_role(
+            "heading", name="NexusDock 运维", exact=True
+        ).wait_for()
+
+    def test_board_is_primary_workbench_without_legacy_nav(self):
+        self.open_board()
+
+        self.assertEqual(
+            self.page.locator('nav[aria-label="主导航"]:visible').count(), 0
+        )
         self.page.locator('aside[aria-label="讨论列表"]').wait_for()
         self.page.get_by_role(
             "button", name=re.compile("讨论服务器巡检计划")
-        ).first.click()
+        ).first.wait_for()
+        self.page.get_by_role("button", name="新建待办").wait_for()
+        self.page.get_by_role("button", name="新讨论", exact=True).last.wait_for()
 
-        self.page.wait_for_url("**/chat/demo-project/discussion-1")
-        self.page.get_by_text("我们需要每天自动检查服务器状态。").wait_for()
-        self.page.get_by_text("建议监控 CPU、内存和容器健康").wait_for()
+        self.page.locator('summary[aria-label="账户菜单"]').click()
+        self.page.get_by_role("button", name="演示空间", exact=True).wait_for()
+        self.page.get_by_role("button", name="第二空间", exact=True).wait_for()
+        self.page.get_by_role("button", name="设置", exact=True).wait_for()
+        self.page.get_by_role("button", name="退出登录", exact=True).wait_for()
 
-        self.assertEqual(self.page.locator("[data-time-separator]").count(), 1)
-        self.page.locator('aside[aria-label="任务详情"]').wait_for()
-        self.page.get_by_role("button", name="生成任务").wait_for()
-
-        collapsed = self.page.locator(
-            'input[aria-label="发送消息，继续推进任务…"]'
+    def test_project_switch_changes_board_and_discussion_scope(self):
+        self.open_board()
+        project_menu = self.page.locator("header details").first
+        project_menu.locator("summary").click()
+        self.page.get_by_role("button", name="产品发布", exact=True).click()
+        self.page.wait_for_url("**/board/demo-project-b")
+        self.page.get_by_role("heading", name="产品发布", exact=True).wait_for()
+        self.page.get_by_role(
+            "button", name=re.compile("讨论版本发布")
+        ).first.wait_for()
+        self.page.get_by_role(
+            "button", name=re.compile("准备发布清单")
+        ).first.wait_for()
+        self.assertEqual(
+            self.page.get_by_role(
+                "button", name=re.compile("讨论服务器巡检计划")
+            ).count(),
+            0,
         )
-        collapsed.wait_for()
-        collapsed.focus()
-        self.page.locator(
-            'textarea[aria-label="发送消息，继续推进任务…"]'
+
+        project_menu.locator("summary").click()
+        self.page.get_by_role("button", name="NexusDock 运维", exact=True).click()
+        self.page.wait_for_url("**/board/demo-project")
+        self.page.get_by_role(
+            "button", name=re.compile("讨论服务器巡检计划")
+        ).first.wait_for()
+        self.assertEqual(
+            self.page.get_by_role("button", name=re.compile("讨论版本发布")).count(),
+            0,
+        )
+
+    def test_todo_execution_is_attached_to_source_messages_and_details_are_read_only(self):
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
         ).wait_for()
 
-    def test_welcome_message_creates_discussion_and_sends_first_turn(self):
-        self.page.goto(BASE + "/chat")
-        collapsed = self.page.locator(
-            'input[aria-label="发送消息，开始讨论…"]'
+        failed_message = self.page.locator("#event-event-8")
+        failed_message.get_by_text("执行失败", exact=True).wait_for()
+        failed_message.get_by_role("button", name="重试", exact=True).wait_for()
+
+        queued_message = self.page.locator("#event-event-7")
+        queued_message.get_by_text("等待执行", exact=True).wait_for()
+        queued_message.get_by_role(
+            "button", name="取消排队", exact=True
+        ).wait_for()
+
+        self.page.get_by_text("系统触发 / 未关联历史", exact=True).wait_for()
+        self.page.get_by_text("执行完成", exact=True).wait_for()
+
+        self.page.get_by_role(
+            "button", name=re.compile("来源讨论 · 讨论服务器巡检计划")
+        ).wait_for()
+        self.assertEqual(
+            self.page.get_by_role("dialog", name="任务信息").count(), 0
         )
-        collapsed.wait_for()
-        collapsed.focus()
-        expanded = self.page.locator(
-            'textarea[aria-label="发送消息，开始讨论…"]'
+
+        self.page.get_by_role("button", name="任务信息", exact=True).click()
+        dialog = self.page.get_by_role("dialog", name="任务信息")
+        dialog.wait_for()
+        dialog.get_by_text(
+            "默认只读；需要调整目标时再进入编辑。", exact=True
+        ).wait_for()
+        self.assertEqual(dialog.get_by_placeholder("任务标题").count(), 0)
+
+        dialog.get_by_role("button", name="编辑", exact=True).click()
+        title = dialog.get_by_placeholder("任务标题")
+        title.wait_for()
+        title.fill("临时标题")
+        dialog.get_by_role("button", name="取消", exact=True).click()
+        dialog.get_by_text("检查 RN 服务器异常日志", exact=True).wait_for()
+        self.assertEqual(dialog.get_by_placeholder("任务标题").count(), 0)
+
+        def fail_card_patch(route):
+            if route.request.method == "PATCH":
+                route.fulfill(
+                    status=500,
+                    content_type="application/json",
+                    body='{"error":{"code":"fixture_save_failure","message":"模拟保存失败"}}',
+                )
+            else:
+                route.continue_()
+
+        self.page.route("**/api/v1/cards/todo-1", fail_card_patch)
+        dialog.get_by_role("button", name="编辑", exact=True).click()
+        failed_title = dialog.get_by_placeholder("任务标题")
+        failed_title.fill("保存失败仍保留")
+        dialog.get_by_role("button", name="保存", exact=True).click()
+        self.page.get_by_text("模拟保存失败", exact=True).wait_for()
+        self.assertEqual(failed_title.input_value(), "保存失败仍保留")
+        self.assertEqual(dialog.get_by_placeholder("任务标题").count(), 1)
+        self.page.unroute("**/api/v1/cards/todo-1", fail_card_patch)
+
+    def test_new_discussion_create_failure_keeps_draft_without_card(self):
+        self.open_board()
+        sidebar_rows = self.page.locator(
+            'aside[aria-label="讨论列表"] > div:nth-of-type(2) > div > button'
         )
-        expanded.fill("把服务器巡检交给 AI 负责")
+        before = sidebar_rows.count()
+        self.page.get_by_role("button", name="新讨论", exact=True).last.click()
+        composer = self.page.get_by_placeholder("从一句话开始新的讨论…")
+        composer.fill("创建失败也不能丢草稿")
+        fixture = self.page.request.post(
+            BASE + "/api/v1/__fixture/fail-next-discussion"
+        )
+        self.assertEqual(fixture.status, 200)
+        self.page.get_by_role("button", name="发送", exact=True).click()
+        self.page.get_by_text("模拟 Discussion 创建失败", exact=True).wait_for()
+        self.assertEqual(composer.input_value(), "创建失败也不能丢草稿")
+        self.assertEqual(sidebar_rows.count(), before)
+        self.assertEqual(
+            self.page.get_by_role("button", name="重试发送", exact=True).count(),
+            0,
+        )
+
+    def test_new_discussion_first_message_failure_retries_same_card(self):
+        self.open_board()
+        sidebar_rows = self.page.locator(
+            'aside[aria-label="讨论列表"] > div:nth-of-type(2) > div > button'
+        )
+        before = sidebar_rows.count()
+
+        self.page.get_by_role("button", name="新讨论", exact=True).last.click()
+        composer = self.page.get_by_placeholder("从一句话开始新的讨论…")
+        composer.fill("验证首条消息失败后安全重试")
         self.page.get_by_role("button", name="发送", exact=True).click()
 
-        self.page.wait_for_url("**/chat/demo-project/discussion-*")
-        self.page.get_by_text("把服务器巡检交给 AI 负责").wait_for()
+        self.page.get_by_text(
+            "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card 和同一幂等键，不会重复创建讨论。",
+            exact=True,
+        ).wait_for()
+        self.assertEqual(sidebar_rows.count(), before + 1)
+        self.assertEqual(composer.input_value(), "验证首条消息失败后安全重试")
 
-    def test_board_manual_todo_and_default_details(self):
-        self.page.goto(BASE + "/board/demo-project")
-        self.page.get_by_role("button", name="新建待办").click()
+        self.page.get_by_role("button", name="重试发送", exact=True).click()
+        self.page.wait_for_url("**/chat/demo-project/discussion-*")
+        self.page.get_by_text(
+            "验证首条消息失败后安全重试", exact=True
+        ).wait_for()
+        self.assertEqual(sidebar_rows.count(), before + 1)
+
+    def test_new_discussion_draft_survives_project_switch(self):
+        self.open_board()
+        self.page.get_by_role("button", name="新讨论", exact=True).last.click()
+        composer = self.page.get_by_placeholder("从一句话开始新的讨论…")
+        composer.fill("切换项目后继续编辑这段草稿")
+
+        project_menu = self.page.locator("header details").first
+        project_menu.locator("summary").click()
+        self.page.get_by_role("button", name="产品发布", exact=True).click()
+        self.page.wait_for_url("**/board/demo-project-b")
+        self.page.get_by_role("heading", name="产品发布", exact=True).wait_for()
+
+        project_menu = self.page.locator("header details").first
+        project_menu.locator("summary").click()
+        self.page.get_by_role("button", name="NexusDock 运维", exact=True).click()
+        self.page.wait_for_url("**/board/demo-project")
+        restored = self.page.get_by_placeholder("从一句话开始新的讨论…")
+        restored.wait_for()
+        self.assertEqual(restored.input_value(), "切换项目后继续编辑这段草稿")
+
+    def test_direct_url_refresh_back_and_forward_preserve_project_context(self):
+        self.open_board()
+        self.page.get_by_role(
+            "button", name=re.compile("检查 RN 服务器异常日志")
+        ).first.click()
+        self.page.wait_for_url("**/cards/demo-project/todo-1")
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
+        ).wait_for()
+
+        self.page.reload()
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
+        ).wait_for()
+        self.page.go_back()
+        self.page.wait_for_url("**/board/demo-project")
+        self.page.get_by_role(
+            "heading", name="NexusDock 运维", exact=True
+        ).wait_for()
+        self.page.go_forward()
+        self.page.wait_for_url("**/cards/demo-project/todo-1")
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
+        ).wait_for()
+
+    def test_manual_todo_creation_remains_available(self):
+        self.open_board()
+        self.page.get_by_role("button", name="新建待办", exact=True).click()
         dialog = self.page.get_by_role("dialog", name="新建待办")
-        dialog.wait_for()
         dialog.get_by_role("textbox", name="待办标题").fill("手工填写待办")
         dialog.get_by_role("textbox", name="待办描述").fill(
             "这个待办不经过模型生成"
         )
-        dialog.get_by_role("button", name="创建待办").click()
-
+        dialog.get_by_role("button", name="创建待办", exact=True).click()
         self.page.wait_for_url("**/cards/demo-project/todo-*")
-        self.page.get_by_role("heading", name="手工填写待办").first.wait_for()
-        details = self.page.locator('aside[aria-label="任务详情"]')
-        details.wait_for()
-        details.get_by_text("这个待办不经过模型生成").wait_for()
-
-    def test_existing_todo_stream_and_desktop_details(self):
-        self.page.goto(BASE + "/board/demo-project")
         self.page.get_by_role(
-            "button", name=re.compile("检查 RN 服务器异常日志")
-        ).first.click()
-
-        self.page.wait_for_url("**/cards/demo-project/todo-1")
-        details = self.page.locator('aside[aria-label="任务详情"]')
-        details.wait_for()
-        details.get_by_role("heading", name="当前执行").wait_for()
-        self.page.get_by_text("状态变化 · todo -> working").wait_for()
-        self.page.get_by_text(
-            "已定位 Docker 容器的错误记录。"
-        ).wait_for(timeout=8000)
-
-    def test_mobile_discussion_and_details_use_drawers(self):
-        self.page.set_viewport_size({"width": 375, "height": 812})
-        self.page.goto(BASE + "/chat")
-        self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
+            "heading", name="手工填写待办", exact=True
+        ).wait_for()
         self.assertEqual(
-            self.page.locator('nav[aria-label="主导航"]:visible').count(), 1
+            self.page.get_by_role("dialog", name="任务信息").count(), 0
+        )
+        self.page.get_by_role("button", name="任务信息", exact=True).click()
+        self.page.get_by_role("dialog", name="任务信息").get_by_text(
+            "这个待办不经过模型生成", exact=True
+        ).wait_for()
+
+    def test_mobile_uses_shared_discussion_and_task_info_drawers(self):
+        self.page.set_viewport_size({"width": 375, "height": 812})
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
+        ).wait_for()
+
+        self.assertEqual(
+            self.page.locator('aside[aria-label="讨论列表"]:visible').count(), 0
         )
         self.page.get_by_role("button", name="打开讨论列表").click()
-        discussion_dialog = self.page.get_by_role("dialog", name="讨论列表")
+        discussion_dialog = self.page.get_by_role("dialog", name="项目讨论")
         discussion_dialog.wait_for()
         discussion_dialog.get_by_role(
             "button", name=re.compile("讨论服务器巡检计划")
-        ).click()
+        ).wait_for()
+        discussion_dialog.get_by_role("button", name="关闭").click()
 
-        self.page.wait_for_url("**/chat/demo-project/discussion-1")
-        self.page.locator(
-            'header nav[aria-label="主导航"]'
-        ).wait_for(state="detached")
-        self.assertEqual(
-            self.page.locator('nav[aria-label="主导航"]:visible').count(), 0
-        )
-        self.page.get_by_role("button", name="打开讨论列表").wait_for()
-        self.page.get_by_role("button", name="任务详情").click()
-        self.page.get_by_role("dialog", name="任务详情").wait_for()
+        self.page.get_by_role("button", name="任务信息", exact=True).click()
+        detail_dialog = self.page.get_by_role("dialog", name="任务信息")
+        detail_dialog.wait_for()
+        detail_dialog.get_by_role("button", name="编辑", exact=True).wait_for()
         self.assertLessEqual(
             self.page.evaluate("document.documentElement.scrollWidth"), 390
         )
 
-    def test_settings_and_persistent_language_theme(self):
+    def test_ongoing_schedule_is_readable_before_editing(self):
+        self.page.goto(BASE + "/cards/demo-project/ongoing-1")
+        self.page.get_by_role(
+            "heading", name="每天检查服务器健康", exact=True
+        ).wait_for()
+        self.page.get_by_role("button", name="任务信息", exact=True).click()
+        dialog = self.page.get_by_role("dialog", name="任务信息")
+        dialog.get_by_text("每天 09:00", exact=True).wait_for()
+        self.assertEqual(dialog.get_by_role("combobox", name="频率").count(), 0)
+        dialog.get_by_role("button", name="编辑", exact=True).last.click()
+        dialog.get_by_role("combobox", name="频率").wait_for()
+
+    def test_settings_keep_language_and_theme_without_legacy_sidebar(self):
         self.page.goto(BASE + "/settings/general")
         self.page.get_by_role("combobox", name="界面语言").select_option("en")
         self.page.get_by_role("heading", name="Settings", exact=True).wait_for()
@@ -147,10 +319,6 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.evaluate("document.documentElement.dataset.theme"),
             "dark",
         )
-        surface = self.page.locator(".bg-slate-50").first.evaluate(
-            "(element) => getComputedStyle(element).backgroundColor"
-        )
-        self.assertNotEqual(surface, "rgb(248, 250, 252)")
         self.page.reload()
         self.page.get_by_role("heading", name="Settings", exact=True).wait_for()
         self.assertEqual(
@@ -164,19 +332,18 @@ class CycleDockSmoke(unittest.TestCase):
             "en",
         )
         self.assertEqual(
-            self.page.evaluate("document.documentElement.lang"), "en"
+            self.page.locator('nav[aria-label="Main navigation"]:visible').count(),
+            0,
         )
-        self.page.get_by_role("link", name="Chat", exact=True).click()
-        self.page.get_by_role(
-            "heading", name="What would you like to move forward today?"
-        ).wait_for()
-        self.page.get_by_role(
-            "button", name="New discussion", exact=True
-        ).wait_for()
-        self.assertEqual(
-            self.page.evaluate("document.documentElement.dataset.theme"),
-            "dark",
-        )
+
+    def test_workspace_switch_is_available_from_account_menu(self):
+        self.open_board()
+        self.page.locator('summary[aria-label="账户菜单"]').click()
+        self.page.get_by_role("button", name="第二空间", exact=True).click()
+        self.page.get_by_text("已切换工作空间", exact=True).wait_for()
+        self.page.wait_for_url("**/board**")
+        self.page.locator('summary[aria-label="账户菜单"]').click()
+        self.page.get_by_role("button", name="第二空间", exact=True).wait_for()
 
 
 if __name__ == "__main__":

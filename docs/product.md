@@ -115,6 +115,20 @@ Discussion Detail 是会话界面；Todo / Ongoing Detail 是工作执行界面�
 
 Discussion 上的“聊天”负责澄清与产生工作；Todo / Ongoing 上的对话负责推进已经生成的工作。模型原始 message/tool trace 仍不作为长期业务数据保存。
 
+### 4.1 Project Workbench 交互
+
+项目默认进入 Board，而不是独立 Chat 首页。工作台外壳由三部分组成：
+
+- 顶栏：Project 选择器 + Account 菜单；Account 菜单保留 Workspace 切换、设置和退出登录。
+- 左侧：当前 Project 的共享 Discussion 列表；Board、Discussion、Todo、Ongoing 详情都复用同一列表。桌面可折叠，移动端使用抽屉。
+- 主区：Board 或当前 Card 详情。Board 右下角可以直接开始新 Discussion；详情只保留当前对象的回复框。
+
+新 Discussion 的首条消息属于一个原子用户意图，但网络请求分成“创建 Discussion Card”和“提交首条 Comment”。因此 UI 在 Card 创建成功后立即持久保存 `Card ID + 原始草稿 + Comment 幂等键`；若第二步失败，用户重试同一 Card/同一幂等键，不能创建重复 Discussion，也不能清空原文。普通创建失败或切换 Project 时，草稿也按 Project 保留。
+
+Todo / Ongoing 详情顶部只放紧凑工作摘要；详细任务信息在桌面和手机都默认关闭且不预留空列。打开后先阅读标题、目标、来源和适用元数据，Human 主动点击“编辑”后才显示表单。Discussion 的标题/摘要保持 AI 管理的只读规则。Ongoing Schedule 同样先阅读，再显式新增/编辑。
+
+执行状态属于用户 Comment 的附属系统状态，不伪装成 Agent 消息。Human Comment Event → Trigger → Run/retry 通过稳定 ID 关联；等待、执行、取消、失败和 retry 显示在对应用户消息下。Schedule/System 等没有用户来源的 Trigger，以及无法建立稳定来源的旧数据，独立显示，不挂到“最近一句话”。
+
 ## 5. 生成任务
 
 Discussion 只有一个面向 AI 的“生成任务”动作，不提供“生成 Todo / 生成 Ongoing”两个按钮。

@@ -1,37 +1,59 @@
 import { useMemo, useState } from "react";
-import { MessageSquareText, Plus, Search } from "lucide-react";
+import {
+  MessageSquareText,
+  PanelLeftClose,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Card, Project } from "../../shared/api/types";
+import type { Card } from "../../shared/api/types";
+
+function workState(card: Card) {
+  if (card.kind === "todo") return card.todo_state;
+  if (card.kind === "ongoing") return card.ongoing_state;
+  return undefined;
+}
 
 export function DiscussionSidebar({
-  projects,
-  projectID,
   discussions,
+  allCards,
   activeCardID,
   creating,
-  onProjectChange,
   onSelect,
   onCreate,
+  onCollapse,
   className = "",
 }: {
-  projects: Project[];
-  projectID: string;
   discussions: Card[];
+  allCards: Card[];
   activeCardID?: string;
   creating?: boolean;
-  onProjectChange: (projectID: string) => void;
   onSelect: (card: Card) => void;
   onCreate: () => void;
+  onCollapse?: () => void;
   className?: string;
 }) {
   const { t, i18n } = useTranslation();
   const [term, setTerm] = useState("");
+  const relatedByDiscussion = useMemo(() => {
+    const groups = new Map<string, Card[]>();
+    for (const card of allCards) {
+      if (!card.source_discussion_id) continue;
+      const existing = groups.get(card.source_discussion_id) || [];
+      existing.push(card);
+      groups.set(card.source_discussion_id, existing);
+    }
+    return groups;
+  }, [allCards]);
   const filtered = useMemo(() => {
     const query = term.trim().toLowerCase();
     return discussions
       .filter((card) => {
         if (!query) return true;
-        return (card.title + " " + card.description).toLowerCase().includes(query);
+        return (card.title + " " + card.description)
+          .toLowerCase()
+          .includes(query);
       })
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }, [discussions, term]);
@@ -42,29 +64,38 @@ export function DiscussionSidebar({
       aria-label={t("讨论列表")}
     >
       <div className="space-y-3 border-b border-slate-200 p-3">
-        <div className="flex items-center gap-2">
-          <select
-            aria-label={t("项目")}
-            value={projectID}
-            onChange={(event) => onProjectChange(event.target.value)}
-            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500"
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            title={t("新建讨论")}
-            aria-label={t("新建讨论")}
-            disabled={!projectID || creating}
-            onClick={onCreate}
-            className="grid size-9 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-          >
-            <Plus className="size-4" />
-          </button>
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-800">
+              {t("项目讨论")}
+            </p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {t("讨论与派生工作")}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              title={t("新建讨论")}
+              aria-label={t("新建讨论")}
+              disabled={creating}
+              onClick={onCreate}
+              className="grid size-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+            >
+              <Plus className="size-4" />
+            </button>
+            {onCollapse && (
+              <button
+                type="button"
+                title={t("收起讨论列表")}
+                aria-label={t("收起讨论列表")}
+                onClick={onCollapse}
+                className="hidden size-8 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700 lg:grid"
+              >
+                <PanelLeftClose className="size-4" />
+              </button>
+            )}
+          </div>
         </div>
         <label className="relative block">
           <span className="sr-only">{t("搜索讨论…")}</span>
@@ -73,8 +104,19 @@ export function DiscussionSidebar({
             value={term}
             onChange={(event) => setTerm(event.target.value)}
             placeholder={t("搜索讨论…")}
-            className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 pl-9 text-sm outline-none focus:border-sky-500"
+            className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-9 pl-9 text-sm outline-none focus:border-sky-500"
           />
+          {term && (
+            <button
+              type="button"
+              title={t("清空搜索")}
+              aria-label={t("清空搜索")}
+              onClick={() => setTerm("")}
+              className="absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
         </label>
       </div>
 
@@ -83,16 +125,30 @@ export function DiscussionSidebar({
           <div className="space-y-1">
             {filtered.map((card) => {
               const active = card.id === activeCardID;
+              const related = relatedByDiscussion.get(card.id) || [];
+              const activeWork = related.filter((item) => {
+                const state = workState(item);
+                return (
+                  (item.kind === "todo" && state !== "done") ||
+                  (item.kind === "ongoing" && state === "active")
+                );
+              }).length;
               return (
                 <button
                   key={card.id}
                   type="button"
                   onClick={() => onSelect(card)}
-                  className={`w-full rounded-xl px-3 py-3 text-left transition ${active ? "bg-white shadow-sm ring-1 ring-slate-200" : "hover:bg-white/80"}`}
+                  className={`w-full rounded-xl px-3 py-3 text-left transition ${
+                    active
+                      ? "bg-white shadow-sm ring-1 ring-slate-200"
+                      : "hover:bg-white/80"
+                  }`}
                 >
                   <div className="flex items-start gap-2.5">
                     <MessageSquareText
-                      className={`mt-0.5 size-4 shrink-0 ${active ? "text-sky-700" : "text-slate-400"}`}
+                      className={`mt-0.5 size-4 shrink-0 ${
+                        active ? "text-sky-700" : "text-slate-400"
+                      }`}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-800">
@@ -101,23 +157,52 @@ export function DiscussionSidebar({
                       <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
                         {card.description || t("继续对话，探索想法…")}
                       </p>
-                      <p className="mt-1.5 text-[11px] text-slate-400">
-                        {new Date(card.updated_at).toLocaleDateString(
-                          i18n.language === "en" ? "en-US" : "zh-CN",
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                        <span>
+                          {new Date(card.updated_at).toLocaleDateString(
+                            i18n.language === "en" ? "en-US" : "zh-CN",
+                          )}
+                        </span>
+                        {!!related.length && (
+                          <span>
+                            {t("关联工作")} {related.length}
+                            {activeWork > 0
+                              ? ` · ${t("活跃")} ${activeWork}`
+                              : ""}
+                          </span>
                         )}
-                        {card.discussion_state === "archived"
-                          ? ` · ${t("已归档")}`
-                          : ""}
-                      </p>
+                        {card.discussion_state === "archived" && (
+                          <span>{t("已归档")}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </button>
               );
             })}
           </div>
+        ) : term ? (
+          <div className="px-4 py-10 text-center">
+            <p className="text-sm text-slate-400">{t("没有匹配的讨论")}</p>
+            <button
+              type="button"
+              onClick={() => setTerm("")}
+              className="mt-3 text-sm font-medium text-sky-700 hover:underline"
+            >
+              {t("清空搜索")}
+            </button>
+          </div>
         ) : (
-          <div className="px-4 py-10 text-center text-sm text-slate-400">
-            {term ? t("没有匹配的讨论") : t("还没有讨论")}
+          <div className="px-4 py-10 text-center">
+            <p className="text-sm text-slate-400">{t("这个项目还没有讨论")}</p>
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={creating}
+              className="mt-3 text-sm font-medium text-sky-700 hover:underline disabled:opacity-40"
+            >
+              {t("新建讨论")}
+            </button>
           </div>
         )}
       </div>

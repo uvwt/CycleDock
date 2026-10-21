@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Bot, Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
-import type { TimelineEvent } from "../../shared/api/types";
+import type {
+  QueueItem,
+  Run,
+  TimelineEvent,
+  WorkItem,
+} from "../../shared/api/types";
 import type { LiveRun } from "../../shared/realtime/useCardStream";
+import { ExecutionStatus, StandaloneExecution } from "./ExecutionStatus";
+import { groupExecutionAttempts, type ExecutionAttempt } from "./execution";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const systemTypes = new Set([
@@ -81,13 +88,31 @@ function TimeSeparator({ value }: { value: string }) {
   );
 }
 
-function EventRow({ event }: { event: TimelineEvent }) {
+function EventRow({
+  event,
+  attempts,
+  cancelingTriggerID,
+  retryingTriggerID,
+  onCancelTrigger,
+  onRetryTrigger,
+}: {
+  event: TimelineEvent;
+  attempts: ExecutionAttempt[];
+  cancelingTriggerID?: string;
+  retryingTriggerID?: string;
+  onCancelTrigger: (triggerID: string) => void;
+  onRetryTrigger: (triggerID: string) => void;
+}) {
   const { t } = useTranslation();
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
   if (system) {
     return (
-      <div className="flex justify-center py-2" data-sequence={event.sequence}>
+      <div
+        id={"event-" + event.id}
+        className="flex justify-center py-2"
+        data-sequence={event.sequence}
+      >
         <span
           className={`max-w-[90%] rounded-full px-3 py-1 text-center text-xs ${event.type === "reject" ? "bg-rose-50 text-rose-700" : event.type === "confirm" ? "bg-amber-50 text-amber-700" : "text-slate-400"}`}
         >
@@ -100,6 +125,7 @@ function EventRow({ event }: { event: TimelineEvent }) {
 
   return (
     <article
+      id={"event-" + event.id}
       data-sequence={event.sequence}
       className={`flex gap-3 ${human ? "justify-end" : "justify-start"}`}
     >
@@ -126,6 +152,15 @@ function EventRow({ event }: { event: TimelineEvent }) {
           </p>
         )}
         <RichText content={event.content} />
+        {human && (
+          <ExecutionStatus
+            attempts={attempts}
+            cancelingTriggerID={cancelingTriggerID}
+            retryingTriggerID={retryingTriggerID}
+            onCancelTrigger={onCancelTrigger}
+            onRetryTrigger={onRetryTrigger}
+          />
+        )}
       </div>
     </article>
   );
@@ -164,21 +199,46 @@ export function ConversationView({
   events,
   live,
   cardKind,
+  queue,
+  currentRun,
+  workHistory,
+  cancelingTriggerID,
+  retryingTriggerID,
+  onCancelTrigger,
+  onRetryTrigger,
 }: {
   events: TimelineEvent[];
   live: LiveRun | null;
   cardKind: string;
+  queue: QueueItem[];
+  currentRun: Run | null;
+  workHistory: WorkItem[];
+  cancelingTriggerID?: string;
+  retryingTriggerID?: string;
+  onCancelTrigger: (triggerID: string) => void;
+  onRetryTrigger: (triggerID: string) => void;
 }) {
   const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
-  const sortedEvents = [...events].sort((a, b) => a.sequence - b.sequence);
+  const sortedEvents = useMemo(
+    () => [...events].sort((a, b) => a.sequence - b.sequence),
+    [events],
+  );
+  const eventIDs = useMemo(
+    () => new Set(sortedEvents.map((event) => event.id)),
+    [sortedEvents],
+  );
+  const { byEvent, standalone } = useMemo(
+    () => groupExecutionAttempts(eventIDs, queue, currentRun, workHistory),
+    [currentRun, eventIDs, queue, workHistory],
+  );
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
-  }, [events, live]);
+  }, [events, live, queue, currentRun, workHistory]);
 
   function onScroll() {
     const element = list.current;
@@ -198,15 +258,13 @@ export function ConversationView({
       aria-label={t("统一消息时间线")}
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-5">
-        {!sortedEvents.length && !live && (
+        {!sortedEvents.length && !live && !standalone.length && (
           <div className="py-20 text-center">
             <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-slate-100 text-slate-400">
               <Bot className="size-8" />
             </div>
             <h2 className="text-lg font-semibold">
-              {cardKind === "discussion"
-                ? t("从第一句话开始")
-                : t("开始协作")}
+              {cardKind === "discussion" ? t("从第一句话开始") : t("开始协作")}
             </h2>
             <p className="mt-2 text-sm text-slate-500">
               {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
@@ -223,10 +281,24 @@ export function ConversationView({
           return (
             <div key={event.id} className="contents">
               {showTime && <TimeSeparator value={event.created_at} />}
-              <EventRow event={event} />
+              <EventRow
+                event={event}
+                attempts={byEvent.get(event.id) || []}
+                cancelingTriggerID={cancelingTriggerID}
+                retryingTriggerID={retryingTriggerID}
+                onCancelTrigger={onCancelTrigger}
+                onRetryTrigger={onRetryTrigger}
+              />
             </div>
           );
         })}
+        <StandaloneExecution
+          attempts={standalone}
+          cancelingTriggerID={cancelingTriggerID}
+          retryingTriggerID={retryingTriggerID}
+          onCancelTrigger={onCancelTrigger}
+          onRetryTrigger={onRetryTrigger}
+        />
         <LiveMessage live={live} />
         <div ref={bottom} className="h-1" />
       </div>
