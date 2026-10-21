@@ -101,12 +101,19 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 		t.Fatalf("idempotent pending direction mismatch: timeline=%d queue=%d run=%+v", len(detail.Timeline), len(detail.Queue), detail.CurrentRun)
 	}
 
-	todo, err := dataStore.CreateTodoCard(
-		context.Background(), workspaceID, uuid.MustParse(project.ID), humanSourceID,
-		"Ship Human Web", "Complete the board.", uuid.NullUUID{}, 1,
-	)
-	if err != nil {
-		t.Fatal(err)
+	todoRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/todos", map[string]any{
+		"title": "Ship Human Web", "description": "Complete the board.",
+	}, cookie, nil)
+	if todoRecorder.Code != http.StatusCreated {
+		t.Fatalf("create todo: %d %s", todoRecorder.Code, todoRecorder.Body.String())
+	}
+	var todo cardResponse
+	decodeRecorder(t, todoRecorder, &todo)
+	if todo.Kind != string(domain.CardKindTodo) ||
+		todo.TodoState != string(domain.TodoStateTodo) ||
+		todo.Title != "Ship Human Web" ||
+		todo.SourceDiscussionID != "" {
+		t.Fatalf("unexpected manually created todo: %+v", todo)
 	}
 	for _, state := range []domain.TodoState{
 		domain.TodoStateTodo,
@@ -114,7 +121,7 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 		domain.TodoStateReview,
 		domain.TodoStateDone,
 	} {
-		move := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+todo.ID.String()+"/move", map[string]any{
+		move := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+todo.ID+"/move", map[string]any{
 			"state": string(state),
 		}, cookie, nil)
 		if move.Code != http.StatusOK {

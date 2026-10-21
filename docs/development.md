@@ -59,7 +59,7 @@
 重点领域行为：
 
 - Discussion Active / Archived 生命周期与 Human-only Archive/Delete。
-- Discussion → Todo / Ongoing 派生约束（不是状态转换）。
+- Discussion → Todo / Ongoing 的 AI 派生约束（不是状态转换）；Human Web 另允许在 Board 直接创建无 source Discussion 的 Todo。
 - Todo → Working → Review → Done 状态机。
 - Ongoing 状态机。
 - Comment → Trigger。

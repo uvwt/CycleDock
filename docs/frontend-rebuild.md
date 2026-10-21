@@ -5,7 +5,7 @@
 ## 1. 目标与边界
 
 - 前端代码从零开发；不复用旧页面、旧组件、旧样式或旧交互。保留 Go + PostgreSQL、OIDC、Model Provider、MCP 与 Card / Event / Trigger / Run 后端业务域。
-- 核心用户路径：Discussion 中澄清 → 唯一 Generate task 操作由 AI 识别派生 Todo 或 Ongoing → 独立任务页继续协作 → Review（人类决定 Done）。
+- 核心用户路径：Discussion 中澄清 → 唯一 Generate task 操作由 AI 识别派生 Todo 或 Ongoing → 独立任务页继续协作 → Review（人类决定 Done）。用户已经明确任务时，也可在 Board 直接手填 Todo，不调用模型。
 - Discussion 与 Todo / Ongoing 都是 Card，统一使用 Card Timeline、Trigger、Run；绝不另建聊天 Session 或另一套 Chat Message 数据模型。
 - Project 仍是看板领域实体；Board 只是界面。
 - PC / 移动端响应式，普通白、灰中性色，色彩只辅助交互/状态；默认可读与低视觉噪音。
@@ -13,9 +13,9 @@
 
 ## 2. 页面与路由
 
-顶层是 Chat、Board、Settings 三个界面域。顶栏左侧品牌/返回，右上角 Chat / Board 快速切换及菜单/抽屉入口。默认不显示永久全局侧边栏，导航抽屉按需开启。所有卡片进入独立 URL 页面，绝非 Dialog。
+顶层是 Chat、Board、Settings 三个界面域。**桌面端只保留一条窄全局侧轨**承载 Chat / Board / Settings，不再叠加第二条全局顶栏；会话页自己的顶部只负责当前 Card 标题、Run 状态和局部面板入口，不重复全局导航。移动端的全局顶栏只出现在顶层页面，进入 Card 会话后隐藏，由会话自身单一工具栏接管。所有卡片进入独立 URL 页面，绝非 Dialog。
 
-- `/chat`：Discussion 列表、搜索/打开、新建 Discussion；空白 Discussion 首条消息即会话开始，标题与描述由 Agent 生成。
+- `/chat`：桌面左侧固定 Discussion 列表，中间为大模型聊天式欢迎态和输入框；移动端列表按需从左侧抽屉打开。欢迎态直接输入第一句话会自动创建 Discussion、提交首条 Comment 并进入会话，标题与描述仍由 Agent 生成。
 - `/chat/:projectID/:cardID`：Discussion 的独立会话页，唯一 Generate task 操作，归档/删除。
 - `/board/:projectID`：看板（Todo、Working、Review、Done；Ongoing 单独区域）；拖拽遵守后端状态机。
 - `/cards/:projectID/:cardID`：Todo/Ongoing 独立工作会话页。
@@ -25,13 +25,17 @@
 
 ## 3. 会话页（最高优先级）
 
-- 主要篇幅是统一对话流，左侧 AI / Agent 消息、右侧 Human 消息，系统事件在中间居中灰字显示。
+- 主要篇幅是统一对话流，左侧 AI / Agent 消息、右侧 Human 消息，系统事件在中间居中灰字显示。Discussion 桌面布局为“左 Discussion 列表 / 中聊天 / 右 Card 详情”，Todo / Ongoing 为“中聊天 / 右 Card 详情”；右侧详情默认常驻，不要求先点按钮。
 - 相同后端 `events` 表 / `timeline` 返回：comment(Human)=右，comment(Agent)、finding、result=左；status_change=居中小字；progress/checkin=简短阶段节点；confirm/reject 按重要性增强。
 - 事件按服务端 `sequence` 顺序排布，保留事件 ID 以去重；绝不可打乱用户消息、Agent 结果及任务状态的交错次序。
-- 标题与状态放在顶部；Description、当前 Run、Queue、Work History、Ongoing Schedule 放在可展开的 **任务详情抽屉**，不长期占据消息区。
-- 底部固定输入框，正常为“发送并执行”；running/queued 提供“加入队列”及“立即转向”；waiting_human 提供“回复并继续”；归档 Discussion 禁止提交。
+- 标题与状态放在会话顶部；Description、当前 Run、Queue、Work History、Ongoing Schedule 在桌面右侧详情栏常驻，在窄屏/移动端才进入 **任务详情抽屉**。
+- 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Run 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
+- Discussion 的 Generate task 只在输入框右上角显示 Sparkles 图标，通过 `title / aria-label` 保留可访问名称，不显示额外文字按钮。跳到最新同样只显示向下图标。
 - Discussion 仅能生成任务而非转换状态，一个 Discussion 可生成多个工作；Todo/Ongoing 不再产生工作。
-- 已到消息底部时自动跟随增量；用户阅读旧消息时禁止强制滚动到底；显示跳到最新按钮。
+- Human 可以在 Board 直接打开“新建待办”表单创建 Todo；AI Generate work 仍然只来自 Discussion。
+- 消息下方不逐条展示时间；只有相邻持久事件的时间差 **严格超过 2 小时** 时，才在两条事件之间插入居中的系统式绝对时间分隔。
+- 已到消息底部时自动跟随增量；用户阅读旧消息时禁止强制滚动到底；显示仅图标的跳到最新按钮。
+- 移动端不同时挤入左右栏：Discussion 列表从左抽屉进入，Card 详情从右抽屉进入，中间聊天始终占满可用宽度；会话页不得再显示 Shell 全局移动顶栏。
 - Markdown 安全渲染，代码块复制、可读排版，减少不必要的阴影和浮层。
 
 ## 4. 实时架构
@@ -77,18 +81,18 @@ React + TypeScript + Vite + React Router + TanStack Query + Tailwind CSS 4。基
 
 ## 8. 当前开发实现与未关闭事项（2026-10-21）
 
-本次 worktree `feat/frontend-rebuild-20261021` 从已 squash 合并 Discussion 模型的 `origin/main` 提交 `89fabf9` 创建。旧 `web/src` 整体删除并新建目录；`docs/frontend-rebuild.md` 是设计约束。
+前端从零重建已进入 `main`。2026-10-21 的会话工作台修订在独立 worktree / 分支 `feat/chat-workbench-20261021` 上继续演进；`docs/frontend-rebuild.md` 继续作为当前设计约束，不回退到旧版双顶栏、Discussion 卡片宫格或桌面 Drawer-only 详情。
 
-**已实现：** Chat、Board、Discussion/Todo/Ongoing 独立详情页、统一 Timeline 消息排版、可展开任务详情/队列/历史/日程、七项 Settings 页面、同源认证 SSE、Go Runner 模型文本增量中转、Chat Completions 与 Responses Stream 解析、EventSource 重连后 REST 恢复、Run 起止时间字段。设计系统基于 Tailwind + 自持 UI 组件 + Radix Sheet，Lucide 统一图标。
+**已实现：** ChatGPT 类 Discussion 工作台、桌面 Discussion 左列表 / 中聊天 / 右详情、Todo/Ongoing 桌面右详情常驻、移动端双抽屉、两态聚合输入框、图标式 Generate / Jump latest、超过 2 小时才显示的时间分隔、Human Board 手工创建 Todo，以及原有统一 Timeline、七项 Settings、同源认证 SSE、Go Runner 模型文本增量中转、Responses/Chat Completions 流解析、EventSource 重连 REST 恢复。设计系统继续基于 Tailwind + 自持 UI 组件 + Radix Sheet，Lucide 统一图标。
 
-**已验证：** React/TypeScript 生产构建、Oxlint、Go 编译/vet/单元测试；TianYi Neo 使用测试夹具验证桌面与 390px 移动端 Chat/Board/Card/Settings，卡片 URL 页面而非弹窗，模拟 SSE 文本增量和运行时计时可见。新增 `web/e2e/smoke.py` 并使用本机 Python Playwright 对测试夹具执行三条自动化 E2E（Chat 创建和消息、Card 详情与流式、Settings 与移动端），3/3 通过。Mock 服务为 `web/e2e/mock-server.mjs`，测试夹具不进入生产包。
+**本轮验证：** React/TypeScript production build 与 Oxlint 已通过；`web/e2e/smoke.py` 对 `web/e2e/mock-server.mjs` 执行 6 条 Python Playwright E2E，覆盖 Discussion 三栏、两态输入框、2 小时时间分隔、首轮消息自动建 Discussion、Human 手工 Todo、桌面常驻详情、SSE 增量、移动端单导航 + 左右抽屉、语言和主题，6/6 通过。Go 全量 `go test ./...` 与 `go vet ./...` 通过；另使用 TianYi 本机 PostgreSQL 17 二进制创建独立临时数据库，执行真实 `TestHumanWebHTTPFlowAndTenantIsolation`，迁移 1–7 与 Human 手工 Todo HTTP 路径通过，测试后实例和数据目录已清理。TianYi Neo 对 1408px 桌面实际构建核验为：左 Discussion 约 279px、中间聊天约 704px、右详情 360px，`scrollWidth == viewport width`，无横向覆盖；Generate 只保留图标和可访问名称。
 
 **尚未通过生产级验收：**
-1. `TEST_DATABASE_URL` 未配置，TianYi 没有 Docker CLI；本机未执行 PostgreSQL 集成测试以及正式 SSE 网络/断线竞态 E2E。
+1. 本轮已跑新增 Human Todo 所在的真实 PostgreSQL HTTP 集成路径，但没有为所有包配置持久 `TEST_DATABASE_URL` 后重跑整套数据库集成矩阵；正式 SSE 网络断线/重连竞态仍需要在部署环境持续验证。
 2. OpenAI-compatible、ChatGPT、Grok 真实外部账号及完整模型流需要授权环境再次验证；测试夹具不代表真实模型调用。
 3. 模型流多进程部署的即时增量采用当前单实例内存 Hub；跨实例一致的实时传输需要扩展。持久 Event 用服务端每 1.5 秒检查序列变化并推送 SSE，客户端没有继续使用 15 秒轮询。
-4. i18next 双语完整覆盖、主题切换、Shiki 语法高亮、Motion 高级动效、Vitest/Playwright 完整自动化套件尚未纳入；首次开发基线先锁定已安装并可构建的依赖，避免未验证的新增 SDK。
-5. 首次开发时尚未合并/部署；现已于 2026-10-21 经 PR #7 squash 合并（7afb749），RN DEV 已部署该版本，反代 SSE 跨标签推送经过真实浏览器验证。
+4. i18next 与主题切换已经落地并纳入 E2E，但高级设置仍未做到完整双语；Shiki、Motion、Vitest 等增强项仍按实际价值后续引入，不为了技术清单强行加依赖。
+5. 前端从零重建基线已于 2026-10-21 经 PR #7 squash 合并（7afb749）并部署 RN DEV；**本节描述的会话工作台修订仍在 `feat/chat-workbench-20261021`，尚未合并或部署。**
 
 ## 9. 语言与主题偏好（后续独立 PR）
 

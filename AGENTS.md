@@ -25,7 +25,7 @@ Project Board
 - Project 即一个项目看板；不要重新引入 Board 表或 Board 领域实体。
 - Card 只有 Discussion / Todo / Ongoing 三类；不要重新引入 Normal Card 抽象。
 - Discussion 是新工作的会话入口，生命周期只有 Active / Archived；不能转换成 Todo / Ongoing。
-- 只有 Discussion 可以通过单一 Generate work 动作派生 Todo / Ongoing；AI 根据有限任务或长期/周期事项判断类型；Todo / Ongoing 不再派生其他 Card。
+- 只有 Discussion 可以通过单一 Generate work 动作让 AI 派生 Todo / Ongoing；AI 根据有限任务或长期/周期事项判断类型；Todo / Ongoing 不再派生其他 Card。Human 可以在 Board 直接创建独立 Todo，这类 Card 不设置 source_discussion_id，也不经过模型判断。
 - Todo 状态机固定为 Todo → Working → Review → Done；Review → Done 只允许 Human。
 - Discussion 首轮会话负责生成标题与摘要；归档后禁止继续产生 Trigger/Run，删除 Discussion 不级联删除其派生工作。
 - Card 保存业务状态，不保存 Agent 当前运行状态。

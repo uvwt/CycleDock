@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Bot, Copy, Check } from "lucide-react";
+import { ArrowDown, Bot, Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { formatDistanceToNow } from "date-fns";
 import { useTranslation } from "react-i18next";
-import { enUS, zhCN } from "date-fns/locale";
 import type { TimelineEvent } from "../../shared/api/types";
 import type { LiveRun } from "../../shared/realtime/useCardStream";
-import { Button } from "../../shared/ui/components";
 
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const systemTypes = new Set([
   "status_change",
   "progress",
@@ -23,6 +21,7 @@ const labels: Record<string, string> = {
   confirm: "提交审核",
   reject: "驳回",
 };
+
 function RichText({ content }: { content: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -36,9 +35,9 @@ function RichText({ content }: { content: string }) {
               <button
                 title={t("复制代码")}
                 aria-label={t("复制代码")}
-                onClick={async (e) => {
+                onClick={async (event) => {
                   const code =
-                    e.currentTarget.parentElement?.querySelector("code")
+                    event.currentTarget.parentElement?.querySelector("code")
                       ?.textContent || "";
                   await navigator.clipboard.writeText(code);
                   setCopied(true);
@@ -62,11 +61,31 @@ function RichText({ content }: { content: string }) {
     </div>
   );
 }
+
+function TimeSeparator({ value }: { value: string }) {
+  const { i18n } = useTranslation();
+  const time = new Date(value);
+  return (
+    <div
+      role="separator"
+      data-time-separator
+      className="flex items-center justify-center py-1 text-[11px] text-slate-400"
+    >
+      {time.toLocaleString(i18n.language === "en" ? "en-US" : "zh-CN", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })}
+    </div>
+  );
+}
+
 function EventRow({ event }: { event: TimelineEvent }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
-  if (system)
+  if (system) {
     return (
       <div className="flex justify-center py-2" data-sequence={event.sequence}>
         <span
@@ -77,6 +96,8 @@ function EventRow({ event }: { event: TimelineEvent }) {
         </span>
       </div>
     );
+  }
+
   return (
     <article
       data-sequence={event.sequence}
@@ -91,7 +112,7 @@ function EventRow({ event }: { event: TimelineEvent }) {
         </span>
       )}
       <div
-        className={`max-w-[min(85%,740px)] min-w-0 ${human ? "rounded-2xl rounded-br-md bg-sky-50 px-4 py-3" : "py-1"}`}
+        className={`max-w-[min(88%,740px)] min-w-0 ${human ? "rounded-2xl rounded-br-md bg-sky-50 px-4 py-3" : "py-1"}`}
       >
         {!human && (
           <p className="mb-1 text-xs font-semibold text-slate-500">
@@ -105,19 +126,11 @@ function EventRow({ event }: { event: TimelineEvent }) {
           </p>
         )}
         <RichText content={event.content} />
-        <p
-          className="mt-1 text-[11px] text-slate-400"
-          title={new Date(event.created_at).toLocaleString()}
-        >
-          {formatDistanceToNow(new Date(event.created_at), {
-            addSuffix: true,
-            locale: i18n.language === "en" ? enUS : zhCN,
-          })}
-        </p>
       </div>
     </article>
   );
 }
+
 function LiveMessage({ live }: { live: LiveRun | null }) {
   const { t } = useTranslation();
   if (!live) return null;
@@ -126,7 +139,7 @@ function LiveMessage({ live }: { live: LiveRun | null }) {
       <span className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100">
         <Bot className="size-4" />
       </span>
-      <div className="min-w-0 max-w-[min(85%,740px)]">
+      <div className="min-w-0 max-w-[min(88%,740px)]">
         <p className="mb-2 text-xs font-semibold text-slate-500">
           Cycle Agent · {live.stage || t("正在执行")}
         </p>
@@ -146,6 +159,7 @@ function LiveMessage({ live }: { live: LiveRun | null }) {
     </div>
   );
 }
+
 export function ConversationView({
   events,
   live,
@@ -160,16 +174,21 @@ export function ConversationView({
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
+  const sortedEvents = [...events].sort((a, b) => a.sequence - b.sequence);
+
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
   }, [events, live]);
+
   function onScroll() {
-    const el = list.current;
-    if (!el) return;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    stick.current = near;
-    setShowLatest(!near);
+    const element = list.current;
+    if (!element) return;
+    const nearBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+    stick.current = nearBottom;
+    setShowLatest(!nearBottom);
   }
+
   return (
     <div
       ref={list}
@@ -179,30 +198,45 @@ export function ConversationView({
       aria-label={t("统一消息时间线")}
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-5">
-        {!events.length && !live && (
+        {!sortedEvents.length && !live && (
           <div className="py-20 text-center">
             <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-slate-100 text-slate-400">
               <Bot className="size-8" />
             </div>
             <h2 className="text-lg font-semibold">
-              {cardKind === "discussion" ? t("从第一句话开始") : t("开始协作")}
+              {cardKind === "discussion"
+                ? t("从第一句话开始")
+                : t("开始协作")}
             </h2>
             <p className="mt-2 text-sm text-slate-500">
               {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
             </p>
           </div>
         )}
-        {[...events]
-          .sort((a, b) => a.sequence - b.sequence)
-          .map((e) => (
-            <EventRow key={e.id} event={e} />
-          ))}
+        {sortedEvents.map((event, index) => {
+          const previous = sortedEvents[index - 1];
+          const showTime =
+            !!previous &&
+            new Date(event.created_at).getTime() -
+              new Date(previous.created_at).getTime() >
+              TWO_HOURS_MS;
+          return (
+            <div key={event.id} className="contents">
+              {showTime && <TimeSeparator value={event.created_at} />}
+              <EventRow event={event} />
+            </div>
+          );
+        })}
         <LiveMessage live={live} />
         <div ref={bottom} className="h-1" />
       </div>
+
       {showLatest && (
         <div className="sticky bottom-3 flex justify-center">
-          <Button
+          <button
+            type="button"
+            title={t("跳到最新")}
+            aria-label={t("跳到最新")}
             onClick={() => {
               bottom.current?.scrollIntoView({
                 behavior: "smooth",
@@ -211,10 +245,10 @@ export function ConversationView({
               stick.current = true;
               setShowLatest(false);
             }}
+            className="grid size-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
           >
             <ArrowDown className="size-4" />
-            {t("跳到最新")}
-          </Button>
+          </button>
         </div>
       )}
     </div>

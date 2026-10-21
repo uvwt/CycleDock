@@ -20,6 +20,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Patch("/projects/{projectID}", api.updateProject)
 	r.Get("/projects/{projectID}/cards", api.listProjectCards)
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
+	r.Post("/projects/{projectID}/todos", api.createTodo)
 
 	r.Get("/cards/{cardID}", api.getCard)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
@@ -285,6 +286,46 @@ func (api *API) createDiscussion(w http.ResponseWriter, r *http.Request) {
 	}
 	card, err := api.store.CreateDiscussion(
 		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, cardToResponse(card))
+}
+
+func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.Title = strings.TrimSpace(request.Title)
+	if request.Title == "" {
+		writeError(w, http.StatusBadRequest, "invalid_title", "todo title is required")
+		return
+	}
+
+	identity := identityFromRequest(r)
+	if _, err := api.store.GetProject(r.Context(), identity.WorkspaceID, projectID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	card, err := api.store.CreateTodoCard(
+		r.Context(),
+		identity.WorkspaceID,
+		projectID,
+		identity.SourceID,
+		request.Title,
+		strings.TrimSpace(request.Description),
+		uuid.NullUUID{},
+		1,
 	)
 	if err != nil {
 		api.handleError(w, err)
