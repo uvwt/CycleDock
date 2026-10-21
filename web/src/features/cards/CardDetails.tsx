@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CalendarPlus,
   Link2,
+  MoreHorizontal,
   Pause,
   Pencil,
   Play,
@@ -43,10 +44,14 @@ export function CardDetails({
   detail,
   projectCards,
   onDeleted,
+  hideHeading = false,
+  compact = false,
 }: {
   detail: CardDetail;
   projectCards: Card[];
   onDeleted: () => void;
+  hideHeading?: boolean;
+  compact?: boolean;
 }) {
   const card = detail.card;
   const navigate = useNavigate();
@@ -122,17 +127,69 @@ export function CardDetails({
   }
 
   return (
-    <div className="space-y-4 pb-10">
-      <Section
-        title="任务信息"
-        description={
-          card.kind === "discussion"
-            ? "标题与摘要由 Discussion 上下文维护。"
-            : "默认只读；需要调整目标时再进入编辑。"
-        }
-      >
+    <div className={compact ? "space-y-3" : "space-y-4 pb-10"}>
+      <section className={compact ? "bg-white" : "rounded-2xl border border-slate-200 bg-white p-4"}>
+        <div className="flex items-center justify-between gap-2">
+          {!hideHeading && (
+            <h2 className="text-sm font-semibold text-slate-900">
+              {card.kind === "discussion" ? "讨论信息" : "任务信息"}
+            </h2>
+          )}
+          {!editing && card.kind !== "discussion" && (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              title="编辑任务信息"
+              aria-label="编辑任务信息"
+              className="ml-auto grid size-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <Pencil className="size-4" />
+            </button>
+          )}
+          {card.kind === "discussion" && (
+            <details className="relative ml-auto">
+              <summary
+                title="讨论操作"
+                aria-label="讨论操作"
+                className="grid size-8 cursor-pointer list-none place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <MoreHorizontal className="size-4" />
+              </summary>
+              <div className="absolute top-9 right-0 z-30 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                {card.discussion_state === "active" && (
+                  <button
+                    type="button"
+                    disabled={archive.isPending}
+                    onClick={(event) => {
+                      event.currentTarget.closest("details")?.removeAttribute("open");
+                      archive.mutate();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    <Archive className="size-3.5" />
+                    归档讨论
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={del.isPending}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    if (window.confirm("确定删除这个讨论？已生成的任务不会被删除。")) {
+                      del.mutate();
+                    }
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  <Trash2 className="size-3.5" />
+                  删除讨论
+                </button>
+              </div>
+            </details>
+          )}
+        </div>
         {editing && card.kind !== "discussion" ? (
-          <div className="space-y-4">
+          <div className="mt-3 space-y-4">
             <Field label="标题">
               <TextInput
                 autoFocus
@@ -165,45 +222,26 @@ export function CardDetails({
             </div>
           </div>
         ) : (
-          <div className="space-y-5">
-            <div>
-              <p className="text-xs font-semibold text-slate-400">标题</p>
-              <p className="mt-1.5 text-sm font-medium leading-6 text-slate-800">
-                {card.title || "—"}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-400">
-                {card.kind === "discussion" ? "摘要" : "目标"}
-              </p>
-              <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-slate-600">
-                {card.description || "暂无描述"}
-              </p>
-            </div>
+          <div className="mt-3 space-y-3">
+            <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600">
+              {card.description || "暂无描述"}
+            </p>
             {source && (
-              <div>
-                <p className="text-xs font-semibold text-slate-400">来源讨论</p>
-                <button
-                  type="button"
-                  onClick={openSource}
-                  className="mt-1.5 inline-flex max-w-full items-center gap-1.5 text-left text-sm font-medium text-sky-700 hover:underline"
-                >
-                  <Link2 className="size-4 shrink-0" />
-                  <span className="truncate">{source.title}</span>
-                </button>
-              </div>
-            )}
-            {card.kind !== "discussion" && (
-              <Button onClick={() => setEditing(true)}>
-                <Pencil className="size-4" />
-                编辑
-              </Button>
+              <button
+                type="button"
+                onClick={openSource}
+                className="inline-flex max-w-full items-center gap-1 text-left text-[11px] leading-4 text-slate-500 hover:text-sky-700 hover:underline"
+              >
+                <Link2 className="size-3 shrink-0 text-slate-400" />
+                <span className="shrink-0 text-slate-400">来源 ·</span>
+                <span className="truncate">{source.title}</span>
+              </button>
             )}
           </div>
         )}
-      </Section>
+      </section>
 
-      {card.kind === "todo" && (
+      {card.kind === "todo" && !compact && (
         <Section title="任务状态">
           <div className="flex flex-wrap gap-2">
             {todoStates.map((state) => (
@@ -227,40 +265,10 @@ export function CardDetails({
         </Section>
       )}
 
-      {card.kind === "discussion" && (
-        <Section title="讨论管理">
-          <div className="flex flex-wrap gap-2">
-            {card.discussion_state === "active" && (
-              <Button
-                onClick={() => archive.mutate()}
-                disabled={archive.isPending}
-              >
-                <Archive className="size-4" />
-                归档讨论
-              </Button>
-            )}
-            <Button
-              variant="danger"
-              onClick={() => {
-                if (
-                  window.confirm("确定删除这个讨论？已生成的任务不会被删除。")
-                ) {
-                  del.mutate();
-                }
-              }}
-              disabled={del.isPending}
-            >
-              <Trash2 className="size-4" />
-              删除讨论
-            </Button>
-          </div>
-        </Section>
-      )}
-
       {card.kind === "ongoing" && (
         <>
           <Section title="持续事项">
-            <div className="flex flex-wrap gap-2">
+            {!compact && <div className="flex flex-wrap gap-2">
               {(["active", "paused", "archived"] as const).map((state) => (
                 <Button
                   key={state}
@@ -284,7 +292,7 @@ export function CardDetails({
                       : "已归档"}
                 </Button>
               ))}
-            </div>
+            </div>}
             <p className="mt-3 text-sm text-slate-500">
               健康状态：{detail.health || "unknown"}
             </p>
@@ -539,7 +547,7 @@ function ScheduleForm({
           onChange={(event) =>
             setFrequency(event.target.value as ScheduleInput["frequency"])
           }
-          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white p-2 font-normal"
+          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-normal leading-5"
         >
           <option value="daily">每天</option>
           <option value="weekly">每周</option>

@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Bot, Check, Copy } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ArrowDown, Bot } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
   QueueItem,
@@ -10,7 +8,8 @@ import type {
   WorkItem,
 } from "../../shared/api/types";
 import type { LiveRun } from "../../shared/realtime/useCardStream";
-import { ExecutionStatus, StandaloneExecution } from "./ExecutionStatus";
+import { ExecutionStatus, RunDuration, StandaloneExecution } from "./ExecutionStatus";
+import { RichText } from "./RichText";
 import { groupExecutionAttempts, type ExecutionAttempt } from "./execution";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
@@ -28,46 +27,6 @@ const labels: Record<string, string> = {
   confirm: "提交审核",
   reject: "驳回",
 };
-
-function RichText({ content }: { content: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="prose-chat text-sm text-slate-700">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children }) => (
-            <div className="relative">
-              <button
-                title={t("复制代码")}
-                aria-label={t("复制代码")}
-                onClick={async (event) => {
-                  const code =
-                    event.currentTarget.parentElement?.querySelector("code")
-                      ?.textContent || "";
-                  await navigator.clipboard.writeText(code);
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1400);
-                }}
-                className="absolute top-2 right-2 z-10 rounded-lg bg-slate-700/80 p-1.5 text-white hover:bg-slate-600"
-              >
-                {copied ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
-              </button>
-              <pre>{children}</pre>
-            </div>
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
 
 function TimeSeparator({ value }: { value: string }) {
   const { i18n } = useTranslation();
@@ -91,6 +50,7 @@ function TimeSeparator({ value }: { value: string }) {
 function EventRow({
   event,
   attempts,
+  live,
   cancelingTriggerID,
   retryingTriggerID,
   onCancelTrigger,
@@ -98,6 +58,7 @@ function EventRow({
 }: {
   event: TimelineEvent;
   attempts: ExecutionAttempt[];
+  live: LiveRun | null;
   cancelingTriggerID?: string;
   retryingTriggerID?: string;
   onCancelTrigger: (triggerID: string) => void;
@@ -110,11 +71,11 @@ function EventRow({
     return (
       <div
         id={"event-" + event.id}
-        className="flex justify-center py-2"
+        className="flex justify-center py-1"
         data-sequence={event.sequence}
       >
         <span
-          className={`max-w-[90%] rounded-full px-3 py-1 text-center text-xs ${event.type === "reject" ? "bg-rose-50 text-rose-700" : event.type === "confirm" ? "bg-amber-50 text-amber-700" : "text-slate-400"}`}
+          className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${event.type === "reject" ? "text-rose-700" : event.type === "confirm" ? "text-amber-700" : "text-slate-500"}`}
         >
           {t(labels[event.type] || event.type)} · {event.content}
           {event.checkin_status ? ` · ${event.checkin_status}` : ""}
@@ -124,6 +85,7 @@ function EventRow({
   }
 
   return (
+    <>
     <article
       id={"event-" + event.id}
       data-sequence={event.sequence}
@@ -138,7 +100,7 @@ function EventRow({
         </span>
       )}
       <div
-        className={`max-w-[min(88%,740px)] min-w-0 ${human ? "rounded-2xl rounded-br-md bg-sky-50 px-4 py-3" : "py-1"}`}
+        className={`max-w-[min(88%,740px)] min-w-0 ${human ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3" : "rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3"}`}
       >
         {!human && (
           <p className="mb-1 text-xs font-semibold text-slate-500">
@@ -152,17 +114,19 @@ function EventRow({
           </p>
         )}
         <RichText content={event.content} />
-        {human && (
-          <ExecutionStatus
-            attempts={attempts}
-            cancelingTriggerID={cancelingTriggerID}
-            retryingTriggerID={retryingTriggerID}
-            onCancelTrigger={onCancelTrigger}
-            onRetryTrigger={onRetryTrigger}
-          />
-        )}
       </div>
     </article>
+    {human && (
+      <ExecutionStatus
+        attempts={attempts}
+        live={live}
+        cancelingTriggerID={cancelingTriggerID}
+        retryingTriggerID={retryingTriggerID}
+        onCancelTrigger={onCancelTrigger}
+        onRetryTrigger={onRetryTrigger}
+      />
+    )}
+    </>
   );
 }
 
@@ -174,10 +138,11 @@ function LiveMessage({ live }: { live: LiveRun | null }) {
       <span className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100">
         <Bot className="size-4" />
       </span>
-      <div className="min-w-0 max-w-[min(88%,740px)]">
-        <p className="mb-2 text-xs font-semibold text-slate-500">
-          Cycle Agent · {live.stage || t("正在执行")}
-        </p>
+      <div className="min-w-0 max-w-[min(88%,740px)] rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3">
+        <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+          <span>Cycle Agent · {live.stage || t("正在执行")}</span>
+          <RunDuration startedAt={live.startedAt} active />
+        </div>
         {live.text ? (
           <RichText content={live.text} />
         ) : (
@@ -257,7 +222,7 @@ export function ConversationView({
       role="log"
       aria-label={t("统一消息时间线")}
     >
-      <div className="mx-auto flex max-w-3xl flex-col gap-5">
+      <div className="mx-auto flex max-w-3xl flex-col gap-4">
         {!sortedEvents.length && !live && !standalone.length && (
           <div className="py-20 text-center">
             <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-slate-100 text-slate-400">
@@ -284,6 +249,7 @@ export function ConversationView({
               <EventRow
                 event={event}
                 attempts={byEvent.get(event.id) || []}
+                live={live}
                 cancelingTriggerID={cancelingTriggerID}
                 retryingTriggerID={retryingTriggerID}
                 onCancelTrigger={onCancelTrigger}
@@ -294,12 +260,13 @@ export function ConversationView({
         })}
         <StandaloneExecution
           attempts={standalone}
+          live={live}
           cancelingTriggerID={cancelingTriggerID}
           retryingTriggerID={retryingTriggerID}
           onCancelTrigger={onCancelTrigger}
           onRetryTrigger={onRetryTrigger}
         />
-        <LiveMessage live={live} />
+        <LiveMessage live={live && currentRun?.id !== live.runID ? live : null} />
         <div ref={bottom} className="h-1" />
       </div>
 

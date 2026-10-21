@@ -38,14 +38,12 @@ export function LoginPage() {
     <main className="grid min-h-screen bg-slate-50 lg:grid-cols-[1fr_1fr]">
       <section className="hidden flex-col justify-between bg-slate-900 p-12 text-white lg:flex">
         <Link to="/chat" className="flex items-center gap-3 text-xl font-bold">
-          <span className="grid size-10 place-items-center rounded-xl bg-sky-400 text-slate-900">
-            C
-          </span>
+          <img src="/cycledock-logo.png" alt="" className="size-10 shrink-0" />
           CycleDock
         </Link>
         <div>
           <p className="mb-5 text-sm text-sky-300">Human × Agent</p>
-          <h1 className="max-w-lg text-5xl leading-tight font-semibold tracking-tight">
+          <h1 className="max-w-lg text-4xl leading-tight font-semibold tracking-tight">
             {t("把讨论变成工作。")}
             <br />
             {t("让进展清晰可见。")}

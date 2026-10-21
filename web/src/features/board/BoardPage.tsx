@@ -29,7 +29,7 @@ import {
 import type { Card, TodoState } from "../../shared/api/types";
 import { cardStateLabel, healthLabel } from "../../shared/presentation/status";
 import { WorkbenchLayout } from "../workbench/WorkbenchLayout";
-import { NewDiscussionComposer } from "../workbench/NewDiscussionComposer";
+import { ProjectDialog } from "../workbench/ProjectDialog";
 
 const states: TodoState[] = ["todo", "working", "review", "done"];
 const labels: Record<TodoState, string> = {
@@ -53,7 +53,7 @@ function Lane({
   return (
     <section
       ref={setNodeRef}
-      className={`min-h-75 rounded-2xl border p-3 ${
+      className={`min-h-72 rounded-xl border p-3 ${
         isOver ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-slate-100/60"
       }`}
     >
@@ -96,15 +96,15 @@ function TaskCard({
       {...attributes}
       {...listeners}
       onClick={() => onOpen(card)}
-      className={`w-full rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-sky-300 ${
+      className={`w-full rounded-lg border border-slate-200 bg-white p-3.5 text-left shadow-sm hover:border-sky-300 ${
         isDragging ? "relative z-20 opacity-60" : ""
       }`}
     >
       <h3 className="line-clamp-2 text-sm font-semibold">{card.title}</h3>
-      <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
+      <p className="mt-1.5 line-clamp-2 text-[13px] leading-5 text-slate-500">
         {card.description}
       </p>
-      <div className="mt-4 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
         <span>{card.current_run_status || t("未运行")}</span>
         <Clock3 className="size-3" />
       </div>
@@ -119,9 +119,6 @@ export default function BoardPage() {
   const [searchParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
   const [creatingTodo, setCreatingTodo] = useState(false);
-  const [discussionOpenToken, setDiscussionOpenToken] = useState(
-    searchParams.get("newDiscussion") === "1" ? 1 : 0,
-  );
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
@@ -134,12 +131,18 @@ export default function BoardPage() {
   const project = params.projectID ? routeProject : projects.data?.[0];
   const projectID = project?.id;
   const newProjectRequested = searchParams.get("newProject") === "1";
+  const view = searchParams.get("view") || "all";
 
+  // 补全默认项目路径时必须保留 newProject 等查询参数，否则弹窗会闪现后关闭。
+  const routeSearch = searchParams.toString();
   useEffect(() => {
     if (!params.projectID && projects.data?.length && !projects.isPending) {
-      navigate("/board/" + projects.data[0].id, { replace: true });
+      navigate(
+        "/board/" + projects.data[0].id + (routeSearch ? "?" + routeSearch : ""),
+        { replace: true },
+      );
     }
-  }, [navigate, params.projectID, projects.data, projects.isPending]);
+  }, [navigate, params.projectID, projects.data, projects.isPending, routeSearch]);
 
   function setProjectSheetOpen(value: boolean) {
     setCreating(value);
@@ -273,7 +276,7 @@ export default function BoardPage() {
             {t("新建项目")}
           </Button>
         </main>
-        <ProjectSheet
+        <ProjectDialog
           open={creating || newProjectRequested}
           onOpenChange={setProjectSheetOpen}
           name={name}
@@ -290,19 +293,12 @@ export default function BoardPage() {
   const projectCards = cards.data || [];
   return (
     <>
-      <WorkbenchLayout
-        cards={projectCards}
-        onSelectDiscussion={open}
-        onCreateDiscussion={() => setDiscussionOpenToken((value) => value + 1)}
-      >
-        <main className="mx-auto max-w-[1600px] space-y-7 px-4 pt-8 pb-44 sm:px-5 md:px-8">
+      <WorkbenchLayout mode="work" projectID={projectID} cards={projectCards}>
+        <main className="mx-auto max-w-[1600px] space-y-6 px-4 pt-6 pb-14 sm:px-5 md:px-8">
           <header className="flex flex-wrap items-center justify-between gap-4 pl-11">
             <div>
-              <p className="text-xs font-semibold tracking-widest text-sky-700">
-                PROJECT BOARD
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-                {project.name}
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                {view === "review" ? t("待我审核") : view === "ongoing" ? t("持续事项") : project.name}
               </h1>
               <p className="mt-1 text-sm text-slate-500">
                 {project.description || t("查看执行状态，跟踪长期工作。")}
@@ -313,10 +309,6 @@ export default function BoardPage() {
                 <ListPlus className="size-4" />
                 {t("新建待办")}
               </Button>
-              <Button onClick={() => setCreating(true)}>
-                <FolderPlus className="size-4" />
-                {t("新建项目")}
-              </Button>
             </div>
           </header>
 
@@ -326,9 +318,9 @@ export default function BoardPage() {
             <ErrorView error={cards.error} />
           ) : (
             <>
-              <DndContext sensors={sensors} onDragEnd={dragEnd}>
-                <div className="grid auto-cols-[minmax(260px,86vw)] grid-flow-col gap-3 overflow-x-auto pb-3 lg:grid-flow-row lg:grid-cols-4 lg:overflow-visible">
-                  {states.map((state) => (
+              {view !== "ongoing" && <DndContext sensors={sensors} onDragEnd={dragEnd}>
+                <div className={`grid auto-cols-[minmax(260px,86vw)] grid-flow-col gap-3 overflow-x-auto pb-3 lg:grid-flow-row ${view === "review" ? "lg:grid-cols-1" : "lg:grid-cols-4"} lg:overflow-visible`}>
+                  {states.filter((state) => view !== "review" || state === "review").map((state) => (
                     <Lane
                       key={state}
                       state={state}
@@ -340,9 +332,9 @@ export default function BoardPage() {
                     />
                   ))}
                 </div>
-              </DndContext>
+              </DndContext>}
 
-              <section className="space-y-3">
+              {view !== "review" && <section className="space-y-3">
                 <h2 className="flex items-center gap-2 font-semibold">
                   <Activity className="size-5 text-sky-700" />
                   {t("持续事项")}
@@ -361,7 +353,7 @@ export default function BoardPage() {
                         key={card.id}
                         type="button"
                         onClick={() => open(card)}
-                        className="rounded-2xl border border-slate-200 bg-white p-5 text-left hover:border-sky-300"
+                        className="rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-sky-300"
                       >
                         <div className="flex justify-between gap-3">
                           <span className="font-semibold">{card.title}</span>
@@ -383,20 +375,13 @@ export default function BoardPage() {
                     </p>
                   )}
                 </div>
-              </section>
+              </section>}
             </>
           )}
         </main>
       </WorkbenchLayout>
 
-      <NewDiscussionComposer
-        key={projectID}
-        projectID={projectID}
-        projectName={project.name}
-        openToken={discussionOpenToken}
-      />
-
-      <ProjectSheet
+      <ProjectDialog
         open={creating || newProjectRequested}
         onOpenChange={setProjectSheetOpen}
         name={name}
@@ -446,61 +431,5 @@ export default function BoardPage() {
         </form>
       </Sheet>
     </>
-  );
-}
-
-function ProjectSheet({
-  open,
-  onOpenChange,
-  name,
-  description,
-  setName,
-  setDescription,
-  pending,
-  onSubmit,
-}: {
-  open: boolean;
-  onOpenChange: (value: boolean) => void;
-  name: string;
-  description: string;
-  setName: (value: string) => void;
-  setDescription: (value: string) => void;
-  pending: boolean;
-  onSubmit: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange} title={t("新建项目")}>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit();
-        }}
-        className="space-y-5"
-      >
-        <Field label={t("项目名称")}>
-          <TextInput
-            autoFocus
-            required
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </Field>
-        <Field label={t("项目描述")}>
-          <TextArea
-            rows={4}
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        </Field>
-        <Button
-          variant="primary"
-          type="submit"
-          disabled={!name.trim() || pending}
-        >
-          {t("创建项目")}
-        </Button>
-      </form>
-    </Sheet>
   );
 }

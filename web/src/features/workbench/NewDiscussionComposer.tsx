@@ -47,10 +47,12 @@ export function NewDiscussionComposer({
   projectID,
   projectName,
   openToken,
+  embedded = false,
 }: {
   projectID: string;
   projectName: string;
   openToken: number;
+  embedded?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -129,7 +131,7 @@ export function NewDiscussionComposer({
     }
   }
 
-  if (!expanded) {
+  if (!expanded && !embedded) {
     return (
       <button
         type="button"
@@ -146,12 +148,12 @@ export function NewDiscussionComposer({
   }
 
   return (
-    <section className="fixed right-3 bottom-3 left-3 z-20 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl sm:right-6 sm:bottom-6 sm:left-auto sm:w-[min(520px,calc(100vw-3rem))]">
+    <section className={embedded ? "w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm focus-within:border-sky-300" : "fixed right-3 bottom-3 left-3 z-20 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl sm:right-6 sm:bottom-6 sm:left-auto sm:w-[min(520px,calc(100vw-3rem))]"}>
       <header className="mb-2 flex items-center justify-between gap-3 px-1">
         <p className="min-w-0 truncate text-xs font-semibold text-slate-500">
           {t("新讨论")} · {projectName}
         </p>
-        {!pending && !content.trim() && (
+        {!embedded && !pending && !content.trim() && (
           <button
             type="button"
             title={t("收起")}
@@ -173,7 +175,7 @@ export function NewDiscussionComposer({
       )}
       <textarea
         ref={input}
-        rows={expanded ? 3 : 1}
+        rows={expanded || embedded ? 3 : 1}
         value={pending?.content ?? content}
         readOnly={Boolean(pending)}
         onChange={(event) => setContent(event.target.value)}

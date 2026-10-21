@@ -32,6 +32,7 @@ import {
 } from "../../shared/ui/components";
 import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
+import { WorkbenchLayout } from "../workbench/WorkbenchLayout";
 import { MCPSettings, NexusSettings } from "./ConnectionsSettings";
 import type { Project } from "../../shared/api/types";
 
@@ -69,6 +70,13 @@ export default function SettingsPage({ role }: { role: string }) {
   const tab = location.pathname.split("/")[2] || "general";
   const current = menus.flatMap((g) => g.items).find((x) => x.id === tab);
   const me = useQuery({ queryKey: keys.me, queryFn: api.me });
+  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
+  const projectID = projects.data?.[0]?.id || "";
+  const cards = useQuery({
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
+    enabled: Boolean(projectID),
+  });
   const isOwner = role === "owner";
   const logout = useMutation({
     mutationFn: api.logout,
@@ -79,23 +87,21 @@ export default function SettingsPage({ role }: { role: string }) {
     onError: (e) => toast.error(String(e)),
   });
   return (
-    <main className="mx-auto max-w-6xl px-4 py-9 sm:px-8">
-      <div className="mb-8">
-        <p className="text-xs font-semibold tracking-widest text-sky-700">
-          PREFERENCES
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold text-slate-900">
+    <WorkbenchLayout mode="work" projectID={projectID} cards={cards.data || []}>
+    <main className="mx-auto w-full min-w-0 max-w-6xl overflow-x-hidden px-4 py-7 sm:px-8 sm:py-8">
+      <div className="mb-6 pl-11 lg:pl-0">
+        <h1 className="text-[22px] font-semibold tracking-tight text-slate-900">
           {t("设置")}
         </h1>
       </div>
-      <div className="grid gap-6 md:grid-cols-[208px_minmax(0,1fr)]">
+      <div className="space-y-6">
         <nav
           aria-label={t("设置")}
-          className="flex gap-2 overflow-x-auto md:flex-col md:gap-5"
+          className="scrollbar-thin flex max-w-full gap-1 overflow-x-auto border-b border-slate-200 pb-2"
         >
           {menus.map((group) => (
-            <div key={group.group} className="flex shrink-0 gap-1 md:block">
-              <p className="hidden px-3 pb-2 text-xs font-semibold text-slate-400 md:block">
+            <div key={group.group} className="flex shrink-0 gap-1">
+              <p className="sr-only">
                 {t(group.group)}
               </p>
               {group.items.map((item) => (
@@ -103,10 +109,10 @@ export default function SettingsPage({ role }: { role: string }) {
                   to={"/settings/" + item.id}
                   key={item.id}
                   className={({ isActive }) =>
-                    `flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm transition md:mb-1 ${isActive ? "bg-white font-semibold text-sky-700 shadow-sm" : "text-slate-500 hover:bg-white hover:text-slate-900"}`
+                    `flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs transition-colors ${isActive ? "bg-white font-medium text-sky-700 ring-1 ring-slate-200" : "text-slate-500 hover:bg-white hover:text-slate-900"}`
                   }
                 >
-                  <item.icon className="size-4" />
+                  <item.icon className="size-3.5" />
                   {t(item.title)}
                 </NavLink>
               ))}
@@ -115,7 +121,7 @@ export default function SettingsPage({ role }: { role: string }) {
         </nav>
         <div className="min-w-0 space-y-5">
           <div className="mb-5 border-b border-slate-200 pb-4">
-            <h2 className="text-xl font-semibold">
+            <h2 className="text-base font-semibold">
               {t(current?.title || "常规")}
             </h2>
           </div>
@@ -126,11 +132,11 @@ export default function SettingsPage({ role }: { role: string }) {
                 "选择界面语言与颜色模式，偏好仅保存在当前浏览器。",
               )}
             >
-              <div className="space-y-5 text-sm">
+              <div className="space-y-4 text-[13px]">
                 <Field label={t("界面语言")}>
                   <select
                     aria-label={t("界面语言")}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
                     value={i18n.resolvedLanguage === "en" ? "en" : "zh"}
                     onChange={(event) =>
                       setLanguage(event.target.value as Language)
@@ -143,7 +149,7 @@ export default function SettingsPage({ role }: { role: string }) {
                 <Field label={t("外观")}>
                   <select
                     aria-label={t("外观")}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
                     value={theme}
                     onChange={(event) =>
                       changeTheme(event.target.value as Theme)
@@ -217,6 +223,7 @@ export default function SettingsPage({ role }: { role: string }) {
         </div>
       </div>
     </main>
+    </WorkbenchLayout>
   );
 }
 function ProjectSettings() {
@@ -282,7 +289,7 @@ function ProjectForm({
           <select
             value={project.id}
             onChange={(e) => onSelect(e.target.value)}
-            className="w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm"
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
           >
             {projects.map((p) => (
               <option value={p.id} key={p.id}>

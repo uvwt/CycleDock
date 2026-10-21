@@ -24,7 +24,7 @@ export function Button({
   return (
     <button
       {...props}
-      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition-colors disabled:opacity-40 ${variants[variant]} ${className}`}
+      className={`inline-flex min-h-8.5 items-center justify-center gap-2 rounded-lg border px-3 text-[13px] font-medium transition-colors disabled:opacity-40 ${variants[variant]} ${className}`}
     >
       {children}
     </button>
@@ -34,7 +34,7 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-sky-500 ${props.className ?? ""}`}
+      className={`w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
     />
   );
 }
@@ -42,7 +42,7 @@ export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
-      className={`w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-sky-500 ${props.className ?? ""}`}
+      className={`w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
     />
   );
 }
@@ -86,7 +86,7 @@ export function ErrorView({
   return (
     <div
       role="alert"
-      className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700"
+      className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
     >
       <AlertCircle className="mb-2 size-5" />
       {error instanceof Error ? error.message : "操作未成功，请稍后重试"}
@@ -117,14 +117,14 @@ export function Sheet({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
         <Dialog.Content
           aria-describedby={undefined}
-          className={`fixed inset-y-0 z-50 flex w-[min(94vw,440px)] flex-col bg-white shadow-2xl ${side === "right" ? "right-0" : "left-0"}`}
+          className={`fixed inset-y-0 z-50 flex w-[min(94vw,440px)] flex-col bg-white shadow-xl ${side === "right" ? "right-0" : "left-0"}`}
         >
           <header className="flex min-h-17 items-center justify-between border-b border-slate-100 px-5 py-4">
             <Dialog.Title className="text-base font-semibold">
               {title}
             </Dialog.Title>
             <Dialog.Close
-              className="rounded-xl p-2 hover:bg-slate-100"
+              className="rounded-lg p-2 hover:bg-slate-100"
               aria-label="关闭"
             >
               <X className="size-5" />
@@ -148,11 +148,11 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+    <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
       <div className="mb-5">
-        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        <h2 className="text-[15px] font-semibold text-slate-900">{title}</h2>
         {description && (
-          <p className="mt-1 text-sm text-slate-500">{description}</p>
+          <p className="mt-1 text-[13px] leading-5 text-slate-500">{description}</p>
         )}
       </div>
       {children}

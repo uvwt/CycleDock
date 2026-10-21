@@ -273,7 +273,7 @@ export function ModelsSettings() {
                   onChange={(e) =>
                     setDraft({ ...draft, model: e.target.value })
                   }
-                  className="w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
                 >
                   <option value="">选择模型</option>
                   {modelQuery.data.map((m) => (

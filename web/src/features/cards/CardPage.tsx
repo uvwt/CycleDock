@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, PanelRight } from "lucide-react";
+import { ArrowLeft, CircleAlert, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -10,28 +10,10 @@ import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import { ConversationView } from "../timeline/ConversationView";
 import { CardDetails } from "./CardDetails";
+import { CardStatusSwitch } from "./CardStatusSwitch";
 import { ConversationComposer } from "./ConversationComposer";
 import { WorkbenchLayout } from "../workbench/WorkbenchLayout";
-import { WorkSummary } from "./WorkSummary";
 import type { Card } from "../../shared/api/types";
-
-function useElapsed(startedAt?: string, active = false) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const handle = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(handle);
-  }, [active]);
-  if (!startedAt) return null;
-  if (!now) return 0;
-  return Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
-}
-
-function prettyTime(seconds: number | null) {
-  return seconds === null
-    ? "—"
-    : Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
-}
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -56,7 +38,27 @@ function CardPageContent() {
     enabled: Boolean(card && actualProjectID),
   });
 
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [relatedOpen, setRelatedOpen] = useState(false);
+  const [taskInfoOpen, setTaskInfoOpen] = useState(false);
+  const taskInfoRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!taskInfoOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (event.target instanceof Node && !taskInfoRef.current?.contains(event.target)) {
+        setTaskInfoOpen(false);
+      }
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setTaskInfoOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [taskInfoOpen]);
   const [comment, setComment] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [submitMode, setSubmitMode] = useState<"enqueue" | "interrupt">(
@@ -81,10 +83,6 @@ function CardPageContent() {
   const hasCurrent =
     Boolean(current) &&
     ["queued", "running", "waiting_human"].includes(current?.status || "");
-  const elapsed = useElapsed(
-    current?.started_at,
-    current?.status === "running",
-  );
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
   );
@@ -162,7 +160,7 @@ function CardPageContent() {
   }
 
   function back() {
-    navigate("/board/" + actualProjectID);
+    navigate(isDiscussion ? "/chat?project=" + encodeURIComponent(actualProjectID) : "/board/" + actualProjectID);
   }
 
   function openDiscussion(item: Card) {
@@ -171,7 +169,7 @@ function CardPageContent() {
 
   if (detail.isPending) {
     return (
-      <main className="grid h-[calc(100dvh-3.5rem)] place-items-center bg-white">
+      <main className="grid h-dvh place-items-center bg-white">
         <Spinner text={t("正在加载会话…")} />
       </main>
     );
@@ -179,7 +177,7 @@ function CardPageContent() {
 
   if (detail.error || !detail.data || !card) {
     return (
-      <main className="h-[calc(100dvh-3.5rem)] bg-white">
+      <main className="h-dvh bg-white">
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
             error={detail.error}
@@ -192,7 +190,7 @@ function CardPageContent() {
 
   if (projectCards.error) {
     return (
-      <main className="h-[calc(100dvh-3.5rem)] bg-white">
+      <main className="h-dvh bg-white">
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
             error={projectCards.error}
@@ -206,20 +204,25 @@ function CardPageContent() {
   const allCards = projectCards.data || [];
   const activeDiscussionID =
     card.kind === "discussion" ? card.id : card.source_discussion_id;
+  const relatedCards = isDiscussion
+    ? allCards.filter((item) => item.source_discussion_id === card.id)
+    : [];
 
   return (
     <WorkbenchLayout
+      mode={isDiscussion ? "discussion" : "work"}
+      projectID={actualProjectID}
       cards={allCards}
       activeDiscussionID={activeDiscussionID}
       onSelectDiscussion={openDiscussion}
       onCreateDiscussion={() =>
-        navigate("/board/" + actualProjectID + "?newDiscussion=1")
+        navigate("/chat?project=" + encodeURIComponent(actualProjectID) + "&newDiscussion=1")
       }
       fill
     >
       <main className="h-full min-h-0 bg-white">
         <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-100 pr-3 pl-12 sm:pr-4">
+          <header className="relative z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-100 pr-3 pl-12 sm:pr-4">
             <div className="flex min-w-0 items-center gap-2">
               <button
                 type="button"
@@ -230,61 +233,66 @@ function CardPageContent() {
               >
                 <ArrowLeft className="size-5" />
               </button>
-              <div className="min-w-0">
-                <h1 className="truncate text-sm font-semibold text-slate-900 sm:text-base">
-                  {card.title || t("新讨论")}
-                </h1>
-                <p className="mt-0.5 truncate text-[11px] text-slate-400">
-                  {card.kind === "discussion"
-                    ? "Discussion"
-                    : card.kind === "todo"
-                      ? "Todo"
-                      : "Ongoing"}
-                  {" · "}
-                  {card.kind === "discussion"
-                    ? card.discussion_state
-                    : card.todo_state || card.ongoing_state}
-                </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="min-w-0">
+                  <h1 className="truncate text-[15px] font-semibold text-slate-900 sm:text-base">
+                    {card.title || t("新讨论")}
+                  </h1>
+                  {isDiscussion && (
+                    <p className="mt-0.5 truncate text-xs text-slate-400">
+                      Discussion · {card.discussion_state}
+                    </p>
+                  )}
+                </div>
+                {!isDiscussion && <CardStatusSwitch card={card} />}
               </div>
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              {current && (
-                <span
-                  role="status"
-                  className="inline-flex max-w-28 items-center gap-1.5 truncate rounded-full bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500 sm:max-w-none sm:px-3 sm:text-xs"
+              {isDiscussion && relatedCards.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRelatedOpen(true)}
+                  className="inline-flex max-w-36 items-center gap-1.5 rounded-xl border border-slate-200 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-50 sm:max-w-none"
                 >
-                  {current.status === "running" && (
-                    <span className="live-dot size-1.5 rounded-full bg-sky-500" />
-                  )}
-                  {current.status === "queued"
-                    ? t("排队中")
-                    : current.status === "waiting_human"
-                      ? t("等待回复")
-                      : current.status === "running"
-                        ? t("运行中")
-                        : current.status}
-                  {current.status === "running" && (
-                    <span className="hidden sm:inline">
-                      {" · "}
-                      {prettyTime(elapsed)}
-                    </span>
-                  )}
-                </span>
+                  <Link2 className="size-3.5 shrink-0" />
+                  <span>{t("关联工作")} {relatedCards.length}</span>
+                </button>
               )}
-              <button
-                type="button"
-                className="grid size-9 place-items-center rounded-xl text-slate-500 hover:bg-slate-100"
-                title={t("任务信息")}
-                aria-label={t("任务信息")}
-                onClick={() => setDetailsOpen(true)}
-              >
-                <PanelRight className="size-5" />
-              </button>
+              <div ref={taskInfoRef} className="relative shrink-0">
+                  <button
+                    type="button"
+                    title={isDiscussion ? "讨论信息" : t("任务信息")}
+                    aria-label={isDiscussion ? "讨论信息" : t("任务信息")}
+                    aria-expanded={taskInfoOpen}
+                    aria-haspopup="dialog"
+                    onClick={() => setTaskInfoOpen((open) => !open)}
+                    className={`grid size-9 place-items-center rounded-xl text-slate-500 hover:bg-slate-100 ${taskInfoOpen ? "bg-slate-100 text-slate-800" : ""}`}
+                  >
+                    <CircleAlert className="size-[19px]" />
+                  </button>
+                  {taskInfoOpen && (
+                    <div
+                      role="dialog"
+                      aria-label={isDiscussion ? "讨论信息" : t("任务信息")}
+                      className={`absolute top-11 right-0 z-50 w-[min(20rem,calc(100vw-1.5rem))] rounded-xl border border-slate-200 bg-white p-4 shadow-md ${
+                        isDiscussion
+                          ? "overflow-visible"
+                          : "max-h-[min(75dvh,680px)] overflow-y-auto"
+                      }`}
+                    >
+                      <CardDetails
+                        key={card.id}
+                        detail={detail.data}
+                        projectCards={allCards}
+                        onDeleted={back}
+                        compact
+                      />
+                    </div>
+                  )}
+                </div>
             </div>
           </header>
-
-          <WorkSummary detail={detail.data} projectCards={allCards} />
 
           <ConversationView
             events={detail.data.timeline}
@@ -341,18 +349,22 @@ function CardPageContent() {
         </section>
       </main>
 
-      <Sheet
-        open={detailsOpen}
-        onOpenChange={setDetailsOpen}
-        title={t("任务信息")}
-      >
-        <CardDetails
-          key={card.id}
-          detail={detail.data}
-          projectCards={allCards}
-          onDeleted={back}
-        />
+      <Sheet open={relatedOpen} onOpenChange={setRelatedOpen} title={t("关联工作")}>
+        <div className="space-y-2">
+          {relatedCards.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => navigate("/cards/" + item.project_id + "/" + item.id)}
+              className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left text-sm hover:border-sky-300"
+            >
+              <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
+              <span className="shrink-0 text-xs text-slate-500">{item.todo_state || item.ongoing_state}</span>
+            </button>
+          ))}
+        </div>
       </Sheet>
+
     </WorkbenchLayout>
   );
 }

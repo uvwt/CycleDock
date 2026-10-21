@@ -54,7 +54,7 @@ function Authenticated() {
       </main>
     );
   return (
-    <Shell identity={me.data}>
+    <Shell>
       <Suspense
         fallback={
           <div className="grid min-h-[50vh] place-items-center">

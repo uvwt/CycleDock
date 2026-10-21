@@ -81,6 +81,12 @@ export function useTheme(): [Theme, (next: Theme) => void] {
 const en = {
   聊天: "Chat",
   看板: "Board",
+  讨论: "Discussion",
+  工作: "Work",
+  工作视图: "Work views",
+  全部工作: "All work",
+  待我审核: "Needs my review",
+  打开导航: "Open navigation",
   设置: "Settings",
   导航抽屉: "Navigation menu",
   退出登录: "Sign out",
