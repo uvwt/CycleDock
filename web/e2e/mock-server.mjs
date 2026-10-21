@@ -404,7 +404,15 @@ http
             return data(res, item);
           }
         }
-        if (route === "/agent/provider-test" || route === "/agent/mcp-test")
+        if (route === "/agent/mcp-test") {
+          const input = await body(req);
+          // Match Go decodeJSON's strict contract; passing MCP.enabled would fail in production.
+          const allowed = ["name", "url", "bearer_token_env", "timeout_ms"];
+          if (Object.keys(input).some((key) => !allowed.includes(key)))
+            return data(res, { error: { code: "invalid_json", message: "unexpected MCP test field" } }, 400);
+          return data(res, { ok: true, code: "ok", message: "测试连接成功", duration_ms: 52, tool_count: 2 });
+        }
+        if (route === "/agent/provider-test")
           return data(res, {
             ok: true,
             code: "ok",
