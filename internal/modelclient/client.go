@@ -35,6 +35,8 @@ type Config struct {
 	Temperature float64
 	Transport   Transport
 	Headers     map[string]string
+	// OnTextDelta forwards text to the ephemeral browser stream; never store raw tool traces.
+	OnTextDelta func(string)
 }
 
 type Message struct {
@@ -126,7 +128,7 @@ func (c *Client) Complete(
 		Stream      bool             `json:"stream"`
 	}{
 		Model: strings.TrimSpace(config.Model), Messages: messages,
-		Tools: tools, Temperature: config.Temperature, Stream: false,
+		Tools: tools, Temperature: config.Temperature, Stream: config.OnTextDelta != nil,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -139,7 +141,11 @@ func (c *Client) Complete(
 		return Completion{}, fmt.Errorf("create model request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
+	if config.OnTextDelta != nil {
+		request.Header.Set("Accept", "text/event-stream")
+	} else {
+		request.Header.Set("Accept", "application/json")
+	}
 	if config.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+config.APIKey)
 	}
@@ -150,6 +156,9 @@ func (c *Client) Complete(
 	}
 	defer response.Body.Close()
 
+	if config.OnTextDelta != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+		return readChatStream(response.Body, config.OnTextDelta)
+	}
 	responseBody, err := readBounded(response.Body, response.ContentLength, maxResponseBytes)
 	if err != nil {
 		return Completion{}, err

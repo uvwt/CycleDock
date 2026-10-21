@@ -22,6 +22,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -96,6 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 	modelClient := modelclient.New()
+	live := realtime.NewHub()
 
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
@@ -117,6 +119,7 @@ func main() {
 		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
 		ModelAuth:    modelAuthService,
 		ModelClient:  modelClient,
+		Live:         live,
 	})
 
 	server := &http.Server{
@@ -130,6 +133,7 @@ func main() {
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
 		ModelAuth: modelAuthService,
 		NexusDock: nexusDockService,
+		Live:      live,
 	})
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

@@ -26,7 +26,8 @@ Project 即 Board，不存在独立 Board API。
 
 ## Card
 
-- `GET /api/v1/cards/{cardID}`：返回 Card、current Run、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。
+- `GET /api/v1/cards/{cardID}`：返回 Card、current Run（包括运行起止时间）、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。
+- `GET /api/v1/cards/{cardID}/stream`：Human Session 认证的 SSE，按 Card/Workspace 权限隔离。推送 run.started / run.stage / run.text.delta / run.finished / run.failed / event.created；模型增量是短暂状态，永久历史仍以 Timeline REST 为准。SSE 断线后重新拉取 Card，服务端单实例 Hub 支持在途流快照；提交新的任务不会从 SSE 发起。
 - `PATCH /api/v1/cards/{cardID}`
 - `POST /api/v1/cards/{cardID}/move`：仅 Todo 状态移动。
 - `POST /api/v1/cards/{cardID}/discussion-state`：当前只允许 Human 将 Discussion 归档。

@@ -22,6 +22,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
 
 	r.Get("/cards/{cardID}", api.getCard)
+	r.Get("/cards/{cardID}/stream", api.streamCard)
 	r.Patch("/cards/{cardID}", api.updateCard)
 	r.Post("/cards/{cardID}/move", api.moveCard)
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
@@ -84,13 +85,15 @@ type cardResponse struct {
 }
 
 type runResponse struct {
-	ID              string    `json:"id"`
-	Status          string    `json:"status"`
-	CurrentStage    string    `json:"current_stage,omitempty"`
-	ProgressSummary string    `json:"progress_summary,omitempty"`
-	ResultSummary   string    `json:"result_summary,omitempty"`
-	ErrorSummary    string    `json:"error_summary,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              string     `json:"id"`
+	Status          string     `json:"status"`
+	CurrentStage    string     `json:"current_stage,omitempty"`
+	ProgressSummary string     `json:"progress_summary,omitempty"`
+	ResultSummary   string     `json:"result_summary,omitempty"`
+	ErrorSummary    string     `json:"error_summary,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
 type eventResponse struct {
@@ -844,11 +847,20 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 }
 
 func runToResponse(run db.AgentRun) runResponse {
-	return runResponse{
+	response := runResponse{
 		ID: run.ID.String(), Status: run.Status, CurrentStage: run.CurrentStage,
 		ProgressSummary: run.ProgressSummary, ResultSummary: run.ResultSummary,
 		ErrorSummary: run.ErrorSummary, CreatedAt: run.CreatedAt.Time,
 	}
+	if run.StartedAt.Valid {
+		start := run.StartedAt.Time
+		response.StartedAt = &start
+	}
+	if run.FinishedAt.Valid {
+		finish := run.FinishedAt.Time
+		response.FinishedAt = &finish
+	}
+	return response
 }
 
 func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
