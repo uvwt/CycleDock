@@ -13,12 +13,14 @@ import { ErrorView, Spinner } from "../shared/ui/components";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 const ChatHome = lazy(() => import("../features/chat/ChatHome"));
 const BoardPage = lazy(() => import("../features/board/BoardPage"));
 const CardPage = lazy(() => import("../features/cards/CardPage"));
 const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
 
 function Authenticated() {
+  const { t } = useTranslation();
   const me = useQuery({ queryKey: keys.me, queryFn: api.me, retry: false });
   const location = useLocation();
   const navigate = useNavigate();
@@ -40,7 +42,7 @@ function Authenticated() {
   if (me.isPending)
     return (
       <main className="grid min-h-screen place-items-center">
-        <Spinner text="正在验证会话…" />
+        <Spinner text={t("正在验证会话…")} />
       </main>
     );
   if (me.error instanceof APIError && me.error.status === 401)

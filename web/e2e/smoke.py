@@ -81,5 +81,27 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 390)
 
 
+    def test_persistent_language_and_theme(self):
+        self.page.goto(BASE + "/settings/general")
+        self.page.get_by_role("combobox", name="界面语言").select_option("en")
+        self.page.get_by_role("heading", name="Settings", exact=True).wait_for()
+        self.page.get_by_role("link", name="Model providers").wait_for()
+        self.page.get_by_role("combobox", name="Appearance").select_option("dark")
+        self.assertEqual(self.page.evaluate("document.documentElement.dataset.theme"), "dark")
+        surface = self.page.locator(".bg-slate-50").first.evaluate(
+            "(element) => getComputedStyle(element).backgroundColor"
+        )
+        self.assertNotEqual(surface, "rgb(248, 250, 252)")
+        self.page.reload()
+        self.page.get_by_role("heading", name="Settings", exact=True).wait_for()
+        self.assertEqual(self.page.get_by_role("combobox", name="Appearance").input_value(), "dark")
+        self.assertEqual(self.page.get_by_role("combobox", name="Language").input_value(), "en")
+        self.assertEqual(self.page.evaluate("document.documentElement.lang"), "en")
+        self.page.get_by_role("link", name="Chat", exact=True).click()
+        self.page.get_by_role("heading", name="Chat", exact=True).wait_for()
+        self.page.get_by_role("button", name="New discussion").wait_for()
+        self.assertEqual(self.page.evaluate("document.documentElement.dataset.theme"), "dark")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

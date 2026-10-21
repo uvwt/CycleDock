@@ -6,6 +6,13 @@ import { Toaster } from "sonner";
 import { queryClient } from "./app/query";
 import { App } from "./app/App";
 import "./index.css";
+import {
+  initializeLanguage,
+  initializePreferences,
+} from "./shared/preferences";
+
+initializeLanguage();
+initializePreferences();
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

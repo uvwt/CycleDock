@@ -3,6 +3,8 @@ import { ArrowDown, Bot, Copy, Check } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatDistanceToNow } from "date-fns";
+import { useTranslation } from "react-i18next";
+import { enUS, zhCN } from "date-fns/locale";
 import type { TimelineEvent } from "../../shared/api/types";
 import type { LiveRun } from "../../shared/realtime/useCardStream";
 import { Button } from "../../shared/ui/components";
@@ -22,6 +24,7 @@ const labels: Record<string, string> = {
   reject: "驳回",
 };
 function RichText({ content }: { content: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   return (
     <div className="prose-chat text-sm text-slate-700">
@@ -31,8 +34,8 @@ function RichText({ content }: { content: string }) {
           pre: ({ children }) => (
             <div className="relative">
               <button
-                title="复制代码"
-                aria-label="复制代码"
+                title={t("复制代码")}
+                aria-label={t("复制代码")}
                 onClick={async (e) => {
                   const code =
                     e.currentTarget.parentElement?.querySelector("code")
@@ -60,6 +63,7 @@ function RichText({ content }: { content: string }) {
   );
 }
 function EventRow({ event }: { event: TimelineEvent }) {
+  const { t, i18n } = useTranslation();
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
   if (system)
@@ -68,7 +72,7 @@ function EventRow({ event }: { event: TimelineEvent }) {
         <span
           className={`max-w-[90%] rounded-full px-3 py-1 text-center text-xs ${event.type === "reject" ? "bg-rose-50 text-rose-700" : event.type === "confirm" ? "bg-amber-50 text-amber-700" : "text-slate-400"}`}
         >
-          {labels[event.type] || event.type} · {event.content}
+          {t(labels[event.type] || event.type)} · {event.content}
           {event.checkin_status ? ` · ${event.checkin_status}` : ""}
         </span>
       </div>
@@ -93,10 +97,10 @@ function EventRow({ event }: { event: TimelineEvent }) {
           <p className="mb-1 text-xs font-semibold text-slate-500">
             {event.actor_name || "Cycle Agent"}
             {event.type === "finding" && (
-              <span className="ml-2 text-sky-700">发现</span>
+              <span className="ml-2 text-sky-700">{t("发现")}</span>
             )}
             {event.type === "result" && (
-              <span className="ml-2 text-emerald-700">结果</span>
+              <span className="ml-2 text-emerald-700">{t("结果")}</span>
             )}
           </p>
         )}
@@ -105,13 +109,17 @@ function EventRow({ event }: { event: TimelineEvent }) {
           className="mt-1 text-[11px] text-slate-400"
           title={new Date(event.created_at).toLocaleString()}
         >
-          {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
+          {formatDistanceToNow(new Date(event.created_at), {
+            addSuffix: true,
+            locale: i18n.language === "en" ? enUS : zhCN,
+          })}
         </p>
       </div>
     </article>
   );
 }
 function LiveMessage({ live }: { live: LiveRun | null }) {
+  const { t } = useTranslation();
   if (!live) return null;
   return (
     <div className="flex gap-3">
@@ -120,13 +128,13 @@ function LiveMessage({ live }: { live: LiveRun | null }) {
       </span>
       <div className="min-w-0 max-w-[min(85%,740px)]">
         <p className="mb-2 text-xs font-semibold text-slate-500">
-          Cycle Agent · {live.stage || "正在执行"}
+          Cycle Agent · {live.stage || t("正在执行")}
         </p>
         {live.text ? (
           <RichText content={live.text} />
         ) : (
           <div
-            aria-label="Agent 正在工作"
+            aria-label={t("Agent 正在工作")}
             className="flex h-7 items-center gap-1"
           >
             <span className="live-dot size-1.5 rounded-full bg-slate-500" />
@@ -147,6 +155,7 @@ export function ConversationView({
   live: LiveRun | null;
   cardKind: string;
 }) {
+  const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -167,7 +176,7 @@ export function ConversationView({
       onScroll={onScroll}
       className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-4 py-7 sm:px-6"
       role="log"
-      aria-label="统一消息时间线"
+      aria-label={t("统一消息时间线")}
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-5">
         {!events.length && !live && (
@@ -176,10 +185,10 @@ export function ConversationView({
               <Bot className="size-8" />
             </div>
             <h2 className="text-lg font-semibold">
-              {cardKind === "discussion" ? "从第一句话开始" : "开始协作"}
+              {cardKind === "discussion" ? t("从第一句话开始") : t("开始协作")}
             </h2>
             <p className="mt-2 text-sm text-slate-500">
-              你的消息、Agent 结果和任务状态都会出现在这里。
+              {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
             </p>
           </div>
         )}
@@ -204,7 +213,7 @@ export function ConversationView({
             }}
           >
             <ArrowDown className="size-4" />
-            跳到最新
+            {t("跳到最新")}
           </Button>
         </div>
       )}

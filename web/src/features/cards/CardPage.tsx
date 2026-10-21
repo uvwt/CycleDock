@@ -11,6 +11,7 @@ import {
   Square,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
@@ -41,6 +42,7 @@ function prettyTime(seconds: number | null) {
     : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 export default function CardPage() {
+  const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
   const detail = useQuery({
@@ -83,7 +85,7 @@ export default function CardPage() {
       setSubmitMode("enqueue");
       await sync();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "发送失败"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("发送失败")),
   });
   const generate = useMutation({
     mutationFn: () =>
@@ -93,7 +95,7 @@ export default function CardPage() {
         "enqueue",
       ),
     onSuccess: () => {
-      toast.success("已提交生成任务指令");
+      toast.success(t("生成任务指令已提交"));
       void sync();
     },
     onError: (e) => toast.error(String(e)),
@@ -115,7 +117,7 @@ export default function CardPage() {
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <button
-            aria-label="返回"
+            aria-label={t("返回")}
             onClick={back}
             className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
           >
@@ -123,7 +125,7 @@ export default function CardPage() {
           </button>
           <div className="min-w-0">
             <h1 className="max-w-[55vw] truncate text-sm font-semibold text-slate-900 md:text-base">
-              {card?.title || "新讨论"}
+              {card?.title || t("新讨论")}
             </h1>
             <p className="mt-0.5 text-xs text-slate-400">
               {isDiscussion
@@ -148,11 +150,11 @@ export default function CardPage() {
                 <span className="live-dot size-1.5 rounded-full bg-sky-500" />
               )}
               {current.status === "queued"
-                ? "排队中"
+                ? t("排队中")
                 : current.status === "waiting_human"
-                  ? "等待回复"
+                  ? t("等待回复")
                   : current.status === "running"
-                    ? "运行中"
+                    ? t("运行中")
                     : current.status}
               {current.status === "running" && (
                 <span> · {prettyTime(elapsed)}</span>
@@ -161,8 +163,8 @@ export default function CardPage() {
           )}
           <button
             className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
-            title="任务详情"
-            aria-label="任务详情"
+            title={t("任务详情")}
+            aria-label={t("任务详情")}
             onClick={() => setDrawer(true)}
           >
             <PanelRight className="size-5" />
@@ -171,7 +173,7 @@ export default function CardPage() {
       </div>
       {detail.isPending ? (
         <div className="grid flex-1 place-items-center">
-          <Spinner text="正在加载会话…" />
+          <Spinner text={t("正在加载会话…")} />
         </div>
       ) : detail.error || !detail.data ? (
         <div className="mx-auto mt-12 w-full max-w-xl p-5">
@@ -197,13 +199,13 @@ export default function CardPage() {
                     onClick={() => generate.mutate()}
                   >
                     <Sparkles className="size-4 text-sky-700" />
-                    生成任务
+                    {t("生成任务")}
                   </Button>
                 </div>
               )}
               {blocked && (
                 <p className="text-center text-xs text-slate-400">
-                  此讨论已归档，不能继续发送消息
+                  {t("此讨论已归档，不能继续发送消息")}
                 </p>
               )}
               <form
@@ -219,10 +221,10 @@ export default function CardPage() {
                   readOnly={!!blocked}
                   placeholder={
                     blocked
-                      ? "讨论已归档"
+                      ? t("讨论已归档")
                       : waiting
-                        ? "回复 Agent，继续执行…"
-                        : "发送消息，继续推进任务…"
+                        ? t("回复 Agent，继续执行…")
+                        : t("发送消息，继续推进任务…")
                   }
                   rows={2}
                   className="max-h-40 min-h-16 resize-none border-0 bg-transparent shadow-none focus:border-0"
@@ -241,7 +243,7 @@ export default function CardPage() {
                   <div className="flex items-center gap-2">
                     {hasCurrent && !waiting && (
                       <select
-                        aria-label="任务发送方式"
+                        aria-label={t("任务发送方式")}
                         value={submitMode}
                         onChange={(e) =>
                           setSubmitMode(
@@ -250,13 +252,13 @@ export default function CardPage() {
                         }
                         className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-600"
                       >
-                        <option value="enqueue">加入队列</option>
-                        <option value="interrupt">立即转向</option>
+                        <option value="enqueue">{t("加入队列")}</option>
+                        <option value="interrupt">{t("立即转向")}</option>
                       </select>
                     )}
                     {waiting && (
                       <span className="text-xs text-amber-600">
-                        等待人工回复
+                        {t("等待人工回复")}
                       </span>
                     )}
                     {!stream.connected && (
@@ -264,7 +266,7 @@ export default function CardPage() {
                         title={stream.lastError}
                         className="text-[11px] text-slate-400"
                       >
-                        正在连接实时通道…
+                        {t("正在连接实时通道…")}
                       </span>
                     )}
                   </div>
@@ -273,7 +275,7 @@ export default function CardPage() {
                       <Button
                         type="button"
                         variant="ghost"
-                        title="取消执行"
+                        title={t("取消执行")}
                         onClick={() => cancel.mutate()}
                         disabled={cancel.isPending}
                       >
@@ -295,23 +297,23 @@ export default function CardPage() {
                         <ArrowUp className="size-4" />
                       )}
                       {waiting
-                        ? "回复并继续"
+                        ? t("回复并继续")
                         : submitMode === "interrupt"
-                          ? "立即转向"
-                          : "发送"}
+                          ? t("立即转向")
+                          : t("发送")}
                     </Button>
                   </div>
                 </div>
               </form>
               <p className="text-center text-[11px] text-slate-400">
                 CycleDock
-                保存重要事件与结果，不保存模型内部思维链或原始工具记录。
+                {t("保存重要事件与结果，不保存模型内部思维链或原始工具记录。")}
               </p>
             </div>
           </div>
         </>
       )}
-      <Sheet open={drawer} onOpenChange={setDrawer} title="任务详情">
+      <Sheet open={drawer} onOpenChange={setDrawer} title={t("任务详情")}>
         {detail.data ? (
           <CardDetails
             key={detail.data.card.id}

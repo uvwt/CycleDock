@@ -20,6 +20,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import {
@@ -50,6 +51,7 @@ function Lane({
   cards: Card[];
   onOpen: (card: Card) => void;
 }) {
+  const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({ id: state });
   return (
     <section
@@ -58,7 +60,7 @@ function Lane({
     >
       <header className="mb-4 flex items-center justify-between px-1">
         <h2 className="text-sm font-semibold text-slate-700">
-          {labels[state]}
+          {t(labels[state])}
         </h2>
         <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-500">
           {cards.length}
@@ -70,7 +72,7 @@ function Lane({
         ))}
         {!cards.length && (
           <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-            没有任务
+            {t("没有任务")}
           </div>
         )}
       </div>
@@ -78,6 +80,7 @@ function Lane({
   );
 }
 function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
+  const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({ id: card.id });
   return (
@@ -94,13 +97,14 @@ function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
         {card.description}
       </p>
       <div className="mt-4 flex items-center justify-between text-[11px] text-slate-400">
-        <span>{card.current_run_status || "未运行"}</span>
+        <span>{card.current_run_status || t("未运行")}</span>
         <Clock3 className="size-3" />
       </div>
     </button>
   );
 }
 export default function BoardPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const params = useParams();
   const [picked, setPicked] = useState("");
@@ -141,7 +145,7 @@ export default function BoardPage() {
       void queryClient.invalidateQueries({
         queryKey: keys.cards(projectID || ""),
       }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : "移动失败"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("移动失败")),
   });
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -176,14 +180,16 @@ export default function BoardPage() {
           <p className="text-xs font-semibold tracking-widest text-sky-700">
             PROJECT BOARD
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">看板</h1>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            {t("看板")}
+          </h1>
           <p className="mt-1 text-sm text-slate-500">
-            查看执行状态，跟踪长期工作。
+            {t("查看执行状态，跟踪长期工作。")}
           </p>
         </div>
         <Button onClick={() => setCreating(true)}>
           <FolderPlus className="size-4" />
-          新建项目
+          {t("新建项目")}
         </Button>
       </header>
       {projects.isPending && <Spinner />}
@@ -192,7 +198,7 @@ export default function BoardPage() {
         <>
           <div className="flex items-center justify-between gap-3">
             <select
-              aria-label="切换项目"
+              aria-label={t("切换项目")}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
               value={projectID}
               onChange={(e) => {
@@ -208,7 +214,7 @@ export default function BoardPage() {
             </select>
             <Button onClick={() => navigate("/chat")}>
               <MessageSquareText className="size-4" />
-              从讨论中生成工作 <ChevronRight className="size-4" />
+              {t("从讨论中生成工作")} <ChevronRight className="size-4" />
             </Button>
           </div>
           {cards.isPending ? (
@@ -234,7 +240,7 @@ export default function BoardPage() {
               <section className="space-y-3">
                 <h2 className="flex items-center gap-2 font-semibold">
                   <Activity className="size-5 text-sky-700" />
-                  持续事项{" "}
+                  {t("持续事项")}{" "}
                   <span className="text-sm text-slate-400">
                     {cards.data?.filter((c) => c.kind === "ongoing").length}
                   </span>
@@ -263,7 +269,9 @@ export default function BoardPage() {
                       </button>
                     ))}
                   {!cards.data?.some((c) => c.kind === "ongoing") && (
-                    <p className="text-sm text-slate-400">暂无持续事项</p>
+                    <p className="text-sm text-slate-400">
+                      {t("暂无持续事项")}
+                    </p>
                   )}
                 </div>
               </section>
@@ -271,7 +279,7 @@ export default function BoardPage() {
           )}
         </>
       )}
-      <Sheet open={creating} onOpenChange={setCreating} title="新建项目">
+      <Sheet open={creating} onOpenChange={setCreating} title={t("新建项目")}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -279,14 +287,14 @@ export default function BoardPage() {
           }}
           className="space-y-5"
         >
-          <Field label="项目名称">
+          <Field label={t("项目名称")}>
             <TextInput
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </Field>
-          <Field label="项目描述">
+          <Field label={t("项目描述")}>
             <TextArea
               rows={4}
               value={description}
@@ -298,7 +306,7 @@ export default function BoardPage() {
             type="submit"
             disabled={!name.trim() || create.isPending}
           >
-            创建项目
+            {t("创建项目")}
           </Button>
         </form>
       </Sheet>

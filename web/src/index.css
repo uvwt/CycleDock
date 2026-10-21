@@ -1,4 +1,50 @@
 @import "tailwindcss";
+
+/*
+ * Tailwind utilities use CSS variables for grayscale colors.
+ * Reassign those variables for dark mode so all components, including dialogs,
+ * maintain contrast without individual ad-hoc style overrides.
+ */
+html[data-theme="dark"] {
+  --color-white: #15202e;
+  --color-slate-50: #101826;
+  --color-slate-100: #1e2b3b;
+  --color-slate-200: #334358;
+  --color-slate-300: #526176;
+  --color-slate-400: #95a3b9;
+  --color-slate-500: #a6b5ca;
+  --color-slate-600: #c8d4e3;
+  --color-slate-700: #dde6f1;
+  --color-slate-800: #e8eef6;
+  --color-slate-900: #f7f9fc;
+  --color-rose-50: #321e2c;
+  --color-rose-100: #472634;
+  --color-rose-200: #713747;
+  --color-amber-50: #332c1e;
+  --color-amber-200: #68552c;
+  color: #e8eef6;
+  background: #101826;
+}
+/* Action buttons keep white text while dark surfaces remain dark. */
+html[data-theme="dark"] .bg-sky-700.text-white {
+  color: #fff;
+}
+html[data-theme="dark"] .bg-slate-900.text-white {
+  color: #101826;
+}
+html[data-theme="dark"] .prose-chat pre {
+  background: #0b1320;
+}
+html[data-theme="dark"] .prose-chat code:not(pre code) {
+  background: #28394d;
+  border-color: #34455a;
+}
+html[data-theme="dark"] .prose-chat a {
+  color: #7dd3fc;
+}
+html[data-theme="dark"] .bg-white\/95 {
+  background-color: rgb(21 32 46 / 95%);
+}
 :root {
   font-family:
     Inter,
