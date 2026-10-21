@@ -12,6 +12,13 @@ import {
   LogOut,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
+import {
+  setLanguage,
+  useTheme,
+  type Language,
+  type Theme,
+} from "../../shared/preferences";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import {
@@ -56,6 +63,8 @@ const menus = [
   },
 ];
 export default function SettingsPage({ role }: { role: string }) {
+  const { t, i18n } = useTranslation();
+  const [theme, changeTheme] = useTheme();
   const location = useLocation();
   const tab = location.pathname.split("/")[2] || "general";
   const current = menus.flatMap((g) => g.items).find((x) => x.id === tab);
@@ -75,17 +84,19 @@ export default function SettingsPage({ role }: { role: string }) {
         <p className="text-xs font-semibold tracking-widest text-sky-700">
           PREFERENCES
         </p>
-        <h1 className="mt-2 text-3xl font-semibold text-slate-900">设置</h1>
+        <h1 className="mt-2 text-3xl font-semibold text-slate-900">
+          {t("设置")}
+        </h1>
       </div>
       <div className="grid gap-6 md:grid-cols-[208px_minmax(0,1fr)]">
         <nav
-          aria-label="设置导航"
+          aria-label={t("设置")}
           className="flex gap-2 overflow-x-auto md:flex-col md:gap-5"
         >
           {menus.map((group) => (
             <div key={group.group} className="flex shrink-0 gap-1 md:block">
               <p className="hidden px-3 pb-2 text-xs font-semibold text-slate-400 md:block">
-                {group.group}
+                {t(group.group)}
               </p>
               {group.items.map((item) => (
                 <NavLink
@@ -96,7 +107,7 @@ export default function SettingsPage({ role }: { role: string }) {
                   }
                 >
                   <item.icon className="size-4" />
-                  {item.title}
+                  {t(item.title)}
                 </NavLink>
               ))}
             </div>
@@ -105,32 +116,49 @@ export default function SettingsPage({ role }: { role: string }) {
         <div className="min-w-0 space-y-5">
           <div className="mb-5 border-b border-slate-200 pb-4">
             <h2 className="text-xl font-semibold">
-              {current?.title || "常规"}
+              {t(current?.title || "常规")}
             </h2>
           </div>
           {tab === "general" && (
             <Section
-              title="显示与偏好"
-              description="界面采用简洁的高对比度浅色主题。"
+              title={t("显示与偏好")}
+              description={t(
+                "选择界面语言与颜色模式，偏好仅保存在当前浏览器。",
+              )}
             >
-              <div className="space-y-4 text-sm">
-                <div className="flex items-center justify-between">
-                  <span>界面语言</span>
-                  <span className="text-slate-500">中文（当前默认）</span>
-                </div>
-                <div className="border-t border-slate-100" />
-                <div className="flex items-center justify-between">
-                  <span>外观</span>
-                  <span className="text-slate-500">白灰色 · 浅色</span>
-                </div>
-                <p className="text-xs text-slate-400">
-                  多语言、主题个性化切换将在完整 i18n 与主题持久化接入后开放。
-                </p>
+              <div className="space-y-5 text-sm">
+                <Field label={t("界面语言")}>
+                  <select
+                    aria-label={t("界面语言")}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+                    value={i18n.resolvedLanguage === "en" ? "en" : "zh"}
+                    onChange={(event) =>
+                      setLanguage(event.target.value as Language)
+                    }
+                  >
+                    <option value="zh">{t("简体中文")}</option>
+                    <option value="en">{t("英语")}</option>
+                  </select>
+                </Field>
+                <Field label={t("外观")}>
+                  <select
+                    aria-label={t("外观")}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+                    value={theme}
+                    onChange={(event) =>
+                      changeTheme(event.target.value as Theme)
+                    }
+                  >
+                    <option value="light">{t("浅色")}</option>
+                    <option value="dark">{t("深色")}</option>
+                    <option value="system">{t("跟随系统")}</option>
+                  </select>
+                </Field>
               </div>
             </Section>
           )}
           {tab === "account" && (
-            <Section title="账号与工作空间">
+            <Section title={t("账号与工作空间")}>
               <div className="space-y-4 text-sm">
                 {me.isPending ? (
                   <Spinner />
@@ -139,27 +167,29 @@ export default function SettingsPage({ role }: { role: string }) {
                 ) : (
                   <>
                     <div>
-                      <p className="text-xs text-slate-400">显示名称</p>
+                      <p className="text-xs text-slate-400">{t("显示名称")}</p>
                       <p className="mt-1 font-semibold">
                         {me.data?.display_name}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400">邮箱</p>
-                      <p className="mt-1">{me.data?.email || "未提供"}</p>
+                      <p className="text-xs text-slate-400">{t("邮箱")}</p>
+                      <p className="mt-1">{me.data?.email || t("未提供")}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400">工作空间</p>
+                      <p className="text-xs text-slate-400">{t("工作空间")}</p>
                       <p className="mt-1">
                         {me.data?.workspace.name} · {role}
                       </p>
                     </div>
                     <p className="text-xs text-slate-500">
-                      Hosted 身份在 NexusDock 管理；模型授权不属于登录身份。
+                      {t(
+                        "Hosted 身份在 NexusDock 管理；模型授权不属于登录身份。",
+                      )}
                     </p>
                     <Button variant="danger" onClick={() => logout.mutate()}>
                       <LogOut className="size-4" />
-                      退出登录
+                      {t("退出登录")}
                     </Button>
                   </>
                 )}
@@ -168,9 +198,9 @@ export default function SettingsPage({ role }: { role: string }) {
           )}
           {["models", "agent", "nexusdock", "mcp"].includes(tab) &&
             !isOwner && (
-              <Section title="需要所有者权限">
+              <Section title={t("需要所有者权限")}>
                 <p className="text-sm text-slate-500">
-                  这些设置只允许 Workspace owner 修改。
+                  {t("这些设置只允许 Workspace owner 修改。")}
                 </p>
               </Section>
             )}
@@ -180,8 +210,8 @@ export default function SettingsPage({ role }: { role: string }) {
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "projects" && <ProjectSettings />}
           {!current && (
-            <Section title="未找到设置页面">
-              <p className="text-slate-500">请选择左侧的设置分类。</p>
+            <Section title={t("未找到设置页面")}>
+              <p className="text-slate-500">{t("请选择左侧的设置分类。")}</p>
             </Section>
           )}
         </div>
@@ -190,6 +220,7 @@ export default function SettingsPage({ role }: { role: string }) {
   );
 }
 function ProjectSettings() {
+  const { t } = useTranslation();
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
   const [projectID, setProjectID] = useState("");
   const current =
@@ -198,8 +229,10 @@ function ProjectSettings() {
   if (projects.error) return <ErrorView error={projects.error} />;
   if (!current)
     return (
-      <Section title="项目设置">
-        <p className="text-sm text-slate-500">没有项目，请先创建项目。</p>
+      <Section title={t("项目设置")}>
+        <p className="text-sm text-slate-500">
+          {t("没有项目，请先创建项目。")}
+        </p>
       </Section>
     );
   return (
@@ -220,6 +253,7 @@ function ProjectForm({
   projects: Project[];
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(project.name),
     [description, setDescription] = useState(project.description),
     [instructions, setInstructions] = useState(project.instructions);
@@ -231,18 +265,20 @@ function ProjectForm({
         instructions: instructions.trim(),
       }),
     onSuccess: () => {
-      toast.success("项目已保存");
+      toast.success(t("项目已保存"));
       void queryClient.invalidateQueries({ queryKey: keys.projects });
     },
     onError: (e) => toast.error(String(e)),
   });
   return (
     <Section
-      title="项目设置"
-      description="Project Instructions 只作用于选中的项目，不影响整个工作空间。"
+      title={t("项目设置")}
+      description={t(
+        "Project Instructions 只作用于选中的项目，不影响整个工作空间。",
+      )}
     >
       <div className="space-y-4">
-        <Field label="选择项目">
+        <Field label={t("选择项目")}>
           <select
             value={project.id}
             onChange={(e) => onSelect(e.target.value)}
@@ -255,10 +291,10 @@ function ProjectForm({
             ))}
           </select>
         </Field>
-        <Field label="名称">
+        <Field label={t("名称")}>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="描述">
+        <Field label={t("描述")}>
           <TextArea
             rows={3}
             value={description}
@@ -270,7 +306,7 @@ function ProjectForm({
             rows={6}
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
-            placeholder="此项目的长期 Agent 工作指令"
+            placeholder={t("此项目的长期 Agent 工作指令")}
           />
         </Field>
         <Button
@@ -278,7 +314,7 @@ function ProjectForm({
           onClick={() => save.mutate()}
           disabled={!name.trim() || save.isPending}
         >
-          保存项目
+          {t("保存项目")}
         </Button>
       </div>
     </Section>

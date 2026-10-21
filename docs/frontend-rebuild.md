@@ -88,4 +88,11 @@ React + TypeScript + Vite + React Router + TanStack Query + Tailwind CSS 4。基
 2. OpenAI-compatible、ChatGPT、Grok 真实外部账号及完整模型流需要授权环境再次验证；测试夹具不代表真实模型调用。
 3. 模型流多进程部署的即时增量采用当前单实例内存 Hub；跨实例一致的实时传输需要扩展。持久 Event 用服务端每 1.5 秒检查序列变化并推送 SSE，客户端没有继续使用 15 秒轮询。
 4. i18next 双语完整覆盖、主题切换、Shiki 语法高亮、Motion 高级动效、Vitest/Playwright 完整自动化套件尚未纳入；首次开发基线先锁定已安装并可构建的依赖，避免未验证的新增 SDK。
-5. 未合并/部署。正式发布前还须验证实际 OIDC/OAuth 回调、反代 SSE 缓冲、权限隔离、断线后结果同步与移动端输入法体验。
+5. 首次开发时尚未合并/部署；现已于 2026-10-21 经 PR #7 squash 合并（7afb749），RN DEV 已部署该版本，反代 SSE 跨标签推送经过真实浏览器验证。
+
+## 9. 语言与主题偏好（后续独立 PR）
+
+- 设置 → 常规：可切换中文/English、浅色/深色/跟随系统。默认中性白灰色浅色主题；配色与语言偏好只存在浏览器 localStorage，不写入 Workspace 或用户账号。
+- 技术实现：i18next + react-i18next，Tailwind v4 颜色 CSS Variables 支持夜间模式，System 跟随媒体查询变化。另有 localStorage storage 事件同步多标签偏好。
+- 当前翻译覆盖导航、登录、Chat/Board 页面、任务页常用动作、设置导航和 Agent 设置主要操作；Model/MCP 高级配置、任务抽屉等仍含中文，不应宣传为完整双语。
+- 浏览器 E2E 新增语言切换、主题变量生效、刷新后的偏好恢复、原有页面交互回归。系统/用户实际模型文本及错误消息不自动翻译。

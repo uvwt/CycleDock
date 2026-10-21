@@ -9,12 +9,14 @@ import {
   FolderKanban,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { Button, ErrorView, Spinner } from "../../shared/ui/components";
 import type { Card } from "../../shared/api/types";
 
 export default function ChatHome() {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
   const [selected, setSelected] = useState("");
@@ -45,7 +47,7 @@ export default function ChatHome() {
       navigate(`/chat/${projectID}/${c.id}`);
     },
     onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "创建讨论失败"),
+      toast.error(e instanceof Error ? e.message : t("创建讨论失败")),
   });
   return (
     <main className="mx-auto max-w-6xl space-y-8 px-5 py-9 md:px-8">
@@ -55,10 +57,10 @@ export default function ChatHome() {
             DISCUSSIONS
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-            聊天
+            {t("聊天")}
           </h1>
           <p className="mt-2 text-sm text-slate-500">
-            从一个想法开始，与 Agent 讨论，再把方向变成任务。
+            {t("从一个想法开始，与 Agent 讨论，再把方向变成任务。")}
           </p>
         </div>
         <Button
@@ -67,10 +69,10 @@ export default function ChatHome() {
           onClick={() => create.mutate()}
         >
           <Plus className="size-4" />
-          新建讨论
+          {t("新建讨论")}
         </Button>
       </div>
-      {projects.isPending && <Spinner text="读取项目…" />}
+      {projects.isPending && <Spinner text={t("读取项目…")} />}
       {projects.error && <ErrorView error={projects.error} />}
       {projectID && (
         <>
@@ -79,7 +81,7 @@ export default function ChatHome() {
               <span className="sr-only">项目</span>
               <FolderKanban className="pointer-events-none absolute top-3 left-3 size-4 text-slate-400" />
               <select
-                aria-label="项目"
+                aria-label={t("项目")}
                 value={projectID}
                 onChange={(e) => setSelected(e.target.value)}
                 className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2.5 pr-8 pl-10 text-sm"
@@ -96,13 +98,13 @@ export default function ChatHome() {
               <input
                 value={term}
                 onChange={(e) => setTerm(e.target.value)}
-                placeholder="搜索讨论…"
+                placeholder={t("搜索讨论…")}
                 className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-3 pl-10 text-sm outline-none focus:border-sky-500"
               />
             </label>
           </div>
           {cards.isPending ? (
-            <Spinner text="读取讨论…" />
+            <Spinner text={t("读取讨论…")} />
           ) : cards.error ? (
             <ErrorView
               error={cards.error}
@@ -111,9 +113,9 @@ export default function ChatHome() {
           ) : discussions.length === 0 ? (
             <div className="flex min-h-64 flex-col items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white text-center">
               <MessageSquareText className="size-9 text-slate-300" />
-              <h2 className="mt-4 font-medium">还没有讨论</h2>
+              <h2 className="mt-4 font-medium">{t("还没有讨论")}</h2>
               <p className="mt-1 text-sm text-slate-500">
-                新建一个讨论，直接发送第一条消息。
+                {t("新建一个讨论，直接发送第一条消息。")}
               </p>
               <Button
                 className="mt-5"
@@ -121,7 +123,7 @@ export default function ChatHome() {
                 onClick={() => create.mutate()}
               >
                 <Plus className="size-4" />
-                开始讨论
+                {t("开始讨论")}
               </Button>
             </div>
           ) : (
@@ -138,20 +140,22 @@ export default function ChatHome() {
                       <ArrowUpRight className="size-4 text-slate-300 group-hover:text-sky-700" />
                     </div>
                     <h2 className="mt-4 line-clamp-2 font-semibold text-slate-900">
-                      {card.title || "新讨论"}
+                      {card.title || t("新讨论")}
                     </h2>
                     <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-500">
-                      {card.description || "继续对话，探索想法…"}
+                      {card.description || t("继续对话，探索想法…")}
                     </p>
                   </div>
                   <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
                     <span>
                       {card.discussion_state === "archived"
-                        ? "已归档"
-                        : "讨论中"}
+                        ? t("已归档")
+                        : t("讨论中")}
                     </span>
                     <span>
-                      {new Date(card.updated_at).toLocaleDateString()}
+                      {new Date(card.updated_at).toLocaleDateString(
+                        i18n.language === "en" ? "en-US" : "zh-CN",
+                      )}
                     </span>
                   </div>
                 </Link>
@@ -162,9 +166,9 @@ export default function ChatHome() {
       )}
       {projects.data?.length === 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-          <p>还没有项目，请先在看板中创建一个项目。</p>
+          <p>{t("还没有项目，请先在看板中创建一个项目。")}</p>
           <Link className="mt-4 inline-block text-sm text-sky-700" to="/board">
-            前往看板
+            {t("前往看板")}
           </Link>
         </div>
       )}

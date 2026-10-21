@@ -16,6 +16,7 @@ import type { Identity } from "../shared/api/types";
 import { queryClient } from "../app/query";
 import { Button, Sheet } from "../shared/ui/components";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 
 export function Shell({
   identity,
@@ -24,6 +25,7 @@ export function Shell({
   identity: Identity;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const [drawer, setDrawer] = useState(false);
   const navigate = useNavigate();
   const logout = useMutation({
@@ -35,8 +37,8 @@ export function Shell({
     onError: (e) => toast.error(String(e)),
   });
   const nav = [
-    { to: "/chat", label: "聊天", icon: MessageCircle },
-    { to: "/board", label: "看板", icon: LayoutDashboard },
+    { to: "/chat", label: t("聊天"), icon: MessageCircle },
+    { to: "/board", label: t("看板"), icon: LayoutDashboard },
   ];
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -57,7 +59,10 @@ export function Shell({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <nav aria-label="主导航" className="flex rounded-xl bg-slate-100 p-1">
+          <nav
+            aria-label={t("主导航")}
+            className="flex rounded-xl bg-slate-100 p-1"
+          >
             {nav.map((item) => (
               <NavLink
                 key={item.to}
@@ -73,16 +78,16 @@ export function Shell({
           </nav>
           <button
             onClick={() => navigate("/settings/general")}
-            title="设置"
-            aria-label="设置"
+            title={t("设置")}
+            aria-label={t("设置")}
             className="rounded-xl p-2 text-slate-600 hover:bg-slate-100"
           >
             <Settings className="size-5" />
           </button>
           <button
             onClick={() => setDrawer(true)}
-            title="导航抽屉"
-            aria-label="导航抽屉"
+            title={t("导航抽屉")}
+            aria-label={t("导航抽屉")}
             className="rounded-xl p-2 text-slate-600 hover:bg-slate-100"
           >
             <Menu className="size-5" />
@@ -105,7 +110,7 @@ export function Shell({
         <div className="space-y-1">
           {[
             ...nav,
-            { to: "/settings/general", label: "设置", icon: Settings },
+            { to: "/settings/general", label: t("设置"), icon: Settings },
           ].map((item) => (
             <button
               key={item.to}
@@ -121,7 +126,9 @@ export function Shell({
           ))}
         </div>
         <div className="my-5 border-t border-slate-100" />
-        <p className="px-3 pb-2 text-xs font-medium text-slate-400">工作空间</p>
+        <p className="px-3 pb-2 text-xs font-medium text-slate-400">
+          {t("工作空间")}
+        </p>
         <div className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm">
           <Bot className="size-4" />
           {identity.workspace.name}
@@ -132,7 +139,7 @@ export function Shell({
           onClick={() => logout.mutate()}
         >
           <LogOut className="size-4" />
-          退出登录
+          {t("退出登录")}
         </Button>
         <p className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">
           <Plus className="size-3" />

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "react-router-dom";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { api } from "../shared/api/client";
 import { keys, queryClient } from "./query";
 import {
@@ -13,6 +14,7 @@ import {
   TextInput,
 } from "../shared/ui/components";
 export function LoginPage() {
+  const { t } = useTranslation();
   const methods = useQuery({
     queryKey: ["login-methods"],
     queryFn: api.loginMethods,
@@ -44,25 +46,25 @@ export function LoginPage() {
         <div>
           <p className="mb-5 text-sm text-sky-300">Human × Agent</p>
           <h1 className="max-w-lg text-5xl leading-tight font-semibold tracking-tight">
-            把讨论变成工作。
+            {t("把讨论变成工作。")}
             <br />
-            让进展清晰可见。
+            {t("让进展清晰可见。")}
           </h1>
           <p className="mt-6 max-w-md text-slate-300">
-            统一的对话时间线、看板、持续工作与 AI Agent。
+            {t("统一的对话时间线、看板、持续工作与 AI Agent。")}
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-slate-400">
           <ShieldCheck className="size-4" />
-          工作空间权限由服务端维护
+          {t("工作空间权限由服务端维护")}
         </div>
       </section>
       <section className="flex items-center justify-center px-6 py-16">
         <div className="w-full max-w-sm space-y-6">
           <h2 className="text-3xl font-semibold text-slate-900">
-            登录 CycleDock
+            {t("登录 CycleDock")}
           </h2>
-          <p className="text-sm text-slate-500">继续进入你的工作空间</p>
+          <p className="text-sm text-slate-500">{t("继续进入你的工作空间")}</p>
           {methods.isPending && <Spinner />}
           {methods.error && <ErrorView error={methods.error} />}
           {methods.data?.providers.map((p) => (
@@ -76,7 +78,7 @@ export function LoginPage() {
               }
               className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white font-medium hover:border-sky-400"
             >
-              使用 {p.name} 登录 <ArrowRight className="size-4" />
+              {t("使用")} {p.name} {t("登录")} <ArrowRight className="size-4" />
             </a>
           ))}
           {methods.data?.password && (
@@ -87,14 +89,14 @@ export function LoginPage() {
               }}
               className="space-y-4"
             >
-              <Field label="管理员密码">
+              <Field label={t("管理员密码")}>
                 <TextInput
                   type="password"
                   autoComplete="current-password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="输入管理员密码"
+                  placeholder={t("输入管理员密码")}
                 />
               </Field>
               <Button
@@ -103,12 +105,14 @@ export function LoginPage() {
                 disabled={login.isPending || !password}
                 className="w-full"
               >
-                登录
+                {t("登录")}
               </Button>
             </form>
           )}
           <p className="text-xs text-slate-400">
-            Hosted 使用 NexusDock 统一认证；Self-hosted 可使用管理员密码。
+            {t(
+              "Hosted 使用 NexusDock 统一认证；Self-hosted 可使用管理员密码。",
+            )}
           </p>
         </div>
       </section>
