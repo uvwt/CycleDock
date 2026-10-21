@@ -384,6 +384,9 @@ const en = {
   "任务状态变更失败：": "Could not change task status: ",
   已暂停: "Paused",
   尚无检查: "No check-ins yet",
+  健康: "Healthy",
+  警告: "Warning",
+  严重: "Critical",
   "可从讨论生成长期或周期工作。":
     "Generate recurring or ongoing work from a discussion.",
   说明: "Description",

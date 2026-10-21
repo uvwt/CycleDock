@@ -45,37 +45,40 @@ const columns: { state: TodoState; label: string }[] = [
 function TodoTile({ card, onOpen }: { card: Card; onOpen: () => void }) {
   const { t } = useTranslation();
   const drag = useDraggable({ id: card.id, data: { state: card.todo_state } });
+  const runLabel =
+    card.current_run_status === "running"
+      ? t("执行中")
+      : card.current_run_status === "queued"
+        ? t("排队中")
+        : card.current_run_status === "waiting_human"
+          ? t("等待回复")
+          : card.current_run_status;
   return (
     <div
       ref={drag.setNodeRef}
-      className="v2-panel flex min-w-0 items-start gap-2 p-3"
-      style={{
-        transform: CSS.Translate.toString(drag.transform),
-        opacity: drag.isDragging ? 0.6 : 1,
-      }}
+      className="product-task-card"
+      data-dragging={drag.isDragging ? "true" : "false"}
+      style={{ transform: CSS.Translate.toString(drag.transform) }}
     >
       <button
         {...drag.listeners}
         {...drag.attributes}
-        className="mt-0.5 cursor-grab touch-none text-[var(--v2-muted)]"
+        className="product-task-drag cursor-grab touch-none"
         aria-label={`${t("拖动")} ${card.title}`}
         title={t("拖动至目标状态")}
       >
         <GripVertical size={15} />
       </button>
-      <button className="min-w-0 flex-1 text-left" onClick={onOpen}>
-        <Typography scale="body" className="break-words font-semibold">
-          {card.title}
-        </Typography>
+      <button className="product-task-main" onClick={onOpen}>
+        <div className="product-task-title">{card.title}</div>
         {card.description && (
-          <Typography scale="meta" className="mt-1 line-clamp-2">
-            {card.description}
-          </Typography>
+          <div className="product-task-description">{card.description}</div>
         )}
-        {card.current_run_status && (
-          <Badge tone="accent" className="mt-2">
-            {card.current_run_status}
-          </Badge>
+        {runLabel && (
+          <div className="product-task-runtime">
+            <span className="product-task-runtime-dot" aria-hidden="true" />
+            {runLabel}
+          </div>
         )}
       </button>
     </div>
@@ -98,21 +101,23 @@ function TodoColumn({
   return (
     <div
       ref={drop.setNodeRef}
-      className="min-w-[238px] rounded-[var(--v2-radius-lg)] bg-[var(--v2-subtle)] p-3"
+      className="product-board-column"
       data-column={state}
-      style={{
-        outline: drop.isOver ? "2px solid var(--v2-accent)" : undefined,
-      }}
+      data-state={state}
+      data-over={drop.isOver ? "true" : "false"}
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <Typography as="h3" scale="section">
-          {t(label)}
-        </Typography>
-        <Badge>{cards.length}</Badge>
+      <div className="product-board-column-header">
+        <div className="product-board-column-title">
+          <span className="product-board-column-dot" aria-hidden="true" />
+          <Typography as="h3" scale="section">
+            {t(label)}
+          </Typography>
+        </div>
+        <span className="product-board-column-count">{cards.length}</span>
       </div>
-      <div className="min-h-24 space-y-2">
+      <div className="product-board-column-items">
         {cards.length === 0 ? (
-          <p className="v2-text-meta px-1 py-4">{t("暂无任务")}</p>
+          <p className="product-board-empty">{t("暂无任务")}</p>
         ) : (
           cards.map((card) => (
             <TodoTile
@@ -238,7 +243,7 @@ export function WorkBoardV2({
     move.mutate({ id: card.id, state: over.id as TodoState });
   };
   return (
-    <div className="min-w-0 space-y-7 p-4 md:p-8">
+    <div className="product-work-page">
       <PageHeader
         title={
           view === "review"
@@ -256,19 +261,16 @@ export function WorkBoardV2({
         }
       />
       {view !== "ongoing" && (
-        <section className="min-w-0">
-          <div className="mb-3 flex items-center gap-2">
-            <ListChecks size={17} color="var(--v2-muted)" />
+        <section className="product-work-section">
+          <div className="product-section-heading">
+            <ListChecks size={17} className="product-section-heading-icon" />
             <Typography as="h2" scale="section">
               {t("待办看板")}
             </Typography>
           </div>
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div
-              className="min-w-0 overflow-x-auto pb-3"
-              aria-label={t("待办看板")}
-            >
-              <div className="grid min-w-[980px] grid-cols-4 gap-3">
+            <div className="product-board-scroll" aria-label={t("待办看板")}>
+              <div className="product-board-grid">
                 {columns.map((col) => (
                   <TodoColumn
                     key={col.state}
@@ -288,42 +290,52 @@ export function WorkBoardV2({
         </section>
       )}
       {view !== "review" && (
-        <section className="space-y-3">
-          <Typography as="h2" scale="section">
-            {t("持续事项")}
-          </Typography>
+        <section className="product-work-section">
+          <div className="product-section-heading">
+            <Typography as="h2" scale="section">
+              {t("持续事项")}
+            </Typography>
+          </div>
           {ongoing.length ? (
-            <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {ongoing.map((c) => (
-                <button
-                  key={c.id}
-                  className="v2-panel min-w-0 space-y-2 p-4 text-left hover:border-[var(--v2-accent)]"
-                  onClick={() =>
-                    navigate(`/projects/${project.id}/work/${c.id}`)
-                  }
-                >
-                  <Typography scale="section" className="break-words">
-                    {c.title}
-                  </Typography>
-                  {c.description && (
-                    <Typography scale="control" className="line-clamp-2">
-                      {c.description}
-                    </Typography>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    <Badge
-                      tone={c.ongoing_state === "active" ? "accent" : "neutral"}
-                    >
-                      {c.ongoing_state === "active"
-                        ? t("运行中")
-                        : c.ongoing_state === "paused"
-                          ? t("已暂停")
-                          : t("已归档")}
-                    </Badge>
-                    <Badge>{c.health || t("尚无检查")}</Badge>
-                  </div>
-                </button>
-              ))}
+            <div className="product-ongoing-list">
+              {ongoing.map((c) => {
+                const health =
+                  !c.health || c.health === "unknown"
+                    ? t("尚无检查")
+                    : c.health === "healthy"
+                      ? t("健康")
+                      : c.health === "warning"
+                        ? t("警告")
+                        : c.health === "critical"
+                          ? t("严重")
+                          : c.health;
+                return (
+                  <button
+                    key={c.id}
+                    className="product-ongoing-row"
+                    onClick={() =>
+                      navigate(`/projects/${project.id}/work/${c.id}`)
+                    }
+                  >
+                    <span className="product-ongoing-title">{c.title}</span>
+                    <span className="product-ongoing-description">
+                      {c.description || t("暂无说明")}
+                    </span>
+                    <span className="product-ongoing-status">
+                      <Badge
+                        tone={c.ongoing_state === "active" ? "accent" : "neutral"}
+                      >
+                        {c.ongoing_state === "active"
+                          ? t("运行中")
+                          : c.ongoing_state === "paused"
+                            ? t("已暂停")
+                            : t("已归档")}
+                      </Badge>
+                      <Badge>{health}</Badge>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           ) : (
             <div className="v2-panel">

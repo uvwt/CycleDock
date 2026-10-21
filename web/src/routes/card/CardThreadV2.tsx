@@ -1,11 +1,10 @@
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   ArrowDown,
-  ArrowUp,
   Info,
   MoreHorizontal,
   Sparkles,
@@ -25,6 +24,7 @@ import {
   Typography,
   Badge,
 } from "../../components/ui/controls";
+import { AdaptiveComposer } from "../../components/ui/AdaptiveComposer";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -342,6 +342,11 @@ export function CardThreadV2({
     element.addEventListener("scroll", check, { passive: true });
     return () => element.removeEventListener("scroll", check);
   }, [detail.isPending, cardID]);
+  useLayoutEffect(() => {
+    if (!atBottom) return;
+    const element = document.querySelector<HTMLElement>("[data-timeline]");
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [expanded, atBottom]);
   const refresh = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: keys.card(cardID) }),
@@ -450,8 +455,8 @@ export function CardThreadV2({
     now,
   );
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 flex-col">
-      <div className="shrink-0 border-b border-[var(--v2-border)] px-4 py-4 md:px-8">
+    <div className="product-thread">
+      <div className="product-thread-header">
         <PageHeader
           title={card.title || t("未命名讨论")}
           description={
@@ -530,46 +535,54 @@ export function CardThreadV2({
           />
         </div>
       )}
-      <div className="shrink-0 border-t border-[var(--v2-border)] bg-[var(--v2-bg)] px-4 pb-5 pt-3 md:px-8">
-        <div className="mx-auto max-w-3xl">
+      <div className="product-thread-composer-wrap">
+        <div className="product-thread-composer">
           {live.lastError && (
-            <Typography scale="meta">{live.lastError}</Typography>
+            <Typography scale="meta" className="mb-2 block">
+              {live.lastError}
+            </Typography>
           )}
           {archived ? (
             <Typography scale="control">
               {t("此讨论已归档，无法继续发送消息。")}
             </Typography>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
+            <AdaptiveComposer
+              value={draft}
+              onChange={setDraft}
+              onSubmit={() => {
                 if (draft.trim()) send.mutate();
               }}
-              className="v2-panel p-2"
-            >
-              <Textarea
-                rows={expanded ? 3 : 1}
-                value={draft}
-                onFocus={() => setExpanded(true)}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    if (draft.trim()) send.mutate();
-                  }
-                }}
-                placeholder={
-                  running === "waiting_human"
-                    ? t("回复并继续")
-                    : "发送新指令或评论…"
-                }
-                aria-label={t("回复内容")}
-                className="resize-none border-0 bg-transparent shadow-none"
-              />
-              <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 flex-wrap gap-1">
+              placeholder={
+                running === "waiting_human"
+                  ? t("回复并继续")
+                  : t("发送新指令或评论…")
+              }
+              ariaLabel={t("回复内容")}
+              expanded={expanded}
+              onExpandedChange={setExpanded}
+              busy={send.isPending}
+              keepExpanded={!!running}
+              sendLabel={
+                running === "waiting_human" ? t("回复并继续") : t("发送")
+              }
+              compactAction={
+                discussion ? (
+                  <IconButton
+                    type="button"
+                    icon={Sparkles}
+                    label={t("生成任务")}
+                    variant="ghost"
+                    disabled={generate.isPending}
+                    onClick={() => generate.mutate()}
+                  />
+                ) : undefined
+              }
+              actions={
+                <div className="product-composer-action">
                   {discussion && (
                     <IconButton
+                      type="button"
                       icon={Sparkles}
                       label={t("生成任务")}
                       variant="ghost"
@@ -580,8 +593,8 @@ export function CardThreadV2({
                   {(running === "running" || running === "queued") && (
                     <Select
                       value={sendMode}
-                      onValueChange={(v) =>
-                        setSendMode(v as "enqueue" | "interrupt")
+                      onValueChange={(value) =>
+                        setSendMode(value as "enqueue" | "interrupt")
                       }
                     >
                       <SelectTrigger
@@ -609,11 +622,10 @@ export function CardThreadV2({
                       )[running] || running}
                     </Badge>
                   )}
-                </div>
-                <div className="flex gap-1">
                   {detail.data.current_run &&
                     ["running", "queued"].includes(running || "") && (
                       <IconButton
+                        type="button"
                         icon={Square}
                         label={t("取消当前运行")}
                         variant="ghost"
@@ -623,18 +635,10 @@ export function CardThreadV2({
                         }
                       />
                     )}
-                  <LoadingButton
-                    type="submit"
-                    variant="primary"
-                    disabled={!draft.trim()}
-                    loading={send.isPending}
-                  >
-                    <ArrowUp size={15} />
-                    {running === "waiting_human" ? t("回复并继续") : t("发送")}
-                  </LoadingButton>
                 </div>
-              </div>
-            </form>
+              }
+              meta={<span>{t("Enter 发送 · Shift+Enter 换行")}</span>}
+            />
           )}
         </div>
       </div>

@@ -2,17 +2,13 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { ArrowUp, MessageSquarePlus } from "lucide-react";
+import { ArrowRight, MessageSquareText } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../../shared/api/client";
 import type { Card, Project } from "../../shared/api/types";
 import { keys, queryClient } from "../../app-v2/query";
-import {
-  Button,
-  LoadingButton,
-  Textarea,
-  Typography,
-} from "../../components/ui/controls";
+import { Typography } from "../../components/ui/controls";
+import { AdaptiveComposer } from "../../components/ui/AdaptiveComposer";
 import { EmptyState } from "../../components/ui/feedback";
 import { PageHeader } from "../../components/layout/Scaffold";
 
@@ -50,6 +46,7 @@ export function DiscussionHome({
   const [draft, setDraft] = useState<FirstMessageDraft>(() =>
     readDraft(project.id),
   );
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [activeProject, setActiveProject] = useState(project.id);
   // 项目切换须按项目隔离草稿，不能将上个项目的首条留言发往新项目。
   if (activeProject !== project.id) {
@@ -89,6 +86,7 @@ export function DiscussionHome({
     onSuccess: async (id) => {
       const fresh = newDraft();
       setDraft(fresh);
+      setComposerExpanded(false);
       try {
         sessionStorage.removeItem("cycledock:discussion-draft:" + project.id);
       } catch {
@@ -100,94 +98,89 @@ export function DiscussionHome({
     onError: (error) =>
       toast.error(t("未能发送，草稿已保留，可重试：") + String(error)),
   });
+  const discussions = cards.filter((card) => card.kind === "discussion");
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col px-4 py-6 md:px-8">
-      <PageHeader title={t("讨论")} description={project.name} />
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 py-12 text-center">
-        <MessageSquarePlus
-          size={30}
-          color="var(--v2-accent)"
-          aria-hidden="true"
-        />
-        <Typography as="h2" scale="title">
-          {t("今天想推进什么？")}
-        </Typography>
-        <Typography scale="body" className="max-w-lg text-[var(--v2-muted)]">
-          {t("先和 Agent 讨论需求，明确目标后再生成待办或持续事项。")}
-        </Typography>
-        <form
-          className="v2-panel mt-3 w-full max-w-2xl p-3 text-left"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!send.isPending) send.mutate();
-          }}
-        >
-          <Textarea
-            aria-label={t("新讨论内容")}
-            placeholder={t("描述问题、想法或准备推进的工作…")}
-            rows={3}
-            value={draft.text}
-            onChange={(e) => setDraft((v) => ({ ...v, text: e.target.value }))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
+    <div className="product-discussion-home">
+      <div className="product-discussion-inner">
+        <PageHeader title={t("讨论")} description={project.name} />
+        <section className="product-discussion-launch">
+          <h2>{t("今天想推进什么？")}</h2>
+          <p className="product-discussion-launch-copy">
+            {t("先和 Agent 讨论需求，明确目标后再生成待办或持续事项。")}
+          </p>
+          <div className="product-discussion-composer">
+            <AdaptiveComposer
+              value={draft.text}
+              onChange={(text) => setDraft((value) => ({ ...value, text }))}
+              onSubmit={() => {
                 if (!send.isPending) send.mutate();
+              }}
+              placeholder={t("描述问题、想法或准备推进的工作…")}
+              ariaLabel={t("新讨论内容")}
+              expanded={composerExpanded}
+              onExpandedChange={setComposerExpanded}
+              busy={send.isPending}
+              sendLabel={t("发送")}
+              meta={
+                <span>
+                  {draft.cardID
+                    ? t("首次发送尚未完成，重试将继续同一讨论")
+                    : t("Enter 发送 · Shift+Enter 换行")}
+                </span>
               }
-            }}
-          />
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <Typography scale="meta">
-              {draft.cardID
-                ? t("首次发送尚未完成，重试将继续同一讨论")
-                : t("Enter 发送 · Shift+Enter 换行")}
-            </Typography>
-            <LoadingButton
-              type="submit"
-              variant="primary"
-              disabled={!draft.text.trim()}
-              loading={send.isPending}
-            >
-              <ArrowUp size={15} />
-              {t("发送")}
-            </LoadingButton>
+            />
           </div>
-        </form>
-        {send.isError && (
-          <Typography scale="control" className="text-[var(--v2-danger)]">
-            {t("发送失败，内容与目标 Discussion 已保留。")}
-          </Typography>
-        )}
-      </div>
-      {!cards.some((card) => card.kind === "discussion") && (
-        <EmptyState
-          title={t("还没有讨论")}
-          description={t("发送上面的第一条消息即可开始。")}
-        />
-      )}
-      {cards.some((card) => card.kind === "discussion") && (
-        <div className="border-t border-[var(--v2-border)] pt-4">
-          <Typography as="h3" scale="section">
-            {t("最近讨论")}
-          </Typography>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            {cards
-              .filter((c) => c.kind === "discussion")
-              .slice(0, 6)
-              .map((c) => (
-                <Button
-                  key={c.id}
-                  variant="ghost"
-                  className="justify-start text-left"
+          {send.isError && (
+            <Typography
+              scale="control"
+              className="mt-3 text-[var(--v2-danger)]"
+            >
+              {t("发送失败，内容与目标 Discussion 已保留。")}
+            </Typography>
+          )}
+        </section>
+
+        {!discussions.length ? (
+          <EmptyState
+            title={t("还没有讨论")}
+            description={t("发送上面的第一条消息即可开始。")}
+          />
+        ) : (
+          <section className="product-recent-section">
+            <div className="product-recent-header">
+              <Typography as="h3" scale="section">
+                {t("最近讨论")}
+              </Typography>
+              <Typography scale="meta">{project.name}</Typography>
+            </div>
+            <div className="product-recent-list">
+              {discussions.slice(0, 6).map((card) => (
+                <button
+                  key={card.id}
+                  className="product-recent-item"
                   onClick={() =>
-                    navigate(`/projects/${project.id}/discussions/${c.id}`)
+                    navigate(
+                      `/projects/${project.id}/discussions/${card.id}`,
+                    )
                   }
                 >
-                  {c.title || t("未命名讨论")}
-                </Button>
+                  <span className="product-recent-item-icon" aria-hidden="true">
+                    <MessageSquareText size={15} />
+                  </span>
+                  <span className="product-recent-item-title">
+                    {card.title || t("未命名讨论")}
+                  </span>
+                  <ArrowRight
+                    size={15}
+                    className="product-recent-item-arrow"
+                    aria-hidden="true"
+                  />
+                </button>
               ))}
-          </div>
-        </div>
-      )}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   );
 }

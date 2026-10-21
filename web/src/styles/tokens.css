@@ -1,16 +1,26 @@
-/* Frontend V2 唯一视觉规格源：现阶段隔离在 .v2 范围，避免影响尚未迁移的旧业务页。 */
+/* V3 产品视觉的基础 token。保留 .v2 命名空间只为避免一次性改动所有业务类名。 */
 .v2 {
-  --v2-bg: #f8fafb;
+  --v2-bg: #f4f6f5;
   --v2-surface: #fff;
-  --v2-subtle: #f3f6f8;
-  --v2-text: #202c36;
-  --v2-muted: #637480;
-  --v2-border: #dce4e9;
-  --v2-accent: #137b9b;
-  --v2-accent-hover: #096482;
+  --v2-surface-muted: #eef2f1;
+  --v2-subtle: #e9efed;
+  --v2-text: #17242a;
+  --v2-muted: #66777e;
+  --v2-border: #d5dfdc;
+  --v2-border-strong: #bccbc7;
+  --v2-accent: #117d9c;
+  --v2-accent-hover: #0c6782;
+  --v2-accent-soft: #e1f1f4;
   --v2-danger: #b53b40;
   --v2-success: #237461;
-  --v2-shadow: 0 12px 32px rgb(20 42 53 / 12%);
+  --v2-warning: #a56719;
+  --v2-sidebar: #102129;
+  --v2-sidebar-surface: #172d36;
+  --v2-sidebar-border: #29404a;
+  --v2-sidebar-text: #edf5f6;
+  --v2-sidebar-muted: #97adb5;
+  --v2-shadow: 0 18px 52px rgb(18 40 49 / 14%);
+  --v2-shadow-soft: 0 6px 20px rgb(18 40 49 / 7%);
   --v2-radius-sm: 6px;
   --v2-radius: 8px;
   --v2-radius-lg: 12px;
@@ -21,8 +31,8 @@
   --v2-type-control: 13px;
   --v2-type-body: 14px;
   --v2-type-section: 16px;
-  --v2-type-title: 22px;
-  --v2-focus: 0 0 0 2px rgb(19 123 155 / 32%);
+  --v2-type-title: 24px;
+  --v2-focus: 0 0 0 3px rgb(17 125 156 / 18%);
   background: var(--v2-bg);
   color: var(--v2-text);
   font-family:
@@ -34,17 +44,27 @@
 }
 html[data-theme="dark"] .v2,
 .v2[data-theme="dark"] {
-  --v2-bg: #101a21;
-  --v2-surface: #1a2832;
-  --v2-subtle: #253540;
-  --v2-text: #e4edf2;
-  --v2-muted: #a8bdc9;
-  --v2-border: #40535f;
+  --v2-bg: #0d171b;
+  --v2-surface: #142126;
+  --v2-surface-muted: #18282e;
+  --v2-subtle: #1d3037;
+  --v2-text: #e9f0f1;
+  --v2-muted: #9eb1b8;
+  --v2-border: #2d4249;
+  --v2-border-strong: #405b64;
   --v2-accent: #58b6d1;
-  --v2-accent-hover: #83d2e7;
+  --v2-accent-hover: #7ac8dc;
+  --v2-accent-soft: #183640;
   --v2-danger: #fa9296;
   --v2-success: #8ad7b9;
-  --v2-shadow: 0 12px 32px rgb(0 0 0 / 36%);
+  --v2-warning: #e5b66a;
+  --v2-sidebar: #081216;
+  --v2-sidebar-surface: #102128;
+  --v2-sidebar-border: #223840;
+  --v2-sidebar-text: #eff6f7;
+  --v2-sidebar-muted: #8aa3ad;
+  --v2-shadow: 0 18px 52px rgb(0 0 0 / 34%);
+  --v2-shadow-soft: 0 6px 20px rgb(0 0 0 / 22%);
   color-scheme: dark;
 }
 .v2 *,
@@ -103,8 +123,9 @@ html[data-theme="dark"] .v2,
   font-weight: 550;
   white-space: nowrap;
   transition:
-    background-color 120ms,
-    border-color 120ms;
+    background-color 140ms,
+    border-color 140ms,
+    color 140ms;
 }
 .v2-button[data-size="compact"] {
   height: var(--v2-control-compact);
@@ -122,9 +143,13 @@ html[data-theme="dark"] .v2,
   background: var(--v2-accent-hover);
 }
 .v2-button[data-variant="secondary"] {
-  background: var(--v2-subtle);
+  background: var(--v2-surface);
   color: var(--v2-text);
   border-color: var(--v2-border);
+}
+.v2-button[data-variant="secondary"]:hover:not(:disabled) {
+  border-color: var(--v2-border-strong);
+  background: var(--v2-surface-muted);
 }
 .v2-button[data-variant="ghost"] {
   background: transparent;
@@ -180,7 +205,7 @@ textarea.v2-input {
 .v2-overlay {
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius-lg);
+  border-radius: 14px;
   box-shadow: var(--v2-shadow);
   color: var(--v2-text);
   font-size: var(--v2-type-control);
@@ -233,13 +258,15 @@ textarea.v2-input {
 }
 .v2-badge {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   padding: 1px 7px;
   border-radius: var(--v2-radius-sm);
-  background: var(--v2-subtle);
+  background: var(--v2-surface-muted);
   color: var(--v2-muted);
   font-size: var(--v2-type-meta);
   font-weight: 550;
+  white-space: nowrap;
 }
 .v2-badge[data-tone="success"] {
   color: var(--v2-success);
@@ -266,17 +293,17 @@ textarea.v2-input {
   color: #fff;
 }
 .v2-message-agent {
-  background: var(--v2-surface);
-  border: 1px solid var(--v2-border);
+  background: transparent;
 }
 .v2-panel {
   background: var(--v2-surface);
   border: 1px solid var(--v2-border);
-  border-radius: var(--v2-radius-lg);
+  border-radius: 10px;
 }
 .v2-sidebar {
-  background: var(--v2-surface);
-  border-right: 1px solid var(--v2-border);
+  background: var(--v2-sidebar);
+  color: var(--v2-sidebar-text);
+  border-right: 1px solid var(--v2-sidebar-border);
   min-width: 0;
 }
 .v2-separator {

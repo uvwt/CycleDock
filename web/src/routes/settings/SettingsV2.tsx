@@ -326,11 +326,11 @@ export function SettingsV2({ me }: { me: Identity }) {
     setMobile(false);
   };
   const nav = (
-    <nav className="space-y-5" aria-label={t("设置分类")}>
+    <nav className="product-settings-nav" aria-label={t("设置分类")}>
       {sections.map((group) => (
-        <div key={t(group.group)}>
-          <Typography scale="meta" className="mb-2 px-2 font-semibold">
-            {group.group}
+        <div className="product-settings-nav-group" key={t(group.group)}>
+          <Typography scale="meta" className="product-settings-nav-label">
+            {t(group.group)}
           </Typography>
           <div className="space-y-1">
             {group.items.map(([id, label]) => (
@@ -355,15 +355,11 @@ export function SettingsV2({ me }: { me: Identity }) {
       "设置",
   );
   return (
-    <main className="v2 min-h-dvh min-w-0 px-4 py-7 md:px-8">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-8 flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <img
-              src="/cycledock-logo.png"
-              className="size-8 object-contain"
-              alt=""
-            />
+    <main className="v2 product-settings-page">
+      <div className="product-settings-shell">
+        <div className="product-settings-topbar">
+          <div className="product-settings-brand">
+            <img src="/cycledock-logo.png" alt="" />
             <Typography as="h1" scale="title">
               {t("设置")}
             </Typography>
@@ -393,12 +389,14 @@ export function SettingsV2({ me }: { me: Identity }) {
           </Sheet>
           <Typography scale="section">{label}</Typography>
         </div>
-        <div className="grid min-w-0 gap-8 md:grid-cols-[180px_minmax(0,1fr)]">
-          <div className="hidden border-r border-[var(--v2-border)] pr-5 md:block">
-            {nav}
-          </div>
-          <div className="v2-panel min-w-0 p-5 md:p-7">
-            <Typography as="h2" scale="title" className="mb-6">
+        <div className="product-settings-layout">
+          <div className="hidden md:block">{nav}</div>
+          <div className="product-settings-content">
+            <Typography
+              as="h2"
+              scale="title"
+              className="product-settings-content-title"
+            >
               {label}
             </Typography>
             <SettingsContent section={section} me={me} />
