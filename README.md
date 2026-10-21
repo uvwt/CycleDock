@@ -46,6 +46,7 @@ Workspace
 - [升级指南](docs/upgrade.md)
 - [技术栈](docs/stack.md)
 - [全新前端产品与实现基线](docs/frontend-rebuild.md)
+- [Frontend V2 从零重构方案](docs/frontend-v2-plan.md)
 - [开发路线](docs/development.md)
 - [旧项目参考边界](docs/legacy-reference.md)
 
@@ -81,3 +82,5 @@ Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MC
 - 长历史上下文采用 bounded recent Timeline + durable historical facts + 派生 Comment/Progress compaction；原 Timeline 始终是审计事实源。
 - Web 已重新按 `docs/frontend-rebuild.md` 从零实现 Chat / Board / 独立 Card / Settings，支持初版 SSE 消息流与响应式布局。当前中文为默认语言；完整中英 i18n、正式视觉回归和生产环境 SSE 验收仍待后续完成。
 - CI 同时执行 PostgreSQL integration、核心 race、Web lint/build/audit 与 Linux Docker Compose smoke。
+
+**Frontend V2 分支说明（尚未发布）**：本地 `feat/frontend-v2-20261021` 正在按照 `docs/frontend-v2-plan.md` 从零替换旧的页面和共享 UI，保留后端、API、SSE 和领域语义。V2 Design System、Discussion/Work、Card Thread、Settings 已落地，并增加桌面/移动端 Showcase 与业务浏览器测试；完整范围、验证和剩余风险见方案文档第 19 节。该分支的结果不能视为当前 `main` 或部署环境已经更新。

@@ -1,171 +1,23 @@
 @import "tailwindcss";
 
-/*
- * Tailwind utilities use CSS variables for grayscale colors.
- * Reassign those variables for dark mode so all components, including dialogs,
- * maintain contrast without individual ad-hoc style overrides.
- */
-html[data-theme="dark"] {
-  --color-white: #15202e;
-  --color-slate-50: #101826;
-  --color-slate-100: #1e2b3b;
-  --color-slate-200: #334358;
-  --color-slate-300: #526176;
-  --color-slate-400: #95a3b9;
-  --color-slate-500: #a6b5ca;
-  --color-slate-600: #c8d4e3;
-  --color-slate-700: #dde6f1;
-  --color-slate-800: #e8eef6;
-  --color-slate-900: #f7f9fc;
-  --color-rose-50: #321e2c;
-  --color-rose-100: #472634;
-  --color-rose-200: #713747;
-  --color-amber-50: #332c1e;
-  --color-amber-200: #68552c;
-  color: #e8eef6;
-  background: #101826;
-}
-/* Action buttons keep white text while dark surfaces remain dark. */
-html[data-theme="dark"] .bg-sky-700.text-white {
-  color: #fff;
-}
-html[data-theme="dark"] .bg-slate-900.text-white {
-  color: #101826;
-}
-html[data-theme="dark"] .prose-chat pre {
-  background: #0b1320;
-}
-html[data-theme="dark"] .prose-chat code:not(pre code) {
-  background: #28394d;
-  border-color: #34455a;
-}
-html[data-theme="dark"] .prose-chat a {
-  color: #7dd3fc;
-}
-html[data-theme="dark"] .bg-white\/95 {
-  background-color: rgb(21 32 46 / 95%);
-}
+/* V2 全新页面的全局基础。字号、颜色、间距与控件规格在 styles/tokens.css 收敛。 */
 :root {
   font-family:
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
-  color: #243247;
-  background: #f8fafc;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
   font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 html,
 body,
 #root {
   min-height: 100%;
   margin: 0;
-}
-button,
-textarea,
-input,
-select {
-  font: inherit;
+  min-width: 0;
 }
 button {
   cursor: pointer;
 }
 button:disabled {
   cursor: not-allowed;
-}
-:focus-visible {
-  outline: 2px solid #0284c7;
-  outline-offset: 2px;
-}
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
-}
-.prose-chat {
-  line-height: 1.68;
-  overflow-wrap: anywhere;
-}
-.prose-chat p {
-  margin: 0.48rem 0;
-}
-.prose-chat ul {
-  list-style: disc;
-  padding-left: 1.4rem;
-}
-.prose-chat ol {
-  list-style: decimal;
-  padding-left: 1.4rem;
-}
-.prose-chat pre {
-  background: #172234;
-  color: #f1f5f9;
-  padding: 1rem;
-  overflow-x: auto;
-  border-radius: 12px;
-  margin: 0.75rem 0;
-}
-.prose-chat code:not(pre code) {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 0 0.25rem;
-}
-.prose-chat a {
-  color: #0369a1;
-  text-decoration: underline;
-}
-.prose-chat blockquote {
-  border-left: 3px solid #cbd5e1;
-  padding-left: 1rem;
-  color: #64748b;
-}
-.prose-chat h1,
-.prose-chat h2,
-.prose-chat h3 {
-  font-weight: 650;
-  margin: 0.75rem 0 0.3rem;
-}
-.prose-chat table {
-  border-collapse: collapse;
-  max-width: 100%;
-  display: block;
-  overflow: auto;
-}
-.prose-chat td,
-.prose-chat th {
-  border: 1px solid #cbd5e1;
-  padding: 0.35rem 0.6rem;
-}
-@keyframes pulse-dot {
-  0%,
-  80%,
-  100% {
-    opacity: 0.3;
-    transform: scale(0.75);
-  }
-  40% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-.live-dot {
-  animation: pulse-dot 1.15s ease-in-out infinite;
-}
-.live-dot:nth-child(2) {
-  animation-delay: 0.16s;
-}
-.live-dot:nth-child(3) {
-  animation-delay: 0.32s;
-}
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
 }

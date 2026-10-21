@@ -128,4 +128,6 @@ jobs:
             sleep 1
           done
           test "$ready" -eq 1
+          python e2e/sse_reconnect.py
+          python e2e/i18n_settings.py
           python e2e/smoke.py

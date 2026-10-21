@@ -180,6 +180,7 @@ const events = {
     },
   ],
 };
+let grokConnected = false;
 const failFirstComment = new Set();
 let failNextDiscussionCreate = false;
 let settings = {
@@ -243,6 +244,14 @@ async function body(req) {
   for await (const part of req) raw += part;
   return raw ? JSON.parse(raw) : {};
 }
+// 使用与真实 Schedule API 同步的夹具状态，覆盖新增、修改和删除闭环。
+const schedulesByCard = {
+  "ongoing-1": [{
+    id: "schedule-demo", enabled: true, frequency: "daily",
+    hour: 9, minute: 0, timezone: "Asia/Shanghai",
+    next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
+  }],
+};
 function details(id) {
   const card = cards.find((x) => x.id === id);
   if (!card) return null;
@@ -305,20 +314,7 @@ function details(id) {
             },
           ]
         : [],
-    schedules:
-      card.kind === "ongoing"
-        ? [
-            {
-              id: "schedule-demo",
-              enabled: true,
-              frequency: "daily",
-              hour: 9,
-              minute: 0,
-              timezone: "Asia/Shanghai",
-              next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
-            },
-          ]
-        : [],
+    schedules: schedulesByCard[id] || [],
     health: card.health || "unknown",
     last_checkin: id === "ongoing-1" ? events[id][0] : null,
   };
@@ -353,17 +349,23 @@ http
           return data(res, { ok: true });
         }
         if (route === "/projects" && req.method === "GET")
-          return data(res, projects);
+          return data(res, session.workspace.id === "demo-workspace-2" ? [secondProject] : projects);
         if (route === "/projects" && req.method === "POST") {
-          return data(
-            res,
-            { ...project, ...(await body(req)), id: "project-new" },
-            201,
-          );
+          const created = {
+            ...(await body(req)),
+            id: "project-" + Date.now(),
+            created_at: now(),
+            updated_at: now(),
+          };
+          projects.push(created);
+          return data(res, created, 201);
         }
-        if (route === `/projects/${project.id}` && req.method === "PATCH") {
-          Object.assign(project, await body(req));
-          return data(res, project);
+        const projectUpdate = route.match(/^\/projects\/([^/]+)$/);
+        if (projectUpdate && req.method === "PATCH") {
+          const target = projects.find((item) => item.id === projectUpdate[1]);
+          if (!target) return failure(res);
+          Object.assign(target, await body(req), { updated_at: now() });
+          return data(res, target);
         }
         const projectCards = route.match(/^\/projects\/([^/]+)\/cards$/);
         if (projectCards && req.method === "GET") {
@@ -372,10 +374,10 @@ http
             cards.filter((card) => card.project_id === projectCards[1]),
           );
         }
-        if (
-          route === `/projects/${project.id}/discussions` &&
-          req.method === "POST"
-        ) {
+        const discussionCreate = route.match(/^\/projects\/([^/]+)\/discussions$/);
+        if (discussionCreate && req.method === "POST") {
+          const target = projects.find((item) => item.id === discussionCreate[1]);
+          if (!target) return failure(res);
           if (failNextDiscussionCreate) {
             failNextDiscussionCreate = false;
             return data(
@@ -391,7 +393,7 @@ http
           }
           const card = {
             id: "discussion-" + Date.now(),
-            project_id: project.id,
+            project_id: target.id,
             kind: "discussion",
             title: "",
             description: "",
@@ -404,14 +406,14 @@ http
           failFirstComment.add(card.id);
           return data(res, card, 201);
         }
-        if (
-          route === `/projects/${project.id}/todos` &&
-          req.method === "POST"
-        ) {
+        const todoCreate = route.match(/^\/projects\/([^/]+)\/todos$/);
+        if (todoCreate && req.method === "POST") {
+          const target = projects.find((item) => item.id === todoCreate[1]);
+          if (!target) return failure(res);
           const input = await body(req);
           const card = {
             id: "todo-" + Date.now(),
-            project_id: project.id,
+            project_id: target.id,
             kind: "todo",
             title: input.title,
             description: input.description || "",
@@ -546,22 +548,28 @@ http
               201,
             );
           }
-          if (rest === "schedules" && req.method === "POST")
-            return data(
-              res,
-              {
-                id: "schedule-new",
-                ...(await body(req)),
-                next_trigger_at: now(),
-              },
-              201,
-            );
-          if (rest?.startsWith("schedules/"))
-            return data(
-              res,
-              req.method === "DELETE" ? undefined : await body(req),
-              req.method === "DELETE" ? 204 : 200,
-            );
+          if (rest === "schedules" && req.method === "POST") {
+            const schedule = {
+              ...(await body(req)), id: "schedule-" + Date.now(), next_trigger_at: now(),
+            };
+            if (!schedulesByCard[id]) schedulesByCard[id] = [];
+            schedulesByCard[id].push(schedule);
+            return data(res, schedule, 201);
+          }
+          if (rest?.startsWith("schedules/")) {
+            const scheduleID = rest.slice("schedules/".length);
+            const plans = schedulesByCard[id] || [];
+            const existing = plans.find(item => item.id === scheduleID);
+            if (!existing) return failure(res);
+            if (req.method === "DELETE") {
+              plans.splice(plans.indexOf(existing), 1);
+              return data(res, undefined, 204);
+            }
+            if (req.method === "PUT") {
+              Object.assign(existing, await body(req));
+              return data(res, existing);
+            }
+          }
           if (rest?.includes("/cancel") || rest?.includes("/retry"))
             return data(res, { trigger_id: "retry-demo" });
         }
@@ -572,11 +580,23 @@ http
           }
           return data(res, settings);
         }
+        // 仅测试夹具使用：模拟已经授权的账号及其实际模型目录。
+        if (route === "/__fixture/connect-grok" && req.method === "POST") {
+          grokConnected = true;
+          return data(res, { connected: true });
+        }
         if (route === "/agent/model-auth")
           return data(res, [
             { provider: "chatgpt", available: false, connected: false },
-            { provider: "grok", available: true, connected: false },
+            { provider: "grok", available: true, connected: grokConnected },
           ]);
+        if (route === "/agent/models" && url.searchParams.get("provider") === "grok")
+          return grokConnected
+            ? data(res, [
+                { id: "grok-3-mini", name: "Grok Mini (测试目录)" },
+                { id: "grok-4", name: "Grok 4 (测试目录)" },
+              ])
+            : data(res, { error: { code: "not_connected", message: "Not connected" } }, 403);
         if (route === "/agent/nexusdock")
           return data(res, { available: true, connected: false });
         if (route === "/agent/mcp-connections") {

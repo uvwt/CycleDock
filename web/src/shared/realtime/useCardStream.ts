@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { keys } from "../../app/query";
+import { keys } from "../../app-v2/query";
+import type { CardDetail } from "../api/types";
 export type LiveRun = {
   runID: string;
   text: string;
@@ -127,13 +128,25 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
     stream.addEventListener("event.created", sync);
     stream.onopen = () => {
       if (!active) return;
+      // EventSource 断线后会重新触发 open。不能清空尚未落库的临时文本；
+      // 同实例会随后送快照，跨实例则以重新获取的持久 Run 状态收口。
       setState((s) => ({
         ...s,
         connected: true,
         lastError: undefined,
-        live: null,
       }));
-      sync();
+      void refresh().then(() => {
+        if (!active) return;
+        const detail = query.getQueryData<CardDetail>(keys.card(cardID));
+        if (!detail) return;
+        setState((s) => ({
+          ...s,
+          live:
+            s.live && detail.current_run?.id !== s.live.runID
+              ? null
+              : s.live,
+        }));
+      });
     };
     stream.onerror = () => {
       if (active)

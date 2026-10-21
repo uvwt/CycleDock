@@ -1,5 +1,7 @@
 # CycleDock 前端从零重建 · 产品与实现基线
 
+> 下一轮 Frontend V2 已另行收敛为 [Frontend V2 从零重构方案](frontend-v2-plan.md)。V2 已在独立开发分支实现并持续验收，尚未合入 main；后续新开发以该文档为 UI / 页面层实施基线，本文继续作为既有功能与历史产品约束参考。
+
 > 后续修订：本轮项目工作台优化以 [项目工作台优化方案与实施交接](project-workbench-plan.md) 为准。该方案已在 `feat/project-workbench-impl-20261021` 实现并进入验收收尾；其覆盖范围内的布局与交互决策替代本文早期的平级 Chat / Board 导航、桌面右侧详情常驻及从零重写要求，未涉及要求继续适用。
 
 > 状态：2026-10-21 用户确认。本文是本次新前端的唯一设计基线；旧 `web/src` 代码不作为实现参考。对接后端以最新 `main`（Discussion/Todo/Ongoing 已分离）为准。
