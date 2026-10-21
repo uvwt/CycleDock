@@ -99,11 +99,13 @@ Project 本身就是项目看板。
 - id
 - workspace_id
 - project_id
-- kind: normal / ongoing
+- kind: discussion / todo / ongoing
 - title
 - description
-- normal_column
+- discussion_state
+- todo_state
 - ongoing_state
+- source_discussion_id nullable
 - required_confirmations
 - created_by_source_id
 - created_at
@@ -111,13 +113,33 @@ Project 本身就是项目看板。
 
 约束：
 
-- normal Card 必须有 normal_column，不能有 ongoing_state。
-- ongoing Card 必须有 ongoing_state，不能有 normal_column。
-- normal_column 限定 Discussion / Todo / Working / Review / Done。
+- Discussion 必须有 discussion_state，不能有 todo_state / ongoing_state / source_discussion_id。
+- Todo 必须有 todo_state，不能有 discussion_state / ongoing_state。
+- Ongoing 必须有 ongoing_state，不能有 discussion_state / todo_state。
+- discussion_state 限定 Active / Archived。
+- todo_state 限定 Todo / Working / Review / Done。
 - ongoing_state 限定 Active / Paused / Archived。
+- Todo / Ongoing 可以通过 source_discussion_id 记录来源 Discussion；来源被删除时派生工作继续存在，来源引用置空。
 - workspace_id 与 project_id 必须 tenant-consistent。
+- source_discussion_id 必须与派生 Card 属于同一 Workspace，创建路径必须确认来源 kind=discussion。
+- Discussion 在首轮 AI 元数据生成前允许 title 为空；Todo / Ongoing title 必须非空。
 
 Card 不保存 agent_status、claimed、progress、current_agent。
+
+### 4.1 派生关系
+
+`source_discussion_id` 表示来源关系，不表示父子生命周期：
+
+```text
+Discussion A
+├── Todo B
+├── Todo C
+└── Ongoing D
+```
+
+Discussion 归档不会归档 B/C/D；Discussion 删除也不会级联删除派生工作。
+
+Todo / Ongoing 不允许作为 source_discussion_id，也不允许继续生成其他 Card。
 
 ## 5. events
 

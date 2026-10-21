@@ -6,9 +6,9 @@
 
 中文：
 
-> Card 保存经过提炼的长期任务知识；Run 保存短生命周期执行状态。
+> Card 保存经过提炼的长期工作知识；Run 保存短生命周期执行状态。
 
-CycleDock 不把一个 Card 实现成永不结束的模型 Conversation。
+Discussion 可以在产品上表现为持续会话，但 CycleDock 仍不保存一个永不结束的模型 Conversation。每一轮执行仍由新的 Trigger / Run 驱动。
 
 每个 Run 都独立构建模型上下文。
 
@@ -300,7 +300,9 @@ Connection test：
 
 Runner：
 
-- Claim 后先把 Normal Card 推进 Working（如果尚未进入 Working）。
+- Claim Todo 后把 Todo 推进 Working（如果尚未进入 Working）。
+- Claim Discussion 不改变 Discussion 生命周期状态；Discussion 永远不会因为 Agent 开始执行而进入 Working。
+- Discussion 第一次运行且 title 仍为空时，Runner 先基于首轮 Discussion context 生成标题与描述并原子写回，再进入正式工作轮次。
 - Run 开始时重新构建最新 durable context。
 - 每个 Run 重新 discovery 已启用 outbound MCP tools。
 - heartbeat 只更新 lease，不写 Timeline。
@@ -308,7 +310,28 @@ Runner：
 - 最终 assistant response 作为 Result 通过统一 Store 完成 Run。
 - Human interrupt / supersede 后，旧 Runner 即使模型晚返回，`FinishRun` 仍因 current Run 校验失败而不能污染 Card。
 
-## 13. Artifact
+## 13. Discussion 生成工作
+
+Discussion 是唯一允许生成新工作 Card 的来源。
+
+Built-in Agent 提供一个内部“生成工作”能力，输入只表达结构化结果：
+
+- kind: todo | ongoing
+- title
+- description
+- Todo 的 required confirmations，或 Ongoing 的可选 Schedule 建议。
+
+用户界面只有“生成任务”一个动作；Todo / Ongoing 的判断由模型完成。
+
+Store 在创建时重新检查：
+
+- 当前来源 Card 仍是 active Discussion。
+- 新 Card 与来源 Discussion 属于同一 Workspace / Project。
+- kind 只能是 todo 或 ongoing。
+
+Todo / Ongoing 不获得这一能力，避免形成 Todo → Todo 或 Ongoing → Todo 的派生树。
+
+## 14. Artifact
 
 如果执行产生真正需要后续继续使用的文件，例如 patch、诊断报告、截图或配置产物，不应通过继承完整 tool response 传递。
 
@@ -316,7 +339,7 @@ Runner：
 
 Artifact 不属于第一阶段必须 schema，避免提前扩展。
 
-## 14. NexusDock First-party Runtime Bootstrap
+## 15. NexusDock First-party Runtime Bootstrap
 
 如果当前 Workspace 已授权 NexusDock 远程设备，Runner 在第一次模型请求前完成以下动作：
 

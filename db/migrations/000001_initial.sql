@@ -32,11 +32,13 @@ CREATE TABLE cards (
     id uuid PRIMARY KEY,
     workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     project_id uuid NOT NULL,
-    kind text NOT NULL CHECK (kind IN ('normal', 'ongoing')),
-    title text NOT NULL CHECK (btrim(title) <> ''),
+    kind text NOT NULL CHECK (kind IN ('discussion', 'todo', 'ongoing')),
+    title text NOT NULL DEFAULT '',
     description text NOT NULL DEFAULT '',
-    normal_column text NULL CHECK (normal_column IN ('discussion', 'todo', 'working', 'review', 'done')),
+    discussion_state text NULL CHECK (discussion_state IN ('active', 'archived')),
+    todo_state text NULL CHECK (todo_state IN ('todo', 'working', 'review', 'done')),
     ongoing_state text NULL CHECK (ongoing_state IN ('active', 'paused', 'archived')),
+    source_discussion_id uuid NULL,
     required_confirmations integer NOT NULL DEFAULT 1 CHECK (required_confirmations > 0),
     created_by_source_id uuid NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -49,10 +51,29 @@ CREATE TABLE cards (
     CONSTRAINT cards_source_fk
         FOREIGN KEY (workspace_id, created_by_source_id)
         REFERENCES sources(workspace_id, id),
+    CONSTRAINT cards_source_discussion_fk
+        FOREIGN KEY (workspace_id, source_discussion_id)
+        REFERENCES cards(workspace_id, id)
+        ON DELETE SET NULL (source_discussion_id),
+    CONSTRAINT cards_title_ck CHECK (
+        kind = 'discussion' OR btrim(title) <> ''
+    ),
     CONSTRAINT cards_kind_state_ck CHECK (
-        (kind = 'normal' AND normal_column IS NOT NULL AND ongoing_state IS NULL)
+        (kind = 'discussion'
+            AND discussion_state IS NOT NULL
+            AND todo_state IS NULL
+            AND ongoing_state IS NULL
+            AND source_discussion_id IS NULL)
         OR
-        (kind = 'ongoing' AND normal_column IS NULL AND ongoing_state IS NOT NULL)
+        (kind = 'todo'
+            AND discussion_state IS NULL
+            AND todo_state IS NOT NULL
+            AND ongoing_state IS NULL)
+        OR
+        (kind = 'ongoing'
+            AND discussion_state IS NULL
+            AND todo_state IS NULL
+            AND ongoing_state IS NOT NULL)
     )
 );
 

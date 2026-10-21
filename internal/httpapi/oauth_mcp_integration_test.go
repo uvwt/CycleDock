@@ -220,7 +220,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	}
 	requiredTools := map[string]bool{
 		"list_projects": false, "list_cards": false, "get_card": false,
-		"create_card": false, "update_card": false, "move_card": false,
+		"create_discussion": false, "generate_work": false, "update_card": false, "move_card": false,
 		"add_comment": false, "create_followup": false, "claim_work": false,
 		"heartbeat_run": false, "report_progress": false, "add_finding": false,
 		"check_in": false, "finish_run": false, "confirm_card": false,
@@ -240,20 +240,27 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if len(projects.Projects) != 1 || projects.Projects[0].ID != project.ID.String() {
 		t.Fatalf("MCP project scope mismatch: %+v", projects)
 	}
-	created := callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "create_card", map[string]any{
-		"project_id": project.ID.String(), "kind": "normal", "title": "MCP work",
-		"description": "created through the official MCP client", "idempotency_key": "mcp-e2e-create",
+	discussion := callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "create_discussion", map[string]any{
+		"project_id": project.ID.String(), "idempotency_key": "mcp-e2e-discussion",
 	})
-	if created.Card.ID == "" || created.Card.ProjectID != project.ID.String() {
-		t.Fatalf("create_card output: %+v", created)
+	if discussion.Card.ID == "" || discussion.Card.Kind != "discussion" {
+		t.Fatalf("create_discussion output: %+v", discussion)
+	}
+	created := callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "generate_work", map[string]any{
+		"discussion_id": discussion.Card.ID, "kind": "todo", "title": "MCP work",
+		"description": "created through the official MCP client", "idempotency_key": "mcp-e2e-generate",
+	})
+	if created.Card.ID == "" || created.Card.ProjectID != project.ID.String() ||
+		created.Card.SourceDiscussionID != discussion.Card.ID {
+		t.Fatalf("generate_work output: %+v", created)
 	}
 	callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "move_card", map[string]any{
-		"card_id": created.Card.ID, "column": "working",
+		"card_id": created.Card.ID, "state": "working",
 	})
 	reviewAttempt, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "move_card",
 		Arguments: map[string]any{
-			"card_id": created.Card.ID, "column": "review",
+			"card_id": created.Card.ID, "state": "review",
 		},
 	})
 	if err != nil {
@@ -316,7 +323,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCard, err := dataStore.CreateNormalCard(ctx, otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Private Card", "")
+	otherCard, err := dataStore.CreateTodoCard(ctx, otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Private Card", "", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

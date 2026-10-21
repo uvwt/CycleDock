@@ -9,11 +9,11 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { Activity, Circle, Clock3 } from 'lucide-react'
-import type { Card, NormalColumn } from '../api'
+import { Activity, Circle, Clock3, MessageSquareText } from 'lucide-react'
+import type { Card, TodoState } from '../api'
 import { useI18n } from '../i18n-context'
 
-const columns: NormalColumn[] = ['discussion', 'todo', 'working', 'review', 'done']
+const columns: TodoState[] = ['todo', 'working', 'review', 'done']
 
 export function Board({
   cards,
@@ -22,37 +22,72 @@ export function Board({
 }: {
   cards: Card[]
   onOpen: (card: Card) => void
-  onMove: (cardID: string, column: NormalColumn) => void
+  onMove: (cardID: string, state: TodoState) => void
 }) {
   const { t } = useI18n()
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
   )
-  const normalCards = cards.filter((card) => card.kind === 'normal')
+  const discussionCards = cards.filter((card) => card.kind === 'discussion')
+  const todoCards = cards.filter((card) => card.kind === 'todo')
   const ongoingCards = cards.filter((card) => card.kind === 'ongoing')
 
   function handleDragEnd(event: DragEndEvent) {
     const cardID = String(event.active.id)
-    const column = event.over?.id as NormalColumn | undefined
-    const card = normalCards.find((item) => item.id === cardID)
-    const blockedDone = column === 'done' && card?.normal_column !== 'review'
-    if (card && column && columns.includes(column) && card.normal_column !== column && !blockedDone) {
-      onMove(cardID, column)
+    const state = event.over?.id as TodoState | undefined
+    const card = todoCards.find((item) => item.id === cardID)
+    const blockedDone = state === 'done' && card?.todo_state !== 'review'
+    if (card && state && columns.includes(state) && card.todo_state !== state && !blockedDone) {
+      onMove(cardID, state)
     }
   }
 
   return (
     <div className="space-y-8">
+      <section>
+        <div className="mb-3 flex items-center gap-2">
+          <MessageSquareText className="size-4 text-sky-700" />
+          <h2 className="text-sm font-semibold text-slate-800">{t('board.discussions')}</h2>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{discussionCards.length}</span>
+        </div>
+        {discussionCards.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 px-5 py-7 text-sm text-slate-600">
+            {t('board.emptyDiscussions')}
+          </div>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {discussionCards.map((card) => (
+              <button
+                key={card.id}
+                onClick={() => onOpen(card)}
+                className={`rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 ${
+                  card.discussion_state === 'archived' ? 'opacity-55' : ''
+                }`}
+              >
+                <p className="font-medium text-slate-900">{card.title || t('board.newDiscussion')}</p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">
+                  {card.description || t('board.discussionPlaceholder')}
+                </p>
+                <div className="mt-4 flex items-center justify-between text-[11px] text-slate-600">
+                  <span className="capitalize">{card.discussion_state}</span>
+                  {card.current_run_status ? <RunBadge status={card.current_run_status} /> : <span>{t('board.idle')}</span>}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="grid snap-x snap-mandatory auto-cols-[minmax(260px,85vw)] grid-flow-col gap-3 overflow-x-auto pb-2 lg:min-w-[980px] lg:snap-none lg:grid-flow-row lg:grid-cols-5 lg:overflow-visible lg:pb-0">
+        <div className="grid snap-x snap-mandatory auto-cols-[minmax(260px,85vw)] grid-flow-col gap-3 overflow-x-auto pb-2 lg:min-w-[820px] lg:snap-none lg:grid-flow-row lg:grid-cols-4 lg:overflow-visible lg:pb-0">
           {columns.map((column) => (
             <BoardColumn
               key={column}
               column={column}
               label={t(`board.${column}`)}
               emptyLabel={t('board.emptyColumn')}
-              cards={normalCards.filter((card) => card.normal_column === column)}
+              cards={todoCards.filter((card) => card.todo_state === column)}
               onOpen={onOpen}
             />
           ))}
@@ -108,7 +143,7 @@ function BoardColumn({
   cards,
   onOpen,
 }: {
-  column: NormalColumn
+  column: TodoState
   label: string
   emptyLabel: string
   cards: Card[]

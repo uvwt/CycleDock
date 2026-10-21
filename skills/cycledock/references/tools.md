@@ -13,14 +13,17 @@ Returns one Card plus recent durable Timeline, pending Trigger queue and current
 
 ## Card writes
 
-### create_card
-Creates Normal or Ongoing Card. Requires a stable `idempotency_key`.
+### create_discussion
+Creates a new Discussion in a Project. A Discussion is the entry point for new work and does not start as a Todo. Requires a stable `idempotency_key`.
+
+### generate_work
+Creates one Todo or Ongoing Card from an active Discussion and records the source Discussion. `kind` is the agent's semantic classification: finite work is `todo`; long-term, periodic, recurring, or continuously monitored work is `ongoing`. Todo and Ongoing Cards cannot generate more Cards. Requires a stable `idempotency_key`.
 
 ### update_card
 Updates title and/or description only.
 
 ### move_card
-For external agents, valid target columns are `discussion`, `todo`, and `working`. Review requires `confirm_card`; Done requires a human.
+For external agents, this is only for Todo Cards. Valid target states are `todo` and `working`. Discussion is not a Todo state. Review requires `confirm_card`; Done requires a human.
 
 ### add_comment
 Adds durable context only. It does **not** create a Trigger.
@@ -56,4 +59,4 @@ A superseded or foreign-owned Run rejects further writes.
 ## Review
 
 ### confirm_card
-Confirms a Working Normal Card. Requires `idempotency_key`. When the Card reaches its required confirmation count, CycleDock moves it to Review. Review → Done remains Human-only.
+Confirms a Working Todo Card. Requires `idempotency_key`. When the Card reaches its required confirmation count, CycleDock moves it to Review. Review → Done remains Human-only.

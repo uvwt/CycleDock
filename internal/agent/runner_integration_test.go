@@ -30,6 +30,115 @@ import (
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
+func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
+	dataStore, _ := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	var requests []modelRequest
+	var callCount int
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request modelRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode model request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		requests = append(requests, request)
+		callCount++
+		current := callCount
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if current == 1 {
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "discussion-metadata-1", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "cycledock_set_discussion_metadata",
+					Arguments: `{"title":"Plan release rollout","description":"Clarify release scope, rollout steps, and monitoring expectations."}`,
+				},
+			}})
+			return
+		}
+		writeModelResponse(t, w, "I have summarized the discussion and will keep clarifying the rollout before generating work.", nil)
+	}))
+	defer modelHTTP.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Discussion metadata E2E")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Release", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	discussion, err := dataStore.CreateDiscussion(ctx, workspace.ID, project.ID, human.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discussion.Title != "" {
+		t.Fatalf("new discussion title=%q, want empty", discussion.Title)
+	}
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
+		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
+		RequestTimeoutMS: 5000, MaxToolRounds: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger, err := dataStore.SubmitComment(ctx, store.SubmitCommentParams{
+		WorkspaceID: workspace.ID, CardID: discussion.ID, AuthorSourceID: human.ID,
+		Content:        "Help me plan a release rollout and decide what work should come out of it.",
+		IdempotencyKey: "discussion-metadata-trigger", DispatchMode: domain.DispatchModeEnqueue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextBuiltInRun(ctx, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.TriggerID != trigger.TriggerID || claim.SourceID != settings.SourceID {
+		t.Fatalf("claim=%+v trigger=%+v settings=%+v", claim, trigger, settings)
+	}
+
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
+		HeartbeatInterval: 50 * time.Millisecond, LeaseDuration: time.Minute,
+	})
+	if err := runner.Run(ctx, *claim); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	card, err := dataStore.GetCard(ctx, workspace.ID, discussion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Title != "Plan release rollout" ||
+		card.Description != "Clarify release scope, rollout steps, and monitoring expectations." {
+		t.Fatalf("discussion metadata=%q / %q", card.Title, card.Description)
+	}
+	if card.Kind != string(domain.CardKindDiscussion) ||
+		!card.DiscussionState.Valid ||
+		card.DiscussionState.String != string(domain.DiscussionStateActive) {
+		t.Fatalf("discussion lifecycle changed during first run: %+v", card)
+	}
+
+	mu.Lock()
+	captured := append([]modelRequest(nil), requests...)
+	mu.Unlock()
+	if len(captured) != 2 {
+		t.Fatalf("model request count=%d, want 2", len(captured))
+	}
+	if !containsMessage(captured[0].Messages, "Help me plan a release rollout") {
+		t.Fatalf("first model request missing discussion context: %+v", captured[0].Messages)
+	}
+}
+
 func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.T) {
 	dataStore, _ := newAgentIntegrationStore(t)
 	ctx := context.Background()
@@ -102,7 +211,7 @@ func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Investigate", "latest card description")
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Investigate", "latest card description", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +344,7 @@ func TestRunnerWaitForHumanStopsWithoutResult(t *testing.T) {
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Waiting Workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
-	card, _ := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Card", "")
+	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 		RequestTimeoutMS: 5000, MaxToolRounds: 4,
@@ -292,7 +401,7 @@ func TestTwoDispatchersExecuteOneTriggerOnce(t *testing.T) {
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Dispatcher Workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
-	card, _ := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Card", "")
+	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 		RequestTimeoutMS: 5000, MaxToolRounds: 4,
@@ -382,7 +491,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Interrupt Workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
-	card, _ := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Card", "")
+	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 		RequestTimeoutMS: 5000, MaxToolRounds: 4,
@@ -572,7 +681,7 @@ func runFailureScenario(
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := dataStore.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Failure card", "")
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Failure card", "", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

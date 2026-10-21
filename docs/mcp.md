@@ -76,11 +76,16 @@ MCP tool input 中没有 `workspace_id` 或 `source_id`。
 
 ### Card / Context
 
-- `create_card`
+- `create_discussion`
+- `generate_work`
 - `update_card`
 - `move_card`
 - `add_comment`
 - `create_followup`
+
+`create_discussion` 创建一个新的 Discussion。Discussion 是新工作的入口，不要求调用方先选择 Todo / Ongoing。
+
+`generate_work` 只能以 Discussion 为来源创建一个 Todo 或 Ongoing，并写入 `source_discussion_id`。这个工具只有一个入口，`kind` 是 AI 对当前 Discussion 的结构化判断结果，不对应两个用户按钮。Todo / Ongoing 不能作为来源再次调用。
 
 `add_comment` 只增加长期上下文，不创建 Trigger。
 
@@ -125,7 +130,7 @@ superseded / expired / cancelled Run，或另一个 Source 拥有的 Run，后�
 
 - `confirm_card`
 
-Agent 不允许直接 `move_card → review`，必须通过 `confirm_card` 留下确认事实。
+Agent 只能对 Todo 使用 `move_card`；Discussion 不存在可移动的任务列。Agent 不允许直接 `move_card → review`，必须通过 `confirm_card` 留下确认事实。
 
 达到 `required_confirmations` 后，CycleDock 自动将 Working → Review。Review → Done 始终 Human-only。
 
@@ -133,7 +138,8 @@ Agent 不允许直接 `move_card → review`，必须通过 `confirm_card` 留�
 
 以下写操作使用 `idempotency_key`：
 
-- create_card。
+- create_discussion。
+- generate_work。
 - add_comment。
 - create_followup。
 - meaningful progress Event。

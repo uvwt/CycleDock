@@ -5,18 +5,25 @@ import "errors"
 type CardKind string
 
 const (
-	CardKindNormal  CardKind = "normal"
-	CardKindOngoing CardKind = "ongoing"
+	CardKindDiscussion CardKind = "discussion"
+	CardKindTodo       CardKind = "todo"
+	CardKindOngoing    CardKind = "ongoing"
 )
 
-type NormalColumn string
+type DiscussionState string
 
 const (
-	NormalColumnDiscussion NormalColumn = "discussion"
-	NormalColumnTodo       NormalColumn = "todo"
-	NormalColumnWorking    NormalColumn = "working"
-	NormalColumnReview     NormalColumn = "review"
-	NormalColumnDone       NormalColumn = "done"
+	DiscussionStateActive   DiscussionState = "active"
+	DiscussionStateArchived DiscussionState = "archived"
+)
+
+type TodoState string
+
+const (
+	TodoStateTodo    TodoState = "todo"
+	TodoStateWorking TodoState = "working"
+	TodoStateReview  TodoState = "review"
+	TodoStateDone    TodoState = "done"
 )
 
 type OngoingState string

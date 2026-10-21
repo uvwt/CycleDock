@@ -14,7 +14,7 @@ import (
 
 func TestBuiltInAgentConcurrentClaimAndContextUsesLatestCardState(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
@@ -132,7 +132,7 @@ func TestBuiltInAgentConcurrentClaimAndContextUsesLatestCardState(t *testing.T) 
 
 func TestAgentContextCompactionRetainsHistoricalDurableFacts(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
@@ -214,7 +214,7 @@ func TestAgentContextCompactionRetainsHistoricalDurableFacts(t *testing.T) {
 
 func TestBuiltInAgentWaitingHumanBlocksUntilReplyAndLateRunCannotFinish(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",

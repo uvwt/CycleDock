@@ -15,23 +15,26 @@ import (
 const createCard = `-- name: CreateCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
-    normal_column, ongoing_state, required_confirmations, created_by_source_id
+    discussion_state, todo_state, ongoing_state, source_discussion_id,
+    required_confirmations, created_by_source_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 `
 
 type CreateCardParams struct {
-	ID                    uuid.UUID   `json:"id"`
-	WorkspaceID           uuid.UUID   `json:"workspace_id"`
-	ProjectID             uuid.UUID   `json:"project_id"`
-	Kind                  string      `json:"kind"`
-	Title                 string      `json:"title"`
-	Description           string      `json:"description"`
-	NormalColumn          pgtype.Text `json:"normal_column"`
-	OngoingState          pgtype.Text `json:"ongoing_state"`
-	RequiredConfirmations int32       `json:"required_confirmations"`
-	CreatedBySourceID     uuid.UUID   `json:"created_by_source_id"`
+	ID                    uuid.UUID     `json:"id"`
+	WorkspaceID           uuid.UUID     `json:"workspace_id"`
+	ProjectID             uuid.UUID     `json:"project_id"`
+	Kind                  string        `json:"kind"`
+	Title                 string        `json:"title"`
+	Description           string        `json:"description"`
+	DiscussionState       pgtype.Text   `json:"discussion_state"`
+	TodoState             pgtype.Text   `json:"todo_state"`
+	OngoingState          pgtype.Text   `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID `json:"source_discussion_id"`
+	RequiredConfirmations int32         `json:"required_confirmations"`
+	CreatedBySourceID     uuid.UUID     `json:"created_by_source_id"`
 }
 
 func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, error) {
@@ -42,8 +45,10 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		arg.Kind,
 		arg.Title,
 		arg.Description,
-		arg.NormalColumn,
+		arg.DiscussionState,
+		arg.TodoState,
 		arg.OngoingState,
+		arg.SourceDiscussionID,
 		arg.RequiredConfirmations,
 		arg.CreatedBySourceID,
 	)
@@ -55,8 +60,10 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		&i.Kind,
 		&i.Title,
 		&i.Description,
-		&i.NormalColumn,
+		&i.DiscussionState,
+		&i.TodoState,
 		&i.OngoingState,
+		&i.SourceDiscussionID,
 		&i.RequiredConfirmations,
 		&i.CreatedBySourceID,
 		&i.CreatedAt,
@@ -158,7 +165,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 }
 
 const getCard = `-- name: GetCard :one
-SELECT id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 FROM cards
 WHERE workspace_id = $1 AND id = $2
 `
@@ -178,8 +185,10 @@ func (q *Queries) GetCard(ctx context.Context, arg GetCardParams) (Card, error) 
 		&i.Kind,
 		&i.Title,
 		&i.Description,
-		&i.NormalColumn,
+		&i.DiscussionState,
+		&i.TodoState,
 		&i.OngoingState,
+		&i.SourceDiscussionID,
 		&i.RequiredConfirmations,
 		&i.CreatedBySourceID,
 		&i.CreatedAt,

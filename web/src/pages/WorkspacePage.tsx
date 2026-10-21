@@ -17,7 +17,7 @@ import {
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { api, type Card, type Identity, type NormalColumn, type Project } from '../api'
+import { api, type Card, type Identity, type Project, type TodoState } from '../api'
 import { useI18n } from '../i18n-context'
 import { queryClient, queryKeys } from '../query'
 
@@ -59,7 +59,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   })
 
   const move = useMutation({
-    mutationFn: ({ cardID, column }: { cardID: string; column: NormalColumn }) => api.moveCard(cardID, column),
+    mutationFn: ({ cardID, state }: { cardID: string; state: TodoState }) => api.moveCard(cardID, state),
     onSuccess: async (_, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.cards(activeProjectID ?? '') }),
@@ -79,7 +79,6 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
   })
 
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
-  const [createCardOpen, setCreateCardOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(() => {
     const search = new URLSearchParams(window.location.search)
@@ -129,6 +128,15 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
       navigate(`/projects/${activeProjectID}/cards/${card.id}`)
     }
   }
+
+  const createDiscussion = useMutation({
+    mutationFn: () => api.createDiscussion(activeProjectID!),
+    onSuccess: async (card) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.cards(activeProjectID ?? '') })
+      navigate(`/projects/${activeProjectID}/cards/${card.id}`)
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not create discussion'),
+  })
 
   return (
     <main className="flex min-h-screen bg-slate-50 text-slate-900">
@@ -236,10 +244,11 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCreateCardOpen(true)}
-                  className="flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-3.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-300"
+                  onClick={() => createDiscussion.mutate()}
+                  disabled={createDiscussion.isPending}
+                  className="flex h-9 items-center gap-2 rounded-xl bg-cyan-400 px-3.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-50"
                 >
-                  <CirclePlus className="size-4" /> {t('nav.newCard')}
+                  <CirclePlus className="size-4" /> {t('nav.newDiscussion')}
                 </button>
               </>
             ) : (
@@ -293,7 +302,7 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
                 <Board
                   cards={cards.data ?? []}
                   onOpen={openCard}
-                  onMove={(cardID, column) => move.mutate({ cardID, column })}
+                  onMove={(cardID, state) => move.mutate({ cardID, state })}
                 />
               </Suspense>
             </>
@@ -309,11 +318,6 @@ export function WorkspacePage({ identity }: { identity: Identity }) {
       ) : null}
       {activeProject ? (
         <>
-          <CreateCardDialog
-            project={activeProject}
-            open={createCardOpen}
-            onOpenChange={setCreateCardOpen}
-          />
           <ProjectSettingsDialog
             key={activeProject.id}
             project={activeProject}
@@ -449,65 +453,6 @@ function CreateProjectDialog({
             Create project
           </button>
           <Dialog.Close aria-label="Close" className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700"><X className="size-4" /></Dialog.Close>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  )
-}
-
-function CreateCardDialog({
-  project,
-  open,
-  onOpenChange,
-}: {
-  project: Project
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const [kind, setKind] = useState<Card['kind']>('normal')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const create = useMutation({
-    mutationFn: () => api.createCard(project.id, { kind, title: title.trim(), description: description.trim() }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.cards(project.id) })
-      setTitle('')
-      setDescription('')
-      setKind('normal')
-      onOpenChange(false)
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not create card'),
-  })
-
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-900/35" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-2xl outline-none">
-          <Dialog.Title className="text-lg font-semibold">New card</Dialog.Title>
-          <Dialog.Description className="mt-1 text-sm text-slate-600">Choose a finite task or an ongoing cycle.</Dialog.Description>
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            {(['normal', 'ongoing'] as Card['kind'][]).map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => setKind(item)}
-                className={`rounded-xl border px-3 py-2.5 text-sm capitalize ${
-                  kind === item ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-slate-200 text-slate-600'
-                }`}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-          <label className="mt-4 block text-xs font-medium text-slate-600">Title</label>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-cyan-500/60" />
-          <label className="mt-4 block text-xs font-medium text-slate-600">Description</label>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500/60" />
-          <button type="button" disabled={!title.trim() || create.isPending} onClick={() => create.mutate()} className="mt-5 h-10 w-full rounded-xl bg-cyan-400 text-sm font-semibold text-slate-950 disabled:opacity-40">
-            Create {kind} card
-          </button>
-          <Dialog.Close className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-slate-600 hover:bg-white hover:text-slate-700"><X className="size-4" /></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

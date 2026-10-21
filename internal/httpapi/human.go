@@ -19,11 +19,13 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/projects/{projectID}", api.getProject)
 	r.Patch("/projects/{projectID}", api.updateProject)
 	r.Get("/projects/{projectID}/cards", api.listProjectCards)
-	r.Post("/projects/{projectID}/cards", api.createCard)
+	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
 
 	r.Get("/cards/{cardID}", api.getCard)
 	r.Patch("/cards/{cardID}", api.updateCard)
 	r.Post("/cards/{cardID}/move", api.moveCard)
+	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
+	r.Delete("/cards/{cardID}", api.deleteDiscussion)
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
@@ -66,17 +68,19 @@ type projectResponse struct {
 }
 
 type cardResponse struct {
-	ID               string    `json:"id"`
-	ProjectID        string    `json:"project_id"`
-	Kind             string    `json:"kind"`
-	Title            string    `json:"title"`
-	Description      string    `json:"description"`
-	NormalColumn     string    `json:"normal_column,omitempty"`
-	OngoingState     string    `json:"ongoing_state,omitempty"`
-	Health           string    `json:"health,omitempty"`
-	CurrentRunStatus string    `json:"current_run_status,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	ProjectID          string    `json:"project_id"`
+	Kind               string    `json:"kind"`
+	Title              string    `json:"title"`
+	Description        string    `json:"description"`
+	DiscussionState    string    `json:"discussion_state,omitempty"`
+	TodoState          string    `json:"todo_state,omitempty"`
+	OngoingState       string    `json:"ongoing_state,omitempty"`
+	SourceDiscussionID string    `json:"source_discussion_id,omitempty"`
+	Health             string    `json:"health,omitempty"`
+	CurrentRunStatus   string    `json:"current_run_status,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type runResponse struct {
@@ -266,47 +270,19 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (api *API) createCard(w http.ResponseWriter, r *http.Request) {
+func (api *API) createDiscussion(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := parseUUIDParam(w, r, "projectID")
 	if !ok {
 		return
 	}
-	var request struct {
-		Kind        string `json:"kind"`
-		Title       string `json:"title"`
-		Description string `json:"description"`
-	}
-	if !decodeJSON(w, r, &request) {
-		return
-	}
-	request.Title = strings.TrimSpace(request.Title)
-	if request.Title == "" {
-		writeError(w, http.StatusBadRequest, "invalid_title", "card title is required")
-		return
-	}
-
 	identity := identityFromRequest(r)
 	if _, err := api.store.GetProject(r.Context(), identity.WorkspaceID, projectID); err != nil {
 		api.handleError(w, err)
 		return
 	}
-	var card db.Card
-	var err error
-	switch domain.CardKind(request.Kind) {
-	case domain.CardKindNormal:
-		card, err = api.store.CreateNormalCard(
-			r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
-			request.Title, strings.TrimSpace(request.Description),
-		)
-	case domain.CardKindOngoing:
-		card, err = api.store.CreateOngoingCard(
-			r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
-			request.Title, strings.TrimSpace(request.Description),
-		)
-	default:
-		writeError(w, http.StatusBadRequest, "invalid_kind", "card kind must be normal or ongoing")
-		return
-	}
+	card, err := api.store.CreateDiscussion(
+		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+	)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -424,23 +400,21 @@ func (api *API) moveCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Column string `json:"column"`
+		State string `json:"state"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	column := domain.NormalColumn(request.Column)
-	switch column {
-	case domain.NormalColumnDiscussion, domain.NormalColumnTodo, domain.NormalColumnWorking,
-		domain.NormalColumnReview, domain.NormalColumnDone:
+	state := domain.TodoState(request.State)
+	switch state {
+	case domain.TodoStateTodo, domain.TodoStateWorking, domain.TodoStateReview, domain.TodoStateDone:
 	default:
-		writeError(w, http.StatusBadRequest, "invalid_column", "unknown normal card column")
+		writeError(w, http.StatusBadRequest, "invalid_state", "unknown todo state")
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.MoveNormalCard(
-		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
-		column,
+	if err := api.store.MoveTodo(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID, state,
 	); err != nil {
 		api.handleError(w, err)
 		return
@@ -451,6 +425,51 @@ func (api *API) moveCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) setDiscussionState(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		State string `json:"state"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if request.State != string(domain.DiscussionStateArchived) {
+		writeError(w, http.StatusBadRequest, "invalid_state", "discussion can only be archived")
+		return
+	}
+	identity := identityFromRequest(r)
+	if err := api.store.ArchiveDiscussion(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
+	); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) deleteDiscussion(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if err := api.store.DeleteDiscussion(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
+	); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *API) setOngoingState(w http.ResponseWriter, r *http.Request) {
@@ -785,11 +804,17 @@ func cardToResponse(card db.Card) cardResponse {
 		Title: card.Title, Description: card.Description,
 		CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 	}
-	if card.NormalColumn.Valid {
-		response.NormalColumn = card.NormalColumn.String
+	if card.DiscussionState.Valid {
+		response.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		response.TodoState = card.TodoState.String
 	}
 	if card.OngoingState.Valid {
 		response.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
 	return response
 }
@@ -800,11 +825,17 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 		Title: card.Title, Description: card.Description,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 	}
-	if card.NormalColumn.Valid {
-		response.NormalColumn = card.NormalColumn.String
+	if card.DiscussionState.Valid {
+		response.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		response.TodoState = card.TodoState.String
 	}
 	if card.OngoingState.Valid {
 		response.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
 	if card.CurrentRunStatus.Valid {
 		response.CurrentRunStatus = card.CurrentRunStatus.String

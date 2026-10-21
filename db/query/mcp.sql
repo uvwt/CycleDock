@@ -46,12 +46,14 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 -- name: CreateAgentCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
-    normal_column, ongoing_state, required_confirmations, created_by_source_id,
+    discussion_state, todo_state, ongoing_state, source_discussion_id,
+    required_confirmations, created_by_source_id,
     create_idempotency_key, create_request_hash
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(project_id), sqlc.arg(kind),
-    sqlc.arg(title), sqlc.arg(description), sqlc.narg(normal_column), sqlc.narg(ongoing_state),
+    sqlc.arg(title), sqlc.arg(description), sqlc.narg(discussion_state), sqlc.narg(todo_state),
+    sqlc.narg(ongoing_state), sqlc.narg(source_discussion_id),
     sqlc.arg(required_confirmations), sqlc.arg(created_by_source_id),
     sqlc.arg(create_idempotency_key), sqlc.arg(create_request_hash)
 )

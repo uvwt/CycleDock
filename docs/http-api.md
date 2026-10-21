@@ -20,7 +20,7 @@ Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted
 - `GET /api/v1/projects/{projectID}`
 - `PATCH /api/v1/projects/{projectID}`
 - `GET /api/v1/projects/{projectID}/cards`
-- `POST /api/v1/projects/{projectID}/cards`
+- `POST /api/v1/projects/{projectID}/discussions`：创建空白 active Discussion；首轮会话由 Built-in Agent 生成标题与摘要。
 
 Project 即 Board，不存在独立 Board API。
 
@@ -28,10 +28,12 @@ Project 即 Board，不存在独立 Board API。
 
 - `GET /api/v1/cards/{cardID}`：返回 Card、current Run、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。
 - `PATCH /api/v1/cards/{cardID}`
-- `POST /api/v1/cards/{cardID}/move`
+- `POST /api/v1/cards/{cardID}/move`：仅 Todo 状态移动。
+- `POST /api/v1/cards/{cardID}/discussion-state`：当前只允许 Human 将 Discussion 归档。
+- `DELETE /api/v1/cards/{cardID}`：当前只允许 Human 删除 Discussion；已生成的 Todo / Ongoing 保留，来源引用置空。
 - `POST /api/v1/cards/{cardID}/ongoing-state`
 
-Normal Card 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP Handler 不复制状态机。
+Discussion 不能转换为 Todo / Ongoing。Todo 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP Handler 不复制状态机。
 
 ## Direction / Queue
 

@@ -1,6 +1,6 @@
 ---
 name: cycledock
-description: Use when working through CycleDock MCP to inspect Projects/Cards, claim queued work, record durable progress/findings/results/check-ins, create explicit follow-ups, confirm completed Normal cards, or coordinate recurring Ongoing work. Do not use it to store raw model/tool traces or bypass Human Review/Done.
+description: Use when working through CycleDock MCP to inspect Projects/Cards, start Discussions, generate Todo/Ongoing work from Discussions, claim queued work, record durable progress/findings/results/check-ins, create explicit follow-ups, confirm completed Todo cards, or coordinate recurring Ongoing work. Do not use it to store raw model/tool traces, generate work from Todo/Ongoing cards, or bypass Human Review/Done.
 ---
 
 # CycleDock
@@ -38,11 +38,18 @@ When a Card already has a pending Trigger, use `claim_work`.
 - If your own previous claim response was lost, retrying `claim_work` returns your existing current Run.
 - Do not create a duplicate follow-up merely because you are unsure whether a claim succeeded.
 
-## Creating a new work direction
+## Starting and generating work
 
-Use `create_followup` only when a **new unit of work** should enter the queue.
+New work starts with `create_discussion`. A Discussion is a conversation entry point, not a Todo state.
 
-Use `add_comment` when you only need to append durable context and **do not** want to create new work.
+When the Discussion has become concrete enough to create work, use the single `generate_work` action. Classify the result yourself:
+
+- finite work with a completion point → `todo`
+- long-term, periodic, recurring, or continuously monitored work → `ongoing`
+
+A Discussion may generate multiple work Cards. Never call `generate_work` from a Todo or Ongoing Card, and never simulate generation by moving a Discussion into another state.
+
+Use `create_followup` only when a new direction should enter the queue of the **same existing Card**. Use `add_comment` when you only need to append durable context and do not want to create a Trigger.
 
 External MCP deliberately has no interrupt tool. Do not simulate an interrupt by creating extra Triggers or editing Run state. Human Web owns the “interrupt now” decision.
 
@@ -67,15 +74,17 @@ When a human replies to a waiting Run, CycleDock creates a new Trigger / Run and
 
 ## Review and completion
 
-For a Normal Card:
+For a Todo Card:
 
-`Discussion → Todo → Working → Review → Done`
+`Todo → Working → Review → Done`
 
-- Agents may move among Discussion, Todo and Working with `move_card`.
+- Agents may move a Todo between Todo and Working with `move_card`.
 - Agents must use `confirm_card` to hand verified Working work to Review.
 - Confirmation thresholds are enforced by CycleDock.
 - **Only a human can move Review → Done.**
 - Do not report a Card as Done merely because a Run completed or because it reached Review.
+
+Discussion lifecycle is `Active → Archived`; it never enters the Todo workflow.
 
 For Ongoing Cards:
 

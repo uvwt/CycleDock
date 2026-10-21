@@ -16,9 +16,10 @@ RETURNING *;
 -- name: CreateCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
-    normal_column, ongoing_state, required_confirmations, created_by_source_id
+    discussion_state, todo_state, ongoing_state, source_discussion_id,
+    required_confirmations, created_by_source_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetCard :one

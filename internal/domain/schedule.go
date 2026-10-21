@@ -108,24 +108,28 @@ func resolveWallTime(
 	return first, !first.IsZero()
 }
 
-func CanMoveNormalCard(from, to NormalColumn, actor SourceKind) error {
+func CanMoveTodo(from, to TodoState, actor SourceKind) error {
+	switch to {
+	case TodoStateTodo, TodoStateWorking, TodoStateReview, TodoStateDone:
+	default:
+		return ErrInvalidTransition
+	}
 	if from == to {
 		return nil
 	}
-	if to == NormalColumnDone {
+	if to == TodoStateDone {
 		if actor != SourceKindHuman {
 			return ErrHumanRequired
 		}
-		if from != NormalColumnReview {
+		if from != TodoStateReview {
 			return ErrInvalidTransition
 		}
 		return nil
 	}
-	if from == NormalColumnDone {
-		if actor != SourceKindHuman || to != NormalColumnReview {
+	if from == TodoStateDone {
+		if actor != SourceKindHuman || to != TodoStateReview {
 			return ErrInvalidTransition
 		}
-		return nil
 	}
 	return nil
 }
