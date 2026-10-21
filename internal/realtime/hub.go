@@ -90,8 +90,11 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			h.live[cardID] = st
 		}
 	} else if event.Type == "run.finished" || event.Type == "run.failed" {
-		// 旧 Run 可能比新 Run 更晚才结束；只能清除自己的流快照。
-		if st, ok := h.live[cardID]; ok && st.runID == event.RunID {
+		// 旧 Run 的终止事件不能删除新 Run 的快照，也不能推送给浏览器清空新流。
+		if st, ok := h.live[cardID]; ok {
+			if st.runID != event.RunID {
+				return
+			}
 			delete(h.live, cardID)
 		}
 	}
