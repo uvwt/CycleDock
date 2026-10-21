@@ -45,6 +45,7 @@ Workspace
 - [Self-host 安装](docs/install.md)
 - [升级指南](docs/upgrade.md)
 - [技术栈](docs/stack.md)
+- [全新前端产品与实现基线](docs/frontend-rebuild.md)
 - [开发路线](docs/development.md)
 - [旧项目参考边界](docs/legacy-reference.md)
 
@@ -78,5 +79,5 @@ Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MC
 - Provider / MCP connection test 只做当前 Provider 的最小模型请求与 MCP initialize + ListTools，不执行 MCP Tool。
 - Card Detail 展示 current Run、pending queue 与终态 work history，并支持 Human cancel / retry。
 - 长历史上下文采用 bounded recent Timeline + durable historical facts + 派生 Comment/Progress compaction；原 Timeline 始终是审计事实源。
-- Web 已具备基础中英 i18n、移动端 Board、loading/error/empty states、键盘拖拽与 reduced-motion / focus-visible 基础。
+- Web 已重新按 `docs/frontend-rebuild.md` 从零实现 Chat / Board / 独立 Card / Settings，支持初版 SSE 消息流与响应式布局。当前中文为默认语言；完整中英 i18n、正式视觉回归和生产环境 SSE 验收仍待后续完成。
 - CI 同时执行 PostgreSQL integration、核心 race、Web lint/build/audit 与 Linux Docker Compose smoke。

@@ -19,6 +19,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/oauth"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -32,6 +33,7 @@ type Config struct {
 	ModelAuth    *modelauth.Service
 	ModelClient  *modelclient.Client
 	NexusDock    *nexusdock.Service
+	Live         *realtime.Hub
 }
 
 type API struct {
@@ -42,6 +44,7 @@ type API struct {
 	modelAuth    *modelauth.Service
 	model        *modelclient.Client
 	nexusDock    *nexusdock.Service
+	live         *realtime.Hub
 	secureCookie bool
 	logger       *slog.Logger
 }
@@ -58,7 +61,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
 		oauth: config.OAuth, modelAuth: config.ModelAuth, model: model, nexusDock: config.NexusDock,
-		secureCookie: config.SecureCookie, logger: logger,
+		secureCookie: config.SecureCookie, logger: logger, live: config.Live,
 	}
 
 	router := chi.NewRouter()

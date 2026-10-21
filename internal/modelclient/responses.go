@@ -118,7 +118,7 @@ func (c *Client) completeResponses(
 		}
 	}
 
-	completion, err := readResponsesStream(response)
+	completion, err := readResponsesStream(response, config.OnTextDelta)
 	if err != nil {
 		return Completion{}, err
 	}
@@ -158,7 +158,7 @@ func buildResponsesInput(messages []Message) (string, []responsesItem) {
 	return strings.Join(instructions, "\n\n"), input
 }
 
-func readResponsesStream(response *http.Response) (Completion, error) {
+func readResponsesStream(response *http.Response, onDelta func(string)) (Completion, error) {
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64*1024), int(maxResponseBytes))
 	var total int64
@@ -187,6 +187,9 @@ func readResponsesStream(response *http.Response) (Completion, error) {
 		switch event.Type {
 		case "response.output_text.delta":
 			text.WriteString(event.Delta)
+			if onDelta != nil && event.Delta != "" {
+				onDelta(event.Delta)
+			}
 		case "response.output_item.done":
 			appendResponseToolCall(&toolCalls, seenCalls, event.Item)
 		case "response.completed":

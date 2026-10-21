@@ -17,6 +17,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -32,6 +33,7 @@ type RunnerConfig struct {
 	LeaseDuration     time.Duration
 	ModelAuth         *modelauth.Service
 	NexusDock         *nexusdock.Service
+	Live              *realtime.Hub
 }
 
 type Runner struct {
@@ -39,6 +41,7 @@ type Runner struct {
 	model             *modelclient.Client
 	modelAuth         *modelauth.Service
 	nexusDock         *nexusdock.Service
+	live              *realtime.Hub
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
 	leaseDuration     time.Duration
@@ -61,12 +64,23 @@ func NewRunner(dataStore *store.Store, model *modelclient.Client, logger *slog.L
 		store: dataStore, model: model, logger: logger,
 		modelAuth:         config.ModelAuth,
 		nexusDock:         config.NexusDock,
+		live:              config.Live,
 		heartbeatInterval: config.HeartbeatInterval,
 		leaseDuration:     config.LeaseDuration,
 	}
 }
 
-func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
+func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr error) {
+	if r.live != nil {
+		r.live.Publish(claim.CardID, realtime.Event{Type: "run.started", RunID: claim.RunID.String(), StartedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		defer func() {
+			eventType := "run.finished"
+			if runErr != nil {
+				eventType = "run.failed"
+			}
+			r.live.Publish(claim.CardID, realtime.Event{Type: eventType, RunID: claim.RunID.String()})
+		}()
+	}
 	settings, err := r.store.GetAgentSettings(ctx, claim.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("load agent settings: %w", err)
@@ -167,6 +181,12 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 		if err != nil {
 			return err
 		}
+		if r.live != nil {
+			r.live.Publish(claim.CardID, realtime.Event{Type: "run.stage", RunID: claim.RunID.String(), Stage: "正在生成回复"})
+			modelConfig.OnTextDelta = func(text string) {
+				r.live.Publish(claim.CardID, realtime.Event{Type: "run.text.delta", RunID: claim.RunID.String(), Text: text})
+			}
+		}
 		response, err := r.model.Complete(runCtx, modelConfig, messages, tools)
 		if err != nil {
 			if heartbeatErr := heartbeatFailure(heartbeatErrors); heartbeatErr != nil {
@@ -192,6 +212,9 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 			Role: "assistant", Content: response.Content, ToolCalls: response.ToolCalls,
 		})
 		for _, call := range response.ToolCalls {
+			if r.live != nil {
+				r.live.Publish(claim.CardID, realtime.Event{Type: "run.stage", RunID: claim.RunID.String(), Stage: "正在执行工具"})
+			}
 			arguments, err := decodeToolArguments(call.Function.Arguments)
 			if err != nil {
 				messages = append(messages, toolMessage(call, `{"error":"invalid tool arguments"}`))

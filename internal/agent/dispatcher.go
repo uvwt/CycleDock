@@ -13,6 +13,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -23,6 +24,7 @@ type DispatcherConfig struct {
 	LeaseDuration    time.Duration
 	ModelAuth        *modelauth.Service
 	NexusDock        *nexusdock.Service
+	Live             *realtime.Hub
 }
 
 type Dispatcher struct {
@@ -61,6 +63,7 @@ func NewDispatcher(
 		LeaseDuration:     config.LeaseDuration,
 		ModelAuth:         config.ModelAuth,
 		NexusDock:         config.NexusDock,
+		Live:              config.Live,
 	})
 	return &Dispatcher{
 		store: dataStore, runner: runner, logger: logger,
