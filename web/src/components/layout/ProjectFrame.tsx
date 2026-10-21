@@ -65,6 +65,7 @@ function DiscussionNavigation({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { cardID } = useParams();
   const [search, setSearch] = useState("");
   const discussions = useMemo(
     () =>
@@ -90,7 +91,7 @@ function DiscussionNavigation({
         <div className="relative min-w-0 flex-1">
           <Search
             size={14}
-            className="pointer-events-none absolute top-3 left-2 text-[var(--v2-muted)]"
+            className="product-sidebar-search-icon pointer-events-none absolute top-3 left-2"
           />
           <Input
             aria-label={t("搜索讨论")}
@@ -117,9 +118,10 @@ function DiscussionNavigation({
         {discussions.map((c) => (
           <Button
             key={c.id}
-            variant="ghost"
+            variant={cardID === c.id ? "secondary" : "ghost"}
             size="compact"
             className="w-full justify-start text-left"
+            aria-current={cardID === c.id ? "page" : undefined}
             onClick={() => {
               navigate(`/projects/${projectID}/discussions/${c.id}`);
               onNavigate?.();
@@ -304,7 +306,7 @@ export function ProjectFrame({
     <div className="v2 v2-app-frame">
       <div className="hidden min-h-0 md:block">{sidebar}</div>
       <div className="flex min-w-0 flex-col overflow-hidden">
-        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--v2-border)] px-3 py-2 md:hidden">
+        <div className="product-mobile-bar flex shrink-0 items-center gap-2 px-3 py-2 md:hidden">
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger asChild>
               <IconButton icon={Menu} label={t("打开导航")} variant="ghost" />

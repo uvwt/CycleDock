@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Bot, Info } from "lucide-react";
-import { Avatar, Typography } from "./controls";
+import { Typography } from "./controls";
 
 export function HumanMessage({
   children,
@@ -10,14 +10,12 @@ export function HumanMessage({
   author?: string;
 }) {
   return (
-    <div className="flex min-w-0 justify-end" data-message-role="human">
-      <div className="max-w-[min(80%,620px)] min-w-0">
-        <Typography scale="meta" className="mb-1 text-right">
+    <div className="product-human-message" data-message-role="human">
+      <div className="min-w-0 max-w-[min(82%,620px)]">
+        <Typography scale="meta" className="mb-1.5 text-right">
           {author}
         </Typography>
-        <div className="v2-message-human min-w-0 break-words rounded-[var(--v2-radius-lg)] px-4 py-3 text-[var(--v2-type-body)]">
-          {children}
-        </div>
+        <div className="product-human-bubble">{children}</div>
       </div>
     </div>
   );
@@ -33,10 +31,12 @@ export function AgentMessage({
   duration?: string;
 }) {
   return (
-    <div className="flex min-w-0 items-start gap-3" data-message-role="agent">
-      <Avatar fallback="C" />
-      <div className="min-w-0 max-w-[min(82%,660px)] flex-1">
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+    <div className="product-agent-message" data-message-role="agent">
+      <div className="product-agent-avatar" aria-hidden="true">
+        C
+      </div>
+      <div className="product-agent-content">
+        <div className="product-agent-meta">
           <Typography scale="meta" className="font-semibold">
             {agent}
           </Typography>
@@ -46,9 +46,7 @@ export function AgentMessage({
             </Typography>
           )}
         </div>
-        <div className="v2-message-agent min-w-0 break-words rounded-[var(--v2-radius-lg)] px-4 py-3">
-          {children}
-        </div>
+        <div className="product-agent-body">{children}</div>
       </div>
     </div>
   );
@@ -57,7 +55,7 @@ export function AgentMessage({
 export function SystemEvent({ children }: { children: ReactNode }) {
   return (
     <div
-      className="flex min-w-0 items-center justify-center gap-1.5 py-2 text-center text-[var(--v2-type-meta)] text-[var(--v2-muted)]"
+      className="product-system-event"
       role="status"
       data-message-role="system"
     >

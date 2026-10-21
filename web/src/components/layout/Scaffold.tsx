@@ -35,23 +35,14 @@ export function Sidebar({
   const { t } = useTranslation();
   return (
     <aside
-      className={cn("v2-sidebar flex h-full flex-col px-3 py-4", className)}
+      className={cn("v2-sidebar product-sidebar", className)}
       aria-label={t("主导航")}
     >
-      <div className="flex items-center gap-2 px-2 pb-5">
-        <img
-          src="/cycledock-logo.png"
-          alt=""
-          className="size-7 object-contain"
-        />
-        <span className="text-[var(--v2-type-section)] font-semibold">
-          CycleDock
-        </span>
+      <div className="product-brand">
+        <img src="/cycledock-logo.png" alt="" />
+        <span className="product-brand-name">CycleDock</span>
       </div>
-      <nav
-        className="mb-4 grid grid-cols-2 gap-1 rounded-[var(--v2-radius)] bg-[var(--v2-subtle)] p-1"
-        aria-label={t("工作模式")}
-      >
+      <nav className="product-mode-nav" aria-label={t("工作模式")}>
         <Button
           variant={mode === "discussions" ? "secondary" : "ghost"}
           size="compact"
@@ -71,8 +62,8 @@ export function Sidebar({
           {t("工作")}
         </Button>
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-      <div className="mt-3 space-y-1 border-t border-[var(--v2-border)] pt-3">
+      <div className="product-sidebar-content">{children}</div>
+      <div className="product-sidebar-footer space-y-1">
         {projectControl ?? (
           <Button
             className="w-full justify-between overflow-hidden"
@@ -114,14 +105,22 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--v2-border)] pb-4">
+    <header className="product-page-header">
       <div className="flex min-w-0 items-center gap-2">
         {leading}
         <div className="min-w-0">
-          <Typography as="h1" scale="title" className="break-words">
+          <Typography
+            as="h1"
+            scale="title"
+            className="product-page-header-title break-words"
+          >
             {title}
           </Typography>
-          {description && <Typography scale="meta">{description}</Typography>}
+          {description && (
+            <Typography scale="meta" className="product-page-header-description">
+              {description}
+            </Typography>
+          )}
         </div>
       </div>
       {actions && (
