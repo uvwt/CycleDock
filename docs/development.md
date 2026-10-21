@@ -58,7 +58,9 @@
 
 重点领域行为：
 
-- Normal 状态机。
+- Discussion Active / Archived 生命周期与 Human-only Archive/Delete。
+- Discussion → Todo / Ongoing 派生约束（不是状态转换）。
+- Todo → Working → Review → Done 状态机。
 - Ongoing 状态机。
 - Comment → Trigger。
 - enqueue。

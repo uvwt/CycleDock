@@ -33,11 +33,9 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	var project projectResponse
 	decodeRecorder(t, projectRecorder, &project)
 
-	cardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/cards", map[string]any{
-		"kind": "normal", "title": "Retry and cancel", "description": "",
-	}, cookie, nil)
+	cardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/discussions", map[string]any{}, cookie, nil)
 	if cardRecorder.Code != http.StatusCreated {
-		t.Fatalf("create card: %d %s", cardRecorder.Code, cardRecorder.Body.String())
+		t.Fatalf("create discussion: %d %s", cardRecorder.Code, cardRecorder.Body.String())
 	}
 	var card cardResponse
 	decodeRecorder(t, cardRecorder, &card)
@@ -144,7 +142,7 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCard, err := dataStore.CreateNormalCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Private", "")
+	otherCard, err := dataStore.CreateTodoCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Private", "", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

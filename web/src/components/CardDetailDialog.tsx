@@ -26,15 +26,14 @@ import { toast } from 'sonner'
 import {
   api,
   type CardDetail,
-  type NormalColumn,
   type OngoingState,
   type Schedule,
   type ScheduleInput,
+  type TodoState,
 } from '../api'
 import { queryClient, queryKeys } from '../query'
 
-const normalColumns: Array<{ id: NormalColumn; label: string }> = [
-  { id: 'discussion', label: 'Discussion' },
+const todoStates: Array<{ id: TodoState; label: string }> = [
   { id: 'todo', label: 'Todo' },
   { id: 'working', label: 'Working' },
   { id: 'review', label: 'Review' },
@@ -82,7 +81,12 @@ export function CardDetailDialog({
               </div>
             </div>
           ) : (
-            <CardDetailContent key={detail.data.card.id} detail={detail.data} refresh={refresh} />
+            <CardDetailContent
+              key={detail.data.card.id}
+              detail={detail.data}
+              refresh={refresh}
+              onDeleted={onClose}
+            />
           )}
           <Dialog.Close className="absolute right-5 top-5 grid size-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:text-slate-950">
             <X className="size-4" />
@@ -97,9 +101,11 @@ export function CardDetailDialog({
 function CardDetailContent({
   detail,
   refresh,
+  onDeleted,
 }: {
   detail: CardDetail
   refresh: () => Promise<void>
+  onDeleted: () => void
 }) {
   const card = detail.card
   const [title, setTitle] = useState(card.title)
@@ -116,7 +122,7 @@ function CardDetailContent({
   })
 
   const move = useMutation({
-    mutationFn: (column: NormalColumn) => api.moveCard(card.id, column),
+    mutationFn: (state: TodoState) => api.moveCard(card.id, state),
     onSuccess: refresh,
     onError: showError,
   })
@@ -124,6 +130,39 @@ function CardDetailContent({
   const ongoingState = useMutation({
     mutationFn: (state: OngoingState) => api.setOngoingState(card.id, state),
     onSuccess: refresh,
+    onError: showError,
+  })
+
+  const archiveDiscussion = useMutation({
+    mutationFn: () => api.archiveDiscussion(card.id),
+    onSuccess: async () => {
+      toast.success('Discussion archived')
+      await refresh()
+    },
+    onError: showError,
+  })
+
+  const deleteDiscussion = useMutation({
+    mutationFn: () => api.deleteDiscussion(card.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.cards(card.project_id) })
+      toast.success('Discussion deleted')
+      onDeleted()
+    },
+    onError: showError,
+  })
+
+  const generateWork = useMutation({
+    mutationFn: () =>
+      api.comment(
+        card.id,
+        'Generate the concrete work from this discussion now. Decide whether each item is a finite Todo or a long-term/periodic Ongoing item, and create it with the appropriate CycleDock tool.',
+        'enqueue',
+      ),
+    onSuccess: async () => {
+      toast.success('Task generation queued')
+      await refresh()
+    },
     onError: showError,
   })
 
@@ -158,6 +197,8 @@ function CardDetailContent({
 
   const waitingHuman = detail.current_run?.status === 'waiting_human'
   const hasCurrentRun = Boolean(detail.current_run)
+  const discussionActive = card.kind === 'discussion' && card.discussion_state === 'active'
+  const interactionDisabled = card.kind === 'discussion' && !discussionActive
 
   return (
     <>
@@ -165,8 +206,10 @@ function CardDetailContent({
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="uppercase tracking-[0.12em]">{card.kind}</span>
           <span>•</span>
-          {card.kind === 'normal' ? (
-            <span className="capitalize">{card.normal_column}</span>
+          {card.kind === 'discussion' ? (
+            <span className="capitalize">{card.discussion_state}</span>
+          ) : card.kind === 'todo' ? (
+            <span className="capitalize">{card.todo_state}</span>
           ) : (
             <>
               <span className="capitalize">{card.ongoing_state}</span>
@@ -181,7 +224,9 @@ function CardDetailContent({
             </>
           ) : null}
         </div>
-        <Dialog.Title className="mt-2 text-xl font-semibold tracking-tight">{card.title}</Dialog.Title>
+        <Dialog.Title className="mt-2 text-xl font-semibold tracking-tight">
+          {card.title || 'New discussion'}
+        </Dialog.Title>
         <Dialog.Description className="mt-1 text-sm text-slate-600">
           Durable card context and meaningful work history. Raw agent traces are intentionally not stored here.
         </Dialog.Description>
@@ -191,54 +236,64 @@ function CardDetailContent({
         <div className="min-h-0 overflow-y-auto px-6 py-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Card</h3>
-              <button
-                type="button"
-                onClick={() => edit.mutate()}
-                disabled={edit.isPending || !title.trim()}
-                className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 transition hover:border-slate-400 disabled:opacity-50"
-              >
-                <Save className="size-3.5" /> Save
-              </button>
+              <h3 className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
+                {card.kind === 'discussion' ? 'Discussion' : 'Card'}
+              </h3>
+              {card.kind !== 'discussion' ? (
+                <button
+                  type="button"
+                  onClick={() => edit.mutate()}
+                  disabled={edit.isPending || !title.trim()}
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 transition hover:border-slate-400 disabled:opacity-50"
+                >
+                  <Save className="size-3.5" /> Save
+                </button>
+              ) : null}
             </div>
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
+              readOnly={card.kind === 'discussion'}
               className="w-full bg-transparent text-lg font-medium outline-none placeholder:text-slate-700"
-              placeholder="Card title"
+              placeholder={card.kind === 'discussion' ? 'Generated after your first message' : 'Card title'}
             />
             <textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
+              readOnly={card.kind === 'discussion'}
               rows={3}
               className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-slate-100 px-3 py-2 text-sm leading-6 text-slate-700 outline-none focus:border-cyan-500/60"
-              placeholder="Describe the durable task context…"
+              placeholder={
+                card.kind === 'discussion'
+                  ? 'A concise discussion summary will be generated after your first message.'
+                  : 'Describe the durable task context…'
+              }
             />
 
-            {card.kind === 'normal' ? (
+            {card.kind === 'todo' ? (
               <div className="mt-4 flex flex-wrap gap-2">
-                {normalColumns.map((column) => {
+                {todoStates.map((state) => {
                   const disabled =
-                    column.id === card.normal_column ||
-                    (column.id === 'done' && card.normal_column !== 'review')
+                    state.id === card.todo_state ||
+                    (state.id === 'done' && card.todo_state !== 'review')
                   return (
                     <button
-                      key={column.id}
+                      key={state.id}
                       type="button"
                       disabled={disabled || move.isPending}
-                      onClick={() => move.mutate(column.id)}
+                      onClick={() => move.mutate(state.id)}
                       className={`rounded-lg border px-2.5 py-1.5 text-xs transition ${
-                        column.id === card.normal_column
+                        state.id === card.todo_state
                           ? 'border-cyan-500/40 bg-sky-50 text-sky-700'
                           : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:opacity-35'
                       }`}
                     >
-                      {column.label}
+                      {state.label}
                     </button>
                   )
                 })}
               </div>
-            ) : (
+            ) : card.kind === 'ongoing' ? (
               <div className="mt-4 flex flex-wrap gap-2">
                 {(['active', 'paused', 'archived'] as OngoingState[]).map((state) => (
                   <button
@@ -256,6 +311,41 @@ function CardDetailContent({
                     {state}
                   </button>
                 ))}
+              </div>
+            ) : (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {discussionActive ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={generateWork.isPending}
+                      onClick={() => generateWork.mutate()}
+                      className="rounded-lg bg-cyan-400 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:opacity-40"
+                    >
+                      Generate task
+                    </button>
+                    <button
+                      type="button"
+                      disabled={archiveDiscussion.isPending}
+                      onClick={() => archiveDiscussion.mutate()}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 disabled:opacity-40"
+                    >
+                      Archive
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={deleteDiscussion.isPending}
+                  onClick={() => {
+                    if (window.confirm('Delete this discussion? Generated Todo/Ongoing cards will be kept.')) {
+                      deleteDiscussion.mutate()
+                    }
+                  }}
+                  className="rounded-lg border border-rose-300 px-3 py-1.5 text-xs text-rose-700 disabled:opacity-40"
+                >
+                  Delete
+                </button>
               </div>
             )}
           </section>
@@ -349,19 +439,36 @@ function CardDetailContent({
           <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
               <Send className="size-3.5" />
-              {waitingHuman ? 'Reply and continue' : hasCurrentRun ? 'New direction' : 'Add direction'}
+              {interactionDisabled
+                ? 'Discussion archived'
+                : waitingHuman
+                  ? 'Reply and continue'
+                  : hasCurrentRun
+                    ? 'New direction'
+                    : card.kind === 'discussion'
+                      ? 'Continue discussion'
+                      : 'Add direction'}
             </div>
             <textarea
               value={comment}
               onChange={(event) => setComment(event.target.value)}
               rows={4}
-              className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-cyan-500/60"
-              placeholder={waitingHuman ? 'Reply with the information the agent needs…' : 'Add context or a new direction…'}
+              disabled={interactionDisabled}
+              className="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-800 outline-none focus:border-cyan-500/60 disabled:bg-slate-100 disabled:text-slate-500"
+              placeholder={
+                interactionDisabled
+                  ? 'Archived discussions are read-only.'
+                  : waitingHuman
+                    ? 'Reply with the information the agent needs…'
+                    : card.kind === 'discussion'
+                      ? 'Continue the discussion…'
+                      : 'Add context or a new direction…'
+              }
             />
             {waitingHuman ? (
               <button
                 type="button"
-                disabled={!comment.trim() || submitDirection.isPending}
+                disabled={interactionDisabled || !comment.trim() || submitDirection.isPending}
                 onClick={() => submitDirection.mutate('reply')}
                 className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-cyan-400 text-xs font-semibold text-slate-950 disabled:opacity-40"
               >
@@ -371,7 +478,7 @@ function CardDetailContent({
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  disabled={!comment.trim() || submitDirection.isPending}
+                  disabled={interactionDisabled || !comment.trim() || submitDirection.isPending}
                   onClick={() => submitDirection.mutate('enqueue')}
                   className="h-9 rounded-lg border border-slate-300 text-xs font-medium text-slate-700 disabled:opacity-40"
                 >
@@ -379,7 +486,7 @@ function CardDetailContent({
                 </button>
                 <button
                   type="button"
-                  disabled={!comment.trim() || submitDirection.isPending}
+                  disabled={interactionDisabled || !comment.trim() || submitDirection.isPending}
                   onClick={() => submitDirection.mutate('interrupt')}
                   className="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-amber-400 text-xs font-semibold text-slate-950 disabled:opacity-40"
                 >
@@ -389,7 +496,7 @@ function CardDetailContent({
             ) : (
               <button
                 type="button"
-                disabled={!comment.trim() || submitDirection.isPending}
+                disabled={interactionDisabled || !comment.trim() || submitDirection.isPending}
                 onClick={() => submitDirection.mutate('enqueue')}
                 className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-cyan-400 text-xs font-semibold text-slate-950 disabled:opacity-40"
               >

@@ -15,7 +15,7 @@ import (
 func TestHumanCancelPendingTriggerAndRetryCreatesNewDirection(t *testing.T) {
 	s := requireIntegration(t)
 	ctx := context.Background()
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 
 	original, err := s.SubmitComment(ctx, SubmitCommentParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
@@ -97,7 +97,7 @@ func TestHumanCancelPendingTriggerAndRetryCreatesNewDirection(t *testing.T) {
 func TestHumanCancelRunningRunBlocksLateWritesAndCanRetry(t *testing.T) {
 	s := requireIntegration(t)
 	ctx := context.Background()
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 
 	original, err := s.SubmitComment(ctx, SubmitCommentParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
@@ -172,7 +172,7 @@ func TestHumanCancelRunningRunBlocksLateWritesAndCanRetry(t *testing.T) {
 func TestBuiltInRestartRecoveryCreatesExactlyOneFollowup(t *testing.T) {
 	s := requireIntegration(t)
 	ctx := context.Background()
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
@@ -293,7 +293,7 @@ func TestBuiltInRestartRecoveryCreatesExactlyOneFollowup(t *testing.T) {
 func TestConcurrentLeaseRecoveryCreatesOneFollowup(t *testing.T) {
 	s := requireIntegration(t)
 	ctx := context.Background()
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
 		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",

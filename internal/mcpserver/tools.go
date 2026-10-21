@@ -16,9 +16,10 @@ func registerTools(server *mcp.Server, dataStore *store.Store) {
 	mcp.AddTool(server, &mcp.Tool{Name: "list_projects", Description: "List Projects in the authenticated CycleDock Workspace. A Project is the board."}, listProjectsHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "list_cards", Description: "List Cards in the authenticated Workspace with current Run status, pending Trigger count, and Ongoing health."}, listCardsHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "get_card", Description: "Get one Card with bounded recent durable Timeline, pending Trigger queue, and current Run. Raw model/tool traces are intentionally absent."}, getCardHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "create_card", Description: "Create a Normal or Ongoing Card. idempotency_key is required for safe retries."}, createCardHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "create_discussion", Description: "Create a Discussion as the entry point for new work. idempotency_key is required for safe retries."}, createDiscussionHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "generate_work", Description: "Generate one Todo or Ongoing Card from an active Discussion. kind is the agent's semantic classification; Todo/Ongoing Cards cannot generate more work."}, generateWorkHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "update_card", Description: "Update a Card title and/or description without changing workflow state."}, updateCardHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "move_card", Description: "Move a Normal Card among discussion, todo, and working. Agents cannot move directly to Review or Done; use confirm_card for Review and a human for Done."}, moveCardHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "move_card", Description: "Move a Todo between todo and working. Agents cannot move directly to Review or Done; use confirm_card for Review and a human for Done."}, moveCardHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "add_comment", Description: "Append durable context to a Card without creating new work. Use create_followup when a new Trigger should be queued."}, addCommentHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "create_followup", Description: "Explicitly create a new durable work direction and pending Trigger. It never interrupts current work and does not silently Claim."}, createFollowupHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "claim_work", Description: "Atomically Claim and start the oldest pending Trigger for a Card. A retry by the same OAuth Source returns its existing current Run."}, claimWorkHandler(dataStore))
@@ -27,7 +28,7 @@ func registerTools(server *mcp.Server, dataStore *store.Store) {
 	mcp.AddTool(server, &mcp.Tool{Name: "add_finding", Description: "Record a durable finding for the current Run. Findings are carried into future Card context; raw tool output is not."}, addFindingHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "check_in", Description: "Record healthy, warning, or critical status for an Ongoing Card through the current Run."}, checkInHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "finish_run", Description: "Finish the authenticated Source's current Run as completed or failed, or enter waiting_human. Completed result is durable Card context."}, finishRunHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "confirm_card", Description: "Confirm a Working Normal Card after verification. When required confirmations are reached, CycleDock moves it to Review; only a human can move Review to Done."}, confirmCardHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "confirm_card", Description: "Confirm a Working Todo after verification. When required confirmations are reached, CycleDock moves it to Review; only a human can move Review to Done."}, confirmCardHandler(dataStore))
 }
 
 func listProjectsHandler(dataStore *store.Store) mcp.ToolHandlerFor[EmptyInput, ListProjectsOutput] {
@@ -124,8 +125,8 @@ func getCardHandler(dataStore *store.Store) mcp.ToolHandlerFor[GetCardInput, Get
 	}
 }
 
-func createCardHandler(dataStore *store.Store) mcp.ToolHandlerFor[CreateCardInput, CardOutput] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, input CreateCardInput) (*mcp.CallToolResult, CardOutput, error) {
+func createDiscussionHandler(dataStore *store.Store) mcp.ToolHandlerFor[CreateDiscussionInput, CardOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, input CreateDiscussionInput) (*mcp.CallToolResult, CardOutput, error) {
 		actor, err := actorFromContext(ctx)
 		if err != nil {
 			return nil, CardOutput{}, err
@@ -134,8 +135,29 @@ func createCardHandler(dataStore *store.Store) mcp.ToolHandlerFor[CreateCardInpu
 		if err != nil {
 			return nil, CardOutput{}, err
 		}
-		result, err := dataStore.CreateAgentCard(ctx, store.AgentCardCreateParams{
+		result, err := dataStore.CreateAgentDiscussion(ctx, store.AgentDiscussionCreateParams{
 			WorkspaceID: actor.WorkspaceID, ProjectID: projectID, SourceID: actor.SourceID,
+			IdempotencyKey: input.IdempotencyKey,
+		})
+		if err != nil {
+			return nil, CardOutput{}, stableToolError(err)
+		}
+		return nil, CardOutput{Card: cardView(result.Card, "", ""), Reused: result.Reused}, nil
+	}
+}
+
+func generateWorkHandler(dataStore *store.Store) mcp.ToolHandlerFor[GenerateWorkInput, CardOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, input GenerateWorkInput) (*mcp.CallToolResult, CardOutput, error) {
+		actor, err := actorFromContext(ctx)
+		if err != nil {
+			return nil, CardOutput{}, err
+		}
+		discussionID, err := parseUUID(input.DiscussionID, "discussion_id")
+		if err != nil {
+			return nil, CardOutput{}, err
+		}
+		result, err := dataStore.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
+			WorkspaceID: actor.WorkspaceID, DiscussionID: discussionID, SourceID: actor.SourceID,
 			Kind: domain.CardKind(input.Kind), Title: input.Title, Description: input.Description,
 			RequiredConfirmations: input.RequiredConfirmations, IdempotencyKey: input.IdempotencyKey,
 		})
@@ -192,13 +214,13 @@ func moveCardHandler(dataStore *store.Store) mcp.ToolHandlerFor[MoveCardInput, C
 		if err != nil {
 			return nil, CardOutput{}, err
 		}
-		column := domain.NormalColumn(input.Column)
-		switch column {
-		case domain.NormalColumnDiscussion, domain.NormalColumnTodo, domain.NormalColumnWorking:
+		state := domain.TodoState(input.State)
+		switch state {
+		case domain.TodoStateTodo, domain.TodoStateWorking:
 		default:
-			return nil, CardOutput{}, errors.New("INVALID_REQUEST: agents may move only to discussion, todo, or working; use confirm_card for Review")
+			return nil, CardOutput{}, errors.New("INVALID_REQUEST: agents may move Todo cards only to todo or working; use confirm_card for Review")
 		}
-		if err := dataStore.MoveNormalCard(ctx, actor.WorkspaceID, cardID, actor.SourceID, column); err != nil {
+		if err := dataStore.MoveTodo(ctx, actor.WorkspaceID, cardID, actor.SourceID, state); err != nil {
 			return nil, CardOutput{}, stableToolError(err)
 		}
 		card, err := dataStore.GetCard(ctx, actor.WorkspaceID, cardID)
@@ -439,11 +461,17 @@ func cardView(card db.Card, projectName, health string) CardView {
 		Kind: card.Kind, Title: card.Title, Description: card.Description,
 		RequiredConfirmations: card.RequiredConfirmations, Health: health,
 	}
-	if card.NormalColumn.Valid {
-		view.NormalColumn = card.NormalColumn.String
+	if card.DiscussionState.Valid {
+		view.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		view.TodoState = card.TodoState.String
 	}
 	if card.OngoingState.Valid {
 		view.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		view.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
 	return view
 }
@@ -455,11 +483,17 @@ func cardSummaryView(card db.ListWorkspaceCardSummariesRow) CardView {
 		RequiredConfirmations: card.RequiredConfirmations, Health: card.Health,
 		PendingTriggerCount: card.PendingTriggerCount,
 	}
-	if card.NormalColumn.Valid {
-		view.NormalColumn = card.NormalColumn.String
+	if card.DiscussionState.Valid {
+		view.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		view.TodoState = card.TodoState.String
 	}
 	if card.OngoingState.Valid {
 		view.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		view.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
 	if card.CurrentRunStatus.Valid {
 		view.CurrentRunStatus = card.CurrentRunStatus.String

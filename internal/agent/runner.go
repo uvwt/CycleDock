@@ -86,9 +86,9 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) error {
 	if err != nil {
 		return err
 	}
-	if runContext.CardKind == domain.CardKindNormal && runContext.NormalColumn != string(domain.NormalColumnWorking) {
-		if err := r.store.MoveNormalCard(
-			runCtx, claim.WorkspaceID, claim.CardID, claim.SourceID, domain.NormalColumnWorking,
+	if runContext.CardKind == domain.CardKindTodo && runContext.TodoState != string(domain.TodoStateWorking) {
+		if err := r.store.MoveTodo(
+			runCtx, claim.WorkspaceID, claim.CardID, claim.SourceID, domain.TodoStateWorking,
 		); err != nil {
 			return fmt.Errorf("move card to working: %w", err)
 		}
@@ -338,7 +338,9 @@ func toolErrorResult(err error) string {
 
 func isInternalTool(name string) bool {
 	switch name {
-	case "cycledock_report_progress",
+	case "cycledock_set_discussion_metadata",
+		"cycledock_generate_work",
+		"cycledock_report_progress",
 		"cycledock_add_finding",
 		"cycledock_check_in",
 		"cycledock_wait_for_human",
@@ -357,6 +359,56 @@ func (r *Runner) callInternalTool(
 	arguments map[string]any,
 ) (string, error) {
 	switch name {
+	case "cycledock_set_discussion_metadata":
+		if runContext.CardKind != domain.CardKindDiscussion {
+			return "", errors.New("discussion metadata is only valid for Discussion cards")
+		}
+		var input struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		if err := r.store.SetDiscussionMetadataForRun(
+			ctx, claim.WorkspaceID, claim.RunID, claim.SourceID,
+			input.Title, input.Description,
+		); err != nil {
+			return "", err
+		}
+		return encodeToolResult(map[string]any{
+			"ok": true, "title": strings.TrimSpace(input.Title),
+			"description": strings.TrimSpace(input.Description),
+		}), nil
+
+	case "cycledock_generate_work":
+		if runContext.CardKind != domain.CardKindDiscussion ||
+			runContext.DiscussionState != string(domain.DiscussionStateActive) {
+			return "", errors.New("generate_work is only valid for an active Discussion")
+		}
+		var input struct {
+			Kind                  string `json:"kind"`
+			Title                 string `json:"title"`
+			Description           string `json:"description"`
+			RequiredConfirmations int32  `json:"required_confirmations"`
+			IdempotencyKey        string `json:"idempotency_key"`
+		}
+		if err := decodeArguments(arguments, &input); err != nil {
+			return "", err
+		}
+		result, err := r.store.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
+			WorkspaceID: claim.WorkspaceID, DiscussionID: claim.CardID, SourceID: claim.SourceID,
+			Kind: domain.CardKind(input.Kind), Title: input.Title, Description: input.Description,
+			RequiredConfirmations: input.RequiredConfirmations, IdempotencyKey: input.IdempotencyKey,
+		})
+		if err != nil {
+			return "", err
+		}
+		return encodeToolResult(map[string]any{
+			"ok": true, "card_id": result.Card.ID.String(), "kind": result.Card.Kind,
+			"title": result.Card.Title, "reused": result.Reused,
+		}), nil
+
 	case "cycledock_report_progress":
 		var input struct {
 			Stage          string `json:"stage"`
@@ -446,8 +498,8 @@ func (r *Runner) callInternalTool(
 		if err := decodeArguments(arguments, &input); err != nil {
 			return "", err
 		}
-		if runContext.CardKind != domain.CardKindNormal {
-			return "", errors.New("confirm_card is only valid for Normal cards")
+		if runContext.CardKind != domain.CardKindTodo {
+			return "", errors.New("confirm_card is only valid for Todo cards")
 		}
 		result, err := r.store.ConfirmCard(
 			ctx, claim.WorkspaceID, claim.CardID, claim.SourceID,
@@ -502,6 +554,31 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_set_discussion_metadata",
+				Description: "Set the generated title and description for a new Discussion whose title is still empty. Call this once during the first Discussion Run before answering.",
+				Parameters: object(map[string]any{
+					"title":       stringField("Concise discussion title derived from the first conversation."),
+					"description": stringField("Short durable summary of what the discussion is about."),
+				}, "title", "description"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_generate_work",
+				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards.",
+				Parameters: object(map[string]any{
+					"kind":                   map[string]any{"type": "string", "enum": []string{"todo", "ongoing"}},
+					"title":                  stringField("Concise generated work title."),
+					"description":            stringField("Durable scope and expected outcome for the generated work."),
+					"required_confirmations": map[string]any{"type": "integer", "minimum": 1, "description": "Todo confirmation threshold; use 1 unless the discussion requires more."},
+					"idempotency_key":        stringField("Stable unique key for this logical generated work item."),
+				}, "kind", "title", "description", "idempotency_key"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_report_progress",
 				Description: "Update the current Run stage/progress and refresh its lease. Add event_content only when the progress itself is a durable Card fact.",
 				Parameters: object(map[string]any{
@@ -550,7 +627,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_confirm_card",
-				Description: "Confirm verified work on a Working Normal Card. CycleDock moves to Review only after the required confirmation threshold. A human alone can move Review to Done.",
+				Description: "Confirm verified work on a Working Todo. CycleDock moves to Review only after the required confirmation threshold. A human alone can move Review to Done.",
 				Parameters: object(map[string]any{
 					"content":         stringField("What was verified."),
 					"idempotency_key": stringField("Stable key for this logical confirmation."),

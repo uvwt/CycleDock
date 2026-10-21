@@ -110,14 +110,14 @@ func newFixture(t *testing.T, s *Store, kind domain.CardKind) testFixture {
 		t.Fatal(err)
 	}
 	var cardID uuid.UUID
-	if kind == domain.CardKindNormal {
-		card, err := s.CreateNormalCard(ctx, workspace.ID, project.ID, human.ID, "Normal", "")
+	if kind == domain.CardKindTodo {
+		card, err := s.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Normal", "", uuid.NullUUID{}, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
 		cardID = card.ID
 	} else {
-		card, err := s.CreateOngoingCard(ctx, workspace.ID, project.ID, human.ID, "Ongoing", "")
+		card, err := s.CreateOngoingCard(ctx, workspace.ID, project.ID, human.ID, "Ongoing", "", uuid.NullUUID{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +135,7 @@ func newFixture(t *testing.T, s *Store, kind domain.CardKind) testFixture {
 
 func TestSubmitCommentIsIdempotentAndEnqueuesBehindCurrentRun(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	first, err := s.SubmitComment(ctx, SubmitCommentParams{
@@ -186,7 +186,7 @@ func TestSubmitCommentIsIdempotentAndEnqueuesBehindCurrentRun(t *testing.T) {
 
 func TestTwoAgentsClaimOnlyOnePendingTrigger(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 	_, err := s.SubmitComment(ctx, SubmitCommentParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
@@ -230,7 +230,7 @@ func TestTwoAgentsClaimOnlyOnePendingTrigger(t *testing.T) {
 
 func TestDatabaseRejectsTwoConcurrentCurrentRuns(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	var triggerIDs []uuid.UUID
@@ -286,9 +286,9 @@ func TestDatabaseRejectsTwoConcurrentCurrentRuns(t *testing.T) {
 
 func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
-	if err := s.MoveNormalCard(ctx, f.WorkspaceID, f.CardID, f.HumanID, domain.NormalColumnWorking); err != nil {
+	if err := s.MoveTodo(ctx, f.WorkspaceID, f.CardID, f.HumanID, domain.TodoStateWorking); err != nil {
 		t.Fatal(err)
 	}
 
@@ -312,7 +312,7 @@ func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-start
-		move := domain.NormalColumnReview
+		move := domain.TodoStateReview
 		finishErr = s.FinishRun(ctx, FinishRunParams{
 			WorkspaceID: f.WorkspaceID, RunID: *first.RunID, RunnerSourceID: f.AgentID,
 			Result: "old result", MoveTo: &move,
@@ -337,18 +337,18 @@ func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `SELECT status FROM agent_runs WHERE id = $1`, *first.RunID).Scan(&oldStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT normal_column FROM cards WHERE id = $1`, f.CardID).Scan(&cardColumn); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT todo_state FROM cards WHERE id = $1`, f.CardID).Scan(&cardColumn); err != nil {
 		t.Fatal(err)
 	}
 	if oldStatus == string(domain.RunStatusSuperseded) {
 		if !errors.Is(finishErr, domain.ErrRunNotCurrent) {
 			t.Fatalf("late finish error = %v, want ErrRunNotCurrent", finishErr)
 		}
-		if cardColumn != string(domain.NormalColumnWorking) {
+		if cardColumn != string(domain.TodoStateWorking) {
 			t.Fatalf("superseded run changed card to %s", cardColumn)
 		}
 	} else if oldStatus == string(domain.RunStatusCompleted) {
-		if finishErr != nil || cardColumn != string(domain.NormalColumnReview) {
+		if finishErr != nil || cardColumn != string(domain.TodoStateReview) {
 			t.Fatalf("finish-first ordering inconsistent: finish=%v column=%s", finishErr, cardColumn)
 		}
 	} else {
@@ -369,7 +369,7 @@ func TestInterruptAndFinishRacePreservesLinearizedState(t *testing.T) {
 
 func TestWaitingHumanReplySupersedesOldRunAndHeartbeatHasNoTimelineEvent(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 	first, err := s.SubmitComment(ctx, SubmitCommentParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AuthorSourceID: f.HumanID,
@@ -423,7 +423,7 @@ func TestLeaseExpiryHealthAndHumanOnlyDone(t *testing.T) {
 	s := requireIntegration(t)
 	ctx := context.Background()
 
-	normal := newFixture(t, s, domain.CardKindNormal)
+	normal := newFixture(t, s, domain.CardKindTodo)
 	result, err := s.SubmitComment(ctx, SubmitCommentParams{
 		WorkspaceID: normal.WorkspaceID, CardID: normal.CardID, AuthorSourceID: normal.HumanID,
 		RunnerSourceID: &normal.AgentID, Content: "lease", IdempotencyKey: "lease-1",
@@ -440,13 +440,13 @@ func TestLeaseExpiryHealthAndHumanOnlyDone(t *testing.T) {
 		t.Fatalf("expired=%d err=%v", expired, err)
 	}
 
-	if err := s.MoveNormalCard(ctx, normal.WorkspaceID, normal.CardID, normal.HumanID, domain.NormalColumnReview); err != nil {
+	if err := s.MoveTodo(ctx, normal.WorkspaceID, normal.CardID, normal.HumanID, domain.TodoStateReview); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MoveNormalCard(ctx, normal.WorkspaceID, normal.CardID, normal.AgentID, domain.NormalColumnDone); !errors.Is(err, domain.ErrHumanRequired) {
+	if err := s.MoveTodo(ctx, normal.WorkspaceID, normal.CardID, normal.AgentID, domain.TodoStateDone); !errors.Is(err, domain.ErrHumanRequired) {
 		t.Fatalf("agent done error=%v, want ErrHumanRequired", err)
 	}
-	if err := s.MoveNormalCard(ctx, normal.WorkspaceID, normal.CardID, normal.HumanID, domain.NormalColumnDone); err != nil {
+	if err := s.MoveTodo(ctx, normal.WorkspaceID, normal.CardID, normal.HumanID, domain.TodoStateDone); err != nil {
 		t.Fatal(err)
 	}
 
@@ -556,7 +556,7 @@ func TestSchedulerDuplicateOccurrenceCreatesOneTriggerAndPausedSkips(t *testing.
 
 func TestWorkspaceScopeRejectsCrossTenantCardRead(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	other, err := s.CreateWorkspace(context.Background(), "Other Workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -569,10 +569,10 @@ func TestWorkspaceScopeRejectsCrossTenantCardRead(t *testing.T) {
 
 func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
-	otherCard, err := s.CreateNormalCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Other normal card", "")
+	otherCard, err := s.CreateTodoCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Other todo card", "", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,11 +627,11 @@ func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 		t.Fatal("database accepted an event whose run belongs to another card")
 	}
 
-	ongoingA, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Ongoing A", "")
+	ongoingA, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Ongoing A", "", uuid.NullUUID{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ongoingB, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Ongoing B", "")
+	ongoingB, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "Ongoing B", "", uuid.NullUUID{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,5 +652,140 @@ func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 		VALUES ($1, $2, $3, 'scheduled_followup', 'enqueue', $4, $5)
 	`, uuid.New(), f.WorkspaceID, ongoingB.ID, schedule.ID, schedule.NextTriggerAt); err == nil {
 		t.Fatal("database accepted a scheduled trigger whose schedule belongs to another card")
+	}
+}
+
+func TestDiscussionLifecycleGeneratesWorkAndPreservesDerivedCards(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+
+	discussion, err := s.CreateDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discussion.Kind != string(domain.CardKindDiscussion) ||
+		!discussion.DiscussionState.Valid ||
+		discussion.DiscussionState.String != string(domain.DiscussionStateActive) ||
+		discussion.Title != "" {
+		t.Fatalf("unexpected new discussion: %+v", discussion)
+	}
+
+	first, err := s.SubmitComment(ctx, SubmitCommentParams{
+		WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+		RunnerSourceID: &f.AgentID, Content: "Plan the release and monitor it every day.",
+		IdempotencyKey: "discussion-first", DispatchMode: domain.DispatchModeEnqueue,
+	})
+	if err != nil || first.RunID == nil {
+		t.Fatalf("first discussion message: result=%+v err=%v", first, err)
+	}
+	if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDiscussionMetadataForRun(
+		ctx, f.WorkspaceID, *first.RunID, f.AgentID,
+		"Release planning", "Plan the release and decide the follow-up monitoring work.",
+	); err != nil {
+		t.Fatalf("set generated discussion metadata: %v", err)
+	}
+	updatedDiscussion, err := s.GetCard(ctx, f.WorkspaceID, discussion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedDiscussion.Title != "Release planning" ||
+		updatedDiscussion.Description != "Plan the release and decide the follow-up monitoring work." {
+		t.Fatalf("discussion metadata was not persisted: %+v", updatedDiscussion)
+	}
+
+	todo, err := s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "Ship release", Description: "Complete the release.",
+		IdempotencyKey: "generate-todo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ongoing, err := s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindOngoing, Title: "Daily release health", Description: "Monitor release health every day.",
+		IdempotencyKey: "generate-ongoing",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []uuid.NullUUID{todo.Card.SourceDiscussionID, ongoing.Card.SourceDiscussionID} {
+		if !source.Valid || source.UUID != discussion.ID {
+			t.Fatalf("generated card lost source discussion: %+v", source)
+		}
+	}
+
+	_, err = s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: todo.Card.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "Nested work", IdempotencyKey: "nested-work",
+	})
+	if !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("Todo generated nested work: %v", err)
+	}
+	_, err = s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: ongoing.Card.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "Nested ongoing work", IdempotencyKey: "nested-ongoing-work",
+	})
+	if !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("Ongoing generated nested work: %v", err)
+	}
+
+	second, err := s.SubmitComment(ctx, SubmitCommentParams{
+		WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+		Content: "Queue another thought.", IdempotencyKey: "discussion-second",
+		DispatchMode: domain.DispatchModeEnqueue,
+	})
+	if err != nil || second.TriggerID == uuid.Nil {
+		t.Fatalf("queue second discussion direction: result=%+v err=%v", second, err)
+	}
+	if err := s.ArchiveDiscussion(ctx, f.WorkspaceID, discussion.ID, f.HumanID); err != nil {
+		t.Fatalf("archive discussion: %v", err)
+	}
+	current, err := s.CurrentRun(ctx, f.WorkspaceID, discussion.ID)
+	if err != nil || current != nil {
+		t.Fatalf("archived discussion still has current run: run=%+v err=%v", current, err)
+	}
+	run, err := s.GetRun(ctx, f.WorkspaceID, *first.RunID)
+	if err != nil || run.Status != string(domain.RunStatusCancelled) {
+		t.Fatalf("archive did not cancel current run: run=%+v err=%v", run, err)
+	}
+	queue, err := s.ListPendingQueue(ctx, f.WorkspaceID, discussion.ID)
+	if err != nil || len(queue) != 0 {
+		t.Fatalf("archive did not cancel pending queue: queue=%+v err=%v", queue, err)
+	}
+	_, err = s.SubmitComment(ctx, SubmitCommentParams{
+		WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+		Content: "should be rejected", IdempotencyKey: "after-archive",
+		DispatchMode: domain.DispatchModeEnqueue,
+	})
+	if !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("archived discussion accepted new direction: %v", err)
+	}
+	_, err = s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "After archive", IdempotencyKey: "after-archive-work",
+	})
+	if !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("archived discussion generated work: %v", err)
+	}
+
+	if err := s.DeleteDiscussion(ctx, f.WorkspaceID, discussion.ID, f.HumanID); err != nil {
+		t.Fatalf("delete discussion: %v", err)
+	}
+	if _, err := s.GetCard(ctx, f.WorkspaceID, discussion.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("deleted discussion still exists: %v", err)
+	}
+	for _, generatedID := range []uuid.UUID{todo.Card.ID, ongoing.Card.ID} {
+		generated, err := s.GetCard(ctx, f.WorkspaceID, generatedID)
+		if err != nil {
+			t.Fatalf("generated card was deleted with discussion: %v", err)
+		}
+		if generated.SourceDiscussionID.Valid {
+			t.Fatalf("generated card kept dangling source discussion: %+v", generated.SourceDiscussionID)
+		}
 	}
 }

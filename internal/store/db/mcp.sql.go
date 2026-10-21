@@ -35,31 +35,35 @@ func (q *Queries) CountCardConfirmations(ctx context.Context, arg CountCardConfi
 const createAgentCard = `-- name: CreateAgentCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
-    normal_column, ongoing_state, required_confirmations, created_by_source_id,
+    discussion_state, todo_state, ongoing_state, source_discussion_id,
+    required_confirmations, created_by_source_id,
     create_idempotency_key, create_request_hash
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9, $10,
-    $11, $12
+    $11, $12,
+    $13, $14
 )
-RETURNING id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 `
 
 type CreateAgentCardParams struct {
-	ID                    uuid.UUID   `json:"id"`
-	WorkspaceID           uuid.UUID   `json:"workspace_id"`
-	ProjectID             uuid.UUID   `json:"project_id"`
-	Kind                  string      `json:"kind"`
-	Title                 string      `json:"title"`
-	Description           string      `json:"description"`
-	NormalColumn          pgtype.Text `json:"normal_column"`
-	OngoingState          pgtype.Text `json:"ongoing_state"`
-	RequiredConfirmations int32       `json:"required_confirmations"`
-	CreatedBySourceID     uuid.UUID   `json:"created_by_source_id"`
-	CreateIdempotencyKey  pgtype.Text `json:"create_idempotency_key"`
-	CreateRequestHash     pgtype.Text `json:"create_request_hash"`
+	ID                    uuid.UUID     `json:"id"`
+	WorkspaceID           uuid.UUID     `json:"workspace_id"`
+	ProjectID             uuid.UUID     `json:"project_id"`
+	Kind                  string        `json:"kind"`
+	Title                 string        `json:"title"`
+	Description           string        `json:"description"`
+	DiscussionState       pgtype.Text   `json:"discussion_state"`
+	TodoState             pgtype.Text   `json:"todo_state"`
+	OngoingState          pgtype.Text   `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID `json:"source_discussion_id"`
+	RequiredConfirmations int32         `json:"required_confirmations"`
+	CreatedBySourceID     uuid.UUID     `json:"created_by_source_id"`
+	CreateIdempotencyKey  pgtype.Text   `json:"create_idempotency_key"`
+	CreateRequestHash     pgtype.Text   `json:"create_request_hash"`
 }
 
 func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams) (Card, error) {
@@ -70,8 +74,10 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 		arg.Kind,
 		arg.Title,
 		arg.Description,
-		arg.NormalColumn,
+		arg.DiscussionState,
+		arg.TodoState,
 		arg.OngoingState,
+		arg.SourceDiscussionID,
 		arg.RequiredConfirmations,
 		arg.CreatedBySourceID,
 		arg.CreateIdempotencyKey,
@@ -85,8 +91,10 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 		&i.Kind,
 		&i.Title,
 		&i.Description,
-		&i.NormalColumn,
+		&i.DiscussionState,
+		&i.TodoState,
 		&i.OngoingState,
+		&i.SourceDiscussionID,
 		&i.RequiredConfirmations,
 		&i.CreatedBySourceID,
 		&i.CreatedAt,
@@ -294,7 +302,7 @@ func (q *Queries) GetAgentFollowupRequest(ctx context.Context, arg GetAgentFollo
 }
 
 const getCreatedCardRequest = `-- name: GetCreatedCardRequest :one
-SELECT id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 FROM cards
 WHERE workspace_id = $1
   AND created_by_source_id = $2
@@ -317,8 +325,10 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 		&i.Kind,
 		&i.Title,
 		&i.Description,
-		&i.NormalColumn,
+		&i.DiscussionState,
+		&i.TodoState,
 		&i.OngoingState,
+		&i.SourceDiscussionID,
 		&i.RequiredConfirmations,
 		&i.CreatedBySourceID,
 		&i.CreatedAt,
@@ -448,7 +458,7 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 
 const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.normal_column, c.ongoing_state, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_run.status AS current_run_status,
@@ -492,8 +502,10 @@ type ListWorkspaceCardSummariesRow struct {
 	Kind                  string             `json:"kind"`
 	Title                 string             `json:"title"`
 	Description           string             `json:"description"`
-	NormalColumn          pgtype.Text        `json:"normal_column"`
+	DiscussionState       pgtype.Text        `json:"discussion_state"`
+	TodoState             pgtype.Text        `json:"todo_state"`
 	OngoingState          pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID      `json:"source_discussion_id"`
 	RequiredConfirmations int32              `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
@@ -522,8 +534,10 @@ func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uu
 			&i.Kind,
 			&i.Title,
 			&i.Description,
-			&i.NormalColumn,
+			&i.DiscussionState,
+			&i.TodoState,
 			&i.OngoingState,
+			&i.SourceDiscussionID,
 			&i.RequiredConfirmations,
 			&i.CreatedBySourceID,
 			&i.CreatedAt,

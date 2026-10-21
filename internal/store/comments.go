@@ -86,6 +86,9 @@ func (s *Store) submitComment(ctx context.Context, p SubmitCommentParams, requir
 			return existing.Result, nil
 		}
 	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return SubmitCommentResult{}, err
+	}
 
 	var currentRunID uuid.UUID
 	var currentStatus string

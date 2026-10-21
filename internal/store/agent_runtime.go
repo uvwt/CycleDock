@@ -58,7 +58,7 @@ func (s *Store) ClaimNextBuiltInRun(
 		  ON t.workspace_id = r.workspace_id
 		 AND t.id = r.trigger_id
 		WHERE r.status = 'queued'
-		  AND ((c.kind = 'normal' AND c.normal_column <> 'done') OR c.ongoing_state = 'active')
+		  AND ((c.kind = 'discussion' AND c.discussion_state = 'active') OR (c.kind = 'todo' AND c.todo_state <> 'done') OR (c.kind = 'ongoing' AND c.ongoing_state = 'active'))
 		ORDER BY t.sequence
 		LIMIT 1
 		FOR UPDATE OF c SKIP LOCKED
@@ -124,7 +124,7 @@ func (s *Store) ClaimNextBuiltInRun(
 			  AND current_run.card_id = c.id
 			  AND current_run.status IN ('queued','running','waiting_human')
 		)
-		  AND (c.kind = 'normal' OR c.ongoing_state = 'active')
+		  AND ((c.kind = 'discussion' AND c.discussion_state = 'active') OR (c.kind = 'todo' AND c.todo_state <> 'done') OR (c.kind = 'ongoing' AND c.ongoing_state = 'active'))
 		ORDER BY pending.sequence
 		LIMIT 1
 		FOR UPDATE OF c SKIP LOCKED
@@ -174,7 +174,8 @@ type AgentRunContext struct {
 	CardKind              domain.CardKind
 	CardTitle             string
 	CardDescription       string
-	NormalColumn          string
+	DiscussionState       string
+	TodoState             string
 	OngoingState          string
 	RequiredConfirmations int32
 	TriggerID             uuid.UUID
@@ -203,7 +204,7 @@ func (s *Store) LoadAgentRunContext(
 		eventLimit = 50
 	}
 	var result AgentRunContext
-	var normalColumn, ongoingState pgtype.Text
+	var discussionState, todoState, ongoingState pgtype.Text
 	var triggerEventContent pgtype.Text
 	var scheduledFor pgtype.Timestamptz
 	var triggerCause string
@@ -211,7 +212,8 @@ func (s *Store) LoadAgentRunContext(
 		SELECT
 			w.id, w.name,
 			p.id, p.name, p.description, p.instructions,
-			c.id, c.kind, c.title, c.description, c.normal_column, c.ongoing_state,
+			c.id, c.kind, c.title, c.description,
+			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
 			t.id, t.cause, cause_event.content, t.scheduled_for, t.created_at,
 			(
@@ -243,7 +245,7 @@ func (s *Store) LoadAgentRunContext(
 		&result.WorkspaceID, &result.WorkspaceName,
 		&result.ProjectID, &result.ProjectName, &result.ProjectDescription, &result.ProjectInstructions,
 		&result.CardID, &result.CardKind, &result.CardTitle, &result.CardDescription,
-		&normalColumn, &ongoingState, &result.RequiredConfirmations,
+		&discussionState, &todoState, &ongoingState, &result.RequiredConfirmations,
 		&result.TriggerID, &triggerCause, &triggerEventContent, &scheduledFor, &result.TriggeredAt,
 		&result.PendingTriggerCount,
 	)
@@ -254,8 +256,11 @@ func (s *Store) LoadAgentRunContext(
 		return AgentRunContext{}, err
 	}
 	result.TriggerCause = domain.TriggerCause(triggerCause)
-	if normalColumn.Valid {
-		result.NormalColumn = normalColumn.String
+	if discussionState.Valid {
+		result.DiscussionState = discussionState.String
+	}
+	if todoState.Valid {
+		result.TodoState = todoState.String
 	}
 	if ongoingState.Valid {
 		result.OngoingState = ongoingState.String

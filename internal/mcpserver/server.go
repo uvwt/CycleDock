@@ -38,7 +38,7 @@ func New(dataStore *store.Store, oauthService *oauth.Service, logger *slog.Logge
 		Description: "Shared project and task state for humans and AI agents.",
 		Version:     "0.3.0",
 	}, &mcp.ServerOptions{
-		Instructions: "Use CycleDock as shared durable work state. Claim existing pending work; create_followup explicitly creates new work. Use findings/results/check-ins instead of raw tool traces. confirm_card may move Working to Review; only a human can move Review to Done.",
+		Instructions: "Use CycleDock as shared durable work state. New work starts as a Discussion; only generate_work may derive a Todo or Ongoing Card from an active Discussion. Todo/Ongoing Cards never generate more Cards. Claim pending work, preserve durable findings/results/check-ins instead of raw tool traces, and use confirm_card to move verified Working Todo work to Review. Only a human can move Review to Done.",
 	})
 	registerTools(server, dataStore)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,31 +51,60 @@ func (s *Store) CreateProject(ctx context.Context, workspaceID uuid.UUID, name, 
 	})
 }
 
-func (s *Store) CreateNormalCard(ctx context.Context, workspaceID, projectID, sourceID uuid.UUID, title, description string) (db.Card, error) {
+func (s *Store) CreateDiscussion(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+) (db.Card, error) {
 	return s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
-		Kind:                  string(domain.CardKindNormal),
-		Title:                 title,
-		Description:           description,
-		NormalColumn:          pgtype.Text{String: string(domain.NormalColumnDiscussion), Valid: true},
-		OngoingState:          pgtype.Text{},
+		Kind:                  string(domain.CardKindDiscussion),
+		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
 	})
 }
 
-func (s *Store) CreateOngoingCard(ctx context.Context, workspaceID, projectID, sourceID uuid.UUID, title, description string) (db.Card, error) {
+func (s *Store) CreateTodoCard(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+	title, description string,
+	sourceDiscussionID uuid.NullUUID,
+	requiredConfirmations int32,
+) (db.Card, error) {
+	if requiredConfirmations <= 0 {
+		requiredConfirmations = 1
+	}
+	return s.queries.CreateCard(ctx, db.CreateCardParams{
+		ID:                    uuid.New(),
+		WorkspaceID:           workspaceID,
+		ProjectID:             projectID,
+		Kind:                  string(domain.CardKindTodo),
+		Title:                 strings.TrimSpace(title),
+		Description:           strings.TrimSpace(description),
+		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+		SourceDiscussionID:    sourceDiscussionID,
+		RequiredConfirmations: requiredConfirmations,
+		CreatedBySourceID:     sourceID,
+	})
+}
+
+func (s *Store) CreateOngoingCard(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+	title, description string,
+	sourceDiscussionID uuid.NullUUID,
+) (db.Card, error) {
 	return s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
 		Kind:                  string(domain.CardKindOngoing),
-		Title:                 title,
-		Description:           description,
-		NormalColumn:          pgtype.Text{},
+		Title:                 strings.TrimSpace(title),
+		Description:           strings.TrimSpace(description),
 		OngoingState:          pgtype.Text{String: string(domain.OngoingStateActive), Valid: true},
+		SourceDiscussionID:    sourceDiscussionID,
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
 	})

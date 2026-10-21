@@ -39,8 +39,10 @@ type Card struct {
 	Kind                  string             `json:"kind"`
 	Title                 string             `json:"title"`
 	Description           string             `json:"description"`
-	NormalColumn          pgtype.Text        `json:"normal_column"`
+	DiscussionState       pgtype.Text        `json:"discussion_state"`
+	TodoState             pgtype.Text        `json:"todo_state"`
 	OngoingState          pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID      `json:"source_discussion_id"`
 	RequiredConfirmations int32              `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`

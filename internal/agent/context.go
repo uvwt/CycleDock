@@ -18,9 +18,12 @@ Rules:
 - Treat Project instructions, Card details, durable Timeline facts, and the current Trigger as authoritative context.
 - Do not assume raw tool calls or outputs from older Runs are available. They are intentionally not persisted.
 - Promote durable discoveries with cycledock_add_finding. Use cycledock_report_progress only for meaningful phase changes.
+- On a Discussion whose title is empty, call cycledock_set_discussion_metadata once with a concise generated title and description derived from the current discussion.
+- Only an active Discussion may create new work. When the human explicitly asks to generate/create work from the discussion, call cycledock_generate_work exactly once for each distinct work item and classify it yourself: finite completion -> todo; long-term/periodic/continuous -> ongoing.
+- Never create work from a Todo or Ongoing Card, and never treat Discussion -> Todo/Ongoing as a state transition.
 - On Ongoing Cards, use cycledock_check_in when you establish a health fact.
 - If human input is required, call cycledock_wait_for_human and stop.
-- Use cycledock_confirm_card only after you have actually verified a Normal Card's work. Human Review -> Done is never your action.
+- Use cycledock_confirm_card only after you have actually verified a Todo's work. Human Review -> Done is never your action.
 - External MCP tool results are ephemeral raw material. Persist only the distilled facts that future Runs need.
 - When work is complete, return a concise durable Result as your final assistant response. CycleDock will persist that Result.
 - Never output chain-of-thought or hidden reasoning.`
@@ -49,8 +52,11 @@ func BuildContext(run store.AgentRunContext, settings db.WorkspaceAgentSetting) 
 	if value := strings.TrimSpace(run.CardDescription); value != "" {
 		fmt.Fprintf(&context, "- Description: %s\n", value)
 	}
-	if run.NormalColumn != "" {
-		fmt.Fprintf(&context, "- Column: %s\n", run.NormalColumn)
+	if run.DiscussionState != "" {
+		fmt.Fprintf(&context, "- Discussion state: %s\n", run.DiscussionState)
+	}
+	if run.TodoState != "" {
+		fmt.Fprintf(&context, "- Todo state: %s\n", run.TodoState)
 	}
 	if run.OngoingState != "" {
 		fmt.Fprintf(&context, "- Ongoing state: %s\n", run.OngoingState)

@@ -17,9 +17,16 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-type AgentCardCreateParams struct {
+type AgentDiscussionCreateParams struct {
+	WorkspaceID    uuid.UUID
+	ProjectID      uuid.UUID
+	SourceID       uuid.UUID
+	IdempotencyKey string
+}
+
+type GenerateWorkParams struct {
 	WorkspaceID           uuid.UUID
-	ProjectID             uuid.UUID
+	DiscussionID          uuid.UUID
 	SourceID              uuid.UUID
 	Kind                  domain.CardKind
 	Title                 string
@@ -63,21 +70,92 @@ func (s *Store) GetRun(ctx context.Context, workspaceID, runID uuid.UUID) (db.Ag
 	return run, err
 }
 
-func (s *Store) CreateAgentCard(ctx context.Context, p AgentCardCreateParams) (AgentCardCreateResult, error) {
+func (s *Store) CreateAgentDiscussion(
+	ctx context.Context,
+	p AgentDiscussionCreateParams,
+) (AgentCardCreateResult, error) {
+	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	if p.IdempotencyKey == "" {
+		return AgentCardCreateResult{}, fmt.Errorf("%w: idempotency key is required", domain.ErrConflict)
+	}
+	requestHash := stableRequestHash(
+		"create_discussion", p.WorkspaceID.String(), p.ProjectID.String(), p.SourceID.String(),
+	)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return AgentCardCreateResult{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockRequestKey(ctx, tx, p.WorkspaceID, p.SourceID, p.IdempotencyKey); err != nil {
+		return AgentCardCreateResult{}, err
+	}
+	if err := ensureAgentSource(ctx, tx, p.WorkspaceID, p.SourceID); err != nil {
+		return AgentCardCreateResult{}, err
+	}
+
+	q := db.New(tx)
+	if existing, reused, err := findCreatedCardRetry(
+		ctx, q, p.WorkspaceID, p.SourceID, p.IdempotencyKey, requestHash,
+	); err != nil || reused {
+		if err != nil {
+			return AgentCardCreateResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return AgentCardCreateResult{}, err
+		}
+		return AgentCardCreateResult{Card: existing, Reused: true}, nil
+	}
+
+	var projectID uuid.UUID
+	if err := tx.QueryRow(ctx,
+		"SELECT id FROM projects WHERE workspace_id = $1 AND id = $2",
+		p.WorkspaceID, p.ProjectID,
+	).Scan(&projectID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AgentCardCreateResult{}, domain.ErrNotFound
+		}
+		return AgentCardCreateResult{}, err
+	}
+
+	card, err := q.CreateAgentCard(ctx, db.CreateAgentCardParams{
+		ID:                    uuid.New(),
+		WorkspaceID:           p.WorkspaceID,
+		ProjectID:             p.ProjectID,
+		Kind:                  string(domain.CardKindDiscussion),
+		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
+		RequiredConfirmations: 1,
+		CreatedBySourceID:     p.SourceID,
+		CreateIdempotencyKey:  pgtype.Text{String: p.IdempotencyKey, Valid: true},
+		CreateRequestHash:     pgtype.Text{String: requestHash, Valid: true},
+	})
+	if err != nil {
+		return AgentCardCreateResult{}, mapConstraintError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AgentCardCreateResult{}, err
+	}
+	return AgentCardCreateResult{Card: card}, nil
+}
+
+func (s *Store) GenerateWorkFromDiscussion(
+	ctx context.Context,
+	p GenerateWorkParams,
+) (AgentCardCreateResult, error) {
 	p.Title = strings.TrimSpace(p.Title)
 	p.Description = strings.TrimSpace(p.Description)
 	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
 	if p.Title == "" || p.IdempotencyKey == "" {
 		return AgentCardCreateResult{}, fmt.Errorf("%w: title and idempotency key are required", domain.ErrConflict)
 	}
-	if p.RequiredConfirmations <= 0 {
+	if p.Kind != domain.CardKindTodo && p.Kind != domain.CardKindOngoing {
+		return AgentCardCreateResult{}, fmt.Errorf("%w: generated work must be todo or ongoing", domain.ErrInvalidTransition)
+	}
+	if p.RequiredConfirmations <= 0 || p.Kind == domain.CardKindOngoing {
 		p.RequiredConfirmations = 1
 	}
-	if p.Kind != domain.CardKindNormal && p.Kind != domain.CardKindOngoing {
-		return AgentCardCreateResult{}, fmt.Errorf("%w: unsupported card kind", domain.ErrInvalidTransition)
-	}
 	requestHash := stableRequestHash(
-		"create_card", p.WorkspaceID.String(), p.ProjectID.String(), p.SourceID.String(),
+		"generate_work", p.WorkspaceID.String(), p.DiscussionID.String(), p.SourceID.String(),
 		string(p.Kind), p.Title, p.Description, fmt.Sprint(p.RequiredConfirmations),
 	)
 
@@ -92,49 +170,60 @@ func (s *Store) CreateAgentCard(ctx context.Context, p AgentCardCreateParams) (A
 	if err := ensureAgentSource(ctx, tx, p.WorkspaceID, p.SourceID); err != nil {
 		return AgentCardCreateResult{}, err
 	}
-	var projectID uuid.UUID
-	if err := tx.QueryRow(ctx,
-		"SELECT id FROM projects WHERE workspace_id = $1 AND id = $2",
-		p.WorkspaceID, p.ProjectID,
-	).Scan(&projectID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return AgentCardCreateResult{}, domain.ErrNotFound
-		}
-		return AgentCardCreateResult{}, err
-	}
 
 	q := db.New(tx)
-	existing, err := q.GetCreatedCardRequest(ctx, db.GetCreatedCardRequestParams{
-		WorkspaceID:          p.WorkspaceID,
-		CreatedBySourceID:    p.SourceID,
-		CreateIdempotencyKey: pgtype.Text{String: p.IdempotencyKey, Valid: true},
-	})
-	if err == nil {
-		if !existing.CreateRequestHash.Valid || existing.CreateRequestHash.String != requestHash {
-			return AgentCardCreateResult{}, domain.ErrIdempotencyMismatch
+	if existing, reused, err := findCreatedCardRetry(
+		ctx, q, p.WorkspaceID, p.SourceID, p.IdempotencyKey, requestHash,
+	); err != nil || reused {
+		if err != nil {
+			return AgentCardCreateResult{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return AgentCardCreateResult{}, err
 		}
 		return AgentCardCreateResult{Card: existing, Reused: true}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+
+	var projectID uuid.UUID
+	var kind, discussionState string
+	if err := tx.QueryRow(ctx, `
+		SELECT project_id, kind, COALESCE(discussion_state, '')
+		FROM cards
+		WHERE workspace_id = $1 AND id = $2
+		FOR UPDATE
+	`, p.WorkspaceID, p.DiscussionID).Scan(&projectID, &kind, &discussionState); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AgentCardCreateResult{}, domain.ErrNotFound
+		}
 		return AgentCardCreateResult{}, err
 	}
+	if kind != string(domain.CardKindDiscussion) ||
+		discussionState != string(domain.DiscussionStateActive) {
+		return AgentCardCreateResult{}, fmt.Errorf(
+			"%w: generated work requires an active discussion", domain.ErrInvalidTransition,
+		)
+	}
 
-	var normalColumn, ongoingState pgtype.Text
-	if p.Kind == domain.CardKindNormal {
-		normalColumn = pgtype.Text{String: string(domain.NormalColumnDiscussion), Valid: true}
+	var todoState, ongoingState pgtype.Text
+	if p.Kind == domain.CardKindTodo {
+		todoState = pgtype.Text{String: string(domain.TodoStateTodo), Valid: true}
 	} else {
 		ongoingState = pgtype.Text{String: string(domain.OngoingStateActive), Valid: true}
 	}
 	card, err := q.CreateAgentCard(ctx, db.CreateAgentCardParams{
-		ID: uuid.New(), WorkspaceID: p.WorkspaceID, ProjectID: p.ProjectID,
-		Kind: string(p.Kind), Title: p.Title, Description: p.Description,
-		NormalColumn: normalColumn, OngoingState: ongoingState,
-		RequiredConfirmations: p.RequiredConfirmations, CreatedBySourceID: p.SourceID,
-		CreateIdempotencyKey: pgtype.Text{String: p.IdempotencyKey, Valid: true},
-		CreateRequestHash:    pgtype.Text{String: requestHash, Valid: true},
+		ID:                    uuid.New(),
+		WorkspaceID:           p.WorkspaceID,
+		ProjectID:             projectID,
+		Kind:                  string(p.Kind),
+		Title:                 p.Title,
+		Description:           p.Description,
+		TodoState:             todoState,
+		OngoingState:          ongoingState,
+		SourceDiscussionID:    uuid.NullUUID{UUID: p.DiscussionID, Valid: true},
+		RequiredConfirmations: p.RequiredConfirmations,
+		CreatedBySourceID:     p.SourceID,
+		CreateIdempotencyKey:  pgtype.Text{String: p.IdempotencyKey, Valid: true},
+		CreateRequestHash:     pgtype.Text{String: requestHash, Valid: true},
 	})
 	if err != nil {
 		return AgentCardCreateResult{}, mapConstraintError(err)
@@ -143,6 +232,29 @@ func (s *Store) CreateAgentCard(ctx context.Context, p AgentCardCreateParams) (A
 		return AgentCardCreateResult{}, err
 	}
 	return AgentCardCreateResult{Card: card}, nil
+}
+
+func findCreatedCardRetry(
+	ctx context.Context,
+	q *db.Queries,
+	workspaceID, sourceID uuid.UUID,
+	idempotencyKey, requestHash string,
+) (db.Card, bool, error) {
+	existing, err := q.GetCreatedCardRequest(ctx, db.GetCreatedCardRequestParams{
+		WorkspaceID:          workspaceID,
+		CreatedBySourceID:    sourceID,
+		CreateIdempotencyKey: pgtype.Text{String: idempotencyKey, Valid: true},
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, false, nil
+	}
+	if err != nil {
+		return db.Card{}, false, err
+	}
+	if !existing.CreateRequestHash.Valid || existing.CreateRequestHash.String != requestHash {
+		return db.Card{}, false, domain.ErrIdempotencyMismatch
+	}
+	return existing, true, nil
 }
 
 func (s *Store) AddAgentComment(
@@ -188,6 +300,9 @@ func (s *Store) AddAgentComment(
 		return event.ID, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, err
+	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, workspaceID, cardID); err != nil {
 		return uuid.Nil, false, err
 	}
 
@@ -257,6 +372,9 @@ func (s *Store) CreateAgentFollowup(
 		}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return FollowupResult{}, err
+	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, workspaceID, cardID); err != nil {
 		return FollowupResult{}, err
 	}
 
@@ -496,7 +614,7 @@ func (s *Store) ConfirmCard(
 		}
 		var column string
 		if err := tx.QueryRow(ctx,
-			"SELECT normal_column FROM cards WHERE workspace_id=$1 AND id=$2",
+			"SELECT todo_state FROM cards WHERE workspace_id=$1 AND id=$2",
 			workspaceID, cardID,
 		).Scan(&column); err != nil {
 			return ConfirmResult{}, err
@@ -506,7 +624,7 @@ func (s *Store) ConfirmCard(
 		}
 		return ConfirmResult{
 			EventID: existing.ID, ConfirmationCount: count,
-			MovedToReview: column == string(domain.NormalColumnReview), Reused: true,
+			MovedToReview: column == string(domain.TodoStateReview), Reused: true,
 		}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -516,13 +634,13 @@ func (s *Store) ConfirmCard(
 	var kind, column string
 	var required int32
 	if err := tx.QueryRow(ctx,
-		"SELECT kind, normal_column, required_confirmations FROM cards WHERE workspace_id=$1 AND id=$2",
+		"SELECT kind, todo_state, required_confirmations FROM cards WHERE workspace_id=$1 AND id=$2",
 		workspaceID, cardID,
 	).Scan(&kind, &column, &required); err != nil {
 		return ConfirmResult{}, err
 	}
-	if kind != string(domain.CardKindNormal) || column != string(domain.NormalColumnWorking) {
-		return ConfirmResult{}, fmt.Errorf("%w: confirm requires a Working normal card", domain.ErrInvalidTransition)
+	if kind != string(domain.CardKindTodo) || column != string(domain.TodoStateWorking) {
+		return ConfirmResult{}, fmt.Errorf("%w: confirm requires a Working Todo card", domain.ErrInvalidTransition)
 	}
 
 	event, err := q.CreateAgentEvent(ctx, db.CreateAgentEventParams{
@@ -544,7 +662,7 @@ func (s *Store) ConfirmCard(
 	moved := count >= int64(required)
 	if moved {
 		command, err := tx.Exec(ctx,
-			"UPDATE cards SET normal_column='review', updated_at=now() WHERE workspace_id=$1 AND id=$2 AND normal_column='working'",
+			"UPDATE cards SET todo_state='review', updated_at=now() WHERE workspace_id=$1 AND id=$2 AND todo_state='working'",
 			workspaceID, cardID,
 		)
 		if err != nil {

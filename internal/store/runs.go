@@ -345,7 +345,7 @@ type FinishRunParams struct {
 	RunID          uuid.UUID
 	RunnerSourceID uuid.UUID
 	Result         string
-	MoveTo         *domain.NormalColumn
+	MoveTo         *domain.TodoState
 	IdempotencyKey string
 }
 
@@ -392,7 +392,7 @@ func (s *Store) FinishRun(ctx context.Context, p FinishRunParams) error {
 	}
 
 	if p.MoveTo != nil {
-		if err := moveNormalCardTx(ctx, tx, p.WorkspaceID, cardID, runnerSourceID, *p.MoveTo, &p.RunID); err != nil {
+		if err := moveTodoTx(ctx, tx, p.WorkspaceID, cardID, runnerSourceID, *p.MoveTo, &p.RunID); err != nil {
 			return err
 		}
 	}

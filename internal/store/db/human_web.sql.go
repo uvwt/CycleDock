@@ -356,7 +356,7 @@ func (q *Queries) ListPendingQueue(ctx context.Context, arg ListPendingQueuePara
 
 const listProjectCardSummaries = `-- name: ListProjectCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.normal_column, c.ongoing_state, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_run.status AS current_run_status
 FROM cards c
@@ -390,8 +390,10 @@ type ListProjectCardSummariesRow struct {
 	Kind                  string             `json:"kind"`
 	Title                 string             `json:"title"`
 	Description           string             `json:"description"`
-	NormalColumn          pgtype.Text        `json:"normal_column"`
+	DiscussionState       pgtype.Text        `json:"discussion_state"`
+	TodoState             pgtype.Text        `json:"todo_state"`
 	OngoingState          pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID      `json:"source_discussion_id"`
 	RequiredConfirmations int32              `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
@@ -418,8 +420,10 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.Kind,
 			&i.Title,
 			&i.Description,
-			&i.NormalColumn,
+			&i.DiscussionState,
+			&i.TodoState,
 			&i.OngoingState,
+			&i.SourceDiscussionID,
 			&i.RequiredConfirmations,
 			&i.CreatedBySourceID,
 			&i.CreatedAt,
@@ -440,7 +444,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 }
 
 const listProjectCards = `-- name: ListProjectCards :many
-SELECT id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 FROM cards
 WHERE workspace_id = $1
   AND project_id = $2
@@ -468,8 +472,10 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 			&i.Kind,
 			&i.Title,
 			&i.Description,
-			&i.NormalColumn,
+			&i.DiscussionState,
+			&i.TodoState,
 			&i.OngoingState,
+			&i.SourceDiscussionID,
 			&i.RequiredConfirmations,
 			&i.CreatedBySourceID,
 			&i.CreatedAt,
@@ -711,7 +717,7 @@ SET title = $1,
     updated_at = now()
 WHERE workspace_id = $3
   AND id = $4
-RETURNING id, workspace_id, project_id, kind, title, description, normal_column, ongoing_state, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
 `
 
 type UpdateCardTextParams struct {
@@ -736,8 +742,10 @@ func (q *Queries) UpdateCardText(ctx context.Context, arg UpdateCardTextParams) 
 		&i.Kind,
 		&i.Title,
 		&i.Description,
-		&i.NormalColumn,
+		&i.DiscussionState,
+		&i.TodoState,
 		&i.OngoingState,
+		&i.SourceDiscussionID,
 		&i.RequiredConfirmations,
 		&i.CreatedBySourceID,
 		&i.CreatedAt,

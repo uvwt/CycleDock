@@ -1,8 +1,8 @@
 # CycleDock
 
-CycleDock 是一个以项目看板和任务为核心的人机协作系统。
+CycleDock 是一个以 Discussion、Todo / Ongoing 工作和项目看板为核心的人机协作系统。
 
-它不是通用聊天产品，也不是 Agent tracing 平台。CycleDock 让人类与 AI Agent 围绕同一个任务持续协作：任务长期存在于 Card 中，每一个新的工作方向形成 Trigger，每一次具体执行形成 Run；系统记录工作的进展、发现与结果，而不是保存模型内部完整对话和工具调用轨迹。
+它不是通用聊天产品，也不是 Agent tracing 平台。新工作先进入 Discussion；人类与 AI 把需求聊清楚后，通过唯一的“生成任务”动作派生 Todo 或 Ongoing。有限任务进入 Todo → Working → Review → Done，长期/周期事项进入 Ongoing。每一个新的工作方向形成 Trigger，每一次具体执行形成 Run；系统记录工作的进展、发现与结果，而不是保存模型内部完整对话和工具调用轨迹。
 
 核心关系：
 
@@ -19,7 +19,9 @@ Workspace
 关键原则：
 
 - Project 本身就是一个项目看板，不存在独立 Board 领域实体。
-- Card 是长期任务与上下文载体。
+- Card 分为 Discussion、Todo、Ongoing；Discussion 不是 Todo 的前置状态。
+- Discussion 可以派生多个 Todo / Ongoing；Todo / Ongoing 不继续派生 Card。
+- “生成任务”只有一个入口，AI 根据有限工作或长期/周期工作自动判断 Todo / Ongoing。
 - Trigger 是一次新的工作方向，也是天然的待执行队列项。
 - 创建 AgentRun 即表示成功 Claim 一个 Trigger，不单独建立 Claims 表。
 - Run 只保存执行状态；旧 Run 的原始模型消息、工具参数和工具结果不会自动传给后续 Run。

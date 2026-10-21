@@ -70,14 +70,16 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	var project projectResponse
 	decodeRecorder(t, projectRecorder, &project)
 
-	cardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/cards", map[string]any{
-		"kind": "normal", "title": "Ship Human Web", "description": "Complete the board.",
-	}, cookie, nil)
+	cardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/discussions", map[string]any{}, cookie, nil)
 	if cardRecorder.Code != http.StatusCreated {
-		t.Fatalf("create card: %d %s", cardRecorder.Code, cardRecorder.Body.String())
+		t.Fatalf("create discussion: %d %s", cardRecorder.Code, cardRecorder.Body.String())
 	}
 	var card cardResponse
 	decodeRecorder(t, cardRecorder, &card)
+	if card.Kind != string(domain.CardKindDiscussion) || card.Title != "" ||
+		card.DiscussionState != string(domain.DiscussionStateActive) {
+		t.Fatalf("unexpected new discussion: %+v", card)
+	}
 
 	headers := map[string]string{"Idempotency-Key": "human-comment-1"}
 	for i := 0; i < 2; i++ {
@@ -99,23 +101,28 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 		t.Fatalf("idempotent pending direction mismatch: timeline=%d queue=%d run=%+v", len(detail.Timeline), len(detail.Queue), detail.CurrentRun)
 	}
 
-	for _, column := range []domain.NormalColumn{
-		domain.NormalColumnTodo,
-		domain.NormalColumnWorking,
-		domain.NormalColumnReview,
-		domain.NormalColumnDone,
+	todo, err := dataStore.CreateTodoCard(
+		context.Background(), workspaceID, uuid.MustParse(project.ID), humanSourceID,
+		"Ship Human Web", "Complete the board.", uuid.NullUUID{}, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []domain.TodoState{
+		domain.TodoStateTodo,
+		domain.TodoStateWorking,
+		domain.TodoStateReview,
+		domain.TodoStateDone,
 	} {
-		move := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+card.ID+"/move", map[string]any{
-			"column": string(column),
+		move := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+todo.ID.String()+"/move", map[string]any{
+			"state": string(state),
 		}, cookie, nil)
 		if move.Code != http.StatusOK {
-			t.Fatalf("move to %s: %d %s", column, move.Code, move.Body.String())
+			t.Fatalf("move to %s: %d %s", state, move.Code, move.Body.String())
 		}
 	}
 
-	runCardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/cards", map[string]any{
-		"kind": "normal", "title": "Interrupt test", "description": "",
-	}, cookie, nil)
+	runCardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/discussions", map[string]any{}, cookie, nil)
 	var runCard cardResponse
 	decodeRecorder(t, runCardRecorder, &runCard)
 	agent, err := dataStore.CreateSource(context.Background(), workspaceID, domain.SourceKindCycleAgent, "Agent")
@@ -164,12 +171,14 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 		t.Fatalf("reply did not continue with runner: run=%+v err=%v", continued, err)
 	}
 
-	ongoingRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/cards", map[string]any{
-		"kind": "ongoing", "title": "Daily health", "description": "Check the service.",
-	}, cookie, nil)
-	var ongoing cardResponse
-	decodeRecorder(t, ongoingRecorder, &ongoing)
-	schedule := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+ongoing.ID+"/schedules", map[string]any{
+	ongoing, err := dataStore.CreateOngoingCard(
+		context.Background(), workspaceID, uuid.MustParse(project.ID), humanSourceID,
+		"Daily health", "Check the service.", uuid.NullUUID{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+ongoing.ID.String()+"/schedules", map[string]any{
 		"frequency": "daily", "hour": 9, "minute": 30, "timezone": "Asia/Shanghai",
 	}, cookie, nil)
 	if schedule.Code != http.StatusCreated {
@@ -190,7 +199,7 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 	deleteWithHistory := doJSON(
 		t, handler, http.MethodDelete,
-		"/api/v1/cards/"+ongoing.ID+"/schedules/"+scheduleData.ID,
+		"/api/v1/cards/"+ongoing.ID.String()+"/schedules/"+scheduleData.ID,
 		nil, cookie, nil,
 	)
 	if deleteWithHistory.Code != http.StatusConflict {
@@ -211,14 +220,14 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 	crossProjectCreate := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/projects/"+otherProject.ID.String()+"/cards",
-		map[string]any{"kind": "normal", "title": "Should not exist", "description": ""},
+		"/api/v1/projects/"+otherProject.ID.String()+"/discussions",
+		map[string]any{},
 		cookie, nil,
 	)
 	if crossProjectCreate.Code != http.StatusNotFound {
-		t.Fatalf("cross-workspace project accepted card creation: %d %s", crossProjectCreate.Code, crossProjectCreate.Body.String())
+		t.Fatalf("cross-workspace project accepted discussion creation: %d %s", crossProjectCreate.Code, crossProjectCreate.Body.String())
 	}
-	otherCard, err := dataStore.CreateNormalCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Other private card", "")
+	otherCard, err := dataStore.CreateTodoCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Other private card", "", uuid.NullUUID{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

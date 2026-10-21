@@ -17,8 +17,8 @@ func TestBuildContextSeparatesHistoricalFactsFromDerivedCompaction(t *testing.T)
 	run := store.AgentRunContext{
 		WorkspaceID: uuid.New(), WorkspaceName: "Workspace",
 		ProjectID: uuid.New(), ProjectName: "Project",
-		CardID: uuid.New(), CardKind: domain.CardKindNormal,
-		CardTitle: "Card", NormalColumn: string(domain.NormalColumnWorking),
+		CardID: uuid.New(), CardKind: domain.CardKindTodo,
+		CardTitle: "Card", TodoState: string(domain.TodoStateWorking),
 		RequiredConfirmations: 1,
 		TriggerID:             uuid.New(), TriggerCause: domain.TriggerCauseManualRetry,
 		TriggerContent: "retry the failed work", TriggeredAt: now,

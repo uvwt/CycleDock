@@ -9,12 +9,17 @@ type GetCardInput struct {
 	EventLimit int32  `json:"event_limit,omitempty" jsonschema:"Recent durable timeline events to return, 1-100; default 50"`
 }
 
-type CreateCardInput struct {
-	ProjectID             string `json:"project_id" jsonschema:"Project UUID"`
-	Kind                  string `json:"kind" jsonschema:"Card kind: normal or ongoing"`
+type CreateDiscussionInput struct {
+	ProjectID      string `json:"project_id" jsonschema:"Project UUID"`
+	IdempotencyKey string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`
+}
+
+type GenerateWorkInput struct {
+	DiscussionID          string `json:"discussion_id" jsonschema:"Source Discussion UUID"`
+	Kind                  string `json:"kind" jsonschema:"AI-classified work kind: todo or ongoing"`
 	Title                 string `json:"title"`
 	Description           string `json:"description,omitempty"`
-	RequiredConfirmations int32  `json:"required_confirmations,omitempty" jsonschema:"Normal card confirmation threshold; default 1"`
+	RequiredConfirmations int32  `json:"required_confirmations,omitempty" jsonschema:"Todo confirmation threshold; default 1"`
 	IdempotencyKey        string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`
 }
 
@@ -26,7 +31,7 @@ type UpdateCardInput struct {
 
 type MoveCardInput struct {
 	CardID string `json:"card_id"`
-	Column string `json:"column" jsonschema:"Agent-visible Normal column: discussion, todo, or working. Review requires confirm_card; Done requires a human."`
+	State  string `json:"state" jsonschema:"Agent-visible Todo state: todo or working. Review requires confirm_card; Done requires a human."`
 }
 
 type AddCommentInput struct {
@@ -99,8 +104,10 @@ type CardView struct {
 	Kind                  string `json:"kind"`
 	Title                 string `json:"title"`
 	Description           string `json:"description"`
-	NormalColumn          string `json:"normal_column,omitempty"`
+	DiscussionState       string `json:"discussion_state,omitempty"`
+	TodoState             string `json:"todo_state,omitempty"`
 	OngoingState          string `json:"ongoing_state,omitempty"`
+	SourceDiscussionID    string `json:"source_discussion_id,omitempty"`
 	Health                string `json:"health,omitempty"`
 	RequiredConfirmations int32  `json:"required_confirmations"`
 	CurrentRunStatus      string `json:"current_run_status,omitempty"`

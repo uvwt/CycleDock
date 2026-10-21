@@ -8,13 +8,14 @@ CycleDock 是人与 AI Agent 共用的任务看板。产品核心是 Project / C
 
 ```text
 Project Board
-→ Card
+→ Discussion
+→ 对话 / 澄清
+→ Generate work（Todo / Ongoing）
 → Human / Schedule 产生 Trigger
 → Claim
 → Run
 → Progress / Finding / Result / Check-in
-→ Human Review
-→ 下一轮 Cycle
+→ Human Review 或下一轮 Cycle
 ```
 
 不能直接服务该闭环的功能默认不进入第一版。
@@ -22,6 +23,11 @@ Project Board
 ## 领域硬约束
 
 - Project 即一个项目看板；不要重新引入 Board 表或 Board 领域实体。
+- Card 只有 Discussion / Todo / Ongoing 三类；不要重新引入 Normal Card 抽象。
+- Discussion 是新工作的会话入口，生命周期只有 Active / Archived；不能转换成 Todo / Ongoing。
+- 只有 Discussion 可以通过单一 Generate work 动作派生 Todo / Ongoing；AI 根据有限任务或长期/周期事项判断类型；Todo / Ongoing 不再派生其他 Card。
+- Todo 状态机固定为 Todo → Working → Review → Done；Review → Done 只允许 Human。
+- Discussion 首轮会话负责生成标题与摘要；归档后禁止继续产生 Trigger/Run，删除 Discussion 不级联删除其派生工作。
 - Card 保存业务状态，不保存 Agent 当前运行状态。
 - Trigger 是不可变工作方向；不要通过修改旧 Trigger 表达“换方向”。
 - 创建 AgentRun 即 Claim Trigger；不要增加 Claims 表。

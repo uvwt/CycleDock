@@ -332,11 +332,11 @@ func (s *Store) expireAndRecoverBuiltInRun(
 	var status, sourceKind, cardKind string
 	var leaseExpiresAt pgtype.Timestamptz
 	var agentEnabled bool
-	var normalColumn, ongoingState pgtype.Text
+	var discussionState, todoState, ongoingState pgtype.Text
 	err = tx.QueryRow(ctx, `
 		SELECT r.trigger_id, r.runner_source_id, r.status, r.lease_expires_at,
 		       src.kind, COALESCE(settings.enabled, false),
-		       c.kind, c.normal_column, c.ongoing_state
+		       c.kind, c.discussion_state, c.todo_state, c.ongoing_state
 		FROM agent_runs r
 		JOIN sources src
 		  ON src.workspace_id = r.workspace_id AND src.id = r.runner_source_id
@@ -349,7 +349,7 @@ func (s *Store) expireAndRecoverBuiltInRun(
 		FOR UPDATE OF r
 	`, workspaceID, cardID, runID).Scan(
 		&triggerID, &runnerSourceID, &status, &leaseExpiresAt,
-		&sourceKind, &agentEnabled, &cardKind, &normalColumn, &ongoingState,
+		&sourceKind, &agentEnabled, &cardKind, &discussionState, &todoState, &ongoingState,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
@@ -379,9 +379,11 @@ func (s *Store) expireAndRecoverBuiltInRun(
 		return false, false, tx.Commit(ctx)
 	}
 
-	executable := cardKind == string(domain.CardKindNormal) &&
-		(!normalColumn.Valid || normalColumn.String != string(domain.NormalColumnDone))
-	if cardKind == string(domain.CardKindOngoing) {
+	executable := cardKind == string(domain.CardKindDiscussion) &&
+		discussionState.Valid && discussionState.String == string(domain.DiscussionStateActive)
+	if cardKind == string(domain.CardKindTodo) {
+		executable = todoState.Valid && todoState.String != string(domain.TodoStateDone)
+	} else if cardKind == string(domain.CardKindOngoing) {
 		executable = ongoingState.Valid && ongoingState.String == string(domain.OngoingStateActive)
 	}
 	if sourceKind != string(domain.SourceKindCycleAgent) || !agentEnabled || !executable {

@@ -35,18 +35,21 @@ export type Project = {
 export type Card = {
   id: string
   project_id: string
-  kind: 'normal' | 'ongoing'
+  kind: 'discussion' | 'todo' | 'ongoing'
   title: string
   description: string
-  normal_column?: NormalColumn
+  discussion_state?: DiscussionState
+  todo_state?: TodoState
   ongoing_state?: OngoingState
+  source_discussion_id?: string
   health?: Health
   current_run_status?: RunStatus
   created_at: string
   updated_at: string
 }
 
-export type NormalColumn = 'discussion' | 'todo' | 'working' | 'review' | 'done'
+export type DiscussionState = 'active' | 'archived'
+export type TodoState = 'todo' | 'working' | 'review' | 'done'
 export type OngoingState = 'active' | 'paused' | 'archived'
 export type Health = 'unknown' | 'healthy' | 'warning' | 'critical'
 export type RunStatus =
@@ -273,20 +276,27 @@ export const api = {
   updateProject: (projectID: string, input: Pick<Project, 'name' | 'description' | 'instructions'>) =>
     request<Project>(`/api/v1/projects/${projectID}`, { method: 'PATCH', body: jsonBody(input) }),
   projectCards: (projectID: string) => request<Card[]>(`/api/v1/projects/${projectID}/cards`),
-  createCard: (projectID: string, input: { kind: Card['kind']; title: string; description: string }) =>
-    request<Card>(`/api/v1/projects/${projectID}/cards`, {
+  createDiscussion: (projectID: string) =>
+    request<Card>(`/api/v1/projects/${projectID}/discussions`, {
       method: 'POST',
-      body: jsonBody(input),
+      body: '{}',
     }),
 
   card: (cardID: string) => request<CardDetail>(`/api/v1/cards/${cardID}`),
   updateCard: (cardID: string, input: { title: string; description: string }) =>
     request<Card>(`/api/v1/cards/${cardID}`, { method: 'PATCH', body: jsonBody(input) }),
-  moveCard: (cardID: string, column: NormalColumn) =>
+  moveCard: (cardID: string, state: TodoState) =>
     request<Card>(`/api/v1/cards/${cardID}/move`, {
       method: 'POST',
-      body: jsonBody({ column }),
+      body: jsonBody({ state }),
     }),
+  archiveDiscussion: (cardID: string) =>
+    request<Card>(`/api/v1/cards/${cardID}/discussion-state`, {
+      method: 'POST',
+      body: jsonBody({ state: 'archived' }),
+    }),
+  deleteDiscussion: (cardID: string) =>
+    request<void>(`/api/v1/cards/${cardID}`, { method: 'DELETE' }),
   setOngoingState: (cardID: string, state: OngoingState) =>
     request<Card>(`/api/v1/cards/${cardID}/ongoing-state`, {
       method: 'POST',

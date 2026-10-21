@@ -14,7 +14,7 @@ import (
 
 func TestAgentFollowupConcurrentClaimOwnershipAndIdempotentFinish(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	commentID, reused, err := s.AddAgentComment(ctx, f.WorkspaceID, f.CardID, f.AgentID, "durable context", "agent-comment-1")
@@ -146,28 +146,38 @@ func TestAgentFollowupConcurrentClaimOwnershipAndIdempotentFinish(t *testing.T) 
 	}
 }
 
-func TestAgentCardCreateConfirmThresholdAndHumanDone(t *testing.T) {
+func TestAgentGenerateWorkConfirmThresholdAndHumanDone(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
-	created, err := s.CreateAgentCard(ctx, AgentCardCreateParams{
+	discussion, err := s.CreateAgentDiscussion(ctx, AgentDiscussionCreateParams{
 		WorkspaceID: f.WorkspaceID, ProjectID: f.ProjectID, SourceID: f.AgentID,
-		Kind: domain.CardKindNormal, Title: "Agent created", Description: "needs two confirmations",
-		RequiredConfirmations: 2, IdempotencyKey: "create-agent-card-1",
+		IdempotencyKey: "create-discussion-1",
+	})
+	if err != nil || discussion.Reused {
+		t.Fatalf("create discussion: %+v err=%v", discussion, err)
+	}
+	created, err := s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.Card.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "Agent created", Description: "needs two confirmations",
+		RequiredConfirmations: 2, IdempotencyKey: "generate-agent-card-1",
 	})
 	if err != nil || created.Reused {
-		t.Fatalf("create agent card: %+v err=%v", created, err)
+		t.Fatalf("generate agent card: %+v err=%v", created, err)
 	}
-	replayed, err := s.CreateAgentCard(ctx, AgentCardCreateParams{
-		WorkspaceID: f.WorkspaceID, ProjectID: f.ProjectID, SourceID: f.AgentID,
-		Kind: domain.CardKindNormal, Title: "Agent created", Description: "needs two confirmations",
-		RequiredConfirmations: 2, IdempotencyKey: "create-agent-card-1",
+	if !created.Card.SourceDiscussionID.Valid || created.Card.SourceDiscussionID.UUID != discussion.Card.ID {
+		t.Fatalf("generated work source=%v, want discussion %s", created.Card.SourceDiscussionID, discussion.Card.ID)
+	}
+	replayed, err := s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
+		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.Card.ID, SourceID: f.AgentID,
+		Kind: domain.CardKindTodo, Title: "Agent created", Description: "needs two confirmations",
+		RequiredConfirmations: 2, IdempotencyKey: "generate-agent-card-1",
 	})
 	if err != nil || !replayed.Reused || replayed.Card.ID != created.Card.ID {
-		t.Fatalf("create card replay: %+v err=%v", replayed, err)
+		t.Fatalf("generate card replay: %+v err=%v", replayed, err)
 	}
-	if err := s.MoveNormalCard(ctx, f.WorkspaceID, created.Card.ID, f.AgentID, domain.NormalColumnWorking); err != nil {
+	if err := s.MoveTodo(ctx, f.WorkspaceID, created.Card.ID, f.AgentID, domain.TodoStateWorking); err != nil {
 		t.Fatalf("agent move to working: %v", err)
 	}
 
@@ -184,17 +194,17 @@ func TestAgentCardCreateConfirmThresholdAndHumanDone(t *testing.T) {
 		t.Fatalf("second confirm: %+v err=%v", second, err)
 	}
 
-	if err := s.MoveNormalCard(ctx, f.WorkspaceID, created.Card.ID, f.AgentID, domain.NormalColumnDone); !errors.Is(err, domain.ErrHumanRequired) {
+	if err := s.MoveTodo(ctx, f.WorkspaceID, created.Card.ID, f.AgentID, domain.TodoStateDone); !errors.Is(err, domain.ErrHumanRequired) {
 		t.Fatalf("agent moved review to done: %v", err)
 	}
-	if err := s.MoveNormalCard(ctx, f.WorkspaceID, created.Card.ID, f.HumanID, domain.NormalColumnDone); err != nil {
+	if err := s.MoveTodo(ctx, f.WorkspaceID, created.Card.ID, f.HumanID, domain.TodoStateDone); err != nil {
 		t.Fatalf("human could not complete review: %v", err)
 	}
 }
 
 func TestSupersededRunCannotFinishThroughOriginalRunner(t *testing.T) {
 	s := requireIntegration(t)
-	f := newFixture(t, s, domain.CardKindNormal)
+	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
 	first, err := s.SubmitComment(ctx, SubmitCommentParams{
