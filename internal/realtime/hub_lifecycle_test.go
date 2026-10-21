@@ -27,6 +27,8 @@ func TestSupersededRunnerCannotReplaceNewRun(t *testing.T) {
 	default:
 	}
 	hub.Publish(card, Event{Type: "run.finished", RunID: "new"})
+	// A finished newer Run must not be replaced by an older delayed delta.
+	hub.Publish(card, Event{Type: "run.text.delta", RunID: "old", Text: "late"})
 	subAfter, remaining := hub.Subscribe(card)
 	defer subAfter.Close()
 	if remaining != nil {

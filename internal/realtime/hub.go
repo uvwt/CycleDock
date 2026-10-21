@@ -71,13 +71,10 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 	if event.Type == "run.started" {
 		h.live[cardID] = liveState{runID: event.RunID, startedAt: event.StartedAt, stage: "正在执行"}
 	} else if event.Type == "run.text.delta" {
-		st := h.live[cardID]
-		if st.runID != "" && st.runID != event.RunID {
-			// Superseded Runner 的迟到增量不得覆盖当前 Run 的实时输出。
+		st, active := h.live[cardID]
+		if !active || st.runID != event.RunID {
+			// 每次 Runner 必须先 run.started。旧 Run 即使在新 Run 完成后才发出增量，也不能复活。
 			return
-		}
-		if st.runID == "" {
-			st = liveState{runID: event.RunID, startedAt: event.StartedAt}
 		}
 		if len(st.text)+len(event.Text) <= maxLiveBytes {
 			st.text += event.Text
