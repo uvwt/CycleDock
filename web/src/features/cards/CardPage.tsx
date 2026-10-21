@@ -142,7 +142,7 @@ export default function CardPage() {
           {current && (
             <span
               role="status"
-              className="hidden items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 text-xs text-slate-500 sm:inline-flex"
+              className="inline-flex max-w-[36vw] shrink-0 items-center gap-1.5 truncate rounded-full bg-slate-50 px-2 py-1.5 text-[11px] text-slate-500 sm:max-w-none sm:px-3 sm:text-xs"
             >
               {current.status === "running" && (
                 <span className="live-dot size-1.5 rounded-full bg-sky-500" />

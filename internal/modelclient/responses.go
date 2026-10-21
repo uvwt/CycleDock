@@ -166,6 +166,7 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 	toolCalls := make([]ToolCall, 0)
 	seenCalls := make(map[string]struct{})
 	var completedOutput []responseOutputItem
+	completed := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -194,6 +195,7 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 			appendResponseToolCall(&toolCalls, seenCalls, event.Item)
 		case "response.completed":
 			completedOutput = event.Response.Output
+			completed = true
 		case "response.failed":
 			code := strings.TrimSpace(event.Error.Code)
 			if code == "" {
@@ -204,6 +206,9 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 	}
 	if err := scanner.Err(); err != nil {
 		return Completion{}, fmt.Errorf("read Responses stream: %w", err)
+	}
+	if !completed {
+		return Completion{}, fmt.Errorf("%w: Responses stream ended before response.completed", ErrMalformedResponse)
 	}
 
 	for _, item := range completedOutput {

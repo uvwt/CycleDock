@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/uvwt/CycleDock/internal/realtime"
 )
 
@@ -64,6 +66,11 @@ func (api *API) streamCard(w http.ResponseWriter, r *http.Request) {
 	if err := api.pool.QueryRow(r.Context(), `SELECT COALESCE(MAX(sequence),0) FROM events WHERE workspace_id=$1 AND card_id=$2`, identity.WorkspaceID, cardID).Scan(&lastSequence); err != nil {
 		return
 	}
+	// 立即提交响应头，避免空闲 Card 的浏览器必须等到 20 秒心跳才触发 onopen。
+	if _, err := fmt.Fprint(w, ": connected\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
 	tick := time.NewTicker(1500 * time.Millisecond)
 	defer tick.Stop()
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -121,14 +128,35 @@ func (api *API) streamPoll(ctx context.Context, workspaceID, cardID uuid.UUID, l
  FROM agent_runs WHERE workspace_id=$1 AND card_id=$2
  ORDER BY created_at DESC LIMIT 1
  `, workspaceID, cardID).Scan(&runID, &runStatus, &stage)
-	if err == nil {
-		key := runID + ":" + runStatus + ":" + stage
-		if key != *lastStage {
-			*lastStage = key
-			if !send(realtime.Event{Type: "run.stage", RunID: runID, Stage: stage}, 0) {
-				return context.Canceled
-			}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	key := runID + ":" + runStatus + ":" + stage
+	if key == *lastStage {
+		return nil
+	}
+	*lastStage = key
+	// 跨实例 Run 状态变化也须能让客户端收口；实时 token 本身由执行实例发送。
+	eventType := "run.stage"
+	switch runStatus {
+	case "completed", "superseded", "cancelled", "expired":
+		eventType = "run.finished"
+	case "failed":
+		eventType = "run.failed"
+	case "queued":
+		stage = "排队中"
+	case "waiting_human":
+		stage = "等待人工回复"
+	case "running":
+		if stage == "" {
+			stage = "正在执行"
 		}
+	}
+	if !send(realtime.Event{Type: eventType, RunID: runID, Stage: stage}, 0) {
+		return context.Canceled
 	}
 	return nil
 }

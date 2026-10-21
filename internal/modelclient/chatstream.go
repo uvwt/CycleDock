@@ -33,6 +33,7 @@ func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) 
 	scanner.Buffer(make([]byte, 64<<10), int(maxResponseBytes))
 	var bytesRead int64
 	var answer strings.Builder
+	completed := false
 	calls := make(map[int]*ToolCall)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -48,6 +49,7 @@ func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) 
 			continue
 		}
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 		var packet chatStreamDelta
@@ -80,6 +82,10 @@ func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) 
 	}
 	if err := scanner.Err(); err != nil {
 		return Completion{}, fmt.Errorf("read chat stream: %w", err)
+	}
+	// The transport can end early without a network error. Never persist a partial answer as a completed Result.
+	if !completed {
+		return Completion{}, fmt.Errorf("%w: chat stream ended before [DONE]", ErrMalformedResponse)
 	}
 	indices := make([]int, 0, len(calls))
 	for i := range calls {
