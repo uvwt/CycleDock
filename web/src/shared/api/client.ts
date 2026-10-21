@@ -74,6 +74,11 @@ export const api = {
   cards: (project: string) => request<Card[]>(`/projects/${project}/cards`),
   createDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/discussions`, "POST", {}),
+  createTodo: (project: string, title: string, description: string) =>
+    request<Card>(`/projects/${project}/todos`, "POST", {
+      title,
+      description,
+    }),
   card: (id: string) => request<CardDetail>(`/cards/${id}`),
   updateCard: (id: string, title: string, description: string) =>
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),

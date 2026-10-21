@@ -1,176 +1,250 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
-import {
-  MessageSquareText,
-  Plus,
-  Search,
-  ArrowUpRight,
-  FolderKanban,
-} from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowUp, MessageSquareText, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
-import { Button, ErrorView, Spinner } from "../../shared/ui/components";
+import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import type { Card } from "../../shared/api/types";
+import { DiscussionSidebar } from "./DiscussionSidebar";
 
 export default function ChatHome() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
-  const [selected, setSelected] = useState("");
-  const [term, setTerm] = useState("");
-  const projectID = projects.data?.some((p) => p.id === selected)
-    ? selected
-    : projects.data?.[0]?.id;
+  const [selectedProject, setSelectedProject] = useState("");
+  const [mobileListOpen, setMobileListOpen] = useState(false);
+  const [message, setMessage] = useState("");
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const requestedProject = selectedProject || searchParams.get("project") || "";
+  const projectID = projects.data?.some(
+    (project) => project.id === requestedProject,
+  )
+    ? requestedProject
+    : projects.data?.[0]?.id || "";
   const cards = useQuery({
-    queryKey: keys.cards(projectID || ""),
-    queryFn: () => api.cards(projectID!),
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
     enabled: !!projectID,
   });
   const discussions = useMemo(
     () =>
-      ((cards.data || []).filter((x) => x.kind === "discussion") as Card[])
-        .filter((x) =>
-          (x.title + " " + x.description)
-            .toLowerCase()
-            .includes(term.trim().toLowerCase()),
-        )
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-    [cards.data, term],
+      ((cards.data || []).filter(
+        (card) => card.kind === "discussion",
+      ) as Card[]),
+    [cards.data],
   );
+
   const create = useMutation({
-    mutationFn: () => api.createDiscussion(projectID!),
-    onSuccess: async (c) => {
-      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID!) });
-      navigate(`/chat/${projectID}/${c.id}`);
+    mutationFn: async (firstMessage?: string) => {
+      const card = await api.createDiscussion(projectID);
+      const content = firstMessage?.trim();
+      let sendError: unknown;
+      if (content) {
+        try {
+          await api.send(card.id, content, "enqueue");
+        } catch (error) {
+          sendError = error;
+        }
+      }
+      return { card, sendError };
     },
-    onError: (e) =>
-      toast.error(e instanceof Error ? e.message : t("创建讨论失败")),
+    onSuccess: async ({ card, sendError }) => {
+      setMessage("");
+      setComposerExpanded(false);
+      setMobileListOpen(false);
+      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      if (sendError) {
+        toast.error(
+          sendError instanceof Error ? sendError.message : t("发送失败"),
+        );
+      }
+      navigate(`/chat/${projectID}/${card.id}`);
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : t("创建讨论失败"),
+      ),
   });
+
+  function selectProject(nextProjectID: string) {
+    setSelectedProject(nextProjectID);
+    setSearchParams({ project: nextProjectID }, { replace: true });
+    setMobileListOpen(false);
+  }
+
+  function selectDiscussion(card: Card) {
+    setMobileListOpen(false);
+    navigate(`/chat/${card.project_id}/${card.id}`);
+  }
+
+  function startFromMessage() {
+    if (!message.trim() || !projectID || create.isPending) return;
+    create.mutate(message);
+  }
+
+  if (projects.isPending) {
+    return (
+      <main className="grid h-[calc(100dvh-4rem)] place-items-center md:h-dvh">
+        <Spinner text={t("读取项目…")} />
+      </main>
+    );
+  }
+  if (projects.error) {
+    return (
+      <main className="mx-auto max-w-xl p-6">
+        <ErrorView
+          error={projects.error}
+          onRetry={() => void projects.refetch()}
+        />
+      </main>
+    );
+  }
+
   return (
-    <main className="mx-auto max-w-6xl space-y-8 px-5 py-9 md:px-8">
-      <div className="flex flex-wrap items-start justify-between gap-5">
-        <div>
-          <p className="text-xs font-semibold tracking-widest text-sky-700">
-            DISCUSSIONS
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-            {t("聊天")}
-          </h1>
-          <p className="mt-2 text-sm text-slate-500">
-            {t("从一个想法开始，与 Agent 讨论，再把方向变成任务。")}
-          </p>
-        </div>
-        <Button
-          variant="primary"
-          disabled={!projectID || create.isPending}
-          onClick={() => create.mutate()}
-        >
-          <Plus className="size-4" />
-          {t("新建讨论")}
-        </Button>
-      </div>
-      {projects.isPending && <Spinner text={t("读取项目…")} />}
-      {projects.error && <ErrorView error={projects.error} />}
-      {projectID && (
-        <>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <label className="relative w-full sm:w-56">
-              <span className="sr-only">项目</span>
-              <FolderKanban className="pointer-events-none absolute top-3 left-3 size-4 text-slate-400" />
-              <select
-                aria-label={t("项目")}
-                value={projectID}
-                onChange={(e) => setSelected(e.target.value)}
-                className="w-full appearance-none rounded-xl border border-slate-200 bg-white py-2.5 pr-8 pl-10 text-sm"
-              >
-                {projects.data?.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="relative flex-1">
-              <Search className="pointer-events-none absolute top-3 left-3 size-4 text-slate-400" />
-              <input
-                value={term}
-                onChange={(e) => setTerm(e.target.value)}
-                placeholder={t("搜索讨论…")}
-                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pr-3 pl-10 text-sm outline-none focus:border-sky-500"
-              />
-            </label>
-          </div>
-          {cards.isPending ? (
-            <Spinner text={t("读取讨论…")} />
-          ) : cards.error ? (
-            <ErrorView
-              error={cards.error}
-              onRetry={() => void cards.refetch()}
+    <main className="h-[calc(100dvh-4rem)] min-h-0 bg-white md:h-dvh">
+      {projectID ? (
+        <div className="grid h-full min-h-0 md:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="hidden min-h-0 border-r border-slate-200 md:block">
+            <DiscussionSidebar
+              projects={projects.data || []}
+              projectID={projectID}
+              discussions={discussions}
+              creating={create.isPending}
+              onProjectChange={selectProject}
+              onSelect={selectDiscussion}
+              onCreate={() => create.mutate(undefined)}
             />
-          ) : discussions.length === 0 ? (
-            <div className="flex min-h-64 flex-col items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white text-center">
-              <MessageSquareText className="size-9 text-slate-300" />
-              <h2 className="mt-4 font-medium">{t("还没有讨论")}</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                {t("新建一个讨论，直接发送第一条消息。")}
-              </p>
-              <Button
-                className="mt-5"
-                variant="primary"
-                onClick={() => create.mutate()}
-              >
-                <Plus className="size-4" />
-                {t("开始讨论")}
-              </Button>
-            </div>
-          ) : (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {discussions.map((card) => (
-                <Link
-                  to={`/chat/${projectID}/${card.id}`}
-                  key={card.id}
-                  className="group flex min-h-44 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-sky-300 hover:shadow-sm"
+          </div>
+
+          <section className="relative flex min-h-0 min-w-0 flex-col">
+            <button
+              type="button"
+              title={t("打开讨论列表")}
+              aria-label={t("打开讨论列表")}
+              onClick={() => setMobileListOpen(true)}
+              className="absolute top-3 left-3 z-10 grid size-9 place-items-center rounded-xl border border-slate-200 bg-white/90 text-slate-500 shadow-sm backdrop-blur hover:bg-slate-100 md:hidden"
+            >
+              <PanelLeft className="size-5" />
+            </button>
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-6">
+              <div className="w-full max-w-3xl">
+                <div className="mb-10 text-center">
+                  <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-slate-100 text-slate-500">
+                    <MessageSquareText className="size-6" />
+                  </span>
+                  <h1 className="mt-5 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
+                    {t("今天想推进什么？")}
+                  </h1>
+                  <p className="mt-2 text-sm text-slate-500">
+                    {t("直接输入第一句话，CycleDock 会创建 Discussion 并开始协作。")}
+                  </p>
+                </div>
+
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    startFromMessage();
+                  }}
+                  className={`mx-auto border bg-white transition-all focus-within:border-sky-300 ${composerExpanded ? "rounded-2xl border-slate-200 p-2 shadow-sm" : "flex items-center rounded-full border-slate-200 py-1 pr-1 pl-4 shadow-sm"}`}
                 >
-                  <div>
-                    <div className="flex items-start justify-between gap-3">
-                      <MessageSquareText className="size-5 text-sky-700" />
-                      <ArrowUpRight className="size-4 text-slate-300 group-hover:text-sky-700" />
-                    </div>
-                    <h2 className="mt-4 line-clamp-2 font-semibold text-slate-900">
-                      {card.title || t("新讨论")}
-                    </h2>
-                    <p className="mt-1 line-clamp-2 text-sm leading-6 text-slate-500">
-                      {card.description || t("继续对话，探索想法…")}
-                    </p>
+                  {composerExpanded ? (
+                    <textarea
+                      autoFocus
+                      aria-label={t("发送消息，开始讨论…")}
+                      value={message}
+                      onChange={(event) => setMessage(event.target.value)}
+                      onBlur={() => {
+                        if (!message.trim()) setComposerExpanded(false);
+                      }}
+                      placeholder={t("发送消息，开始讨论…")}
+                      rows={3}
+                      className="max-h-44 min-h-20 w-full resize-none bg-transparent px-2 py-2 text-sm outline-none"
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          startFromMessage();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <input
+                      aria-label={t("发送消息，开始讨论…")}
+                      value={message}
+                      onChange={(event) => setMessage(event.target.value)}
+                      onFocus={() => setComposerExpanded(true)}
+                      placeholder={t("发送消息，开始讨论…")}
+                      className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none"
+                    />
+                  )}
+                  <div
+                    className={
+                      composerExpanded
+                        ? "flex justify-end px-1 pb-1"
+                        : "shrink-0"
+                    }
+                  >
+                    <button
+                      type="submit"
+                      title={t("发送")}
+                      aria-label={t("发送")}
+                      disabled={!message.trim() || create.isPending}
+                      className="grid size-9 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:opacity-30"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
                   </div>
-                  <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
-                    <span>
-                      {card.discussion_state === "archived"
-                        ? t("已归档")
-                        : t("讨论中")}
-                    </span>
-                    <span>
-                      {new Date(card.updated_at).toLocaleDateString(
-                        i18n.language === "en" ? "en-US" : "zh-CN",
-                      )}
-                    </span>
-                  </div>
-                </Link>
-              ))}
+                </form>
+              </div>
             </div>
-          )}
-        </>
-      )}
-      {projects.data?.length === 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-          <p>{t("还没有项目，请先在看板中创建一个项目。")}</p>
-          <Link className="mt-4 inline-block text-sm text-sky-700" to="/board">
-            {t("前往看板")}
-          </Link>
+          </section>
         </div>
+      ) : (
+        <div className="grid h-full place-items-center px-5 text-center">
+          <div>
+            <MessageSquareText className="mx-auto size-9 text-slate-300" />
+            <h1 className="mt-4 text-xl font-semibold">
+              {t("还没有项目")}
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              {t("请先在看板中创建一个项目。")}
+            </p>
+            <Link
+              className="mt-5 inline-block text-sm font-medium text-sky-700"
+              to="/board"
+            >
+              {t("前往看板")}
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {projectID && (
+        <Sheet
+          open={mobileListOpen}
+          onOpenChange={setMobileListOpen}
+          side="left"
+          title={t("讨论列表")}
+        >
+          <div className="-m-5 h-[calc(100dvh-4.25rem)]">
+            <DiscussionSidebar
+              projects={projects.data || []}
+              projectID={projectID}
+              discussions={discussions}
+              creating={create.isPending}
+              onProjectChange={selectProject}
+              onSelect={selectDiscussion}
+              onCreate={() => create.mutate(undefined)}
+            />
+          </div>
+        </Sheet>
       )}
     </main>
   );

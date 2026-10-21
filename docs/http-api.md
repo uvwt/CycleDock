@@ -21,6 +21,7 @@ Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted
 - `PATCH /api/v1/projects/{projectID}`
 - `GET /api/v1/projects/{projectID}/cards`
 - `POST /api/v1/projects/{projectID}/discussions`：创建空白 active Discussion；首轮会话由 Built-in Agent 生成标题与摘要。
+- `POST /api/v1/projects/{projectID}/todos`：Human 直接创建 Todo；请求只接受 `title + description`，Human Source / Workspace 来自 Web Session，`source_discussion_id` 为空且初始状态固定为 `todo`。
 
 Project 即 Board，不存在独立 Board API。
 
@@ -34,7 +35,7 @@ Project 即 Board，不存在独立 Board API。
 - `DELETE /api/v1/cards/{cardID}`：当前只允许 Human 删除 Discussion；已生成的 Todo / Ongoing 保留，来源引用置空。
 - `POST /api/v1/cards/{cardID}/ongoing-state`
 
-Discussion 不能转换为 Todo / Ongoing。Todo 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP Handler 不复制状态机。
+Discussion 不能转换为 Todo / Ongoing。Human 直接新建 Todo 与 Discussion 的 Generate work 是两条独立创建路径；AI Generate work 仍只能从 Discussion 发起。Todo 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP Handler 不复制状态机。
 
 ## Direction / Queue
 

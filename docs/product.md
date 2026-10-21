@@ -19,6 +19,8 @@ CycleDock 是一个以项目看板和任务为核心的人机协作系统：人�
 → Todo 执行 / Review / Done，或 Ongoing 持续运行
 ```
 
+Human 也可以在 Project Board 直接填写并创建 Todo。直接创建用于用户已经知道“要做什么”的场景，不要求先建 Discussion，也不调用模型；AI 生成 Todo / Ongoing 的入口仍然只存在于 Discussion。
+
 Project 本身就是一张项目看板。Board 只作为 UI 视图概念存在，不作为数据库实体。
 
 未来如果需要 Kanban、List、My Tasks、Review、Critical Ongoing 等不同展示方式，应优先设计 View / Saved View，让不同 View 读取同一批 Card，而不是在 Project 下创建多个 Board。
@@ -57,7 +59,8 @@ Todo → Working → Review → Done
 
 规则：
 
-- Todo 由 Discussion 的“生成任务”动作派生，不通过 Discussion 状态转换得到。
+- Todo 可以由 Discussion 的“生成任务”动作派生，也可以由 Human 在 Board 直接创建；两者都不是 Discussion 状态转换。
+- Human 直接创建的 Todo 不设置 `source_discussion_id`，标题与描述以用户输入为准，不调用模型生成。
 - Todo 自身不能再生成 Todo 或 Ongoing，避免任务树无限分叉。
 - Agent 可以开始执行并推进到 Working。
 - Agent 完成验证后通过 Confirm 进入 Review。
@@ -114,7 +117,7 @@ Discussion 上的“聊天”负责澄清与产生工作；Todo / Ongoing 上的
 
 ## 5. 生成任务
 
-Discussion 只有一个“生成任务”动作，不提供“生成 Todo / 生成 Ongoing”两个按钮。
+Discussion 只有一个面向 AI 的“生成任务”动作，不提供“生成 Todo / 生成 Ongoing”两个按钮。
 
 流程：
 
@@ -129,6 +132,8 @@ Discussion
 “生成任务”是派生，不是类型转换。生成出的 Todo / Ongoing 立即成为独立工作对象，后续生命周期不会反向改变来源 Discussion。
 
 Todo / Ongoing 不暴露生成其他 Card 的能力。
+
+该规则只约束 **AI 派生工作**。Human 在 Board 的“新建待办”是直接创建独立 Todo，不需要来源 Discussion；第一版不提供 Human 直接创建 Ongoing，避免把长期事项的 Schedule / Health 语义拆散。
 
 ## 6. 用户发送新方向
 

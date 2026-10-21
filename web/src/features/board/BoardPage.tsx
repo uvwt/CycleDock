@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Activity,
   FolderPlus,
+  ListPlus,
   MessageSquareText,
   Clock3,
   ChevronRight,
@@ -109,8 +110,11 @@ export default function BoardPage() {
   const params = useParams();
   const [picked, setPicked] = useState("");
   const [creating, setCreating] = useState(false);
+  const [creatingTodo, setCreatingTodo] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [todoTitle, setTodoTitle] = useState("");
+  const [todoDescription, setTodoDescription] = useState("");
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
   const projectID = projects.data?.some(
     (p) => p.id === (params.projectID || picked),
@@ -135,6 +139,20 @@ export default function BoardPage() {
       setDescription("");
       await queryClient.invalidateQueries({ queryKey: keys.projects });
       navigate("/board/" + project.id);
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+  const createTodo = useMutation({
+    mutationFn: () =>
+      api.createTodo(projectID!, todoTitle.trim(), todoDescription.trim()),
+    onSuccess: async (card) => {
+      setCreatingTodo(false);
+      setTodoTitle("");
+      setTodoDescription("");
+      await queryClient.invalidateQueries({
+        queryKey: keys.cards(projectID || ""),
+      });
+      navigate(`/cards/${projectID}/${card.id}`);
     },
     onError: (e) => toast.error(String(e)),
   });
@@ -187,10 +205,18 @@ export default function BoardPage() {
             {t("查看执行状态，跟踪长期工作。")}
           </p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <FolderPlus className="size-4" />
-          {t("新建项目")}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {projectID && (
+            <Button variant="primary" onClick={() => setCreatingTodo(true)}>
+              <ListPlus className="size-4" />
+              {t("新建待办")}
+            </Button>
+          )}
+          <Button onClick={() => setCreating(true)}>
+            <FolderPlus className="size-4" />
+            {t("新建项目")}
+          </Button>
+        </div>
       </header>
       {projects.isPending && <Spinner />}
       {projects.error && <ErrorView error={projects.error} />}
@@ -307,6 +333,44 @@ export default function BoardPage() {
             disabled={!name.trim() || create.isPending}
           >
             {t("创建项目")}
+          </Button>
+        </form>
+      </Sheet>
+      <Sheet
+        open={creatingTodo}
+        onOpenChange={setCreatingTodo}
+        title={t("新建待办")}
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            createTodo.mutate();
+          }}
+          className="space-y-5"
+        >
+          <Field label={t("待办标题")}>
+            <TextInput
+              autoFocus
+              required
+              value={todoTitle}
+              onChange={(e) => setTodoTitle(e.target.value)}
+              placeholder={t("要完成什么？")}
+            />
+          </Field>
+          <Field label={t("待办描述")}>
+            <TextArea
+              rows={5}
+              value={todoDescription}
+              onChange={(e) => setTodoDescription(e.target.value)}
+              placeholder={t("补充目标、范围或完成条件")}
+            />
+          </Field>
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!todoTitle.trim() || createTodo.isPending}
+          >
+            {t("创建待办")}
           </Button>
         </form>
       </Sheet>

@@ -18,6 +18,8 @@ const project = {
   updated_at: new Date().toISOString(),
 };
 const now = () => new Date().toISOString();
+const hoursAgo = (hours) =>
+  new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 const cards = [
   {
     id: "discussion-1",
@@ -62,7 +64,7 @@ const events = {
       content: "我们需要每天自动检查服务器状态。",
       actor_kind: "human",
       actor_name: "测试用户",
-      created_at: now(),
+      created_at: hoursAgo(3),
     },
     {
       id: "event-2",
@@ -233,6 +235,25 @@ http
             title: "",
             description: "",
             discussion_state: "active",
+            created_at: now(),
+            updated_at: now(),
+          };
+          cards.unshift(card);
+          events[card.id] = [];
+          return data(res, card, 201);
+        }
+        if (
+          route === `/projects/${project.id}/todos` &&
+          req.method === "POST"
+        ) {
+          const input = await body(req);
+          const card = {
+            id: "todo-" + Date.now(),
+            project_id: project.id,
+            kind: "todo",
+            title: input.title,
+            description: input.description || "",
+            todo_state: "todo",
             created_at: now(),
             updated_at: now(),
           };
