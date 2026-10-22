@@ -131,4 +131,5 @@ jobs:
           python e2e/sse_reconnect.py
           python e2e/i18n_settings.py
           python e2e/composer_states.py
+          python e2e/shell_theme.py
           python e2e/smoke.py
