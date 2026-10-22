@@ -204,6 +204,53 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	); err != nil || !created {
 		t.Fatalf("create scheduled trigger history: created=%v err=%v", created, err)
 	}
+	projectSchedules := doJSON(
+		t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/schedules",
+		nil, cookie, nil,
+	)
+	if projectSchedules.Code != http.StatusOK {
+		t.Fatalf("list project schedules: %d %s", projectSchedules.Code, projectSchedules.Body.String())
+	}
+	var projectScheduleItems []projectScheduleResponse
+	decodeRecorder(t, projectSchedules, &projectScheduleItems)
+	if len(projectScheduleItems) != 1 ||
+		projectScheduleItems[0].CardID != ongoing.ID.String() ||
+		projectScheduleItems[0].CardTitle != "Daily health" ||
+		projectScheduleItems[0].LastTriggeredAt == nil {
+		t.Fatalf("unexpected project schedule view: %+v", projectScheduleItems)
+	}
+
+	activity := doJSON(
+		t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/activity?limit=20",
+		nil, cookie, nil,
+	)
+	if activity.Code != http.StatusOK {
+		t.Fatalf("list project activity: %d %s", activity.Code, activity.Body.String())
+	}
+	var activityItems []projectActivityResponse
+	decodeRecorder(t, activity, &activityItems)
+	var sawScheduledQueue bool
+	for _, item := range activityItems {
+		if item.CardID == ongoing.ID.String() &&
+			item.ActivityType == "trigger" &&
+			item.Status == "queued" {
+			sawScheduledQueue = true
+			break
+		}
+	}
+	if !sawScheduledQueue {
+		t.Fatalf("scheduled trigger missing from project activity: %+v", activityItems)
+	}
+	badActivityLimit := doJSON(
+		t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/activity?limit=101",
+		nil, cookie, nil,
+	)
+	if badActivityLimit.Code != http.StatusBadRequest {
+		t.Fatalf("invalid activity limit accepted: %d %s", badActivityLimit.Code, badActivityLimit.Body.String())
+	}
 	deleteWithHistory := doJSON(
 		t, handler, http.MethodDelete,
 		"/api/v1/cards/"+ongoing.ID.String()+"/schedules/"+scheduleData.ID,

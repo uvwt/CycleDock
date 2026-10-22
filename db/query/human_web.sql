@@ -50,6 +50,123 @@ WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
 ORDER BY c.created_at, c.id;
 
+-- name: ListProjectSchedules :many
+SELECT
+    cs.id,
+    cs.card_id,
+    c.title AS card_title,
+    c.ongoing_state,
+    cs.enabled,
+    cs.frequency,
+    cs.day_of_week,
+    cs.day_of_month,
+    cs.time_of_day,
+    cs.timezone,
+    cs.next_trigger_at,
+    cs.last_triggered_at,
+    latest_run.status AS last_run_status,
+    latest_run.finished_at AS last_run_finished_at
+FROM card_schedules cs
+JOIN cards c
+  ON c.workspace_id = cs.workspace_id
+ AND c.id = cs.card_id
+LEFT JOIN LATERAL (
+    SELECT r.status, r.finished_at
+    FROM triggers t
+    LEFT JOIN agent_runs r
+      ON r.workspace_id = t.workspace_id
+     AND r.trigger_id = t.id
+    WHERE t.workspace_id = cs.workspace_id
+      AND t.card_id = cs.card_id
+      AND t.schedule_id = cs.id
+    ORDER BY t.scheduled_for DESC, t.created_at DESC
+    LIMIT 1
+) latest_run ON true
+WHERE cs.workspace_id = sqlc.arg(workspace_id)
+  AND c.project_id = sqlc.arg(project_id)
+  AND c.kind = 'ongoing'
+ORDER BY cs.enabled DESC, cs.next_trigger_at, cs.id;
+
+-- name: ListProjectActivity :many
+WITH activity AS (
+    SELECT
+        e.id,
+        e.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'event'::text AS activity_type,
+        e.event_type AS status,
+        e.content,
+        s.name AS actor_name,
+        e.created_at AS occurred_at
+    FROM events e
+    JOIN cards c
+      ON c.workspace_id = e.workspace_id
+     AND c.id = e.card_id
+    JOIN sources s
+      ON s.workspace_id = e.workspace_id
+     AND s.id = e.actor_source_id
+    WHERE e.workspace_id = sqlc.arg(workspace_id)
+      AND c.project_id = sqlc.arg(project_id)
+      AND e.event_type IN ('progress', 'finding', 'result', 'checkin', 'confirm', 'reject', 'status_change')
+
+    UNION ALL
+
+    SELECT
+        r.id,
+        r.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'run'::text AS activity_type,
+        r.status,
+        COALESCE(NULLIF(r.error_summary, ''), NULLIF(r.result_summary, ''), NULLIF(r.progress_summary, ''), NULLIF(r.current_stage, ''), t.cause) AS content,
+        s.name AS actor_name,
+        COALESCE(r.finished_at, r.started_at, r.created_at) AS occurred_at
+    FROM agent_runs r
+    JOIN cards c
+      ON c.workspace_id = r.workspace_id
+     AND c.id = r.card_id
+    JOIN triggers t
+      ON t.workspace_id = r.workspace_id
+     AND t.card_id = r.card_id
+     AND t.id = r.trigger_id
+    JOIN sources s
+      ON s.workspace_id = r.workspace_id
+     AND s.id = r.runner_source_id
+    WHERE r.workspace_id = sqlc.arg(workspace_id)
+      AND c.project_id = sqlc.arg(project_id)
+
+    UNION ALL
+
+    SELECT
+        t.id,
+        t.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'trigger'::text AS activity_type,
+        CASE WHEN t.cancelled_at IS NULL THEN 'queued' ELSE 'cancelled' END AS status,
+        COALESCE(NULLIF(t.cancel_reason, ''), t.cause) AS content,
+        COALESCE(s.name, '') AS actor_name,
+        COALESCE(t.cancelled_at, t.created_at) AS occurred_at
+    FROM triggers t
+    JOIN cards c
+      ON c.workspace_id = t.workspace_id
+     AND c.id = t.card_id
+    LEFT JOIN sources s
+      ON s.workspace_id = t.workspace_id
+     AND s.id = t.created_by_source_id
+    LEFT JOIN agent_runs r
+      ON r.workspace_id = t.workspace_id
+     AND r.trigger_id = t.id
+    WHERE t.workspace_id = sqlc.arg(workspace_id)
+      AND c.project_id = sqlc.arg(project_id)
+      AND (r.id IS NULL OR t.cancelled_at IS NOT NULL)
+)
+SELECT *
+FROM activity
+ORDER BY occurred_at DESC, id DESC
+LIMIT sqlc.arg(activity_limit)::int;
+
 -- name: UpdateCardText :one
 UPDATE cards
 SET title = sqlc.arg(title),

@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { BriefcaseBusiness, MessageCircle, Settings } from "lucide-react";
+import {
+  Activity,
+  BriefcaseBusiness,
+  CalendarClock,
+  MessageCircle,
+  Settings,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
 import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
@@ -29,6 +35,18 @@ export function Shell({ children }: { children: ReactNode }) {
       label: t("工作"),
       icon: BriefcaseBusiness,
     },
+    {
+      to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
+      activePath: "/plans",
+      label: t("计划"),
+      icon: CalendarClock,
+    },
+    {
+      to: projectID ? `/activity/${encodeURIComponent(projectID)}` : "/activity",
+      activePath: "/activity",
+      label: t("活动"),
+      icon: Activity,
+    },
   ];
 
   function primaryActive(activePath: string, routerActive: boolean) {
@@ -38,6 +56,12 @@ export function Shell({ children }: { children: ReactNode }) {
         location.pathname.startsWith("/board") ||
         location.pathname.startsWith("/cards/")
       );
+    }
+    if (activePath === "/plans") {
+      return routerActive || location.pathname.startsWith("/plans");
+    }
+    if (activePath === "/activity") {
+      return routerActive || location.pathname.startsWith("/activity");
     }
     return routerActive || location.pathname.startsWith("/chat");
   }
@@ -54,6 +78,14 @@ export function Shell({ children }: { children: ReactNode }) {
       location.pathname.startsWith("/cards/")
     ) {
       navigate(`/board/${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (location.pathname.startsWith("/plans")) {
+      navigate(`/plans/${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (location.pathname.startsWith("/activity")) {
+      navigate(`/activity/${encodeURIComponent(nextProjectID)}`);
     }
   }
 

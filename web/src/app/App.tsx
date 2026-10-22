@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 const ChatHome = lazy(() => import("../features/chat/ChatHome"));
 const BoardPage = lazy(() => import("../features/board/BoardPage"));
+const PlanPage = lazy(() => import("../features/plans/PlanPage"));
+const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
 const CardPage = lazy(() => import("../features/cards/CardPage"));
 const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
 
@@ -70,6 +72,10 @@ function Authenticated() {
             <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
             <Route path="/board" element={<BoardPage />} />
             <Route path="/board/:projectID" element={<BoardPage />} />
+            <Route path="/plans" element={<PlanPage />} />
+            <Route path="/plans/:projectID" element={<PlanPage />} />
+            <Route path="/activity" element={<ActivityPage />} />
+            <Route path="/activity/:projectID" element={<ActivityPage />} />
             <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
             <Route
               path="/settings/*"

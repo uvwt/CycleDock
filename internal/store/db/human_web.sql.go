@@ -433,6 +433,135 @@ func (q *Queries) ListPendingQueue(ctx context.Context, arg ListPendingQueuePara
 	return items, nil
 }
 
+const listProjectActivity = `-- name: ListProjectActivity :many
+WITH activity AS (
+    SELECT
+        e.id,
+        e.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'event'::text AS activity_type,
+        e.event_type AS status,
+        e.content,
+        s.name AS actor_name,
+        e.created_at AS occurred_at
+    FROM events e
+    JOIN cards c
+      ON c.workspace_id = e.workspace_id
+     AND c.id = e.card_id
+    JOIN sources s
+      ON s.workspace_id = e.workspace_id
+     AND s.id = e.actor_source_id
+    WHERE e.workspace_id = $2
+      AND c.project_id = $3
+      AND e.event_type IN ('progress', 'finding', 'result', 'checkin', 'confirm', 'reject', 'status_change')
+
+    UNION ALL
+
+    SELECT
+        r.id,
+        r.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'run'::text AS activity_type,
+        r.status,
+        COALESCE(NULLIF(r.error_summary, ''), NULLIF(r.result_summary, ''), NULLIF(r.progress_summary, ''), NULLIF(r.current_stage, ''), t.cause) AS content,
+        s.name AS actor_name,
+        COALESCE(r.finished_at, r.started_at, r.created_at) AS occurred_at
+    FROM agent_runs r
+    JOIN cards c
+      ON c.workspace_id = r.workspace_id
+     AND c.id = r.card_id
+    JOIN triggers t
+      ON t.workspace_id = r.workspace_id
+     AND t.card_id = r.card_id
+     AND t.id = r.trigger_id
+    JOIN sources s
+      ON s.workspace_id = r.workspace_id
+     AND s.id = r.runner_source_id
+    WHERE r.workspace_id = $2
+      AND c.project_id = $3
+
+    UNION ALL
+
+    SELECT
+        t.id,
+        t.card_id,
+        c.title AS card_title,
+        c.kind AS card_kind,
+        'trigger'::text AS activity_type,
+        CASE WHEN t.cancelled_at IS NULL THEN 'queued' ELSE 'cancelled' END AS status,
+        COALESCE(NULLIF(t.cancel_reason, ''), t.cause) AS content,
+        COALESCE(s.name, '') AS actor_name,
+        COALESCE(t.cancelled_at, t.created_at) AS occurred_at
+    FROM triggers t
+    JOIN cards c
+      ON c.workspace_id = t.workspace_id
+     AND c.id = t.card_id
+    LEFT JOIN sources s
+      ON s.workspace_id = t.workspace_id
+     AND s.id = t.created_by_source_id
+    LEFT JOIN agent_runs r
+      ON r.workspace_id = t.workspace_id
+     AND r.trigger_id = t.id
+    WHERE t.workspace_id = $2
+      AND c.project_id = $3
+      AND (r.id IS NULL OR t.cancelled_at IS NOT NULL)
+)
+SELECT id, card_id, card_title, card_kind, activity_type, status, content, actor_name, occurred_at
+FROM activity
+ORDER BY occurred_at DESC, id DESC
+LIMIT $1::int
+`
+
+type ListProjectActivityParams struct {
+	ActivityLimit int32     `json:"activity_limit"`
+	WorkspaceID   uuid.UUID `json:"workspace_id"`
+	ProjectID     uuid.UUID `json:"project_id"`
+}
+
+type ListProjectActivityRow struct {
+	ID           uuid.UUID          `json:"id"`
+	CardID       uuid.UUID          `json:"card_id"`
+	CardTitle    string             `json:"card_title"`
+	CardKind     string             `json:"card_kind"`
+	ActivityType string             `json:"activity_type"`
+	Status       string             `json:"status"`
+	Content      string             `json:"content"`
+	ActorName    string             `json:"actor_name"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+}
+
+func (q *Queries) ListProjectActivity(ctx context.Context, arg ListProjectActivityParams) ([]ListProjectActivityRow, error) {
+	rows, err := q.db.Query(ctx, listProjectActivity, arg.ActivityLimit, arg.WorkspaceID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectActivityRow{}
+	for rows.Next() {
+		var i ListProjectActivityRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CardID,
+			&i.CardTitle,
+			&i.CardKind,
+			&i.ActivityType,
+			&i.Status,
+			&i.Content,
+			&i.ActorName,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectCardSummaries = `-- name: ListProjectCardSummaries :many
 SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
@@ -561,6 +690,101 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 			&i.UpdatedAt,
 			&i.CreateIdempotencyKey,
 			&i.CreateRequestHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectSchedules = `-- name: ListProjectSchedules :many
+SELECT
+    cs.id,
+    cs.card_id,
+    c.title AS card_title,
+    c.ongoing_state,
+    cs.enabled,
+    cs.frequency,
+    cs.day_of_week,
+    cs.day_of_month,
+    cs.time_of_day,
+    cs.timezone,
+    cs.next_trigger_at,
+    cs.last_triggered_at,
+    latest_run.status AS last_run_status,
+    latest_run.finished_at AS last_run_finished_at
+FROM card_schedules cs
+JOIN cards c
+  ON c.workspace_id = cs.workspace_id
+ AND c.id = cs.card_id
+LEFT JOIN LATERAL (
+    SELECT r.status, r.finished_at
+    FROM triggers t
+    LEFT JOIN agent_runs r
+      ON r.workspace_id = t.workspace_id
+     AND r.trigger_id = t.id
+    WHERE t.workspace_id = cs.workspace_id
+      AND t.card_id = cs.card_id
+      AND t.schedule_id = cs.id
+    ORDER BY t.scheduled_for DESC, t.created_at DESC
+    LIMIT 1
+) latest_run ON true
+WHERE cs.workspace_id = $1
+  AND c.project_id = $2
+  AND c.kind = 'ongoing'
+ORDER BY cs.enabled DESC, cs.next_trigger_at, cs.id
+`
+
+type ListProjectSchedulesParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ProjectID   uuid.UUID `json:"project_id"`
+}
+
+type ListProjectSchedulesRow struct {
+	ID                uuid.UUID          `json:"id"`
+	CardID            uuid.UUID          `json:"card_id"`
+	CardTitle         string             `json:"card_title"`
+	OngoingState      pgtype.Text        `json:"ongoing_state"`
+	Enabled           bool               `json:"enabled"`
+	Frequency         string             `json:"frequency"`
+	DayOfWeek         pgtype.Int2        `json:"day_of_week"`
+	DayOfMonth        pgtype.Int2        `json:"day_of_month"`
+	TimeOfDay         pgtype.Time        `json:"time_of_day"`
+	Timezone          string             `json:"timezone"`
+	NextTriggerAt     pgtype.Timestamptz `json:"next_trigger_at"`
+	LastTriggeredAt   pgtype.Timestamptz `json:"last_triggered_at"`
+	LastRunStatus     pgtype.Text        `json:"last_run_status"`
+	LastRunFinishedAt pgtype.Timestamptz `json:"last_run_finished_at"`
+}
+
+func (q *Queries) ListProjectSchedules(ctx context.Context, arg ListProjectSchedulesParams) ([]ListProjectSchedulesRow, error) {
+	rows, err := q.db.Query(ctx, listProjectSchedules, arg.WorkspaceID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectSchedulesRow{}
+	for rows.Next() {
+		var i ListProjectSchedulesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CardID,
+			&i.CardTitle,
+			&i.OngoingState,
+			&i.Enabled,
+			&i.Frequency,
+			&i.DayOfWeek,
+			&i.DayOfMonth,
+			&i.TimeOfDay,
+			&i.Timezone,
+			&i.NextTriggerAt,
+			&i.LastTriggeredAt,
+			&i.LastRunStatus,
+			&i.LastRunFinishedAt,
 		); err != nil {
 			return nil, err
 		}

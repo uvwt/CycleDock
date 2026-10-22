@@ -179,3 +179,13 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 当前 Project 由应用级 Project Context 统一管理并持久化。URL 中明确指定的 Project 优先；直达、刷新、前进后退后仍应回到正确 Project，失效 ID 才回退到可访问项目，不能继续显示上一个 Project 的 Card 数据。
 - 切换 Project 时保留当前一级工作模式：Chat 切换后仍进入该 Project 的 Chat；Work / Work Card 切换后回到该 Project 的 Work。Card 详情以 Card 的真实 `project_id` 纠正 URL 与全局 Project 上下文，避免跨项目错配。
 - Settings → Projects 复用相同 Project 选择器；新建项目继续复用现有项目创建表单与服务端 API，不另造第二套项目实体或状态。
+
+## 12. 2026-10-22 四个一级入口：Chat / Work / Plan / Activity
+
+> 本节覆盖第 9 节中“一级入口只保留 Chat 与 Work 两个图标”的约定；第 11 节的全局 Project Context 与唯一 ProjectSwitcher 继续有效。
+
+- 当前 Project 下的一级入口固定为 **Chat / Work / Plan / Activity**。四者只是同一 Project 数据的不同 View，不增加 Conversation、Activity、ScheduledTask 等新领域实体。
+- **Plan** 直接聚合现有 Ongoing Card + CardSchedule，回答“接下来哪些事情会自动发生”。第一版仅展示启停状态、日/周/月规则、时区、下一次触发、最近触发与最近运行，点击回到对应 Ongoing Card；不要求日历视图，也不建立第二套计划状态机。
+- **Activity** 直接聚合现有 Event / Trigger / AgentRun，回答“Agent 正在做什么、最近发生了什么”。只展示有产品意义的排队、运行、等待、完成、失败和 durable Event；raw model message、tool call、tool arguments、raw tool result 与 chain-of-thought 不进入产品活动流。
+- Project 切换继续复用应用级 Project Context：在 Plan 中切换项目仍停留 Plan，在 Activity 中切换项目仍停留 Activity；失效 Project ID 按第 11 节规则回退。
+- Plan / Activity 列表点击后进入现有 Card 详情，不复制任务详情、运行操作或状态机。Schedule 编辑仍在 Ongoing Card 中完成，Activity 不增加修改 Run / Trigger 的第二套写接口。

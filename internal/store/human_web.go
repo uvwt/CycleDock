@@ -79,6 +79,37 @@ func (s *Store) ListProjectCardSummaries(
 	})
 }
 
+func (s *Store) ListProjectSchedules(
+	ctx context.Context,
+	workspaceID, projectID uuid.UUID,
+) ([]db.ListProjectSchedulesRow, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	return s.queries.ListProjectSchedules(ctx, db.ListProjectSchedulesParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+	})
+}
+
+func (s *Store) ListProjectActivity(
+	ctx context.Context,
+	workspaceID, projectID uuid.UUID,
+	limit int32,
+) ([]db.ListProjectActivityRow, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 60
+	}
+	return s.queries.ListProjectActivity(ctx, db.ListProjectActivityParams{
+		WorkspaceID:   workspaceID,
+		ProjectID:     projectID,
+		ActivityLimit: limit,
+	})
+}
+
 func (s *Store) UpdateCardText(
 	ctx context.Context,
 	workspaceID, cardID uuid.UUID,

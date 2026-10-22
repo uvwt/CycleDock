@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/projects/{projectID}", api.getProject)
 	r.Patch("/projects/{projectID}", api.updateProject)
 	r.Get("/projects/{projectID}/cards", api.listProjectCards)
+	r.Get("/projects/{projectID}/schedules", api.listProjectSchedules)
+	r.Get("/projects/{projectID}/activity", api.listProjectActivity)
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
 	r.Post("/projects/{projectID}/todos", api.createTodo)
 
@@ -140,6 +143,36 @@ type scheduleResponse struct {
 	Timezone        string     `json:"timezone"`
 	NextTriggerAt   time.Time  `json:"next_trigger_at"`
 	LastTriggeredAt *time.Time `json:"last_triggered_at,omitempty"`
+}
+
+type projectScheduleResponse struct {
+	ID                string     `json:"id"`
+	CardID            string     `json:"card_id"`
+	CardTitle         string     `json:"card_title"`
+	OngoingState      string     `json:"ongoing_state"`
+	Enabled           bool       `json:"enabled"`
+	Frequency         string     `json:"frequency"`
+	DayOfWeek         *int       `json:"day_of_week,omitempty"`
+	DayOfMonth        *int       `json:"day_of_month,omitempty"`
+	Hour              int        `json:"hour"`
+	Minute            int        `json:"minute"`
+	Timezone          string     `json:"timezone"`
+	NextTriggerAt     time.Time  `json:"next_trigger_at"`
+	LastTriggeredAt   *time.Time `json:"last_triggered_at,omitempty"`
+	LastRunStatus     string     `json:"last_run_status,omitempty"`
+	LastRunFinishedAt *time.Time `json:"last_run_finished_at,omitempty"`
+}
+
+type projectActivityResponse struct {
+	ID           string    `json:"id"`
+	CardID       string    `json:"card_id"`
+	CardTitle    string    `json:"card_title"`
+	CardKind     string    `json:"card_kind"`
+	ActivityType string    `json:"activity_type"`
+	Status       string    `json:"status"`
+	Content      string    `json:"content"`
+	ActorName    string    `json:"actor_name,omitempty"`
+	OccurredAt   time.Time `json:"occurred_at"`
 }
 
 type cardDetailResponse struct {
@@ -283,6 +316,83 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 	response := make([]cardResponse, 0, len(cards))
 	for _, card := range cards {
 		response = append(response, cardSummaryToResponse(card))
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) listProjectSchedules(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	rows, err := api.store.ListProjectSchedules(r.Context(), identity.WorkspaceID, projectID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	response := make([]projectScheduleResponse, 0, len(rows))
+	for _, row := range rows {
+		hour, minute := scheduleHourMinute(row.TimeOfDay.Microseconds)
+		item := projectScheduleResponse{
+			ID: row.ID.String(), CardID: row.CardID.String(), CardTitle: row.CardTitle,
+			Enabled: row.Enabled, Frequency: row.Frequency, Hour: hour, Minute: minute,
+			Timezone: row.Timezone, NextTriggerAt: row.NextTriggerAt.Time,
+		}
+		if row.OngoingState.Valid {
+			item.OngoingState = row.OngoingState.String
+		}
+		if row.DayOfWeek.Valid {
+			value := int(row.DayOfWeek.Int16)
+			item.DayOfWeek = &value
+		}
+		if row.DayOfMonth.Valid {
+			value := int(row.DayOfMonth.Int16)
+			item.DayOfMonth = &value
+		}
+		if row.LastTriggeredAt.Valid {
+			value := row.LastTriggeredAt.Time
+			item.LastTriggeredAt = &value
+		}
+		if row.LastRunStatus.Valid {
+			item.LastRunStatus = row.LastRunStatus.String
+		}
+		if row.LastRunFinishedAt.Valid {
+			value := row.LastRunFinishedAt.Time
+			item.LastRunFinishedAt = &value
+		}
+		response = append(response, item)
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) listProjectActivity(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	limit := int32(60)
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 100 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 100")
+			return
+		}
+		limit = int32(value)
+	}
+	identity := identityFromRequest(r)
+	rows, err := api.store.ListProjectActivity(r.Context(), identity.WorkspaceID, projectID, limit)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	response := make([]projectActivityResponse, 0, len(rows))
+	for _, row := range rows {
+		response = append(response, projectActivityResponse{
+			ID: row.ID.String(), CardID: row.CardID.String(), CardTitle: row.CardTitle,
+			CardKind: row.CardKind, ActivityType: row.ActivityType, Status: row.Status,
+			Content: row.Content, ActorName: row.ActorName, OccurredAt: row.OccurredAt.Time,
+		})
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -1040,11 +1150,10 @@ func schedulesToResponse(items []db.CardSchedule) []scheduleResponse {
 }
 
 func scheduleFromDB(item db.CardSchedule) scheduleResponse {
-	micros := item.TimeOfDay.Microseconds
+	hour, minute := scheduleHourMinute(item.TimeOfDay.Microseconds)
 	response := scheduleResponse{
 		ID: item.ID.String(), Enabled: item.Enabled, Frequency: item.Frequency,
-		Hour:     int(micros / int64(time.Hour/time.Microsecond)),
-		Minute:   int((micros % int64(time.Hour/time.Microsecond)) / int64(time.Minute/time.Microsecond)),
+		Hour: hour, Minute: minute,
 		Timezone: item.Timezone, NextTriggerAt: item.NextTriggerAt.Time,
 	}
 	if item.DayOfWeek.Valid {
@@ -1060,6 +1169,12 @@ func scheduleFromDB(item db.CardSchedule) scheduleResponse {
 		response.LastTriggeredAt = &value
 	}
 	return response
+}
+
+func scheduleHourMinute(micros int64) (int, int) {
+	hour := int(micros / int64(time.Hour/time.Microsecond))
+	minute := int((micros % int64(time.Hour/time.Microsecond)) / int64(time.Minute/time.Microsecond))
+	return hour, minute
 }
 
 func scheduleFromStore(item store.CardSchedule) scheduleResponse {

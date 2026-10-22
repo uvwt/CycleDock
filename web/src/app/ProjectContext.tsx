@@ -11,7 +11,7 @@ const emptyProjects: Project[] = [];
 
 function projectFromLocation(pathname: string, search: string) {
   const routeMatch = pathname.match(
-    /^\/(?:chat|board|cards|projects)\/([^/]+)/,
+    /^\/(?:chat|board|cards|projects|plans|activity)\/([^/]+)/,
   );
   if (routeMatch?.[1]) return decodeURIComponent(routeMatch[1]);
   return new URLSearchParams(search).get("project") || "";

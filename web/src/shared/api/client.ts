@@ -11,6 +11,8 @@ import type {
   ModelAuthStart,
   NexusConnection,
   Project,
+  ProjectActivity,
+  ProjectSchedule,
   Provider,
   Schedule,
   ScheduleInput,
@@ -78,6 +80,12 @@ export const api = {
     value: { name: string; description: string; instructions: string },
   ) => request<Project>(`/projects/${id}`, "PATCH", value),
   cards: (project: string) => request<Card[]>(`/projects/${project}/cards`),
+  projectSchedules: (project: string) =>
+    request<ProjectSchedule[]>(`/projects/${project}/schedules`),
+  projectActivity: (project: string, limit = 60) =>
+    request<ProjectActivity[]>(
+      `/projects/${project}/activity?limit=${encodeURIComponent(String(limit))}`,
+    ),
   createDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/discussions`, "POST", {}),
   createTodo: (project: string, title: string, description: string) =>

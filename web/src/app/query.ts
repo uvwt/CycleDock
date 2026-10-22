@@ -10,6 +10,8 @@ export const keys = {
   projects: ["projects"] as const,
   cards: (id: string) => ["cards", id] as const,
   card: (id: string) => ["card", id] as const,
+  schedules: (id: string) => ["project-schedules", id] as const,
+  activity: (id: string) => ["project-activity", id] as const,
   agent: ["agent-settings"] as const,
   auth: ["model-auth"] as const,
   models: (id: string) => ["models", id] as const,

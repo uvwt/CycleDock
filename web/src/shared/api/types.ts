@@ -119,6 +119,25 @@ export type Schedule = {
   next_trigger_at: string;
 };
 export type ScheduleInput = Omit<Schedule, "id" | "next_trigger_at">;
+export type ProjectSchedule = Schedule & {
+  card_id: string;
+  card_title: string;
+  ongoing_state: OngoingState;
+  last_triggered_at?: string;
+  last_run_status?: string;
+  last_run_finished_at?: string;
+};
+export type ProjectActivity = {
+  id: string;
+  card_id: string;
+  card_title: string;
+  card_kind: CardKind;
+  activity_type: "event" | "run" | "trigger";
+  status: string;
+  content: string;
+  actor_name?: string;
+  occurred_at: string;
+};
 export type CardDetail = {
   card: Card;
   current_run: Run | null;
