@@ -10,14 +10,12 @@ import {
 export function DiscussionSidebar({
   discussions,
   activeCardID,
-  creating,
   onSelect,
   onCreate,
   className = "",
 }: {
   discussions: Card[];
   activeCardID?: string;
-  creating?: boolean;
   onSelect: (card: Card) => void;
   onCreate: () => void;
   className?: string;
@@ -50,7 +48,6 @@ export function DiscussionSidebar({
               type="button"
               title={t("新建讨论")}
               aria-label={t("新建讨论")}
-              disabled={creating}
               onClick={onCreate}
               className="grid size-8 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:opacity-40"
             >

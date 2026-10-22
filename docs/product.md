@@ -33,6 +33,8 @@ Discussion 是所有新工作的默认入口，也是一个真正的 AI 会话�
 
 新建 Discussion 时不要求用户填写标题或描述；第一次会话运行时由 Built-in Agent 根据首轮上下文自动生成标题与描述。生成前 UI 使用“New discussion / 新讨论”作为展示占位，不把占位文本写成业务标题。
 
+点击“新建讨论”本身只进入当前 Project 的前端草稿态，不创建 Discussion Card。只有用户首次发送非空消息时，才创建 Discussion 并提交首条 Comment；因此用户打开新会话后直接离开不会留下空 Discussion。
+
 Discussion 生命周期：
 
 ```text

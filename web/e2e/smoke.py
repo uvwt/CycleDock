@@ -71,6 +71,45 @@ class CycleDockSmoke(unittest.TestCase):
             'textarea[aria-label="发送消息，继续推进任务…"]'
         ).wait_for()
 
+    def test_new_discussion_button_only_opens_draft_until_first_send(self):
+        create_requests = []
+        self.page.on(
+            "request",
+            lambda request: create_requests.append(request.url)
+            if request.method == "POST"
+            and request.url.endswith("/api/v1/projects/demo-project/discussions")
+            else None,
+        )
+
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.page.get_by_role("button", name="新建讨论", exact=True).click()
+        self.page.wait_for_url("**/chat?project=demo-project")
+        collapsed = self.page.locator(
+            'input[aria-label="发送消息，开始讨论…"]'
+        )
+        collapsed.wait_for()
+        self.page.wait_for_timeout(100)
+        self.assertEqual(create_requests, [])
+
+        # 草稿首页的“新建讨论”同样只回到草稿入口，不得提前落库。
+        self.page.get_by_role("button", name="新建讨论", exact=True).click()
+        self.page.wait_for_timeout(100)
+        self.assertEqual(create_requests, [])
+
+        collapsed.focus()
+        self.page.locator(
+            'textarea[aria-label="发送消息，开始讨论…"]'
+        ).fill("只在发送第一句话时创建会话")
+        self.page.get_by_role("button", name="发送", exact=True).click()
+        self.page.get_by_text(
+            "讨论已创建，但首条消息还未确认送达。"
+        ).wait_for()
+        self.assertEqual(len(create_requests), 1)
+
+        self.page.get_by_role("button", name="重试发送").click()
+        self.page.wait_for_url("**/chat/demo-project/discussion-*")
+        self.assertEqual(len(create_requests), 1)
+
     def test_discussion_create_failure_keeps_draft_without_pending_card(self):
         self.page.goto(BASE + "/chat?project=demo-project")
         self.page.get_by_role(

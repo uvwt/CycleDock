@@ -152,19 +152,6 @@ function CardPageContent() {
     onSettled: () => setRetryingTriggerID(""),
   });
 
-  const createDiscussion = useMutation({
-    mutationFn: () => api.createDiscussion(actualProjectID),
-    onSuccess: async (created) => {
-      await queryClient.invalidateQueries({
-        queryKey: keys.cards(actualProjectID),
-      });
-      setContextSidebarOpen(false);
-      navigate(`/chat/${actualProjectID}/${created.id}`);
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("创建讨论失败")),
-  });
-
   function submit() {
     if (!comment.trim() || blocked || send.isPending) return;
     send.mutate(waiting ? "reply" : submitMode);
@@ -181,6 +168,11 @@ function CardPageContent() {
   function openDiscussion(item: Card) {
     setContextSidebarOpen(false);
     navigate(`/chat/${item.project_id}/${item.id}`);
+  }
+
+  function startDiscussion() {
+    setContextSidebarOpen(false);
+    navigate(`/chat?project=${encodeURIComponent(actualProjectID)}`);
   }
 
   function openWork(item: Card) {
@@ -224,9 +216,8 @@ function CardPageContent() {
       <DiscussionSidebar
         discussions={discussions}
         activeCardID={cardID}
-        creating={createDiscussion.isPending}
         onSelect={openDiscussion}
-        onCreate={() => createDiscussion.mutate()}
+        onCreate={startDiscussion}
       />
     ) : null;
 

@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { MessageSquareText, PanelLeft } from "lucide-react";
-import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
-import { keys, queryClient } from "../../app/query";
+import { keys } from "../../app/query";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
@@ -34,20 +33,14 @@ export default function ChatHome() {
     [cards.data],
   );
 
-  const createEmpty = useMutation({
-    mutationFn: () => api.createDiscussion(projectID),
-    onSuccess: async (card) => {
-      setMobileListOpen(false);
-      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-      navigate(`/chat/${projectID}/${card.id}`);
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("创建讨论失败")),
-  });
-
   function selectDiscussion(card: Card) {
     setMobileListOpen(false);
     navigate(`/chat/${card.project_id}/${card.id}`);
+  }
+
+  function startDiscussion() {
+    setMobileListOpen(false);
+    navigate(`/chat?project=${encodeURIComponent(projectID)}`);
   }
 
   if (projectsPending) {
@@ -73,9 +66,8 @@ export default function ChatHome() {
           <div className="hidden min-h-0 border-r border-slate-200 md:block">
             <DiscussionSidebar
               discussions={discussions}
-              creating={createEmpty.isPending}
               onSelect={selectDiscussion}
-              onCreate={() => createEmpty.mutate()}
+              onCreate={startDiscussion}
             />
           </div>
 
@@ -142,9 +134,8 @@ export default function ChatHome() {
           <div className="-m-5 h-[calc(100dvh-4.25rem)]">
             <DiscussionSidebar
               discussions={discussions}
-              creating={createEmpty.isPending}
               onSelect={selectDiscussion}
-              onCreate={() => createEmpty.mutate()}
+              onCreate={startDiscussion}
             />
           </div>
         </Sheet>
