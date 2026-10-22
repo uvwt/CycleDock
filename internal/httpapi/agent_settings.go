@@ -16,16 +16,23 @@ import (
 )
 
 type agentSettingsResponse struct {
-	Configured         bool   `json:"configured"`
-	Enabled            bool   `json:"enabled"`
-	ProviderType       string `json:"provider_type"`
-	ProviderBaseURL    string `json:"provider_base_url"`
-	Model              string `json:"model"`
-	APIKeyEnv          string `json:"api_key_env"`
-	RequestTimeoutMS   int32  `json:"request_timeout_ms"`
-	MaxToolRounds      int32  `json:"max_tool_rounds"`
-	SystemInstructions string `json:"system_instructions"`
-	SourceID           string `json:"source_id,omitempty"`
+	Configured         bool                 `json:"configured"`
+	Enabled            bool                 `json:"enabled"`
+	Routes             []modelRouteResponse `json:"routes"`
+	RequestTimeoutMS   int32                `json:"request_timeout_ms"`
+	MaxToolRounds      int32                `json:"max_tool_rounds"`
+	SystemInstructions string               `json:"system_instructions"`
+	SourceID           string               `json:"source_id,omitempty"`
+}
+
+type modelRouteResponse struct {
+	ID              string `json:"id"`
+	Enabled         bool   `json:"enabled"`
+	ProviderType    string `json:"provider_type"`
+	CredentialID    string `json:"credential_id,omitempty"`
+	ProviderBaseURL string `json:"provider_base_url"`
+	Model           string `json:"model"`
+	APIKeyEnv       string `json:"api_key_env"`
 }
 
 type mcpConnectionResponse struct {
@@ -45,7 +52,7 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
-			Configured: false, ProviderType: "openai_compatible",
+			Configured: false, Routes: []modelRouteResponse{},
 			RequestTimeoutMS: 120000, MaxToolRounds: 12,
 		})
 		return
@@ -63,11 +70,16 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Enabled            bool   `json:"enabled"`
-		ProviderType       string `json:"provider_type"`
-		ProviderBaseURL    string `json:"provider_base_url"`
-		Model              string `json:"model"`
-		APIKeyEnv          string `json:"api_key_env"`
+		Enabled bool `json:"enabled"`
+		Routes  []struct {
+			ID              string `json:"id"`
+			Enabled         bool   `json:"enabled"`
+			ProviderType    string `json:"provider_type"`
+			CredentialID    string `json:"credential_id"`
+			ProviderBaseURL string `json:"provider_base_url"`
+			Model           string `json:"model"`
+			APIKeyEnv       string `json:"api_key_env"`
+		} `json:"routes"`
 		RequestTimeoutMS   int32  `json:"request_timeout_ms"`
 		MaxToolRounds      int32  `json:"max_tool_rounds"`
 		SystemInstructions string `json:"system_instructions"`
@@ -75,33 +87,41 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	request.ProviderType = strings.TrimSpace(request.ProviderType)
-	if request.ProviderType == "" {
-		request.ProviderType = "openai_compatible"
-	}
-	if request.Enabled &&
-		(request.ProviderType == string(modelauth.ProviderChatGPT) ||
-			request.ProviderType == string(modelauth.ProviderGrok)) {
-		if api.modelAuth == nil {
+	routes := make([]store.ModelRouteInput, 0, len(request.Routes))
+	for _, route := range request.Routes {
+		var routeID uuid.UUID
+		if strings.TrimSpace(route.ID) != "" {
+			parsed, err := uuid.Parse(strings.TrimSpace(route.ID))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_route_id", "Model route id is invalid.")
+				return
+			}
+			routeID = parsed
+		}
+		var credentialID *uuid.UUID
+		if strings.TrimSpace(route.CredentialID) != "" {
+			parsed, err := uuid.Parse(strings.TrimSpace(route.CredentialID))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_credential_id", "Model credential id is invalid.")
+				return
+			}
+			credentialID = &parsed
+		}
+		providerType := strings.TrimSpace(route.ProviderType)
+		if request.Enabled && route.Enabled &&
+			(providerType == string(modelauth.ProviderChatGPT) || providerType == string(modelauth.ProviderGrok)) &&
+			api.modelAuth == nil {
 			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
 			return
 		}
-		status, err := api.modelAuth.Status(
-			r.Context(), identity.WorkspaceID, modelauth.Provider(request.ProviderType),
-		)
-		if err != nil {
-			api.handleError(w, err)
-			return
-		}
-		if !status.Available || !status.Connected {
-			writeError(w, http.StatusConflict, "model_account_not_connected", "Connect the selected model account before enabling the Cycle Agent.")
-			return
-		}
+		routes = append(routes, store.ModelRouteInput{
+			ID: routeID, Enabled: route.Enabled, ProviderType: providerType,
+			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseURL,
+			Model: route.Model, APIKeyEnv: route.APIKeyEnv,
+		})
 	}
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
-		Enabled: request.Enabled, ProviderType: request.ProviderType,
-		ProviderBaseURL: request.ProviderBaseURL,
-		Model:           request.Model, APIKeyEnv: request.APIKeyEnv,
+		Enabled: request.Enabled, Routes: routes,
 		RequestTimeoutMS: request.RequestTimeoutMS, MaxToolRounds: request.MaxToolRounds,
 		SystemInstructions: request.SystemInstructions,
 	})
@@ -119,6 +139,7 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		ProviderType     string `json:"provider_type"`
+		CredentialID     string `json:"credential_id"`
 		ProviderBaseURL  string `json:"provider_base_url"`
 		Model            string `json:"model"`
 		APIKeyEnv        string `json:"api_key_env"`
@@ -152,8 +173,13 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
 			return
 		}
-		config, err := api.modelAuth.ModelConfig(
-			r.Context(), identity.WorkspaceID, modelauth.Provider(providerType), request.Model, timeout,
+		credentialID, err := uuid.Parse(strings.TrimSpace(request.CredentialID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_credential_id", "Select a connected model account.")
+			return
+		}
+		config, err := api.modelAuth.ModelConfigForCredential(
+			r.Context(), identity.WorkspaceID, modelauth.Provider(providerType), credentialID, request.Model, timeout,
 		)
 		if err != nil {
 			api.writeModelAuthError(w, err)
@@ -285,11 +311,22 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 	return false
 }
 
-func agentSettingsToResponse(settings db.WorkspaceAgentSetting) agentSettingsResponse {
+func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse {
+	routes := make([]modelRouteResponse, 0, len(settings.Routes))
+	for _, route := range settings.Routes {
+		credentialID := ""
+		if route.CredentialID.Valid {
+			credentialID = route.CredentialID.UUID.String()
+		}
+		routes = append(routes, modelRouteResponse{
+			ID: route.ID.String(), Enabled: route.Enabled, ProviderType: route.ProviderType,
+			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseUrl,
+			Model: route.Model, APIKeyEnv: route.ApiKeyEnv,
+		})
+	}
 	return agentSettingsResponse{
 		Configured: true, Enabled: settings.Enabled,
-		ProviderType:    settings.ProviderType,
-		ProviderBaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKeyEnv: settings.ApiKeyEnv,
+		Routes:           routes,
 		RequestTimeoutMS: settings.RequestTimeoutMs, MaxToolRounds: settings.MaxToolRounds,
 		SystemInstructions: settings.SystemInstructions, SourceID: settings.SourceID.String(),
 	}

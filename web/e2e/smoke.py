@@ -408,6 +408,26 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.evaluate("document.documentElement.scrollWidth"), 390
         )
 
+    def test_model_routes_can_add_reorder_and_save(self):
+        self.page.goto(BASE + "/settings/models")
+        self.page.get_by_role("heading", name="模型服务").wait_for()
+        self.page.get_by_text("模型路由", exact=True).wait_for()
+        self.page.get_by_text("优先级 1", exact=True).wait_for()
+
+        self.page.get_by_role("button", name="添加 Route").click()
+        self.page.get_by_text("优先级 2", exact=True).wait_for()
+        self.page.get_by_role("button", name="下移模型 Route").first.click()
+
+        with self.page.expect_request(
+            lambda request: request.url.endswith("/api/v1/agent/settings")
+            and request.method == "PUT"
+        ) as request_info:
+            self.page.get_by_role("button", name="保存模型路由").click()
+        payload = request_info.value.post_data_json
+        self.assertEqual(len(payload["routes"]), 2)
+        self.assertEqual(payload["routes"][0]["model"], "")
+        self.assertEqual(payload["routes"][1]["model"], "example-model")
+
     def test_settings_and_persistent_language_theme(self):
         self.page.goto(BASE + "/settings/general")
         self.page.get_by_role("combobox", name="界面语言").select_option("en")

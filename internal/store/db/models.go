@@ -109,6 +109,8 @@ type ModelOauthCredential struct {
 	DisplayLabel         string             `json:"display_label"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	ID                   uuid.UUID          `json:"id"`
+	AccountSubject       string             `json:"account_subject"`
 }
 
 type NexusdockAuthFlow struct {
@@ -251,15 +253,11 @@ type WorkspaceAgentSetting struct {
 	WorkspaceID        uuid.UUID          `json:"workspace_id"`
 	SourceID           uuid.UUID          `json:"source_id"`
 	Enabled            bool               `json:"enabled"`
-	ProviderBaseUrl    string             `json:"provider_base_url"`
-	Model              string             `json:"model"`
-	ApiKeyEnv          string             `json:"api_key_env"`
 	RequestTimeoutMs   int32              `json:"request_timeout_ms"`
 	MaxToolRounds      int32              `json:"max_tool_rounds"`
 	SystemInstructions string             `json:"system_instructions"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	ProviderType       string             `json:"provider_type"`
 }
 
 type WorkspaceMcpConnection struct {
@@ -282,6 +280,20 @@ type WorkspaceMembership struct {
 	IsPersonal     bool               `json:"is_personal"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceModelRoute struct {
+	ID              uuid.UUID          `json:"id"`
+	WorkspaceID     uuid.UUID          `json:"workspace_id"`
+	Position        int32              `json:"position"`
+	Enabled         bool               `json:"enabled"`
+	ProviderType    string             `json:"provider_type"`
+	CredentialID    uuid.NullUUID      `json:"credential_id"`
+	ProviderBaseUrl string             `json:"provider_base_url"`
+	Model           string             `json:"model"`
+	ApiKeyEnv       string             `json:"api_key_env"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WorkspaceNexusdockConnection struct {

@@ -17,9 +17,7 @@ func TestBuiltInAgentConcurrentClaimAndContextUsesLatestCardState(t *testing.T) 
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
-	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
-	})
+	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, testAgentSettings(true, "http://127.0.0.1:18090/v1", "test-model", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +133,7 @@ func TestAgentContextCompactionRetainsHistoricalDurableFacts(t *testing.T) {
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 
-	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
-	})
+	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, testAgentSettings(true, "http://127.0.0.1:18090/v1", "test-model", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,9 +212,7 @@ func TestBuiltInAgentWaitingHumanBlocksUntilReplyAndLateRunCannotFinish(t *testi
 	s := requireIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
-	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
-	})
+	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, testAgentSettings(true, "http://127.0.0.1:18090/v1", "test-model", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,29 +273,34 @@ func TestAgentSettingsReuseOneCycleSourceAndMCPUpdateIsWorkspaceScoped(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.SaveAgentSettings(ctx, workspace.ID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://localhost:18090/v1", Model: "a",
-		APIKeyEnv: "MODEL_KEY",
-	})
+	first, err := s.SaveAgentSettings(ctx, workspace.ID, testAgentSettings(
+		true, "http://localhost:18090/v1", "a", "MODEL_KEY",
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.SaveAgentSettings(ctx, workspace.ID, AgentSettingsInput{
-		Enabled: false, ProviderBaseURL: "http://localhost:18090/v1", Model: "b",
-		APIKeyEnv: "MODEL_KEY_2",
-	})
+	second, err := s.SaveAgentSettings(ctx, workspace.ID, testAgentSettings(
+		false, "http://localhost:18090/v1", "b", "MODEL_KEY_2",
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
 	subscription, err := s.SaveAgentSettings(ctx, workspace.ID, AgentSettingsInput{
-		Enabled: false, ProviderType: "chatgpt", ProviderBaseURL: "https://must-not-persist.example/v1",
-		Model: "subscription-model", APIKeyEnv: "MUST_NOT_PERSIST",
+		Enabled: false,
+		Routes: []ModelRouteInput{{
+			Enabled: false, ProviderType: "chatgpt",
+			ProviderBaseURL: "https://must-not-persist.example/v1",
+			Model:           "subscription-model", APIKeyEnv: "MUST_NOT_PERSIST",
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subscription.ProviderType != "chatgpt" || subscription.ProviderBaseUrl != "" || subscription.ApiKeyEnv != "" {
-		t.Fatalf("subscription settings leaked API provider fields: %+v", subscription)
+	if len(subscription.Routes) != 1 ||
+		subscription.Routes[0].ProviderType != "chatgpt" ||
+		subscription.Routes[0].ProviderBaseUrl != "" ||
+		subscription.Routes[0].ApiKeyEnv != "" {
+		t.Fatalf("subscription route leaked API provider fields: %+v", subscription.Routes)
 	}
 	if subscription.SourceID != first.SourceID {
 		t.Fatalf("subscription provider switch changed cycle_agent source: %s vs %s", subscription.SourceID, first.SourceID)

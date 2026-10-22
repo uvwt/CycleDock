@@ -80,6 +80,13 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			st.text += event.Text
 		}
 		h.live[cardID] = st
+	} else if event.Type == "run.text.reset" {
+		st, active := h.live[cardID]
+		if !active || st.runID != event.RunID {
+			return
+		}
+		st.text = ""
+		h.live[cardID] = st
 	} else if event.Type == "run.stage" {
 		st := h.live[cardID]
 		if st.runID == event.RunID {

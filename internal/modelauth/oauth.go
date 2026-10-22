@@ -255,14 +255,23 @@ func (s *Service) CompleteChatGPT(
 	if token.IDToken == "" {
 		return uuid.Nil, errors.New("ChatGPT token response is missing id_token")
 	}
-	if err := s.verifyChatGPTIDToken(ctx, token.IDToken, clientID, flow.Nonce); err != nil {
+	identity, err := s.verifyChatGPTIDToken(ctx, token.IDToken, clientID, flow.Nonce)
+	if err != nil {
 		return uuid.Nil, err
 	}
 	expiresAt := tokenExpiry(token.ExpiresIn)
-	if err := s.saveCredential(ctx, workspaceID, ProviderChatGPT, credentialPayload{
+	displayLabel := identity.Email
+	if displayLabel == "" {
+		displayLabel = identity.Name
+	}
+	if displayLabel == "" {
+		displayLabel = "ChatGPT account"
+	}
+	if _, err := s.saveCredential(ctx, workspaceID, ProviderChatGPT, credentialPayload{
 		AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
 		ClientID: clientID, TokenURL: chatGPTTokenURL, Scope: token.Scope,
-	}, expiresAt); err != nil {
+		UserID: identity.Subject, Email: identity.Email,
+	}, expiresAt, identity.Subject, displayLabel); err != nil {
 		return uuid.Nil, err
 	}
 	return workspaceID, nil
@@ -396,11 +405,22 @@ func (s *Service) PollGrok(
 		return DevicePollResult{}, errors.New("xAI token response is missing credentials")
 	}
 	userID, email := xaiTokenIdentity(token)
-	if err := s.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
+	accountSubject := userID
+	if accountSubject == "" {
+		accountSubject = email
+	}
+	displayLabel := email
+	if displayLabel == "" {
+		displayLabel = userID
+	}
+	if displayLabel == "" {
+		displayLabel = "Grok account"
+	}
+	if _, err := s.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
 		AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
 		ClientID: flow.ClientID, TokenURL: flow.TokenURL, Scope: token.Scope,
 		UserID: userID, Email: email,
-	}, tokenExpiry(token.ExpiresIn)); err != nil {
+	}, tokenExpiry(token.ExpiresIn), accountSubject, displayLabel); err != nil {
 		return DevicePollResult{}, err
 	}
 	if _, err := s.pool.Exec(ctx, "DELETE FROM model_auth_flows WHERE id=$1", flowID); err != nil {
@@ -456,31 +476,47 @@ func (s *Service) refreshCredential(
 	}, tokenExpiry(token.ExpiresIn), nil
 }
 
+type accountIdentity struct {
+	Subject string
+	Email   string
+	Name    string
+}
+
 func (s *Service) verifyChatGPTIDToken(
 	ctx context.Context,
 	rawIDToken string,
 	clientID string,
 	expectedNonce string,
-) error {
+) (accountIdentity, error) {
 	providerCtx := oidc.ClientContext(ctx, s.httpClient)
 	provider, err := oidc.NewProvider(providerCtx, "https://auth.openai.com")
 	if err != nil {
-		return fmt.Errorf("discover ChatGPT identity provider: %w", err)
+		return accountIdentity{}, fmt.Errorf("discover ChatGPT identity provider: %w", err)
 	}
 	idToken, err := provider.Verifier(&oidc.Config{ClientID: clientID}).Verify(providerCtx, rawIDToken)
 	if err != nil {
-		return errors.New("verify ChatGPT identity token")
+		return accountIdentity{}, errors.New("verify ChatGPT identity token")
 	}
 	var claims struct {
-		Nonce string `json:"nonce"`
+		Nonce   string `json:"nonce"`
+		Subject string `json:"sub"`
+		Email   string `json:"email"`
+		Name    string `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
-		return errors.New("decode ChatGPT identity token")
+		return accountIdentity{}, errors.New("decode ChatGPT identity token")
 	}
 	if claims.Nonce == "" || claims.Nonce != expectedNonce {
-		return errors.New("ChatGPT identity token nonce mismatch")
+		return accountIdentity{}, errors.New("ChatGPT identity token nonce mismatch")
 	}
-	return nil
+	if strings.TrimSpace(claims.Subject) == "" {
+		return accountIdentity{}, errors.New("ChatGPT identity token is missing subject")
+	}
+	return accountIdentity{
+		Subject: strings.TrimSpace(claims.Subject),
+		Email:   strings.TrimSpace(claims.Email),
+		Name:    strings.TrimSpace(claims.Name),
+	}, nil
 }
 
 type oidcDiscovery struct {

@@ -264,10 +264,10 @@ waiting_human 表示：
 
 Workspace owner 可以配置：
 
-- Provider 类型：OpenAI-compatible API、ChatGPT Plan、Grok Subscription。
-- OpenAI-compatible Provider Base URL / API Key 环境变量名（仅 API Provider）。
-- ChatGPT / Grok model account connection（仅订阅 Provider）。
-- Model。
+- 零个或多个有序 Model Route；每条 Route 绑定一个 provider、model，以及订阅账号或 API endpoint。
+- Route 可以独立启用/停用，并按优先级排序。
+- OpenAI-compatible Route 保存 Provider Base URL / API Key 环境变量名。
+- ChatGPT / Grok 可以连接多个 model account；订阅 Route 显式绑定一个 credential。
 - request timeout。
 - max tool rounds。
 - Workspace Agent instructions。
@@ -277,7 +277,7 @@ MCP connection 保存 URL、timeout、enabled 与 Bearer Token 环境变量名�
 
 Model API Key 与 MCP Bearer Token 本身不进入 Settings API / PostgreSQL；Runner 开始 Run 时从 CycleDock 进程环境读取。
 
-ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨 Run 刷新，因此存放在独立 credential 表并用 CYCLEDOCK_MODEL_SECRET_KEY 做 AES-256-GCM 加密。Workspace Agent settings 只保存所选 provider / model，不复制 OAuth secret。
+ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨 Run 刷新，因此存放在独立 credential 表并用 CYCLEDOCK_MODEL_SECRET_KEY 做 AES-256-GCM 加密。每个 credential 有独立 ID；同一 Provider 可以存在多个账号。稳定账号 subject 用于“重新授权同一账号时更新原 credential”，Route 只保存 credential ID，不复制 OAuth secret。
 
 模型协议：
 
@@ -296,13 +296,18 @@ Dispatcher：
 
 Connection test：
 
-- OpenAI-compatible Provider Test 对配置 endpoint / model 发最小 /chat/completions 请求。
-- ChatGPT / Grok Provider Test 使用已连接账号与正式 Responses transport 发最小请求。
+- 每条 Model Route 可以独立测试。
+- OpenAI-compatible Route Test 对配置 endpoint / model 发最小 /chat/completions 请求。
+- ChatGPT / Grok Route Test 使用该 Route 绑定的具体账号与正式 Responses transport 发最小请求。
 - MCP Test 复用正式 MCP Client，只做 initialize + ListTools 并返回工具数量，不执行 Tool。
 - endpoint / auth / timeout / malformed / initialize / ListTools 错误只返回安全分类消息。
 
 Runner：
 
+- 每一轮模型推理都从当前 active Route 开始；可恢复的模型错误才按 Route 顺序向后 failover。
+- 429、provider 5xx、请求 timeout/网络失败、账号需重新授权/refresh 失败、空或 malformed model response 可以切到下一 Route；普通 400、Run cancellation、MCP 失败与任务状态冲突不触发模型切换。
+- 一旦备用 Route 成功，本 Run 后续 tool round 从该 Route 继续，不重新撞已经失败的高优先级 Route，也不回绕。
+- 上游已经流出部分文本后才失败时，先发送 ephemeral run.text.reset 清空当前未完成文本，再切备用 Route；raw partial text 不进入 durable Timeline。
 - Claim Todo 后把 Todo 推进 Working（如果尚未进入 Working）。
 - Claim Discussion 不改变 Discussion 生命周期状态；Discussion 永远不会因为 Agent 开始执行而进入 Working。
 - Discussion 第一次运行且 title 仍为空时，Runner 先基于首轮 Discussion context 生成标题与描述并原子写回，再进入正式工作轮次。

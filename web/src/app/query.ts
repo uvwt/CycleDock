@@ -12,7 +12,8 @@ export const keys = {
   card: (id: string) => ["card", id] as const,
   agent: ["agent-settings"] as const,
   auth: ["model-auth"] as const,
-  models: (id: string) => ["models", id] as const,
+  models: (provider: string, credentialID = "") =>
+    ["models", provider, credentialID] as const,
   mcp: ["mcp"] as const,
   nexus: ["nexus"] as const,
 };

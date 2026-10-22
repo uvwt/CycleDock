@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/uvwt/CycleDock/internal/auth"
 )
 
@@ -35,8 +37,12 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	cookie := responseCookie(t, login, sessionCookieName)
 
 	unknownSecret := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"enabled": true, "provider_base_url": "http://127.0.0.1:18090/v1",
-		"model": "test", "api_key": "must-never-be-accepted",
+		"enabled": true,
+		"routes": []map[string]any{{
+			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
+			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
+			"api_key": "must-never-be-accepted",
+		}},
 		"request_timeout_ms": 5000, "max_tool_rounds": 4, "system_instructions": "",
 	}, cookie, nil)
 	if unknownSecret.Code != http.StatusBadRequest {
@@ -44,8 +50,12 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	}
 
 	save := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"enabled": true, "provider_base_url": "http://127.0.0.1:18090/v1",
-		"model": "test", "api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
+		"enabled": true,
+		"routes": []map[string]any{{
+			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
+			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
+			"api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
+		}},
 		"request_timeout_ms": 5000, "max_tool_rounds": 4,
 		"system_instructions": "Keep durable facts only.",
 	}, cookie, nil)

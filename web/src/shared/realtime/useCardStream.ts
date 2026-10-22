@@ -93,6 +93,17 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
                 },
       }));
     };
+    const onReset = (e: Event) => {
+      const v = parse(e);
+      if (!active || !v?.run_id) return;
+      setState((s) => ({
+        ...s,
+        live:
+          s.live && s.live.runID === v.run_id
+            ? { ...s.live, text: "" }
+            : s.live,
+      }));
+    };
     const onSnapshot = (e: Event) => {
       const v = parse(e);
       if (!active || !v?.run_id) return;
@@ -121,6 +132,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
     stream.addEventListener("run.started", onStarted);
     stream.addEventListener("run.stage", onStage);
     stream.addEventListener("run.text.delta", onDelta);
+    stream.addEventListener("run.text.reset", onReset);
     stream.addEventListener("run.text.snapshot", onSnapshot);
     stream.addEventListener("run.finished", onFinal);
     stream.addEventListener("run.failed", onFinal);

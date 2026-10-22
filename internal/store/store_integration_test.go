@@ -65,6 +65,16 @@ type testFixture struct {
 	CardID      uuid.UUID
 }
 
+func testAgentSettings(enabled bool, baseURL, model, apiKeyEnv string) AgentSettingsInput {
+	return AgentSettingsInput{
+		Enabled: enabled,
+		Routes: []ModelRouteInput{{
+			Enabled: true, ProviderType: "openai_compatible",
+			ProviderBaseURL: baseURL, Model: model, APIKeyEnv: apiKeyEnv,
+		}},
+	}
+}
+
 func requireIntegration(t *testing.T) *Store {
 	t.Helper()
 	if integrationStore == nil {

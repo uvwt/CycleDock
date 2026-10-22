@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/modelauth"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 )
 
 func (api *API) getModelAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -180,8 +181,13 @@ func (api *API) disconnectModelAuth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "Unsupported model account provider.")
 		return
 	}
-	if err := api.modelAuth.Disconnect(r.Context(), identity.WorkspaceID, provider); err != nil {
-		api.handleError(w, err)
+	credentialID, err := uuid.Parse(strings.TrimSpace(chi.URLParam(r, "credentialID")))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_credential_id", "Model credential id is invalid.")
+		return
+	}
+	if err := api.modelAuth.Disconnect(r.Context(), identity.WorkspaceID, provider, credentialID); err != nil {
+		api.writeModelAuthError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -201,7 +207,24 @@ func (api *API) listAgentModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_provider", "Unsupported model account provider.")
 		return
 	}
-	config, err := api.modelAuth.ModelConfig(r.Context(), identity.WorkspaceID, provider, "", 30*time.Second)
+	credentialID := uuid.Nil
+	if raw := strings.TrimSpace(r.URL.Query().Get("credential_id")); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_credential_id", "Model credential id is invalid.")
+			return
+		}
+		credentialID = parsed
+	}
+	var config modelclient.Config
+	var err error
+	if credentialID == uuid.Nil {
+		config, err = api.modelAuth.ModelConfig(r.Context(), identity.WorkspaceID, provider, "", 30*time.Second)
+	} else {
+		config, err = api.modelAuth.ModelConfigForCredential(
+			r.Context(), identity.WorkspaceID, provider, credentialID, "", 30*time.Second,
+		)
+	}
 	if err != nil {
 		api.writeModelAuthError(w, err)
 		return
@@ -236,6 +259,8 @@ func (api *API) writeModelAuthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
 	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):
 		writeError(w, http.StatusConflict, "model_account_not_connected", "Connect the model account again.")
+	case errors.Is(err, modelauth.ErrCredentialInUse):
+		writeError(w, http.StatusConflict, "model_account_in_use", "Remove this account from model routes before disconnecting it.")
 	case errors.Is(err, modelauth.ErrFlowNotFound):
 		writeError(w, http.StatusGone, "model_auth_expired", "The model sign-in attempt expired. Start again.")
 	default:

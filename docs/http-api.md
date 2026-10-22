@@ -86,13 +86,15 @@ Workspace owner：
 - `DELETE /api/v1/agent/mcp-connections/{connectionID}`
 - `POST /api/v1/agent/mcp-test`
 
-- GET /api/v1/agent/model-auth：只返回 available / connected / expiry，不返回 token。
-- POST /api/v1/agent/model-auth/chatgpt/start：返回官方 authorization URL；临时 Hosted dynamic-registration 测试模式还会返回 `manual_callback=true`。
+GET / PUT /api/v1/agent/settings 使用有序 routes 数组；每条 Route 包含 id、enabled、provider_type、model，以及 credential_id 或 OpenAI-compatible endpoint/env 引用。数组顺序就是 failover 优先级。
+
+- GET /api/v1/agent/model-auth：返回 provider 可用状态与 accounts 数组；每个账号只返回 credential id、display label、expiry，不返回 token。
+- POST /api/v1/agent/model-auth/chatgpt/start：新增/重新授权一个 ChatGPT 账号并返回官方 authorization URL；临时 Hosted dynamic-registration 测试模式还会返回 `manual_callback=true`。
 - POST /api/v1/agent/model-auth/chatgpt/complete：仅供上述临时 Hosted 测试模式使用；Workspace owner 粘贴完整 localhost callback URL，由服务端校验 loopback URL、Workspace-scoped state 并完成 PKCE token exchange。
-- POST /api/v1/agent/model-auth/grok/start：返回 xAI verification URL / user code / flow ID。
+- POST /api/v1/agent/model-auth/grok/start：开始新增/重新授权一个 Grok 账号，返回 xAI verification URL / user code / flow ID。
 - POST /api/v1/agent/model-auth/grok/poll：完成 device-code 连接。
-- DELETE /api/v1/agent/model-auth/{provider}：断开账号。
-- GET /api/v1/agent/models?provider=chatgpt|grok：读取当前账号模型目录。
+- DELETE /api/v1/agent/model-auth/{provider}/{credentialID}：断开指定账号；仍被 Route 引用时返回 409。
+- GET /api/v1/agent/models?provider=chatgpt|grok&credential_id={credentialID}：使用指定账号读取模型目录。
 
 ChatGPT OAuth callback 为 GET /auth/model/chatgpt/callback，完成后重定向回 Web。
 

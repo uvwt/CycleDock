@@ -11,6 +11,60 @@ import (
 	"github.com/google/uuid"
 )
 
+const createWorkspaceModelRoute = `-- name: CreateWorkspaceModelRoute :one
+INSERT INTO workspace_model_routes (
+    id, workspace_id, position, enabled, provider_type, credential_id,
+    provider_base_url, model, api_key_env
+)
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6,
+    $7, $8, $9
+)
+RETURNING id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at
+`
+
+type CreateWorkspaceModelRouteParams struct {
+	ID              uuid.UUID     `json:"id"`
+	WorkspaceID     uuid.UUID     `json:"workspace_id"`
+	Position        int32         `json:"position"`
+	Enabled         bool          `json:"enabled"`
+	ProviderType    string        `json:"provider_type"`
+	CredentialID    uuid.NullUUID `json:"credential_id"`
+	ProviderBaseUrl string        `json:"provider_base_url"`
+	Model           string        `json:"model"`
+	ApiKeyEnv       string        `json:"api_key_env"`
+}
+
+func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorkspaceModelRouteParams) (WorkspaceModelRoute, error) {
+	row := q.db.QueryRow(ctx, createWorkspaceModelRoute,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Position,
+		arg.Enabled,
+		arg.ProviderType,
+		arg.CredentialID,
+		arg.ProviderBaseUrl,
+		arg.Model,
+		arg.ApiKeyEnv,
+	)
+	var i WorkspaceModelRoute
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Position,
+		&i.Enabled,
+		&i.ProviderType,
+		&i.CredentialID,
+		&i.ProviderBaseUrl,
+		&i.Model,
+		&i.ApiKeyEnv,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteWorkspaceMCPConnection = `-- name: DeleteWorkspaceMCPConnection :execrows
 DELETE FROM workspace_mcp_connections
 WHERE workspace_id = $1
@@ -30,8 +84,18 @@ func (q *Queries) DeleteWorkspaceMCPConnection(ctx context.Context, arg DeleteWo
 	return result.RowsAffected(), nil
 }
 
+const deleteWorkspaceModelRoutes = `-- name: DeleteWorkspaceModelRoutes :exec
+DELETE FROM workspace_model_routes
+WHERE workspace_id = $1
+`
+
+func (q *Queries) DeleteWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceModelRoutes, workspaceID)
+	return err
+}
+
 const getWorkspaceAgentSettings = `-- name: GetWorkspaceAgentSettings :one
-SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
+SELECT workspace_id, source_id, enabled, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
 FROM workspace_agent_settings
 WHERE workspace_id = $1
 `
@@ -43,15 +107,11 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 		&i.WorkspaceID,
 		&i.SourceID,
 		&i.Enabled,
-		&i.ProviderBaseUrl,
-		&i.Model,
-		&i.ApiKeyEnv,
 		&i.RequestTimeoutMs,
 		&i.MaxToolRounds,
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ProviderType,
 	)
 	return i, err
 }
@@ -86,7 +146,7 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 }
 
 const listEnabledWorkspaceAgentSettings = `-- name: ListEnabledWorkspaceAgentSettings :many
-SELECT workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
+SELECT workspace_id, source_id, enabled, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
 FROM workspace_agent_settings
 WHERE enabled
 ORDER BY workspace_id
@@ -105,15 +165,11 @@ func (q *Queries) ListEnabledWorkspaceAgentSettings(ctx context.Context) ([]Work
 			&i.WorkspaceID,
 			&i.SourceID,
 			&i.Enabled,
-			&i.ProviderBaseUrl,
-			&i.Model,
-			&i.ApiKeyEnv,
 			&i.RequestTimeoutMs,
 			&i.MaxToolRounds,
 			&i.SystemInstructions,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ProviderType,
 		); err != nil {
 			return nil, err
 		}
@@ -200,37 +256,67 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 	return items, nil
 }
 
+const listWorkspaceModelRoutes = `-- name: ListWorkspaceModelRoutes :many
+SELECT id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at
+FROM workspace_model_routes
+WHERE workspace_id = $1
+ORDER BY position, id
+`
+
+func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceModelRoute, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceModelRoutes, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WorkspaceModelRoute{}
+	for rows.Next() {
+		var i WorkspaceModelRoute
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Position,
+			&i.Enabled,
+			&i.ProviderType,
+			&i.CredentialID,
+			&i.ProviderBaseUrl,
+			&i.Model,
+			&i.ApiKeyEnv,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
-    workspace_id, source_id, enabled, provider_type, provider_base_url, model,
-    api_key_env, request_timeout_ms, max_tool_rounds, system_instructions
+    workspace_id, source_id, enabled,
+    request_timeout_ms, max_tool_rounds, system_instructions
 )
 VALUES (
     $1, $2, $3,
-    $4, $5, $6, $7,
-    $8, $9, $10
+    $4, $5, $6
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET enabled = EXCLUDED.enabled,
-    provider_type = EXCLUDED.provider_type,
-    provider_base_url = EXCLUDED.provider_base_url,
-    model = EXCLUDED.model,
-    api_key_env = EXCLUDED.api_key_env,
     request_timeout_ms = EXCLUDED.request_timeout_ms,
     max_tool_rounds = EXCLUDED.max_tool_rounds,
     system_instructions = EXCLUDED.system_instructions,
     updated_at = now()
-RETURNING workspace_id, source_id, enabled, provider_base_url, model, api_key_env, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at, provider_type
+RETURNING workspace_id, source_id, enabled, request_timeout_ms, max_tool_rounds, system_instructions, created_at, updated_at
 `
 
 type UpsertWorkspaceAgentSettingsParams struct {
 	WorkspaceID        uuid.UUID `json:"workspace_id"`
 	SourceID           uuid.UUID `json:"source_id"`
 	Enabled            bool      `json:"enabled"`
-	ProviderType       string    `json:"provider_type"`
-	ProviderBaseUrl    string    `json:"provider_base_url"`
-	Model              string    `json:"model"`
-	ApiKeyEnv          string    `json:"api_key_env"`
 	RequestTimeoutMs   int32     `json:"request_timeout_ms"`
 	MaxToolRounds      int32     `json:"max_tool_rounds"`
 	SystemInstructions string    `json:"system_instructions"`
@@ -241,10 +327,6 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		arg.WorkspaceID,
 		arg.SourceID,
 		arg.Enabled,
-		arg.ProviderType,
-		arg.ProviderBaseUrl,
-		arg.Model,
-		arg.ApiKeyEnv,
 		arg.RequestTimeoutMs,
 		arg.MaxToolRounds,
 		arg.SystemInstructions,
@@ -254,15 +336,11 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		&i.WorkspaceID,
 		&i.SourceID,
 		&i.Enabled,
-		&i.ProviderBaseUrl,
-		&i.Model,
-		&i.ApiKeyEnv,
 		&i.RequestTimeoutMs,
 		&i.MaxToolRounds,
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ProviderType,
 	)
 	return i, err
 }

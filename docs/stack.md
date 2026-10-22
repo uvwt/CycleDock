@@ -56,7 +56,7 @@
 - chatgpt：使用 OpenAI Sign in with ChatGPT OAuth access token，直接请求 api.openai.com/v1/responses。
 - grok：使用 xAI OAuth access token，直接请求 cli-chat-proxy.grok.com/v1/responses。
 
-订阅 Provider 共用 Responses transport，但认证流程与固定官方 origin 保持各自明确，不引入大型通用 multi-provider framework。
+订阅 Provider 共用 Responses transport，但认证流程与固定官方 origin 保持各自明确，不引入大型通用 multi-provider framework。Workspace 的模型选择由轻量有序 Model Routes 表达；同一 Provider 可绑定不同 credential/model 形成多条 Route，Runner 只在可恢复模型故障时向后 failover。
 
 Responses transport：
 
