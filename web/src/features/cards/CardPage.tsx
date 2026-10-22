@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { CircleAlert, PanelLeft } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -9,7 +9,7 @@ import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import { ConversationView } from "../timeline/ConversationView";
-import { CardDetails } from "./CardDetails";
+import { CardHeaderActions } from "./CardHeaderActions";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
@@ -62,8 +62,6 @@ function CardPageContent() {
     Boolean(current) &&
     ["queued", "running", "waiting_human"].includes(current?.status || "");
 
-  const [taskInfoOpen, setTaskInfoOpen] = useState(false);
-  const taskInfoRef = useRef<HTMLDivElement>(null);
   const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -72,27 +70,6 @@ function CardPageContent() {
   );
   const [cancelingTriggerID, setCancelingTriggerID] = useState("");
   const [retryingTriggerID, setRetryingTriggerID] = useState("");
-
-  useEffect(() => {
-    if (!taskInfoOpen) return;
-    function handlePointerDown(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        !taskInfoRef.current?.contains(event.target)
-      ) {
-        setTaskInfoOpen(false);
-      }
-    }
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setTaskInfoOpen(false);
-    }
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [taskInfoOpen]);
 
   useEffect(() => {
     if (!card || !projectID || projectID === card.project_id) return;
@@ -294,35 +271,8 @@ function CardPageContent() {
                 {!isDiscussion && <CardStatusSwitch card={card} />}
               </div>
             </div>
-            <div ref={taskInfoRef} className="relative shrink-0">
-              <button
-                type="button"
-                title={isDiscussion ? t("讨论信息") : t("任务信息")}
-                aria-label={isDiscussion ? t("讨论信息") : t("任务信息")}
-                aria-expanded={taskInfoOpen}
-                aria-haspopup="dialog"
-                onClick={() => setTaskInfoOpen((open) => !open)}
-                className={`grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 ${
-                  taskInfoOpen ? "bg-slate-100 text-slate-700" : ""
-                }`}
-              >
-                <CircleAlert className="size-[18px]" />
-              </button>
-              {taskInfoOpen && (
-                <div
-                  role="dialog"
-                  aria-label={isDiscussion ? t("讨论信息") : t("任务信息")}
-                  className="absolute top-10 right-0 z-50 max-h-[min(75dvh,680px)] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-md"
-                >
-                  <CardDetails
-                    key={card.id}
-                    detail={detail.data}
-                    projectCards={projectCards.data || []}
-                    onDeleted={back}
-                    compact
-                  />
-                </div>
-              )}
+            <div className="shrink-0">
+              <CardHeaderActions card={card} onDeleted={back} />
             </div>
           </header>
 
