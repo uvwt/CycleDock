@@ -33,7 +33,7 @@
 
 - Discussion、Todo、Ongoing 的核心区域都是统一对话流：左侧 Agent / Result，右侧 Human，系统事件在中间居中灰字显示。Discussion 详情使用 Discussion 二级列表；Todo / Ongoing 使用 Work 二级列表，二者复用同一 Context Sidebar 基础组件，但业务数据与分组逻辑独立。
 - 相同后端 `events` 表 / `timeline` 返回：comment(Human)=右，comment(Agent)、finding、result=左；status_change=居中小字；progress/checkin=简短阶段节点；confirm/reject 按重要性增强。
-- 事件按服务端 `sequence` 顺序排布，保留事件 ID 以去重；绝不可打乱用户消息、Agent 结果及任务状态的交错次序。
+- 服务端 `sequence` 始终保留为真实审计顺序和去重依据；会话展示优先按稳定因果关系组织轮次。若 `source_event_id → Run → run_id Event` 关联完整，同一 Run 的 Agent 事件应紧跟触发它的来源消息展示，即使这些 Result 在审计序列里晚于后续已入队的 Human 消息；同一轮内部仍按 `sequence` 排序。缺少稳定关联的旧数据或系统触发不得按文本、时间或数组位置猜测，继续按原审计顺序独立展示。
 - Todo/Ongoing 详情不保留右侧常驻栏。业务状态以标题旁紧凑状态切换器呈现；任务目标、来源 Discussion、Health / Schedule 等 durable 信息通过标题栏最右侧的信息按钮打开紧凑浮层。浮层默认阅读，Human 显式点击编辑后才显示保存/取消表单，移动端同样使用浮层而不是独立详情抽屉。
 - 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Run 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
 - Discussion 的 Generate task 只在输入框右上角显示 Sparkles 图标，通过 `title / aria-label` 保留可访问名称，不显示额外文字按钮。跳到最新同样只显示向下图标。
@@ -51,7 +51,7 @@
 - 传输：原生 EventSource，同源 HttpOnly Cookie；每个 Card 的只读 SSE 订阅基于后端鉴权范围。
 - 短暂文本增量仅保存在 Run 的临时流中；最终有意义的 Result/Finding/Progress/Comment 入原有 events 表，不把原始工具参数/结果/CoT 持久化。
 - SSE 合约建议：`run.started`、`run.stage`、`run.text.delta`、`event.created`、`run.finished`、`run.failed`；`id`/游标应可重连、幂等消重。
-- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。
+- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。同一 Run 的流式正文与最终持久 Result 占用同一 Agent 回复位置：运行中显示 SSE 增量，Result 到达后由持久事件接管，不能再额外保留一份 `result_summary` 正文。
 - 加载中提供轻量动态点或 Spinner 和真实阶段。运行耗时从 `started_at` 至 `finished_at` / 当前服务端时间计算；Queued 不计为运行时间。
 - 单次 SSE 网络中断不能取消后台 Agent Run，失败/等待人工/取消必须准确表达。
 - OpenAI-compatible Transport 也要支持增量输出；不能只对 ChatGPT/Grok 实现。

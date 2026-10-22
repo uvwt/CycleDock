@@ -10,7 +10,11 @@ import type {
 import type { LiveRun } from "../../shared/realtime/useCardStream";
 import { ExecutionStatus, RunDuration, StandaloneExecution } from "./ExecutionStatus";
 import { RichText } from "./RichText";
-import { groupExecutionAttempts, type ExecutionAttempt } from "./execution";
+import {
+  groupExecutionAttempts,
+  groupRunEvents,
+  type ExecutionAttempt,
+} from "./execution";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const systemTypes = new Set([
@@ -200,6 +204,19 @@ export function ConversationView({
     () => groupExecutionAttempts(eventIDs, queue, currentRun, workHistory),
     [currentRun, eventIDs, queue, workHistory],
   );
+  const { bySourceEvent, topLevel } = useMemo(
+    () => groupRunEvents(sortedEvents, byEvent),
+    [byEvent, sortedEvents],
+  );
+  const persistedResultRunIDs = useMemo(
+    () =>
+      new Set(
+        sortedEvents
+          .filter((event) => event.type === "result" && event.run_id)
+          .map((event) => event.run_id!),
+      ),
+    [sortedEvents],
+  );
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
@@ -236,25 +253,44 @@ export function ConversationView({
             </p>
           </div>
         )}
-        {sortedEvents.map((event, index) => {
-          const previous = sortedEvents[index - 1];
+        {topLevel.map((event, index) => {
+          const previous = topLevel[index - 1];
           const showTime =
             !!previous &&
             new Date(event.created_at).getTime() -
               new Date(previous.created_at).getTime() >
               TWO_HOURS_MS;
+          const attachedEvents = bySourceEvent.get(event.id) || [];
+          const attempts = (byEvent.get(event.id) || []).filter((attempt) => {
+            if (attempt.kind !== "history" || attempt.value.status !== "completed") {
+              return true;
+            }
+            return !attempt.value.run_id || !persistedResultRunIDs.has(attempt.value.run_id);
+          });
           return (
             <div key={event.id} className="contents">
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
                 event={event}
-                attempts={byEvent.get(event.id) || []}
+                attempts={attempts}
                 live={live}
                 cancelingTriggerID={cancelingTriggerID}
                 retryingTriggerID={retryingTriggerID}
                 onCancelTrigger={onCancelTrigger}
                 onRetryTrigger={onRetryTrigger}
               />
+              {attachedEvents.map((attachedEvent) => (
+                <EventRow
+                  key={attachedEvent.id}
+                  event={attachedEvent}
+                  attempts={[]}
+                  live={null}
+                  cancelingTriggerID={cancelingTriggerID}
+                  retryingTriggerID={retryingTriggerID}
+                  onCancelTrigger={onCancelTrigger}
+                  onRetryTrigger={onRetryTrigger}
+                />
+              ))}
             </div>
           );
         })}
@@ -266,7 +302,15 @@ export function ConversationView({
           onCancelTrigger={onCancelTrigger}
           onRetryTrigger={onRetryTrigger}
         />
-        <LiveMessage live={live && currentRun?.id !== live.runID ? live : null} />
+        <LiveMessage
+          live={
+            live &&
+            currentRun?.id !== live.runID &&
+            !persistedResultRunIDs.has(live.runID)
+              ? live
+              : null
+          }
+        />
         <div ref={bottom} className="h-1" />
       </div>
 

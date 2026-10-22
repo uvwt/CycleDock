@@ -67,7 +67,6 @@ function AgentAttempt({
     history?.error_summary ||
     run?.progress_summary ||
     run?.current_stage ||
-    history?.result_summary ||
     history?.progress_summary ||
     history?.current_stage ||
     "";
@@ -103,9 +102,9 @@ function AgentAttempt({
               {retry ? " · " + t("重试") : ""}
             </p>
             {summary && (
-              <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">
-                {summary}
-              </p>
+              <div className="mt-1 text-sm leading-6 text-slate-600">
+                <RichText content={summary} />
+              </div>
             )}
             {sameLiveRun && live?.text && (
               <div className="mt-2 border-t border-slate-200 pt-2">

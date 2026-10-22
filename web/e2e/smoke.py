@@ -200,6 +200,29 @@ class CycleDockSmoke(unittest.TestCase):
             "已定位 Docker 容器的错误记录。"
         ).wait_for(timeout=8000)
 
+    def test_todo_results_follow_their_source_turn_without_duplicate_body(self):
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.page.get_by_role(
+            "heading", name="检查 RN 服务器异常日志", exact=True
+        ).wait_for()
+
+        # 后端审计序列故意是 Human A -> Human B -> Result A；视觉会话必须按因果轮次
+        # 展示成 Human A -> Result A -> Human B，同时最终 Markdown 正文只能出现一次。
+        turn_order = self.page.locator(
+            "#event-event-9, #event-event-10, #event-event-3"
+        ).evaluate_all("nodes => nodes.map(node => node.id)")
+        self.assertEqual(
+            turn_order,
+            ["event-event-9", "event-event-10", "event-event-3"],
+        )
+        result = self.page.locator("#event-event-10")
+        result.locator("strong").get_by_text(
+            "上一轮日志检查完成", exact=True
+        ).wait_for()
+        self.assertEqual(
+            self.page.get_by_text("上一轮日志检查完成", exact=True).count(), 1
+        )
+
     def test_work_detail_sidebar_groups_and_info_alignment(self):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         sidebar = self.page.locator('aside[aria-label="工作列表"]')

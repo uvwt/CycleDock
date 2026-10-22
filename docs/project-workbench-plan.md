@@ -56,7 +56,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 返回看板保留原项目、筛选与浏览位置。详情不显示首页的新讨论悬浮框，避免两个输入框职责不清。
 - Discussion：以现有时间线与回复为主，显示真实派生工作及状态，可直达工作。
 - Todo / Ongoing：主区顶部增加紧凑工作摘要，包括目标摘要、业务状态、Agent 状态、当前阶段 / 进展、最新结果入口、来源讨论（存在才展示）。详细说明不必重复铺满首屏。
-- 复用 ConversationView 的持久 Timeline：Comment / Finding / Progress / Result / Check-in 等，不能替换成原始模型历史；保留事件 ID、sequence 顺序和去重。
+- 复用 ConversationView 的持久 Timeline：Comment / Finding / Progress / Result / Check-in 等，不能替换成原始模型历史；事件 ID 与 `sequence` 继续作为审计事实和去重依据。会话视觉顺序在存在稳定 `source_event_id / run_id` 关联时按因果轮次组织，不能因为后续消息先入队就把前一轮 Result 排到它们后面。
 - 来源关系用 source_discussion_id；独立创建的 Todo 无来源，不伪造。验收标准当前没有独立前端字段，可从 description 展示，不假设结构化字段已存在。
 - 回复、继续、Human 验收等推进操作位于主区；最终 Review → Done 仍只由 Human 完成。
 
@@ -84,7 +84,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 ```
 
 - 这是系统执行状态，不伪装成 Agent 真实回复，不调用模型生成排队提示。
-- 随真实状态更新附属状态区，不每次刷新或状态变化都新增持久气泡。结果仍由现有 Agent Result 展示。
+- 随真实状态更新附属状态区，不每次刷新或状态变化都新增持久气泡。结果正文只由现有 Agent Result 展示；完成后的 `work_history.result_summary` 不再作为第二份消息正文渲染，避免与同一 Run 的持久 Result 重复。
 - 取消只针对尚可取消的排队 Trigger；已开始执行不再显示「取消排队」，不能误当作取消当前 Run。
 - 重试继续按后端 can_retry 判定，创建新 Trigger 并保留旧执行，不能覆盖历史或复用同一 Trigger 创建第二个 Run。
 - 重试可沿同一来源消息展示多个执行尝试；原失败记录可追溯，避免新旧状态互相覆盖。
@@ -137,7 +137,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 讨论模式：左侧是当前 Project 的 Discussion 搜索与列表；主区是独立聊天首页或 Discussion 详情。新讨论首条消息继续复用具备幂等重试与草稿保护的创建组件；关联 Todo/Ongoing 仅作为轻量入口按需展开，不常驻额外「派生工作」横条。
 - Discussion 的信息入口与 Todo / Ongoing 统一：会话标题右侧一个信息图标，点击在按钮下方展示**不占页面布局宽度的紧凑浮层**，点击外部或 Esc 关闭，不使用独立右侧固定栏或原右侧抽屉。讨论摘要在浮层显示，不重复标题、不显示维护规则说明；归档/删除收进 `···` 操作菜单，保留删除确认及服务端权限校验。任务浮层中来源 Discussion 链接用更小的次要文字（11px）呈现，避免抢占主体视觉。
 - 工作模式：左侧改成全部工作 / 待审核 / 持续事项等工作视图；主区为四列 Todo + Ongoing 看板或任务详情。**不常驻 Discussion 列表**。Todo/Ongoing 详情改为单栏会话：标题旁使用紧凑状态切换器（Todo: 待办 / 进行中 / 待审核 / 已完成；Ongoing: 运行中 / 已暂停 / 已归档），状态操作仍通过原后端和 Human-only Done 权限约束。原右侧整列信息面板取消，在标题栏右侧使用 `!` 信息按钮打开锚定浮层显示目标、来源及显式编辑；Ongoing 日程和 Check-in 管理功能留在同一浮层，不能因为去掉侧栏而丢失。移动端同样优先轻量浮层，不再为任务占用固定信息列。
-- 会话中 Human 评论始终为右侧独立气泡；关联的 Run / Trigger 的排队、运行、失败、重试和结果作为左侧带 Agent 头像的独立消息卡片展现，不塞进 Human 气泡。执行时长属于单个正在运行的 Run，放在其对应 Agent 消息头的右侧（使用该 Run 的 `started_at`），不能放在整个 Card 的标题旁；SSE 临时输出应尽量合并到相同 Run 的消息中，避免重复呈现。
+- 会话中 Human 评论始终为右侧独立气泡；关联的 Run / Trigger 的排队、运行、失败、重试和结果作为左侧带 Agent 头像的独立消息卡片展现，不塞进 Human 气泡。视觉上以来源 Human 消息为轮次锚点：例如用户连续发送 A、B，A 正在执行而 B 入队，则展示应为 `A → A 的 Agent 状态/结果 → B → B 的 Agent 状态/结果`，而不是 `A → B → Agent A → Agent B`；底层 Event/Trigger/Run 的真实发生顺序不改写。执行时长属于单个正在运行的 Run，放在其对应 Agent 消息头的右侧（使用该 Run 的 `started_at`），不能放在整个 Card 的标题旁；SSE 临时输出与最终 Result 必须合并到相同 Run 的消息位置，避免重复呈现。
 - 视觉基线统一为克制的白 / 灰中性色 + CycleDock 蓝青品牌色：页面主标题约 22–24px、区块标题 15–16px、正文 13–14px、导航与表单控件优先 12–13px、辅助信息约 12px，避免同屏出现明显失衡的大字和微字；卡片和输入框以 8–12px 圆角为主，表单下拉框保持约 13px 字号与紧凑高度，弹层使用紧凑阴影，避免大面积 pill、过度圆角和玻璃拟态。品牌入口、登录页和浏览器 favicon 统一使用 CycleDock 三色几何 C Logo。移动端根布局必须保持 viewport 宽度，横向滚动仅允许发生在明确的局部容器（如看板列、设置标签）。
 - Board 可直接创建独立 Todo；Discussion 生成的工作保留来源 Discussion 的深链接。两种模式分别做适合自身的交互，但无信息孤岛。
 - 切换项目或新建项目都必须保持当前一级模式（Discussion / Work）：Discussion 中完成项目操作仍停留在 Discussion，Work 中仍停留在 Work，不得因为项目选择器复用 Board 路由而隐式切换模式。切换 Workspace 必须清理旧 Workspace 查询范围，所有 URL 深链接继续使用服务端鉴权。设置为共享入口，不引入另一条全局顶栏。
