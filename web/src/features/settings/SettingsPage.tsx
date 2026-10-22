@@ -32,7 +32,6 @@ import {
 } from "../../shared/ui/components";
 import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
-import { WorkbenchLayout } from "../workbench/WorkbenchLayout";
 import { MCPSettings, NexusSettings } from "./ConnectionsSettings";
 import type { Project } from "../../shared/api/types";
 
@@ -70,13 +69,6 @@ export default function SettingsPage({ role }: { role: string }) {
   const tab = location.pathname.split("/")[2] || "general";
   const current = menus.flatMap((g) => g.items).find((x) => x.id === tab);
   const me = useQuery({ queryKey: keys.me, queryFn: api.me });
-  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
-  const projectID = projects.data?.[0]?.id || "";
-  const cards = useQuery({
-    queryKey: keys.cards(projectID),
-    queryFn: () => api.cards(projectID),
-    enabled: Boolean(projectID),
-  });
   const isOwner = role === "owner";
   const logout = useMutation({
     mutationFn: api.logout,
@@ -87,9 +79,8 @@ export default function SettingsPage({ role }: { role: string }) {
     onError: (e) => toast.error(String(e)),
   });
   return (
-    <WorkbenchLayout mode="work" projectID={projectID} cards={cards.data || []}>
     <main className="mx-auto w-full min-w-0 max-w-6xl overflow-x-hidden px-4 py-7 sm:px-8 sm:py-8">
-      <div className="mb-6 pl-11 lg:pl-0">
+      <div className="mb-6">
         <h1 className="text-[22px] font-semibold tracking-tight text-slate-900">
           {t("设置")}
         </h1>
@@ -97,7 +88,7 @@ export default function SettingsPage({ role }: { role: string }) {
       <div className="space-y-6">
         <nav
           aria-label={t("设置")}
-          className="scrollbar-thin flex max-w-full gap-1 overflow-x-auto border-b border-slate-200 pb-2"
+          className="scrollbar-thin flex max-w-full flex-wrap gap-1 border-b border-slate-200 pb-2 md:flex-nowrap md:overflow-x-auto"
         >
           {menus.map((group) => (
             <div key={group.group} className="flex shrink-0 gap-1">
@@ -223,7 +214,6 @@ export default function SettingsPage({ role }: { role: string }) {
         </div>
       </div>
     </main>
-    </WorkbenchLayout>
   );
 }
 function ProjectSettings() {

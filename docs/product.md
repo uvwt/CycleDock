@@ -115,19 +115,21 @@ Discussion Detail 是会话界面；Todo / Ongoing Detail 是工作执行界面�
 
 Discussion 上的“聊天”负责澄清与产生工作；Todo / Ongoing 上的对话负责推进已经生成的工作。模型原始 message/tool trace 仍不作为长期业务数据保存。
 
-### 4.1 Project Workbench 交互
+### 4.1 Chat / Work 双入口交互
 
-项目默认进入 Board，而不是独立 Chat 首页。工作台外壳由三部分组成：
+桌面端使用 64px 的全局图标导航 rail，一级入口只有 **Chat** 与 **Work**；品牌入口使用正式 CycleDock Logo，rail 底部只保留 **Settings**，不再提供账户 / Workspace 快捷侧栏。账户信息、当前 Workspace 与退出登录统一放在 Settings → Account。移动端使用紧凑顶栏，不复制第二套常驻导航。Project 是两种模式共同的数据范围。
 
-- 顶栏：Project 选择器 + Account 菜单；Account 菜单保留 Workspace 切换、设置和退出登录。
-- 左侧：当前 Project 的共享 Discussion 列表；Board、Discussion、Todo、Ongoing 详情都复用同一列表。桌面可折叠，移动端使用抽屉。
-- 主区：Board 或当前 Card 详情。Board 右下角可以直接开始新 Discussion；详情只保留当前对象的回复框。
+- `/chat`：Discussion 模式。桌面左侧显示当前 Project 的 Discussion 列表，主区是新讨论入口或当前 Discussion 对话；移动端 Discussion 列表通过左侧抽屉进入。
+- `/board/:projectID`：Work 模式。展示 Todo 四列与 Ongoing 区域，并允许 Human 直接创建独立 Todo。
+- `/chat/:projectID/:cardID`：Discussion 详情。继续使用统一对话 Timeline、SSE 与两态 Composer。
+- `/cards/:projectID/:cardID`：Todo / Ongoing 详情。主区保持对话式 Timeline；标题旁提供任务状态切换与信息按钮，业务信息通过紧凑锚定浮层按需查看，桌面和移动端都不再占用固定右侧列。
+- `/settings/*`：共享设置中心，不增加第三套工作模式。
 
-新 Discussion 的首条消息属于一个原子用户意图，但网络请求分成“创建 Discussion Card”和“提交首条 Comment”。因此 UI 在 Card 创建成功后立即持久保存 `Card ID + 原始草稿 + Comment 幂等键`；若第二步失败，用户重试同一 Card/同一幂等键，不能创建重复 Discussion，也不能清空原文。普通创建失败或切换 Project 时，草稿也按 Project 保留。
+新 Discussion 的首条消息属于一个原子用户意图，但网络请求分成“创建 Discussion Card”和“提交首条 Comment”。因此 UI 在 Card 创建成功后立即持久保存 `Card ID + 原始草稿 + Comment 幂等键`；若第二步失败，用户重试同一 Card/同一幂等键，不能创建重复 Discussion，也不能清空原文。草稿按 Project 保存。
 
-Todo / Ongoing 详情顶部只放紧凑工作摘要；详细任务信息在桌面和手机都默认关闭且不预留空列。打开后先阅读标题、目标、来源和适用元数据，Human 主动点击“编辑”后才显示表单。Discussion 的标题/摘要保持 AI 管理的只读规则。Ongoing Schedule 同样先阅读，再显式新增/编辑。
+Card Timeline 仍以 REST 持久 Event 为最终事实源，SSE 只承载低延迟 Run 状态与文本增量。Human Comment Event → Trigger → Run / retry 通过稳定 ID 关联；Queue、running、waiting_human、失败、取消、retry 状态显示在对应消息附近，无用户来源的 Schedule/System Trigger 或无法建立稳定来源的旧数据独立显示，绝不按文本、时间或数组位置猜测关联。
 
-执行状态属于用户 Comment 的附属系统状态，不伪装成 Agent 消息。Human Comment Event → Trigger → Run/retry 通过稳定 ID 关联；等待、执行、取消、失败和 retry 显示在对应用户消息下。Schedule/System 等没有用户来源的 Trigger，以及无法建立稳定来源的旧数据，独立显示，不挂到“最近一句话”。
+Todo / Ongoing 任务信息继续包含目标、来源 Discussion、业务状态、Ongoing Health / Schedule 等 durable 信息。Discussion 的标题 / 摘要保持 AI 管理；Todo / Ongoing 可由 Human 显式编辑。Review → Done、enqueue / interrupt、waiting_human 等权限与状态规则始终由服务端执行。
 
 ## 5. 生成任务
 

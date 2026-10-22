@@ -143,3 +143,28 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 切换项目或新建项目都必须保持当前一级模式（Discussion / Work）：Discussion 中完成项目操作仍停留在 Discussion，Work 中仍停留在 Work，不得因为项目选择器复用 Board 路由而隐式切换模式。切换 Workspace 必须清理旧 Workspace 查询范围，所有 URL 深链接继续使用服务端鉴权。设置为共享入口，不引入另一条全局顶栏。
 - 不回退整个仓库到 `092f521`。只参考其 Chat / Board 分离边界，当前 `53b0d86` 的后端、OAuth、安全性和 SSE/执行关联改进保留。
 - 本轮属于用户明确要求的**临时快速渲染调整**：只允许轻量页面打开与 HMR 检查，不代替发布前必须执行的 lint / build / 回归 / 真实桌面与移动端验收；未经用户确认不合并或部署。
+
+## 9. 2026-10-22 最终产品决策：恢复 092f521 外壳，能力按当前后端重建
+
+> 本节覆盖第 8 节中“不要恢复 64px 图标主导航”、单侧栏与任务信息浮层等冲突约定。领域约束、稳定执行关联与可靠首轮 Discussion 语义继续有效。
+
+- 桌面端恢复 `092f521` 的 **64px 全局图标 rail**。一级工作入口只保留 **Chat** 与 **Work** 两个图标；顶部使用正式 CycleDock Logo，rail 底部只保留 Settings。Account / Workspace 快捷侧栏删除，账户、Workspace 与退出登录统一留在 Settings → Account。
+- Chat 与 Work 是同一 Project 数据上的两种工作入口，不建立新的 Session / Board 领域模型。Chat 使用 Discussion 列表 + 会话主区；Work 使用 Todo 四列 + Ongoing 区域。移动端使用紧凑顶栏与抽屉。
+- 不把 `web/` 简单整体回退到 `092f521`。后端、API 契约及安全边界保持当前 `main`：Workspace membership/switch、Trigger lineage、OAuth、SSE、Human-only Done、enqueue / interrupt / waiting_human 等全部保留。
+- Card 详情基于 `092f521` 页面结构重新开发。Timeline 继续是对话式：Human 消息在右，Agent / Result 在左，系统事件居中；相邻持久事件间隔严格超过 2 小时才显示时间分隔。
+- SSE 继续使用 Card stream：`run.started` / `run.stage` / `run.text.delta` / `run.text.snapshot` / terminal / `event.created`。SSE 只表示暂态和低延迟输出，REST Timeline 是最终事实源。
+- Queue / current Run / retry / cancel 通过服务端稳定的 `source_event_id / trigger_id / retry_of_trigger_id` 关联到原始 Human Comment；无稳定来源的 Schedule/System Trigger 独立展示，不允许按文字或时间猜测。
+- 新 Discussion 首页保留 `092f521` 的收起 / 聚焦展开两态输入框，但补回可靠首轮语义：Card 创建成功后立即保存原始草稿、Card ID 与幂等键；首条 Comment 失败只允许重试同一 Card。
+- Todo/Ongoing 继续使用对话式工作详情；取消右侧常驻任务信息栏，标题旁保留紧凑状态切换器，信息按钮固定在标题栏最右侧。桌面左侧新增 Work 二级列表，视觉与 DiscussionSidebar 共用同一基础组件，但内容按 Todo / Working / Review / Done / Ongoing 折叠分组；默认只展开当前任务所在分组。移动端从左抽屉打开同一 Work 列表。任务目标、来源 Discussion、Ongoing Health/Schedule 和显式编辑继续保留在信息浮层中；Human 手工 Todo 与 Human-only Done 规则不变。
+- Workspace membership/switch API 与服务端 Session scope 继续保留，但 Shell 不再暴露 Workspace 快捷切换侧栏；账户与当前 Workspace 信息统一进入 Settings → Account。若未来重新提供 Workspace 切换入口，仍必须先清理旧租户 Query cache 再写入新 Identity。所有真实租户权限继续由服务端 Session 与数据库约束保证。
+- 验收必须包含 lint/build、浏览器 mock E2E、相关 Go 测试、桌面与 375px 移动端宽度检查；未经用户明确要求，不推送、不合并、不部署。
+- 本轮独立分支已实际验证：前端 lint 0 warning / 0 error、production build 通过、mock Playwright 14/14 通过；最新收敛回归覆盖正式 Logo、Shell 无 Account / Workspace 快捷侧栏、标题旁状态切换、任务 / 讨论信息浮层、Human-only Done disabled、Work 二级侧栏状态折叠、信息按钮右对齐、移动端 Work / Discussion 抽屉和原有 SSE / Queue / Retry 流程。1440px 桌面与 375px 手机均无全局横向溢出；相对当前 `main` 的后端源码 / migration / Agent / MCP / OAuth diff 仍为 0。此前同分支 Go `test ./...` 与 `vet ./...` 已通过，本轮未修改后端。
+
+## 10. 2026-10-22 Work 详情二级列表修订
+
+- Discussion 与 Work 详情统一采用同一套 Context Sidebar 基础骨架：项目选择、侧栏容器、滚动区、选中态列表项共用；Discussion 保持扁平会话列表，Work 保持独立的业务分组，不做“万能侧栏”。
+- Work 列表分为待办、进行中、待审核、已完成、持续事项五组。进入 Todo/Ongoing 详情时默认只展开当前任务所在组，其余组保持折叠；用户手动展开另一组时使用单组手风琴行为。
+- 切换 Work 列表中的任务后继续使用独立 Card URL，新的当前任务自动高亮，其所在分组自动成为默认展开组。Project 切换返回对应 Work 看板，不跨 Project 保留旧任务。
+- 桌面端 Work 列表与 Discussion 列表使用相同宽度和边界；移动端都用左侧 Sheet，不额外挤占会话主区。
+- 标题栏信息图标从标题/状态组中移出，固定在最右侧；标题与状态区域可收缩，信息入口位置不再随标题长度漂移。
+- 本修订已通过前端 lint 0 warning / 0 error、production build 和 mock Playwright 14/14；新增回归覆盖 Work 分组展开、当前任务高亮、分组切换、信息按钮右对齐与 375×812 移动端 Work 抽屉。
