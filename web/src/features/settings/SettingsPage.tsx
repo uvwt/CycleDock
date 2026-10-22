@@ -34,6 +34,8 @@ import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { MCPSettings, NexusSettings } from "./ConnectionsSettings";
 import type { Project } from "../../shared/api/types";
+import { useProject } from "../../app/project-context";
+import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
 
 const menus = [
   {
@@ -92,9 +94,7 @@ export default function SettingsPage({ role }: { role: string }) {
         >
           {menus.map((group) => (
             <div key={group.group} className="flex shrink-0 gap-1">
-              <p className="sr-only">
-                {t(group.group)}
-              </p>
+              <p className="sr-only">{t(group.group)}</p>
               {group.items.map((item) => (
                 <NavLink
                   to={"/settings/" + item.id}
@@ -218,12 +218,13 @@ export default function SettingsPage({ role }: { role: string }) {
 }
 function ProjectSettings() {
   const { t } = useTranslation();
-  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
-  const [projectID, setProjectID] = useState("");
+  const { projects, projectID, setProjectID, isPending, error, refetch } =
+    useProject();
   const current =
-    projects.data?.find((p) => p.id === projectID) || projects.data?.[0];
-  if (projects.isPending) return <Spinner />;
-  if (projects.error) return <ErrorView error={projects.error} />;
+    projects.find((project) => project.id === projectID) || projects[0];
+
+  if (isPending) return <Spinner />;
+  if (error) return <ErrorView error={error} onRetry={refetch} />;
   if (!current)
     return (
       <Section title={t("项目设置")}>
@@ -232,11 +233,12 @@ function ProjectSettings() {
         </p>
       </Section>
     );
+
   return (
     <ProjectForm
       key={current.id}
       project={current}
-      projects={projects.data || []}
+      projects={projects}
       onSelect={setProjectID}
     />
   );
@@ -276,17 +278,11 @@ function ProjectForm({
     >
       <div className="space-y-4">
         <Field label={t("选择项目")}>
-          <select
-            value={project.id}
-            onChange={(e) => onSelect(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
-          >
-            {projects.map((p) => (
-              <option value={p.id} key={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <ProjectSwitcher
+            projects={projects}
+            projectID={project.id}
+            onChange={onSelect}
+          />
         </Field>
         <Field label={t("名称")}>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} />

@@ -35,6 +35,12 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(self.errors, [], "Browser JavaScript errors")
         self.page.close()
 
+    def switch_project(self, name):
+        self.page.get_by_role("button", name="选择项目").first.click()
+        picker = self.page.get_by_role("dialog", name="选择项目")
+        picker.wait_for()
+        picker.get_by_role("button", name=name, exact=True).click()
+
     def test_discussion_workbench_composer_and_time_separator(self):
         self.page.goto(BASE + "/chat")
         self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
@@ -104,16 +110,13 @@ class CycleDockSmoke(unittest.TestCase):
             'textarea[aria-label="发送消息，开始讨论…"]'
         ).fill("切换项目后继续编辑这段草稿")
 
-        project = self.page.get_by_role("combobox", name="项目")
-        project.select_option("demo-project-b")
+        self.switch_project("产品发布")
         self.page.wait_for_url("**/chat?project=demo-project-b")
         self.page.get_by_role(
             "heading", name="今天想推进什么？", exact=True
         ).wait_for()
 
-        self.page.get_by_role("combobox", name="项目").select_option(
-            "demo-project"
-        )
+        self.switch_project("NexusDock 运维")
         self.page.wait_for_url("**/chat?project=demo-project")
         restored = self.page.locator(
             'textarea[aria-label="发送消息，开始讨论…"]'
@@ -274,8 +277,7 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_project_switch_keeps_work_and_chat_scopes_isolated(self):
         self.page.goto(BASE + "/board/demo-project")
-        work_project = self.page.get_by_role("combobox", name="切换项目")
-        work_project.select_option("demo-project-b")
+        self.switch_project("产品发布")
         self.page.wait_for_url("**/board/demo-project-b")
         self.page.get_by_role(
             "button", name=re.compile("准备发布清单")
@@ -288,9 +290,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
 
         self.page.goto(BASE + "/chat?project=demo-project")
-        self.page.get_by_role("combobox", name="项目").select_option(
-            "demo-project-b"
-        )
+        self.switch_project("产品发布")
         self.page.wait_for_url("**/chat?project=demo-project-b")
         self.page.get_by_role(
             "button", name=re.compile("讨论版本发布")

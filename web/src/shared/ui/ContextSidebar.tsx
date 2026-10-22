@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import type { Project } from "../api/types";
 
 export function ContextSidebar({
   ariaLabel,
@@ -24,38 +23,6 @@ export function ContextSidebar({
         {children}
       </div>
     </aside>
-  );
-}
-
-export function ContextProjectSwitcher({
-  projects,
-  projectID,
-  ariaLabel,
-  onChange,
-  action,
-}: {
-  projects: Project[];
-  projectID: string;
-  ariaLabel: string;
-  onChange: (projectID: string) => void;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <select
-        aria-label={ariaLabel}
-        value={projectID}
-        onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500"
-      >
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))}
-      </select>
-      {action}
-    </div>
   );
 }
 

@@ -9,9 +9,8 @@ import {
   PlayCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Card, Project, TodoState } from "../../shared/api/types";
+import type { Card, TodoState } from "../../shared/api/types";
 import {
-  ContextProjectSwitcher,
   ContextSidebar,
   ContextSidebarItem,
 } from "../../shared/ui/ContextSidebar";
@@ -44,19 +43,13 @@ function groupIcon(group: WorkGroup, active: boolean) {
 }
 
 export function WorkSidebar({
-  projects,
-  projectID,
   cards,
   activeCardID,
-  onProjectChange,
   onSelect,
   className = "",
 }: {
-  projects: Project[];
-  projectID: string;
   cards: Card[];
   activeCardID?: string;
-  onProjectChange: (projectID: string) => void;
   onSelect: (card: Card) => void;
   className?: string;
 }) {
@@ -117,12 +110,9 @@ export function WorkSidebar({
       ariaLabel={t("工作列表")}
       className={className}
       header={
-        <ContextProjectSwitcher
-          projects={projects}
-          projectID={projectID}
-          ariaLabel={t("项目")}
-          onChange={onProjectChange}
-        />
+        <div className="px-1 text-xs font-semibold text-slate-500">
+          {t("工作")}
+        </div>
       }
     >
       <div className="space-y-1.5">

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { MessageSquareText, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -8,23 +8,20 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import type { Card } from "../../shared/api/types";
+import { useProject } from "../../app/project-context";
 import { DiscussionSidebar } from "./DiscussionSidebar";
 import { DiscussionStartComposer } from "./DiscussionStartComposer";
 
 export default function ChatHome() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
-  const [selectedProject, setSelectedProject] = useState("");
   const [mobileListOpen, setMobileListOpen] = useState(false);
-
-  const requestedProject = selectedProject || searchParams.get("project") || "";
-  const projectID = projects.data?.some(
-    (project) => project.id === requestedProject,
-  )
-    ? requestedProject
-    : projects.data?.[0]?.id || "";
+  const {
+    projectID,
+    isPending: projectsPending,
+    error: projectsError,
+    refetch: refetchProjects,
+  } = useProject();
 
   const cards = useQuery({
     queryKey: keys.cards(projectID),
@@ -33,9 +30,7 @@ export default function ChatHome() {
   });
   const discussions = useMemo(
     () =>
-      ((cards.data || []).filter(
-        (card) => card.kind === "discussion",
-      ) as Card[]),
+      (cards.data || []).filter((card) => card.kind === "discussion") as Card[],
     [cards.data],
   );
 
@@ -47,23 +42,15 @@ export default function ChatHome() {
       navigate(`/chat/${projectID}/${card.id}`);
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : t("创建讨论失败"),
-      ),
+      toast.error(error instanceof Error ? error.message : t("创建讨论失败")),
   });
-
-  function selectProject(nextProjectID: string) {
-    setSelectedProject(nextProjectID);
-    setSearchParams({ project: nextProjectID }, { replace: true });
-    setMobileListOpen(false);
-  }
 
   function selectDiscussion(card: Card) {
     setMobileListOpen(false);
     navigate(`/chat/${card.project_id}/${card.id}`);
   }
 
-  if (projects.isPending) {
+  if (projectsPending) {
     return (
       <main className="grid h-[calc(100dvh-3.5rem)] place-items-center md:h-dvh">
         <Spinner text={t("读取项目…")} />
@@ -71,13 +58,10 @@ export default function ChatHome() {
     );
   }
 
-  if (projects.error) {
+  if (projectsError) {
     return (
       <main className="mx-auto max-w-xl p-6">
-        <ErrorView
-          error={projects.error}
-          onRetry={() => void projects.refetch()}
-        />
+        <ErrorView error={projectsError} onRetry={refetchProjects} />
       </main>
     );
   }
@@ -88,11 +72,8 @@ export default function ChatHome() {
         <div className="grid h-full min-h-0 md:grid-cols-[280px_minmax(0,1fr)]">
           <div className="hidden min-h-0 border-r border-slate-200 md:block">
             <DiscussionSidebar
-              projects={projects.data || []}
-              projectID={projectID}
               discussions={discussions}
               creating={createEmpty.isPending}
-              onProjectChange={selectProject}
               onSelect={selectDiscussion}
               onCreate={() => createEmpty.mutate()}
             />
@@ -160,11 +141,8 @@ export default function ChatHome() {
         >
           <div className="-m-5 h-[calc(100dvh-4.25rem)]">
             <DiscussionSidebar
-              projects={projects.data || []}
-              projectID={projectID}
               discussions={discussions}
               creating={createEmpty.isPending}
-              onProjectChange={selectProject}
               onSelect={selectDiscussion}
               onCreate={() => createEmpty.mutate()}
             />

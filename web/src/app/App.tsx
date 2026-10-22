@@ -12,6 +12,7 @@ import { keys, queryClient } from "./query";
 import { ErrorView, Spinner } from "../shared/ui/components";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
+import { ProjectProvider } from "./ProjectContext";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 const ChatHome = lazy(() => import("../features/chat/ChatHome"));
@@ -54,37 +55,39 @@ function Authenticated() {
       </main>
     );
   return (
-    <Shell>
-      <Suspense
-        fallback={
-          <div className="grid min-h-[50vh] place-items-center">
-            <Spinner />
-          </div>
-        }
-      >
-        <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
-          <Route path="/chat" element={<ChatHome />} />
-          <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
-          <Route path="/board" element={<BoardPage />} />
-          <Route path="/board/:projectID" element={<BoardPage />} />
-          <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
-          <Route
-            path="/settings/*"
-            element={<SettingsPage role={me.data.role} />}
-          />
-          <Route
-            path="/projects/:projectID/cards/:cardID"
-            element={<LegacyCardRedirect />}
-          />
-          <Route
-            path="/projects/:projectID"
-            element={<LegacyBoardRedirect />}
-          />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
-        </Routes>
-      </Suspense>
-    </Shell>
+    <ProjectProvider>
+      <Shell>
+        <Suspense
+          fallback={
+            <div className="grid min-h-[50vh] place-items-center">
+              <Spinner />
+            </div>
+          }
+        >
+          <Routes>
+            <Route path="/" element={<Navigate to="/chat" replace />} />
+            <Route path="/chat" element={<ChatHome />} />
+            <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
+            <Route path="/board" element={<BoardPage />} />
+            <Route path="/board/:projectID" element={<BoardPage />} />
+            <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
+            <Route
+              path="/settings/*"
+              element={<SettingsPage role={me.data.role} />}
+            />
+            <Route
+              path="/projects/:projectID/cards/:cardID"
+              element={<LegacyCardRedirect />}
+            />
+            <Route
+              path="/projects/:projectID"
+              element={<LegacyBoardRedirect />}
+            />
+            <Route path="*" element={<Navigate to="/chat" replace />} />
+          </Routes>
+        </Suspense>
+      </Shell>
+    </ProjectProvider>
   );
 }
 function LegacyBoardRedirect() {

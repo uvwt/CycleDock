@@ -168,3 +168,13 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 桌面端 Work 列表与 Discussion 列表使用相同宽度和边界；移动端都用左侧 Sheet，不额外挤占会话主区。
 - 标题栏信息图标从标题/状态组中移出，固定在最右侧；标题与状态区域可收缩，信息入口位置不再随标题长度漂移。
 - 本修订已通过前端 lint 0 warning / 0 error、production build 和 mock Playwright 14/14；新增回归覆盖 Work 分组展开、当前任务高亮、分组切换、信息按钮右对齐与 375×812 移动端 Work 抽屉。
+
+## 11. 2026-10-22 全局 Project 上下文与选择器修订
+
+> 本节是 Project 入口与前端上下文的最新决策，覆盖第 2.1、8、9、10 节中关于 Project 选择器位置、页面级项目下拉和 Context Sidebar 内项目选择的冲突约定；其他领域规则不变。
+
+- Project 是 Chat / Work / Card 共用的全局数据范围。桌面端在 64px 全局 rail 底部、Settings 正上方放置唯一的 Project 入口；移动端在紧凑顶栏提供同一入口。Discussion / Work 二级侧栏和 Board 页面不再各自放一套项目下拉。
+- Project 选择统一复用同一个 `ProjectSwitcher` 组件，不再使用原生 `<select>` 或页面各自手写一套选择框。桌面 compact 入口打开 rail 右侧、贴近底部的轻量浮层，不遮暗页面；移动端 compact 入口与设置页完整选择器继续使用可访问的 Dialog 交互。
+- 当前 Project 由应用级 Project Context 统一管理并持久化。URL 中明确指定的 Project 优先；直达、刷新、前进后退后仍应回到正确 Project，失效 ID 才回退到可访问项目，不能继续显示上一个 Project 的 Card 数据。
+- 切换 Project 时保留当前一级工作模式：Chat 切换后仍进入该 Project 的 Chat；Work / Work Card 切换后回到该 Project 的 Work。Card 详情以 Card 的真实 `project_id` 纠正 URL 与全局 Project 上下文，避免跨项目错配。
+- Settings → Projects 复用相同 Project 选择器；新建项目继续复用现有项目创建表单与服务端 API，不另造第二套项目实体或状态。

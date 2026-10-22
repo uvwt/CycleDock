@@ -1,30 +1,23 @@
 import { useMemo, useState } from "react";
 import { MessageSquareText, Plus, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Card, Project } from "../../shared/api/types";
+import type { Card } from "../../shared/api/types";
 import {
-  ContextProjectSwitcher,
   ContextSidebar,
   ContextSidebarItem,
 } from "../../shared/ui/ContextSidebar";
 
 export function DiscussionSidebar({
-  projects,
-  projectID,
   discussions,
   activeCardID,
   creating,
-  onProjectChange,
   onSelect,
   onCreate,
   className = "",
 }: {
-  projects: Project[];
-  projectID: string;
   discussions: Card[];
   activeCardID?: string;
   creating?: boolean;
-  onProjectChange: (projectID: string) => void;
   onSelect: (card: Card) => void;
   onCreate: () => void;
   className?: string;
@@ -36,7 +29,9 @@ export function DiscussionSidebar({
     return discussions
       .filter((card) => {
         if (!query) return true;
-        return (card.title + " " + card.description).toLowerCase().includes(query);
+        return (card.title + " " + card.description)
+          .toLowerCase()
+          .includes(query);
       })
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }, [discussions, term]);
@@ -47,24 +42,21 @@ export function DiscussionSidebar({
       className={className}
       header={
         <>
-          <ContextProjectSwitcher
-            projects={projects}
-            projectID={projectID}
-            ariaLabel={t("项目")}
-            onChange={onProjectChange}
-            action={
-              <button
-                type="button"
-                title={t("新建讨论")}
-                aria-label={t("新建讨论")}
-                disabled={!projectID || creating}
-                onClick={onCreate}
-                className="grid size-9 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
-              >
-                <Plus className="size-4" />
-              </button>
-            }
-          />
+          <div className="flex items-center justify-between gap-3 px-1">
+            <span className="text-xs font-semibold text-slate-500">
+              {t("讨论")}
+            </span>
+            <button
+              type="button"
+              title={t("新建讨论")}
+              aria-label={t("新建讨论")}
+              disabled={creating}
+              onClick={onCreate}
+              className="grid size-8 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:opacity-40"
+            >
+              <Plus className="size-4" />
+            </button>
+          </div>
           <label className="relative block">
             <span className="sr-only">{t("搜索讨论…")}</span>
             <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-slate-400" />

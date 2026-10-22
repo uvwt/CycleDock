@@ -15,6 +15,8 @@ import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
+import { useProject } from "../../app/project-context";
+import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -25,6 +27,7 @@ function CardPageContent() {
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
+  const { projects, projectID: activeProjectID, setProjectID } = useProject();
 
   const detail = useQuery({
     queryKey: keys.card(cardID),
@@ -35,10 +38,6 @@ function CardPageContent() {
   const actualProjectID = card?.project_id || projectID;
   const stream = useCardStream(cardID, actualProjectID);
 
-  const projects = useQuery({
-    queryKey: keys.projects,
-    queryFn: api.projects,
-  });
   const projectCards = useQuery({
     queryKey: keys.cards(actualProjectID),
     queryFn: () => api.cards(actualProjectID),
@@ -46,9 +45,9 @@ function CardPageContent() {
   });
   const discussions = useMemo(
     () =>
-      ((projectCards.data || []).filter(
+      (projectCards.data || []).filter(
         (item) => item.kind === "discussion",
-      ) as Card[]),
+      ) as Card[],
     [projectCards.data],
   );
 
@@ -70,6 +69,12 @@ function CardPageContent() {
   );
   const [cancelingTriggerID, setCancelingTriggerID] = useState("");
   const [retryingTriggerID, setRetryingTriggerID] = useState("");
+
+  useEffect(() => {
+    if (actualProjectID && actualProjectID !== activeProjectID) {
+      setProjectID(actualProjectID);
+    }
+  }, [activeProjectID, actualProjectID, setProjectID]);
 
   useEffect(() => {
     if (!card || !projectID || projectID === card.project_id) return;
@@ -157,9 +162,7 @@ function CardPageContent() {
       navigate(`/chat/${actualProjectID}/${created.id}`);
     },
     onError: (error) =>
-      toast.error(
-        error instanceof Error ? error.message : t("创建讨论失败"),
-      ),
+      toast.error(error instanceof Error ? error.message : t("创建讨论失败")),
   });
 
   function submit() {
@@ -183,6 +186,16 @@ function CardPageContent() {
   function openWork(item: Card) {
     setContextSidebarOpen(false);
     navigate(`/cards/${item.project_id}/${item.id}`);
+  }
+
+  function switchProject(nextProjectID: string) {
+    setProjectID(nextProjectID);
+    setContextSidebarOpen(false);
+    navigate(
+      isDiscussion
+        ? `/chat?project=${encodeURIComponent(nextProjectID)}`
+        : `/board/${encodeURIComponent(nextProjectID)}`,
+    );
   }
 
   if (detail.isPending) {
@@ -209,14 +222,9 @@ function CardPageContent() {
   const discussionSidebar =
     isDiscussion && actualProjectID ? (
       <DiscussionSidebar
-        projects={projects.data || []}
-        projectID={actualProjectID}
         discussions={discussions}
         activeCardID={cardID}
         creating={createDiscussion.isPending}
-        onProjectChange={(nextProjectID) =>
-          navigate(`/chat?project=${encodeURIComponent(nextProjectID)}`)
-        }
         onSelect={openDiscussion}
         onCreate={() => createDiscussion.mutate()}
       />
@@ -225,11 +233,8 @@ function CardPageContent() {
   const workSidebar =
     !isDiscussion && actualProjectID ? (
       <WorkSidebar
-        projects={projects.data || []}
-        projectID={actualProjectID}
         cards={projectCards.data || []}
         activeCardID={cardID}
-        onProjectChange={(nextProjectID) => navigate(`/board/${nextProjectID}`)}
         onSelect={openWork}
       />
     ) : null;
@@ -238,9 +243,7 @@ function CardPageContent() {
 
   return (
     <main className="h-dvh min-h-0 bg-white">
-      <div
-        className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]"
-      >
+      <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
         <div className="hidden min-h-0 border-r border-slate-200 lg:block">
           {contextSidebar}
         </div>
@@ -251,12 +254,28 @@ function CardPageContent() {
               <button
                 type="button"
                 title={isDiscussion ? t("打开讨论列表") : t("打开工作列表")}
-                aria-label={isDiscussion ? t("打开讨论列表") : t("打开工作列表")}
+                aria-label={
+                  isDiscussion ? t("打开讨论列表") : t("打开工作列表")
+                }
                 onClick={() => setContextSidebarOpen(true)}
                 className="grid size-9 shrink-0 place-items-center rounded-xl text-slate-500 hover:bg-slate-100 lg:hidden"
               >
                 <PanelLeft className="size-5" />
               </button>
+              <div className="lg:hidden">
+                <ProjectSwitcher
+                  compact
+                  projects={projects}
+                  projectID={actualProjectID}
+                  onChange={switchProject}
+                  onCreate={() =>
+                    navigate(
+                      `/board/${encodeURIComponent(actualProjectID)}?new=project`,
+                    )
+                  }
+                  onManage={() => navigate("/settings/projects")}
+                />
+              </div>
               <div className="flex min-w-0 items-center gap-2">
                 <div className="min-w-0">
                   <h1 className="truncate text-sm font-semibold text-slate-900 sm:text-base">
@@ -302,10 +321,7 @@ function CardPageContent() {
                     ? t("Agent 正在处理当前工作")
                     : t("Agent 当前空闲")}
                   {detail.data.queue.length > 0
-                    ? " · " +
-                      t("另有待处理") +
-                      " " +
-                      detail.data.queue.length
+                    ? " · " + t("另有待处理") + " " + detail.data.queue.length
                     : ""}
                 </p>
               )}
@@ -332,7 +348,6 @@ function CardPageContent() {
             </div>
           </div>
         </section>
-
       </div>
 
       {contextSidebar && (
@@ -342,12 +357,9 @@ function CardPageContent() {
           side="left"
           title={isDiscussion ? t("讨论列表") : t("工作列表")}
         >
-          <div className="-m-5 h-[calc(100dvh-4.25rem)]">
-            {contextSidebar}
-          </div>
+          <div className="-m-5 h-[calc(100dvh-4.25rem)]">{contextSidebar}</div>
         </Sheet>
       )}
-
     </main>
   );
 }

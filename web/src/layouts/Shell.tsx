@@ -2,24 +2,72 @@ import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { BriefcaseBusiness, MessageCircle, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useProject } from "../app/project-context";
+import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const focusedConversation =
-    /^\/(?:chat|cards)\/[^/]+\/[^/]+\/?$/.test(location.pathname);
+  const { projects, projectID, setProjectID } = useProject();
+  const focusedConversation = /^\/(?:chat|cards)\/[^/]+\/[^/]+\/?$/.test(
+    location.pathname,
+  );
 
   const primaryNav = [
-    { to: "/chat", label: t("聊天"), icon: MessageCircle },
-    { to: "/board", label: t("工作"), icon: BriefcaseBusiness },
+    {
+      to: projectID
+        ? `/chat?project=${encodeURIComponent(projectID)}`
+        : "/chat",
+      activePath: "/chat",
+      label: t("聊天"),
+      icon: MessageCircle,
+    },
+    {
+      to: projectID ? `/board/${encodeURIComponent(projectID)}` : "/board",
+      activePath: "/board",
+      label: t("工作"),
+      icon: BriefcaseBusiness,
+    },
   ];
 
-  function primaryActive(to: string, routerActive: boolean) {
-    if (to === "/board") {
-      return routerActive || location.pathname.startsWith("/cards/");
+  function primaryActive(activePath: string, routerActive: boolean) {
+    if (activePath === "/board") {
+      return (
+        routerActive ||
+        location.pathname.startsWith("/board") ||
+        location.pathname.startsWith("/cards/")
+      );
     }
-    return routerActive;
+    return routerActive || location.pathname.startsWith("/chat");
+  }
+
+  function switchProject(nextProjectID: string) {
+    setProjectID(nextProjectID);
+
+    if (location.pathname.startsWith("/chat")) {
+      navigate(`/chat?project=${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (
+      location.pathname.startsWith("/board") ||
+      location.pathname.startsWith("/cards/")
+    ) {
+      navigate(`/board/${encodeURIComponent(nextProjectID)}`);
+    }
+  }
+
+  function createProject() {
+    navigate(
+      projectID
+        ? `/board/${encodeURIComponent(projectID)}?new=project`
+        : "/board?new=project",
+    );
+  }
+
+  function manageProjects() {
+    if (projectID) setProjectID(projectID);
+    navigate("/settings/projects");
   }
 
   const logo = (
@@ -50,13 +98,13 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           {primaryNav.map((item) => (
             <NavLink
-              key={item.to}
+              key={item.activePath}
               to={item.to}
               title={item.label}
               aria-label={item.label}
               className={({ isActive }) =>
                 `grid size-10 place-items-center rounded-xl transition ${
-                  primaryActive(item.to, isActive)
+                  primaryActive(item.activePath, isActive)
                     ? "bg-slate-100 text-slate-900"
                     : "text-slate-400 hover:bg-slate-50 hover:text-slate-800"
                 }`
@@ -67,9 +115,18 @@ export function Shell({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        <div className="mt-auto">
+        <div className="mt-auto flex flex-col items-center gap-1">
+          <ProjectSwitcher
+            compact
+            projects={projects}
+            projectID={projectID}
+            onChange={switchProject}
+            onCreate={createProject}
+            onManage={manageProjects}
+          />
           <NavLink
             to="/settings/general"
+            onClick={() => projectID && setProjectID(projectID)}
             title={t("设置")}
             aria-label={t("设置")}
             className={({ isActive }) =>
@@ -100,13 +157,13 @@ export function Shell({ children }: { children: ReactNode }) {
             <nav aria-label={t("主导航")} className="flex items-center gap-1">
               {primaryNav.map((item) => (
                 <NavLink
-                  key={item.to}
+                  key={item.activePath}
                   to={item.to}
                   title={item.label}
                   aria-label={item.label}
                   className={({ isActive }) =>
                     `grid size-9 place-items-center rounded-xl transition ${
-                      primaryActive(item.to, isActive)
+                      primaryActive(item.activePath, isActive)
                         ? "bg-slate-100 text-slate-900"
                         : "text-slate-400"
                     }`
@@ -115,15 +172,22 @@ export function Shell({ children }: { children: ReactNode }) {
                   <item.icon className="size-[18px]" />
                 </NavLink>
               ))}
+              <ProjectSwitcher
+                compact
+                projects={projects}
+                projectID={projectID}
+                onChange={switchProject}
+                onCreate={createProject}
+                onManage={manageProjects}
+              />
               <NavLink
                 to="/settings/general"
+                onClick={() => projectID && setProjectID(projectID)}
                 title={t("设置")}
                 aria-label={t("设置")}
                 className={({ isActive }) =>
                   `grid size-9 place-items-center rounded-xl transition ${
-                    isActive
-                      ? "bg-slate-100 text-slate-900"
-                      : "text-slate-400"
+                    isActive ? "bg-slate-100 text-slate-900" : "text-slate-400"
                   }`
                 }
               >

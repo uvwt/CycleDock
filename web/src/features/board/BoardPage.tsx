@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   DndContext,
   KeyboardSensor,
@@ -34,6 +34,7 @@ import {
   TextInput,
 } from "../../shared/ui/components";
 import type { Card, TodoState } from "../../shared/api/types";
+import { useProject } from "../../app/project-context";
 
 const states: TodoState[] = ["todo", "working", "review", "done"];
 const labels: Record<TodoState, string> = {
@@ -107,20 +108,31 @@ function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
 export default function BoardPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const params = useParams();
-  const [picked, setPicked] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
   const [creatingTodo, setCreatingTodo] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
   const [todoDescription, setTodoDescription] = useState("");
-  const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects });
-  const projectID = projects.data?.some(
-    (p) => p.id === (params.projectID || picked),
-  )
-    ? params.projectID || picked
-    : projects.data?.[0]?.id;
+  const {
+    projectID,
+    isPending: projectsPending,
+    error: projectsError,
+    refetch: refetchProjects,
+    setProjectID,
+  } = useProject();
+
+  const creatingFromURL = searchParams.get("new") === "project";
+
+  function setCreateProjectOpen(open: boolean) {
+    setCreating(open);
+    if (open || !creatingFromURL) return;
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("new");
+    setSearchParams(next, { replace: true });
+  }
   const cards = useQuery({
     queryKey: keys.cards(projectID || ""),
     queryFn: () => api.cards(projectID!),
@@ -138,6 +150,7 @@ export default function BoardPage() {
       setName("");
       setDescription("");
       await queryClient.invalidateQueries({ queryKey: keys.projects });
+      setProjectID(project.id);
       navigate("/board/" + project.id);
     },
     onError: (e) => toast.error(String(e)),
@@ -218,27 +231,18 @@ export default function BoardPage() {
           </Button>
         </div>
       </header>
-      {projects.isPending && <Spinner />}
-      {projects.error && <ErrorView error={projects.error} />}
+      {projectsPending && <Spinner />}
+      {Boolean(projectsError) && (
+        <ErrorView error={projectsError} onRetry={refetchProjects} />
+      )}
       {projectID && (
         <>
-          <div className="flex items-center justify-between gap-3">
-            <select
-              aria-label={t("切换项目")}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              value={projectID}
-              onChange={(e) => {
-                setPicked(e.target.value);
-                navigate("/board/" + e.target.value);
-              }}
+          <div className="flex justify-end">
+            <Button
+              onClick={() =>
+                navigate(`/chat?project=${encodeURIComponent(projectID)}`)
+              }
             >
-              {projects.data?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <Button onClick={() => navigate("/chat")}>
               <MessageSquareText className="size-4" />
               {t("从讨论中生成工作")} <ChevronRight className="size-4" />
             </Button>
@@ -305,7 +309,11 @@ export default function BoardPage() {
           )}
         </>
       )}
-      <Sheet open={creating} onOpenChange={setCreating} title={t("新建项目")}>
+      <Sheet
+        open={creating || creatingFromURL}
+        onOpenChange={setCreateProjectOpen}
+        title={t("新建项目")}
+      >
         <form
           onSubmit={(e) => {
             e.preventDefault();
