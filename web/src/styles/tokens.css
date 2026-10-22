@@ -14,11 +14,11 @@
   --v2-danger: #b53b40;
   --v2-success: #237461;
   --v2-warning: #a56719;
-  --v2-sidebar: #102129;
-  --v2-sidebar-surface: #172d36;
-  --v2-sidebar-border: #29404a;
-  --v2-sidebar-text: #edf5f6;
-  --v2-sidebar-muted: #97adb5;
+  --v2-sidebar: #f0f3f2;
+  --v2-sidebar-surface: #fff;
+  --v2-sidebar-border: #d5dfdc;
+  --v2-sidebar-text: #223139;
+  --v2-sidebar-muted: #6e7d83;
   --v2-shadow: 0 18px 52px rgb(18 40 49 / 14%);
   --v2-shadow-soft: 0 6px 20px rgb(18 40 49 / 7%);
   --v2-radius-sm: 6px;
