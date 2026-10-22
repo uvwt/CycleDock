@@ -41,6 +41,19 @@ class CycleDockSmoke(unittest.TestCase):
         picker.wait_for()
         picker.get_by_role("button", name=name, exact=True).click()
 
+    def open_card_menu(self):
+        self.page.get_by_role("button", name="更多操作").click()
+        menu = self.page.get_by_role("menu")
+        menu.wait_for()
+        return menu
+
+    def open_task_details(self):
+        menu = self.open_card_menu()
+        menu.get_by_role("menuitem", name="任务详情").click()
+        details = self.page.get_by_role("dialog", name="任务详情")
+        details.wait_for()
+        return details
+
     def test_discussion_workbench_composer_and_time_separator(self):
         self.page.goto(BASE + "/chat")
         self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
@@ -57,8 +70,9 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
-        self.page.get_by_role("button", name="讨论信息").click()
-        self.page.get_by_role("dialog", name="讨论信息").wait_for()
+        menu = self.open_card_menu()
+        menu.get_by_role("menuitem", name="编辑信息").click()
+        self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.page.keyboard.press("Escape")
         self.page.get_by_role("button", name="生成任务").wait_for()
 
@@ -207,9 +221,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
-        self.page.get_by_role("button", name="任务信息").click()
-        details = self.page.get_by_role("dialog", name="任务信息")
-        details.wait_for()
+        details = self.open_task_details()
         details.get_by_text("这个待办不经过模型生成").wait_for()
 
     def test_existing_todo_stream_and_desktop_details(self):
@@ -219,16 +231,18 @@ class CycleDockSmoke(unittest.TestCase):
         ).first.click()
 
         self.page.wait_for_url("**/cards/demo-project/todo-1")
-        status_switch = self.page.locator(
-            'summary[aria-label="切换任务状态"]'
+        status_switch = self.page.get_by_role(
+            "button", name="切换任务状态"
         )
         status_switch.wait_for()
         status_switch.click()
         self.assertTrue(
-            self.page.get_by_role("button", name="已完成", exact=True).is_disabled()
+            self.page.get_by_role(
+                "menuitem", name="已完成", exact=True
+            ).is_disabled()
         )
         self.page.keyboard.press("Escape")
-        self.page.get_by_role("button", name="任务信息").wait_for()
+        self.page.get_by_role("button", name="更多操作").wait_for()
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
@@ -287,15 +301,15 @@ class CycleDockSmoke(unittest.TestCase):
         )
         self.assertEqual(active_task.get_attribute("aria-current"), "page")
 
-        info = self.page.get_by_role("button", name="任务信息")
-        header = info.locator("xpath=ancestor::header[1]")
-        info_box = info.bounding_box()
+        actions = self.page.get_by_role("button", name="更多操作")
+        header = actions.locator("xpath=ancestor::header[1]")
+        actions_box = actions.bounding_box()
         header_box = header.bounding_box()
-        self.assertIsNotNone(info_box)
+        self.assertIsNotNone(actions_box)
         self.assertIsNotNone(header_box)
         self.assertLess(
             (header_box["x"] + header_box["width"])
-            - (info_box["x"] + info_box["width"]),
+            - (actions_box["x"] + actions_box["width"]),
             32,
         )
 
@@ -343,11 +357,11 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_task_edit_failure_keeps_unsaved_input(self):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.page.get_by_role("button", name="任务信息").click()
-        details = self.page.get_by_role("dialog", name="任务信息")
-        details.wait_for()
-        details.get_by_role("button", name="编辑任务信息").click()
-        title = details.get_by_placeholder("任务标题")
+        menu = self.open_card_menu()
+        menu.get_by_role("menuitem", name="编辑信息").click()
+        editor = self.page.get_by_role("dialog", name="编辑任务信息")
+        editor.wait_for()
+        title = editor.get_by_placeholder("任务标题")
         title.fill("保存失败仍保留")
 
         def fail_card_patch(route):
@@ -361,10 +375,10 @@ class CycleDockSmoke(unittest.TestCase):
                 route.continue_()
 
         self.page.route("**/api/v1/cards/todo-1", fail_card_patch)
-        details.get_by_role("button", name="保存", exact=True).click()
+        editor.get_by_role("button", name="保存", exact=True).click()
         self.page.get_by_text("模拟保存失败", exact=True).wait_for()
         self.assertEqual(title.input_value(), "保存失败仍保留")
-        self.assertEqual(details.get_by_placeholder("任务标题").count(), 1)
+        self.assertEqual(editor.get_by_placeholder("任务标题").count(), 1)
         self.page.unroute("**/api/v1/cards/todo-1", fail_card_patch)
 
     def test_ongoing_health_schedule_and_source_are_preserved(self):
@@ -373,9 +387,7 @@ class CycleDockSmoke(unittest.TestCase):
             "button", name=re.compile("每天检查服务器健康")
         ).first.click()
         self.page.wait_for_url("**/cards/demo-project/ongoing-1")
-        self.page.get_by_role("button", name="任务信息").click()
-        details = self.page.get_by_role("dialog", name="任务信息")
-        details.wait_for()
+        details = self.open_task_details()
         details.get_by_text("健康状态：healthy").wait_for()
         details.get_by_text("每天 09:00", exact=True).wait_for()
         details.get_by_text("讨论服务器巡检计划", exact=True).wait_for()
@@ -396,7 +408,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.get_by_role("heading", name="设置", exact=True).wait_for()
         self.page.get_by_role("link", name="账户", exact=True).wait_for()
 
-    def test_mobile_discussion_drawer_and_info_popover(self):
+    def test_mobile_discussion_drawer_and_actions_modal(self):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/chat")
         self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
@@ -418,8 +430,9 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.locator('nav[aria-label="主导航"]:visible').count(), 0
         )
         self.page.get_by_role("button", name="打开讨论列表").wait_for()
-        self.page.get_by_role("button", name="讨论信息").click()
-        self.page.get_by_role("dialog", name="讨论信息").wait_for()
+        menu = self.open_card_menu()
+        menu.get_by_role("menuitem", name="编辑信息").click()
+        self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.assertLessEqual(
             self.page.evaluate("document.documentElement.scrollWidth"), 390
         )

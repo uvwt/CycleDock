@@ -189,3 +189,13 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - **Activity** 直接聚合现有 Event / Trigger / AgentRun，回答“Agent 正在做什么、最近发生了什么”。只展示有产品意义的排队、运行、等待、完成、失败和 durable Event；raw model message、tool call、tool arguments、raw tool result 与 chain-of-thought 不进入产品活动流。
 - Project 切换继续复用应用级 Project Context：在 Plan 中切换项目仍停留 Plan，在 Activity 中切换项目仍停留 Activity；失效 Project ID 按第 11 节规则回退。
 - Plan / Activity 列表点击后进入现有 Card 详情，不复制任务详情、运行操作或状态机。Schedule 编辑仍在 Ongoing Card 中完成，Activity 不增加修改 Run / Trigger 的第二套写接口。
+
+## 13. 2026-10-22 卡片操作菜单与任务详情收口
+
+> 本节覆盖前文仍描述“标题栏独立任务信息按钮 / `!` 信息按钮”的交互约定；durable Card 信息与 Schedule 能力本身继续保留。
+
+- Card 标题栏右侧统一使用现有 `Menu` 组件的三点“更多操作”入口，不再恢复独立感叹号 / 信息按钮，也不在菜单外再嵌一层自制操作浮层。
+- Discussion 菜单直接提供编辑信息、归档、删除等动作；Todo / Ongoing 菜单提供“任务详情”和“编辑信息”，避免为了查看 durable 信息先进入编辑态。
+- “任务详情”使用现有 `Modal / Section / Button / Field` 组件展示目标、来源 Discussion；Ongoing 继续展示 Health、最近 Check-in 和 Schedule，并保留日程新增 / 编辑 / 启停 / 删除能力。
+- 状态切换仍由标题旁的 `CardStatusSwitch` 独立承担；任务详情不复制 Todo / Ongoing 状态机。
+- 浏览器 smoke 必须按当前 Radix Menu 的 `button + menuitem` 可访问语义测试，不能继续依赖已删除的原生 `details/summary` 或旧“任务信息”按钮。

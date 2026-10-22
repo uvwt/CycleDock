@@ -282,7 +282,11 @@ function CardPageContent() {
               </div>
             </div>
             <div className="shrink-0">
-              <CardHeaderActions card={card} onDeleted={back} />
+              <CardHeaderActions
+                detail={detail.data}
+                projectCards={projectCards.data || []}
+                onDeleted={back}
+              />
             </div>
           </header>
 

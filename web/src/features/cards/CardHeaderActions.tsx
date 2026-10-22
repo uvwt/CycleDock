@@ -1,10 +1,18 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Archive, MoreHorizontal, Pencil, Save, Trash2 } from "lucide-react";
+import {
+  Archive,
+  FileText,
+  MoreHorizontal,
+  Pencil,
+  Save,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../../shared/api/client";
-import type { Card } from "../../shared/api/types";
+import type { Card, CardDetail } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
+import { TaskDetailsPanel } from "./TaskDetailsPanel";
 import {
   Button,
   ConfirmDialog,
@@ -18,12 +26,16 @@ import {
 } from "../../shared/ui/components";
 
 export function CardHeaderActions({
-  card,
+  detail,
+  projectCards,
   onDeleted,
 }: {
-  card: Card;
+  detail: CardDetail;
+  projectCards: Card[];
   onDeleted: () => void;
 }) {
+  const card = detail.card;
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(card.title);
@@ -86,6 +98,12 @@ export function CardHeaderActions({
           </button>
         }
       >
+        {card.kind !== "discussion" && (
+          <MenuItem onSelect={() => setDetailsOpen(true)}>
+            <FileText className="size-4" />
+            任务详情
+          </MenuItem>
+        )}
         <MenuItem onSelect={openEditor}>
           <Pencil className="size-4" />
           编辑信息
@@ -114,6 +132,21 @@ export function CardHeaderActions({
           </>
         )}
       </Menu>
+
+      {card.kind !== "discussion" && (
+        <Modal
+          open={detailsOpen}
+          onOpenChange={setDetailsOpen}
+          title="任务详情"
+          description="查看任务目标、来源关系，以及持续事项的健康状态和定时日程。"
+        >
+          <TaskDetailsPanel
+            detail={detail}
+            projectCards={projectCards}
+            onChange={sync}
+          />
+        </Modal>
+      )}
 
       <Modal
         open={editOpen}
