@@ -36,7 +36,14 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 
 	var mu sync.Mutex
 	var requests []modelRequest
-	var callCount int
+	metadataStarted := make(chan struct{}, 1)
+	releaseMetadata := make(chan struct{})
+	releasedMetadata := false
+	defer func() {
+		if !releasedMetadata {
+			close(releaseMetadata)
+		}
+	}()
 	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request modelRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -46,12 +53,15 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 		}
 		mu.Lock()
 		requests = append(requests, request)
-		callCount++
-		current := callCount
 		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		if current == 1 {
+		if requestIncludesTool(request, "cycledock_set_discussion_metadata") {
+			select {
+			case metadataStarted <- struct{}{}:
+			default:
+			}
+			<-releaseMetadata
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID: "discussion-metadata-1", Type: "function",
 				Function: modelclient.ToolFunction{
@@ -109,11 +119,38 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
 		HeartbeatInterval: 50 * time.Millisecond, LeaseDuration: time.Minute,
 	})
-	if err := runner.Run(ctx, *claim); err != nil {
-		t.Fatalf("run: %v", err)
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runner.Run(ctx, *claim)
+	}()
+
+	select {
+	case <-metadataStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("metadata request did not start")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("main Run waited for blocked discussion metadata")
 	}
 
 	card, err := dataStore.GetCard(ctx, workspace.ID, discussion.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Title != "" {
+		t.Fatalf("metadata completed before release: title=%q", card.Title)
+	}
+
+	close(releaseMetadata)
+	releasedMetadata = true
+	runner.waitBackground()
+
+	card, err = dataStore.GetCard(ctx, workspace.ID, discussion.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +170,19 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 	if len(captured) != 2 {
 		t.Fatalf("model request count=%d, want 2", len(captured))
 	}
-	if !containsMessage(captured[0].Messages, "Help me plan a release rollout") {
-		t.Fatalf("first model request missing discussion context: %+v", captured[0].Messages)
+	var metadataRequests, mainRequests int
+	for _, request := range captured {
+		if !containsMessage(request.Messages, "Help me plan a release rollout") {
+			t.Fatalf("model request missing discussion context: %+v", request.Messages)
+		}
+		if requestIncludesTool(request, "cycledock_set_discussion_metadata") {
+			metadataRequests++
+		} else {
+			mainRequests++
+		}
+	}
+	if metadataRequests != 1 || mainRequests != 1 {
+		t.Fatalf("metadata requests=%d main requests=%d, want 1/1", metadataRequests, mainRequests)
 	}
 }
 
@@ -728,6 +776,14 @@ type modelRequest struct {
 	Model    string                `json:"model"`
 	Messages []modelclient.Message `json:"messages"`
 	Tools    []any                 `json:"tools"`
+}
+
+func requestIncludesTool(request modelRequest, name string) bool {
+	raw, err := json.Marshal(request.Tools)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(raw, []byte(`"name":"`+name+`"`))
 }
 
 func writeModelResponse(t *testing.T, w http.ResponseWriter, content string, toolCalls []modelclient.ToolCall) {

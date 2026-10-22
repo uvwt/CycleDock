@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,7 @@ type Runner struct {
 	logger            *slog.Logger
 	heartbeatInterval time.Duration
 	leaseDuration     time.Duration
+	background        sync.WaitGroup
 }
 
 func NewRunner(dataStore *store.Store, model *modelclient.Client, logger *slog.Logger, config RunnerConfig) *Runner {
@@ -101,6 +103,7 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 	if err != nil {
 		return err
 	}
+	r.startDiscussionMetadata(ctx, claim, runContext, settings)
 	if runContext.CardKind == domain.CardKindTodo && runContext.TodoState != string(domain.TodoStateWorking) {
 		if err := r.store.MoveTodo(
 			runCtx, claim.WorkspaceID, claim.CardID, claim.SourceID, domain.TodoStateWorking,
@@ -265,6 +268,85 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 			messages = append(messages, toolMessage(call, result))
 		}
 	}
+}
+
+func (r *Runner) startDiscussionMetadata(
+	ctx context.Context,
+	claim store.BuiltInRunClaim,
+	runContext store.AgentRunContext,
+	settings db.WorkspaceAgentSetting,
+) {
+	if runContext.CardKind != domain.CardKindDiscussion ||
+		runContext.DiscussionState != string(domain.DiscussionStateActive) ||
+		strings.TrimSpace(runContext.CardTitle) != "" {
+		return
+	}
+
+	// 元数据生成是旁路工作：不能阻塞主回复，也不能因为失败而让当前 Run 失败。
+	// 使用 Dispatcher 生命周期 ctx，而不是 runCtx；主 Run 完成后它仍可在请求超时内安全写回。
+	r.background.Add(1)
+	go func() {
+		defer r.background.Done()
+		if err := r.generateDiscussionMetadata(ctx, claim, runContext, settings); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, domain.ErrRunNotCurrent) {
+				r.logger.Warn(
+					"Cycle Agent discussion metadata generation failed",
+					"workspace_id", claim.WorkspaceID,
+					"card_id", claim.CardID,
+					"run_id", claim.RunID,
+					"error", publicRunError(err),
+				)
+			}
+		}
+	}()
+}
+
+func (r *Runner) generateDiscussionMetadata(
+	ctx context.Context,
+	claim store.BuiltInRunClaim,
+	runContext store.AgentRunContext,
+	settings db.WorkspaceAgentSetting,
+) error {
+	config, err := r.modelConfig(ctx, claim.WorkspaceID, settings)
+	if err != nil {
+		return err
+	}
+	// Metadata 不能混入用户可见的流式回复。
+	config.OnTextDelta = nil
+	response, err := r.model.Complete(
+		ctx,
+		config,
+		BuildDiscussionMetadataContext(runContext),
+		[]modelclient.ToolDefinition{discussionMetadataToolDefinition()},
+	)
+	if err != nil {
+		return err
+	}
+	if len(response.ToolCalls) != 1 ||
+		response.ToolCalls[0].Function.Name != "cycledock_set_discussion_metadata" {
+		return errMalformedModelResult
+	}
+	arguments, err := decodeToolArguments(response.ToolCalls[0].Function.Arguments)
+	if err != nil {
+		return err
+	}
+	if _, err := r.callInternalTool(
+		ctx,
+		claim,
+		runContext,
+		"cycledock_set_discussion_metadata",
+		arguments,
+	); err != nil {
+		return err
+	}
+	if r.live != nil {
+		r.live.Publish(claim.CardID, realtime.Event{Type: "card.updated"})
+	}
+	return nil
+}
+
+func (r *Runner) waitBackground() {
+	r.background.Wait()
 }
 
 func (r *Runner) modelConfig(
@@ -607,17 +689,6 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
-				Name:        "cycledock_set_discussion_metadata",
-				Description: "Set the generated title and description for a new Discussion whose title is still empty. Call this once during the first Discussion Run before answering.",
-				Parameters: object(map[string]any{
-					"title":       stringField("Concise discussion title derived from the first conversation."),
-					"description": stringField("Short durable summary of what the discussion is about."),
-				}, "title", "description"),
-			},
-		},
-		{
-			Type: "function",
-			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_generate_work",
 				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards.",
 				Parameters: object(map[string]any{
@@ -685,6 +756,31 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 					"content":         stringField("What was verified."),
 					"idempotency_key": stringField("Stable key for this logical confirmation."),
 				}, "content", "idempotency_key"),
+			},
+		},
+	}
+}
+
+func discussionMetadataToolDefinition() modelclient.ToolDefinition {
+	return modelclient.ToolDefinition{
+		Type: "function",
+		Function: modelclient.ToolDefinitionFunc{
+			Name:        "cycledock_set_discussion_metadata",
+			Description: "Set the generated title and description for a new Discussion whose title is still empty.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title": map[string]any{
+						"type":        "string",
+						"description": "Concise discussion title derived from the first conversation.",
+					},
+					"description": map[string]any{
+						"type":        "string",
+						"description": "Short durable summary of what the discussion is about.",
+					},
+				},
+				"required":             []string{"title", "description"},
+				"additionalProperties": false,
 			},
 		},
 	}

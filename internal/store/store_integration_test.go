@@ -655,6 +655,122 @@ func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestDiscussionMetadataWritebackGuards(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+
+	t.Run("completed run may finish delayed metadata", func(t *testing.T) {
+		discussion, err := s.CreateDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := s.SubmitComment(ctx, SubmitCommentParams{
+			WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+			RunnerSourceID: &f.AgentID, Content: "Plan a delayed metadata write.",
+			IdempotencyKey: "metadata-completed-comment", DispatchMode: domain.DispatchModeEnqueue,
+		})
+		if err != nil || first.RunID == nil {
+			t.Fatalf("submit first comment: result=%+v err=%v", first, err)
+		}
+		if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.FinishRun(ctx, FinishRunParams{
+			WorkspaceID: f.WorkspaceID, RunID: *first.RunID, RunnerSourceID: f.AgentID,
+			Result: "Main reply completed first.", IdempotencyKey: "metadata-completed-finish",
+		}); err != nil {
+			t.Fatalf("finish main run: %v", err)
+		}
+		if err := s.SetDiscussionMetadataForRun(
+			ctx, f.WorkspaceID, *first.RunID, f.AgentID,
+			"Delayed title", "Metadata may arrive after the main reply.",
+		); err != nil {
+			t.Fatalf("completed run could not write delayed metadata: %v", err)
+		}
+		card, err := s.GetCard(ctx, f.WorkspaceID, discussion.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if card.Title != "Delayed title" {
+			t.Fatalf("delayed metadata title=%q", card.Title)
+		}
+	})
+
+	t.Run("superseded run cannot write metadata", func(t *testing.T) {
+		discussion, err := s.CreateDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := s.SubmitComment(ctx, SubmitCommentParams{
+			WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+			RunnerSourceID: &f.AgentID, Content: "Old direction.",
+			IdempotencyKey: "metadata-superseded-old", DispatchMode: domain.DispatchModeEnqueue,
+		})
+		if err != nil || first.RunID == nil {
+			t.Fatalf("submit old direction: result=%+v err=%v", first, err)
+		}
+		if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.SubmitComment(ctx, SubmitCommentParams{
+			WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+			RunnerSourceID: &f.Agent2ID, Content: "New direction.",
+			IdempotencyKey: "metadata-superseded-new", DispatchMode: domain.DispatchModeInterrupt,
+		}); err != nil {
+			t.Fatalf("interrupt old run: %v", err)
+		}
+		err = s.SetDiscussionMetadataForRun(
+			ctx, f.WorkspaceID, *first.RunID, f.AgentID,
+			"Stale title", "This stale metadata must not be written.",
+		)
+		if !errors.Is(err, domain.ErrRunNotCurrent) {
+			t.Fatalf("superseded run metadata error=%v, want ErrRunNotCurrent", err)
+		}
+		card, err := s.GetCard(ctx, f.WorkspaceID, discussion.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if card.Title != "" {
+			t.Fatalf("superseded run changed title to %q", card.Title)
+		}
+	})
+
+	t.Run("existing human title wins", func(t *testing.T) {
+		discussion, err := s.CreateDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := s.SubmitComment(ctx, SubmitCommentParams{
+			WorkspaceID: f.WorkspaceID, CardID: discussion.ID, AuthorSourceID: f.HumanID,
+			RunnerSourceID: &f.AgentID, Content: "Keep my manual title.",
+			IdempotencyKey: "metadata-manual-title-comment", DispatchMode: domain.DispatchModeEnqueue,
+		})
+		if err != nil || first.RunID == nil {
+			t.Fatalf("submit manual-title comment: result=%+v err=%v", first, err)
+		}
+		if err := s.StartRun(ctx, f.WorkspaceID, *first.RunID, f.AgentID, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.UpdateCardText(ctx, f.WorkspaceID, discussion.ID, "Human title", "Human description"); err != nil {
+			t.Fatalf("set human title: %v", err)
+		}
+		if err := s.SetDiscussionMetadataForRun(
+			ctx, f.WorkspaceID, *first.RunID, f.AgentID,
+			"Generated title", "Generated description",
+		); err != nil {
+			t.Fatalf("metadata no-op on human title: %v", err)
+		}
+		card, err := s.GetCard(ctx, f.WorkspaceID, discussion.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if card.Title != "Human title" || card.Description != "Human description" {
+			t.Fatalf("metadata overwrote human text: title=%q description=%q", card.Title, card.Description)
+		}
+	})
+}
+
 func TestDiscussionLifecycleGeneratesWorkAndPreservesDerivedCards(t *testing.T) {
 	s := requireIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)

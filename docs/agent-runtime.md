@@ -12,6 +12,18 @@ Discussion 可以在产品上表现为持续会话，但 CycleDock 仍不保存�
 
 每个 Run 都独立构建模型上下文。
 
+### Discussion 首轮元数据
+
+新 Discussion 的首轮 Run 会从第一条用户消息生成标题与摘要，但这条 metadata 请求与主回复并行：
+
+- 主回复不等待标题/摘要生成，也不因为 metadata 失败而失败。
+- metadata 使用独立模型请求，不进入用户可见的流式输出。
+- metadata 只在 Discussion 仍为 Active 且 title 仍为空时写入，避免覆盖用户后续手工修改。
+- 产生 metadata 的 Run 即使已经 completed / failed 仍可完成这次旁路写回；superseded / expired / cancelled Run 不允许回写。
+- 写回后通过 `card.updated` SSE 通知前端刷新 Card 与 Discussion 列表。
+
+因此标题生成延迟或偶发失败不会增加首条 Agent 回复的等待时间。
+
 ## 2. 上下文分层
 
 ### Project Context
@@ -307,7 +319,7 @@ Runner：
 
 - Claim Todo 后把 Todo 推进 Working（如果尚未进入 Working）。
 - Claim Discussion 不改变 Discussion 生命周期状态；Discussion 永远不会因为 Agent 开始执行而进入 Working。
-- Discussion 第一次运行且 title 仍为空时，Runner 先基于首轮 Discussion context 生成标题与描述并原子写回，再进入正式工作轮次。
+- Discussion 第一次运行且 title 仍为空时，Runner 启动独立 metadata 请求，与正式工作轮次并行；metadata 完成后按当前 Card/Run 状态原子写回，不阻塞用户可见回复。
 - Run 开始时重新构建最新 durable context。
 - 每个 Run 重新 discovery 已启用 outbound MCP tools。
 - 同一 Run 的 system / Workspace / Project / Card / Trigger 前缀只在 Run 开始时构建一次；工具轮次只在后方追加，尽量保持供应商 prompt-cache 可复用的稳定前缀。

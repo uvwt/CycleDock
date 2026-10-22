@@ -125,6 +125,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
     stream.addEventListener("run.finished", onFinal);
     stream.addEventListener("run.failed", onFinal);
     stream.addEventListener("event.created", sync);
+    stream.addEventListener("card.updated", sync);
     stream.onopen = () => {
       if (!active) return;
       setState((s) => ({

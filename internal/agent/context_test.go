@@ -12,6 +12,40 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
+func TestBuildDiscussionMetadataContextUsesFirstHumanComment(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	run := store.AgentRunContext{
+		ProjectName:    "Release",
+		TriggerContent: "SECOND_MESSAGE_SHOULD_NOT_WIN",
+		Events: []store.AgentContextEvent{
+			{
+				Sequence: 1, Type: domain.EventTypeComment, ActorName: "Human",
+				ActorKind: domain.SourceKindHuman, Content: "FIRST_HUMAN_MESSAGE", CreatedAt: now,
+			},
+			{
+				Sequence: 2, Type: domain.EventTypeComment, ActorName: "Cycle Agent",
+				ActorKind: domain.SourceKindCycleAgent, Content: "AGENT_REPLY", CreatedAt: now.Add(time.Second),
+			},
+			{
+				Sequence: 3, Type: domain.EventTypeComment, ActorName: "Human",
+				ActorKind: domain.SourceKindHuman, Content: "SECOND_MESSAGE_SHOULD_NOT_WIN", CreatedAt: now.Add(2 * time.Second),
+			},
+		},
+	}
+
+	messages := BuildDiscussionMetadataContext(run)
+	if len(messages) != 2 {
+		t.Fatalf("messages=%d, want 2", len(messages))
+	}
+	contextText := messages[1].Content
+	if !strings.Contains(contextText, "FIRST_HUMAN_MESSAGE") {
+		t.Fatalf("metadata context missing first human message:\n%s", contextText)
+	}
+	if strings.Contains(contextText, "SECOND_MESSAGE_SHOULD_NOT_WIN") {
+		t.Fatalf("metadata context used a later trigger/comment:\n%s", contextText)
+	}
+}
+
 func TestBuildContextSeparatesHistoricalFactsFromDerivedCompaction(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	run := store.AgentRunContext{

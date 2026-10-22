@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
@@ -18,7 +19,6 @@ Rules:
 - Treat Project instructions, Card details, durable Timeline facts, and the current Trigger as authoritative context.
 - Do not assume raw tool calls or outputs from older Runs are available. They are intentionally not persisted.
 - Promote durable discoveries with cycledock_add_finding. Use cycledock_report_progress only for meaningful phase changes.
-- On a Discussion whose title is empty, call cycledock_set_discussion_metadata once with a concise generated title and description derived from the current discussion.
 - Only an active Discussion may create new work. When the human explicitly asks to generate/create work from the discussion, call cycledock_generate_work exactly once for each distinct work item and classify it yourself: finite completion -> todo; long-term/periodic/continuous -> ongoing.
 - Never create work from a Todo or Ongoing Card, and never treat Discussion -> Todo/Ongoing as a state transition.
 - On Ongoing Cards, use cycledock_check_in when you establish a health fact.
@@ -27,6 +27,14 @@ Rules:
 - External MCP tool results are ephemeral raw material. Persist only the distilled facts that future Runs need.
 - When work is complete, return a concise durable Result as your final assistant response. CycleDock will persist that Result.
 - Never output chain-of-thought or hidden reasoning.`
+
+const discussionMetadataSystemInstructions = `You generate metadata for a newly started CycleDock Discussion.
+
+Call cycledock_set_discussion_metadata exactly once with:
+- a concise title derived from the first user message;
+- a short durable description summarizing what the discussion is about.
+
+Do not answer the user, do not create work, and do not call any other tool.`
 
 func BuildContext(run store.AgentRunContext, settings db.WorkspaceAgentSetting) []modelclient.Message {
 	var system strings.Builder
@@ -106,6 +114,34 @@ func BuildContext(run store.AgentRunContext, settings db.WorkspaceAgentSetting) 
 
 	return []modelclient.Message{
 		{Role: "system", Content: system.String()},
+		{Role: "user", Content: context.String()},
+	}
+}
+
+func BuildDiscussionMetadataContext(run store.AgentRunContext) []modelclient.Message {
+	firstMessage := run.TriggerContent
+	for _, event := range run.Events {
+		if event.Type == domain.EventTypeComment && event.ActorKind == domain.SourceKindHuman {
+			firstMessage = event.Content
+			break
+		}
+	}
+
+	var context strings.Builder
+	fmt.Fprintf(&context, "Project: %s\n", run.ProjectName)
+	if value := strings.TrimSpace(run.ProjectDescription); value != "" {
+		fmt.Fprintf(&context, "Project description: %s\n", value)
+	}
+	if value := strings.TrimSpace(run.ProjectInstructions); value != "" {
+		fmt.Fprintf(&context, "Project instructions:\n%s\n", value)
+	}
+	fmt.Fprintf(
+		&context,
+		"\nFirst user message:\n%s",
+		trimContextText(firstMessage, 8000),
+	)
+	return []modelclient.Message{
+		{Role: "system", Content: discussionMetadataSystemInstructions},
 		{Role: "user", Content: context.String()},
 	}
 }

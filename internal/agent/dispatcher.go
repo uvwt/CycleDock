@@ -91,6 +91,7 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			workers.Wait()
+			d.runner.waitBackground()
 			return nil
 		case <-maintenance.C:
 			if err := d.maintain(ctx); err != nil && !errors.Is(err, context.Canceled) {

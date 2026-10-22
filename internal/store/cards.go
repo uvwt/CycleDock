@@ -223,8 +223,9 @@ func (s *Store) DeleteDiscussion(
 	return tx.Commit(ctx)
 }
 
-// SetDiscussionMetadataForRun writes the generated title/description only while the
-// same Run still owns an active Discussion. A superseded Run must never rename it.
+// SetDiscussionMetadataForRun writes first-message metadata without coupling its
+// lifetime to the user-visible reply. Completed/failed Runs may finish metadata
+// afterward, but superseded/expired/cancelled Runs must never rename the Discussion.
 func (s *Store) SetDiscussionMetadataForRun(
 	ctx context.Context,
 	workspaceID, runID, runnerSourceID uuid.UUID,
@@ -246,7 +247,15 @@ func (s *Store) SetDiscussionMetadataForRun(
 	if err != nil {
 		return err
 	}
-	if actualRunnerSourceID != runnerSourceID || status != domain.RunStatusRunning {
+	if actualRunnerSourceID != runnerSourceID {
+		return domain.ErrRunNotCurrent
+	}
+	switch status {
+	case domain.RunStatusRunning,
+		domain.RunStatusWaitingHuman,
+		domain.RunStatusCompleted,
+		domain.RunStatusFailed:
+	default:
 		return domain.ErrRunNotCurrent
 	}
 	var kind, state, existingTitle string
