@@ -5,31 +5,22 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 
 -- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
-    workspace_id, source_id, enabled, provider_type, provider_base_url, model,
-    api_key_env, request_timeout_ms, max_tool_rounds, system_instructions
+    workspace_id, source_id, provider_type, provider_base_url, model,
+    api_key_env, system_instructions
 )
 VALUES (
-    sqlc.arg(workspace_id), sqlc.arg(source_id), sqlc.arg(enabled),
+    sqlc.arg(workspace_id), sqlc.arg(source_id),
     sqlc.arg(provider_type), sqlc.arg(provider_base_url), sqlc.arg(model), sqlc.arg(api_key_env),
-    sqlc.arg(request_timeout_ms), sqlc.arg(max_tool_rounds), sqlc.arg(system_instructions)
+    sqlc.arg(system_instructions)
 )
 ON CONFLICT (workspace_id) DO UPDATE
-SET enabled = EXCLUDED.enabled,
-    provider_type = EXCLUDED.provider_type,
+SET provider_type = EXCLUDED.provider_type,
     provider_base_url = EXCLUDED.provider_base_url,
     model = EXCLUDED.model,
     api_key_env = EXCLUDED.api_key_env,
-    request_timeout_ms = EXCLUDED.request_timeout_ms,
-    max_tool_rounds = EXCLUDED.max_tool_rounds,
     system_instructions = EXCLUDED.system_instructions,
     updated_at = now()
 RETURNING *;
-
--- name: ListEnabledWorkspaceAgentSettings :many
-SELECT *
-FROM workspace_agent_settings
-WHERE enabled
-ORDER BY workspace_id;
 
 -- name: ListWorkspaceMCPConnections :many
 SELECT *

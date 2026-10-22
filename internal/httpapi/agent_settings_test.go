@@ -35,18 +35,25 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	cookie := responseCookie(t, login, sessionCookieName)
 
 	unknownSecret := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"enabled": true, "provider_base_url": "http://127.0.0.1:18090/v1",
-		"model": "test", "api_key": "must-never-be-accepted",
-		"request_timeout_ms": 5000, "max_tool_rounds": 4, "system_instructions": "",
+		"provider_base_url": "http://127.0.0.1:18090/v1",
+		"model":             "test", "api_key": "must-never-be-accepted",
+		"system_instructions": "",
 	}, cookie, nil)
 	if unknownSecret.Code != http.StatusBadRequest {
 		t.Fatalf("plaintext api_key was accepted: %d %s", unknownSecret.Code, unknownSecret.Body.String())
 	}
 
+	lowLevelOption := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
+		"provider_base_url": "http://127.0.0.1:18090/v1",
+		"model":             "test", "max_tool_rounds": 4,
+	}, cookie, nil)
+	if lowLevelOption.Code != http.StatusBadRequest {
+		t.Fatalf("runtime-only option was accepted: %d %s", lowLevelOption.Code, lowLevelOption.Body.String())
+	}
+
 	save := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"enabled": true, "provider_base_url": "http://127.0.0.1:18090/v1",
-		"model": "test", "api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
-		"request_timeout_ms": 5000, "max_tool_rounds": 4,
+		"provider_base_url": "http://127.0.0.1:18090/v1",
+		"model":             "test", "api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
 		"system_instructions": "Keep durable facts only.",
 	}, cookie, nil)
 	if save.Code != http.StatusOK {
@@ -54,6 +61,11 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	}
 	if strings.Contains(save.Body.String(), "must-never-be-accepted") {
 		t.Fatalf("plaintext secret leaked into response: %s", save.Body.String())
+	}
+	for _, hidden := range []string{"enabled", "request_timeout_ms", "max_tool_rounds"} {
+		if strings.Contains(save.Body.String(), `"`+hidden+`"`) {
+			t.Fatalf("runtime-only setting %q leaked into response: %s", hidden, save.Body.String())
+		}
 	}
 
 	connection := doJSON(t, handler, http.MethodPost, "/api/v1/agent/mcp-connections", map[string]any{

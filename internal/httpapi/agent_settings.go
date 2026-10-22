@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/agentcheck"
+	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -17,13 +18,10 @@ import (
 
 type agentSettingsResponse struct {
 	Configured         bool   `json:"configured"`
-	Enabled            bool   `json:"enabled"`
 	ProviderType       string `json:"provider_type"`
 	ProviderBaseURL    string `json:"provider_base_url"`
 	Model              string `json:"model"`
 	APIKeyEnv          string `json:"api_key_env"`
-	RequestTimeoutMS   int32  `json:"request_timeout_ms"`
-	MaxToolRounds      int32  `json:"max_tool_rounds"`
 	SystemInstructions string `json:"system_instructions"`
 	SourceID           string `json:"source_id,omitempty"`
 }
@@ -46,7 +44,6 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
 			Configured: false, ProviderType: "openai_compatible",
-			RequestTimeoutMS: 120000, MaxToolRounds: 12,
 		})
 		return
 	}
@@ -63,13 +60,10 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Enabled            bool   `json:"enabled"`
 		ProviderType       string `json:"provider_type"`
 		ProviderBaseURL    string `json:"provider_base_url"`
 		Model              string `json:"model"`
 		APIKeyEnv          string `json:"api_key_env"`
-		RequestTimeoutMS   int32  `json:"request_timeout_ms"`
-		MaxToolRounds      int32  `json:"max_tool_rounds"`
 		SystemInstructions string `json:"system_instructions"`
 	}
 	if !decodeJSON(w, r, &request) {
@@ -79,30 +73,10 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if request.ProviderType == "" {
 		request.ProviderType = "openai_compatible"
 	}
-	if request.Enabled &&
-		(request.ProviderType == string(modelauth.ProviderChatGPT) ||
-			request.ProviderType == string(modelauth.ProviderGrok)) {
-		if api.modelAuth == nil {
-			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
-			return
-		}
-		status, err := api.modelAuth.Status(
-			r.Context(), identity.WorkspaceID, modelauth.Provider(request.ProviderType),
-		)
-		if err != nil {
-			api.handleError(w, err)
-			return
-		}
-		if !status.Available || !status.Connected {
-			writeError(w, http.StatusConflict, "model_account_not_connected", "Connect the selected model account before enabling the Cycle Agent.")
-			return
-		}
-	}
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
-		Enabled: request.Enabled, ProviderType: request.ProviderType,
+		ProviderType:    request.ProviderType,
 		ProviderBaseURL: request.ProviderBaseURL,
 		Model:           request.Model, APIKeyEnv: request.APIKeyEnv,
-		RequestTimeoutMS: request.RequestTimeoutMS, MaxToolRounds: request.MaxToolRounds,
 		SystemInstructions: request.SystemInstructions,
 	})
 	if err != nil {
@@ -118,23 +92,15 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		ProviderType     string `json:"provider_type"`
-		ProviderBaseURL  string `json:"provider_base_url"`
-		Model            string `json:"model"`
-		APIKeyEnv        string `json:"api_key_env"`
-		RequestTimeoutMS int32  `json:"request_timeout_ms"`
+		ProviderType    string `json:"provider_type"`
+		ProviderBaseURL string `json:"provider_base_url"`
+		Model           string `json:"model"`
+		APIKeyEnv       string `json:"api_key_env"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	if request.RequestTimeoutMS == 0 {
-		request.RequestTimeoutMS = 120000
-	}
-	if request.RequestTimeoutMS < 1000 || request.RequestTimeoutMS > 600000 {
-		writeError(w, http.StatusBadRequest, "invalid_timeout", "request_timeout_ms must be between 1000 and 600000")
-		return
-	}
-	timeout := time.Duration(request.RequestTimeoutMS) * time.Millisecond
+	timeout := agentconfig.DefaultModelRequestTimeout
 	providerType := strings.TrimSpace(request.ProviderType)
 	if providerType == "" {
 		providerType = "openai_compatible"
@@ -287,10 +253,9 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 
 func agentSettingsToResponse(settings db.WorkspaceAgentSetting) agentSettingsResponse {
 	return agentSettingsResponse{
-		Configured: true, Enabled: settings.Enabled,
+		Configured:      true,
 		ProviderType:    settings.ProviderType,
 		ProviderBaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKeyEnv: settings.ApiKeyEnv,
-		RequestTimeoutMS: settings.RequestTimeoutMs, MaxToolRounds: settings.MaxToolRounds,
 		SystemInstructions: settings.SystemInstructions, SourceID: settings.SourceID.String(),
 	}
 }

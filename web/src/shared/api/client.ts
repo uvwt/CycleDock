@@ -158,7 +158,6 @@ export const api = {
     provider_base_url: string;
     model: string;
     api_key_env: string;
-    request_timeout_ms: number;
   }) => request<TestResult>("/agent/provider-test", "POST", value),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
   nexusConnect: () =>

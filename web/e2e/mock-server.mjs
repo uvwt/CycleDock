@@ -205,13 +205,10 @@ const failFirstComment = new Set();
 let failNextDiscussionCreate = false;
 let settings = {
   configured: true,
-  enabled: true,
   provider_type: "openai_compatible",
   provider_base_url: "https://api.example.com/v1",
   model: "example-model",
   api_key_env: "CYCLEDOCK_MODEL_API_KEY",
-  request_timeout_ms: 120000,
-  max_tool_rounds: 16,
   system_instructions: "先检查现场，再确认结果",
 };
 const session = {

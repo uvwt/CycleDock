@@ -202,8 +202,10 @@ func publicRunError(err error) string {
 		return "Model provider returned an invalid response."
 	case errors.Is(err, modelclient.ErrResponseTooLarge):
 		return "Model provider response exceeded the safety limit."
-	case errors.Is(err, errMaxToolRoundsExceeded):
-		return "Built-in Agent reached the configured maximum tool rounds before completion."
+	case errors.Is(err, errRunawayToolLoop):
+		return "Built-in Agent stopped an unusually long tool loop before completion."
+	case errors.Is(err, errRunContextBudgetExceeded):
+		return "Built-in Agent context could not be reduced enough to continue safely."
 	case strings.Contains(err.Error(), "environment variable"):
 		return "Built-in Agent secret environment variable is not configured."
 	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):

@@ -175,7 +175,7 @@ func TestBuiltInRestartRecoveryCreatesExactlyOneFollowup(t *testing.T) {
 	f := newFixture(t, s, domain.CardKindTodo)
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
+		ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestConcurrentLeaseRecoveryCreatesOneFollowup(t *testing.T) {
 	f := newFixture(t, s, domain.CardKindTodo)
 
 	settings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
+		ProviderBaseURL: "http://127.0.0.1:18090/v1", Model: "test-model",
 	})
 	if err != nil {
 		t.Fatal(err)

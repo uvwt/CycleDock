@@ -85,8 +85,7 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 		t.Fatalf("new discussion title=%q, want empty", discussion.Title)
 	}
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-		RequestTimeoutMS: 5000, MaxToolRounds: 4,
+		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -216,8 +215,7 @@ func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.
 		t.Fatal(err)
 	}
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-		RequestTimeoutMS: 5000, MaxToolRounds: 8,
+		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -346,8 +344,7 @@ func TestRunnerWaitForHumanStopsWithoutResult(t *testing.T) {
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-		RequestTimeoutMS: 5000, MaxToolRounds: 4,
+		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -403,8 +400,7 @@ func TestTwoDispatchersExecuteOneTriggerOnce(t *testing.T) {
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-		RequestTimeoutMS: 5000, MaxToolRounds: 4,
+		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -493,8 +489,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-		RequestTimeoutMS: 5000, MaxToolRounds: 4,
+		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -562,7 +557,7 @@ func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
 			writeModelResponse(t, w, "late response", nil)
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 1000, 4, "")
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, time.Second, "")
 		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent operation timed out." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -574,13 +569,13 @@ func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
 			_, _ = w.Write([]byte("{not-json"))
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, "")
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
 		if status != string(domain.RunStatusFailed) || summary != "Model provider returned an invalid response." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
 	})
 
-	t.Run("max tool rounds", func(t *testing.T) {
+	t.Run("runaway tool loop guard", func(t *testing.T) {
 		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
@@ -589,9 +584,9 @@ func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
 			}})
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 1, "")
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
 		if status != string(domain.RunStatusFailed) ||
-			summary != "Built-in Agent reached the configured maximum tool rounds before completion." {
+			summary != "Built-in Agent stopped an unusually long tool loop before completion." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
 	})
@@ -607,7 +602,7 @@ func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
 		}))
 		defer mcpHTTP.Close()
 
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, mcpHTTP.URL)
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
 		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -652,7 +647,7 @@ func TestDispatcherPersistsExplicitRuntimeFailureClasses(t *testing.T) {
 		}))
 		defer modelHTTP.Close()
 
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 5000, 4, mcpHTTP.URL)
+		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
 		if status != string(domain.RunStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -664,8 +659,7 @@ func runFailureScenario(
 	dataStore *store.Store,
 	ctx context.Context,
 	modelURL string,
-	timeoutMS int32,
-	maxToolRounds int32,
+	modelTimeout time.Duration,
 	mcpURL string,
 ) (string, string) {
 	t.Helper()
@@ -686,8 +680,7 @@ func runFailureScenario(
 		t.Fatal(err)
 	}
 	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		Enabled: true, ProviderBaseURL: modelURL, Model: "failure-model",
-		RequestTimeoutMS: timeoutMS, MaxToolRounds: maxToolRounds,
+		ProviderBaseURL: modelURL, Model: "failure-model",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -717,7 +710,13 @@ func runFailureScenario(
 	dispatcher := NewDispatcher(dataStore, modelclient.New(), nil, DispatcherConfig{
 		MaxConcurrent: 1, LeaseDuration: time.Minute,
 	})
-	dispatcher.runClaim(ctx, *claim)
+	runCtx := ctx
+	cancel := func() {}
+	if modelTimeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, modelTimeout)
+	}
+	defer cancel()
+	dispatcher.runClaim(runCtx, *claim)
 	run, err := dataStore.GetRun(ctx, workspace.ID, claim.RunID)
 	if err != nil {
 		t.Fatal(err)

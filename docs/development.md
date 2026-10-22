@@ -171,11 +171,13 @@ Human Comment
 当前实现：
 
 - 每个 Workspace 最多一条专用 `cycle_agent` Source，只有 Workspace owner 可以读取/修改 Built-in Agent settings。
-- provider type / model / timeout / max tool rounds / Workspace Agent instructions 持久化到 PostgreSQL。
+- provider type / model / Workspace Agent instructions 持久化到 PostgreSQL；Cycle Agent 默认可用，不保存 Workspace 级启用开关。
+- 模型请求 timeout、上下文预算和异常工具循环保护属于 Runtime 内部默认策略，不进入 Workspace Settings。
 - Model API Key 与 MCP Bearer Token 不写数据库；配置只保存 `api_key_env` / `bearer_token_env`，运行时从进程环境解析。
-- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 启用了 Built-in Agent 的 Workspace。
+- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 模型配置完整、所需订阅凭据存在的 Workspace。
 - queued Run（例如 interrupt / waiting_human reply）优先恢复；普通 pending Trigger 按 sequence 原子 Claim。
 - Context Builder 每个 Run 从最新 Project / Card / bounded meaningful Timeline / 当前 Trigger 重建上下文。
+- 当前 Run 的 system / Card 前缀保持稳定；工具链按 Token 预算自动把较老的已完成工具轮次压缩为确定性摘要，context overflow 会收紧预算后自动重试。
 - OpenAI-compatible Client 使用非流式 `/chat/completions` tool-call loop，具备 timeout 与响应体上限。
 - ChatGPT Plan 使用官方 Sign in with ChatGPT + public Responses API；Grok Subscription 使用 xAI OAuth + Grok inference proxy；两者都不依赖本地 CLI/runtime。
 - subscription transport 使用 store=false / stream=true Responses SSE，并把 current Run 的 tool-call loop 映射为 function call items。
@@ -189,7 +191,7 @@ Human Comment
 - expired queued/running lease 不复活旧 Run；Built-in Agent 通过新的 `system_followup` Trigger 恢复。
 - Human cancel pending Trigger / current Run；failed / expired / cancelled work 通过新的 `manual_retry` Trigger retry。
 - Provider / MCP connection test action 与状态反馈；测试不执行任何 MCP Tool。
-- provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都进入明确 failed Run。
+- provider timeout、malformed response、MCP initialize/tool transport failure、无法继续压缩的 context budget、异常工具循环都进入明确 failed Run。
 - API Key / MCP token 继续使用部署环境注入；需要跨 Run refresh 的 subscription OAuth token 已使用独立 encrypted credential storage。
 - 基础中英 i18n、mobile Board、loading/error/empty states、键盘拖拽、focus-visible、reduced-motion。
 - 长历史 context 使用 bounded recent Timeline；窗口外 durable facts 原样保留，旧 Comment / Progress 只形成派生 compaction。

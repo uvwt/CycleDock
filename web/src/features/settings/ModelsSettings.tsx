@@ -61,7 +61,6 @@ export function ModelsSettings() {
         provider_base_url: draft?.provider_base_url || "",
         model: draft?.model || "",
         api_key_env: draft?.api_key_env || "",
-        request_timeout_ms: draft?.request_timeout_ms || 120000,
       }),
     onSuccess: (r) => toast[r.ok ? "success" : "warning"](r.message),
     onError: (e) => toast.error(String(e)),

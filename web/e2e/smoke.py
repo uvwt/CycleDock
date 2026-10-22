@@ -450,6 +450,18 @@ class CycleDockSmoke(unittest.TestCase):
             "dark",
         )
 
+    def test_agent_settings_hide_runtime_controls(self):
+        self.page.goto(BASE + "/settings/agent")
+        self.page.get_by_role("heading", name="Agent 设置", exact=True).wait_for()
+        self.page.get_by_text("内置 Agent", exact=True).wait_for()
+        self.page.get_by_text("Workspace Agent Instructions", exact=True).wait_for()
+        for removed in ("启用 Cycle Agent", "请求超时（毫秒）", "最大工具轮次"):
+            self.assertEqual(
+                self.page.get_by_text(removed, exact=True).count(),
+                0,
+                f"runtime-only setting is still visible: {removed}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

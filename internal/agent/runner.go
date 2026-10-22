@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/modelauth"
@@ -23,9 +24,9 @@ import (
 )
 
 var (
-	errWaitingHuman          = errors.New("agent run is waiting for human")
-	errMalformedModelResult  = errors.New("model returned an invalid final result")
-	errMaxToolRoundsExceeded = errors.New("model exceeded max tool rounds")
+	errWaitingHuman         = errors.New("agent run is waiting for human")
+	errMalformedModelResult = errors.New("model returned an invalid final result")
+	errRunawayToolLoop      = errors.New("model exceeded the internal runaway tool-loop guard")
 )
 
 type RunnerConfig struct {
@@ -85,8 +86,8 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 	if err != nil {
 		return fmt.Errorf("load agent settings: %w", err)
 	}
-	if !settings.Enabled || settings.SourceID != claim.SourceID {
-		return errors.New("built-in agent settings are disabled or changed")
+	if settings.SourceID != claim.SourceID || !runnableAgentSettings(settings) {
+		return errors.New("built-in agent model configuration changed")
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -173,7 +174,9 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 		return err
 	}
 
-	for round := int32(0); ; round++ {
+	contextInputBudget := defaultRunInputBudgetTokens
+	toolRounds := 0
+	for {
 		if err := heartbeatFailure(heartbeatErrors); err != nil {
 			return err
 		}
@@ -187,7 +190,22 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 				r.live.Publish(claim.CardID, realtime.Event{Type: "run.text.delta", RunID: claim.RunID.String(), Text: text})
 			}
 		}
+		messages, err = fitRunContext(messages, tools, contextInputBudget)
+		if err != nil {
+			return err
+		}
 		response, err := r.model.Complete(runCtx, modelConfig, messages, tools)
+		if err != nil &&
+			modelclient.IsContextTooLargeError(err) &&
+			contextInputBudget != conservativeRunInputBudgetTokens {
+			// OpenAI-compatible Provider 不一定暴露可靠的 context window。
+			// 首次被供应商明确拒绝后收紧预算，并在后续工具轮次持续使用该预算。
+			contextInputBudget = conservativeRunInputBudgetTokens
+			messages, err = fitRunContext(messages, tools, contextInputBudget)
+			if err == nil {
+				response, err = r.model.Complete(runCtx, modelConfig, messages, tools)
+			}
+		}
 		if err != nil {
 			if heartbeatErr := heartbeatFailure(heartbeatErrors); heartbeatErr != nil {
 				return heartbeatErr
@@ -204,9 +222,10 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 				Result: result, IdempotencyKey: "builtin-finish:" + claim.RunID.String(),
 			})
 		}
-		if round >= settings.MaxToolRounds {
-			return fmt.Errorf("%w (%d)", errMaxToolRoundsExceeded, settings.MaxToolRounds)
+		if toolRounds >= maxRunToolRounds {
+			return errRunawayToolLoop
 		}
+		toolRounds++
 
 		messages = append(messages, modelclient.Message{
 			Role: "assistant", Content: response.Content, ToolCalls: response.ToolCalls,
@@ -253,7 +272,7 @@ func (r *Runner) modelConfig(
 	workspaceID uuid.UUID,
 	settings db.WorkspaceAgentSetting,
 ) (modelclient.Config, error) {
-	timeout := time.Duration(settings.RequestTimeoutMs) * time.Millisecond
+	timeout := agentconfig.DefaultModelRequestTimeout
 	switch settings.ProviderType {
 	case "", "openai_compatible":
 		apiKey, err := secretFromEnv(settings.ApiKeyEnv, "model API key")
@@ -277,6 +296,17 @@ func (r *Runner) modelConfig(
 	default:
 		return modelclient.Config{}, fmt.Errorf("unsupported model provider %q", settings.ProviderType)
 	}
+}
+
+func runnableAgentSettings(settings db.WorkspaceAgentSetting) bool {
+	if strings.TrimSpace(settings.Model) == "" {
+		return false
+	}
+	if settings.ProviderType == "" || settings.ProviderType == "openai_compatible" {
+		return strings.TrimSpace(settings.ProviderBaseUrl) != ""
+	}
+	return settings.ProviderType == string(modelauth.ProviderChatGPT) ||
+		settings.ProviderType == string(modelauth.ProviderGrok)
 }
 
 func (r *Runner) heartbeat(

@@ -132,13 +132,10 @@ export type CardDetail = {
 export type Provider = "chatgpt" | "grok" | "openai_compatible";
 export type AgentSettings = {
   configured: boolean;
-  enabled: boolean;
   provider_type: Provider;
   provider_base_url: string;
   model: string;
   api_key_env: string;
-  request_timeout_ms: number;
-  max_tool_rounds: number;
   system_instructions: string;
   source_id?: string;
 };

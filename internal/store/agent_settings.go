@@ -15,13 +15,10 @@ import (
 )
 
 type AgentSettingsInput struct {
-	Enabled            bool
 	ProviderType       string
 	ProviderBaseURL    string
 	Model              string
 	APIKeyEnv          string
-	RequestTimeoutMS   int32
-	MaxToolRounds      int32
 	SystemInstructions string
 }
 
@@ -46,12 +43,6 @@ func (s *Store) SaveAgentSettings(
 	input.Model = strings.TrimSpace(input.Model)
 	input.APIKeyEnv = strings.TrimSpace(input.APIKeyEnv)
 	input.SystemInstructions = strings.TrimSpace(input.SystemInstructions)
-	if input.RequestTimeoutMS == 0 {
-		input.RequestTimeoutMS = 120000
-	}
-	if input.MaxToolRounds == 0 {
-		input.MaxToolRounds = 12
-	}
 	switch input.ProviderType {
 	case "openai_compatible", "chatgpt", "grok":
 	default:
@@ -61,12 +52,6 @@ func (s *Store) SaveAgentSettings(
 		input.ProviderBaseURL = ""
 		input.APIKeyEnv = ""
 	}
-	if input.Enabled && input.Model == "" {
-		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: model is required when built-in agent is enabled", domain.ErrConflict)
-	}
-	if input.ProviderType == "openai_compatible" && input.Enabled && input.ProviderBaseURL == "" {
-		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: provider_base_url is required for OpenAI-compatible provider", domain.ErrConflict)
-	}
 	if input.ProviderType == "openai_compatible" && input.ProviderBaseURL != "" {
 		if err := agentconfig.ValidateEndpoint(input.ProviderBaseURL); err != nil {
 			return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
@@ -75,13 +60,6 @@ func (s *Store) SaveAgentSettings(
 	if input.ProviderType == "openai_compatible" && input.APIKeyEnv != "" && !agentconfig.ValidEnvName(input.APIKeyEnv) {
 		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: api_key_env must be an environment variable name", domain.ErrConflict)
 	}
-	if input.RequestTimeoutMS < 1000 || input.RequestTimeoutMS > 600000 {
-		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: request_timeout_ms must be between 1000 and 600000", domain.ErrConflict)
-	}
-	if input.MaxToolRounds < 1 || input.MaxToolRounds > 32 {
-		return db.WorkspaceAgentSetting{}, fmt.Errorf("%w: max_tool_rounds must be between 1 and 32", domain.ErrConflict)
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return db.WorkspaceAgentSetting{}, err
@@ -128,10 +106,9 @@ func (s *Store) SaveAgentSettings(
 	}
 
 	settings, err := q.UpsertWorkspaceAgentSettings(ctx, db.UpsertWorkspaceAgentSettingsParams{
-		WorkspaceID: workspaceID, SourceID: sourceID, Enabled: input.Enabled,
+		WorkspaceID: workspaceID, SourceID: sourceID,
 		ProviderType: input.ProviderType, ProviderBaseUrl: input.ProviderBaseURL,
 		Model: input.Model, ApiKeyEnv: input.APIKeyEnv,
-		RequestTimeoutMs: input.RequestTimeoutMS, MaxToolRounds: input.MaxToolRounds,
 		SystemInstructions: input.SystemInstructions,
 	})
 	if err != nil {

@@ -238,7 +238,7 @@ waiting_human 表示：
 
 - Run → failed。
 - error_summary 写可供用户理解、且不包含 secret / 原始上游响应的失败摘要。
-- provider timeout、malformed response、MCP initialize/tool transport failure、max tool rounds 都有明确失败分类。
+- provider timeout、malformed response、MCP initialize/tool transport failure、上下文预算耗尽、异常长工具循环都有明确失败分类。
 - retry 创建新的 `manual_retry` Trigger，旧 Run/Trigger 不复活。
 - `manual_retry` 保存 `retry_of_trigger_id`；旧失败记录继续保留。展示层可以把多个尝试附着到同一个 `source_event_id`，但不得覆盖旧状态，也不得按消息内容、时间或位置推断关联。
 
@@ -268,12 +268,14 @@ Workspace owner 可以配置：
 - OpenAI-compatible Provider Base URL / API Key 环境变量名（仅 API Provider）。
 - ChatGPT / Grok model account connection（仅订阅 Provider）。
 - Model。
-- request timeout。
-- max tool rounds。
 - Workspace Agent instructions。
 - 零个或多个 outbound MCP connection。
 
 MCP connection 保存 URL、timeout、enabled 与 Bearer Token 环境变量名。
+
+Cycle Agent 本身没有 Workspace 级启用开关。模型配置完整且所需账号凭据存在时，Dispatcher 自动把该 Workspace 视为可执行；模型未配置或订阅账号未连接时不 Claim 新工作。
+
+模型请求 timeout、上下文预算与异常工具循环保护属于 Runtime 内部策略，不进入 Settings API / PostgreSQL，也不要求用户调参。默认模型请求 timeout 为 120 秒；工具链正常情况下依靠自动上下文压缩持续运行，仅保留一个较高的隐藏式异常循环上限作为安全保险。
 
 Model API Key 与 MCP Bearer Token 本身不进入 Settings API / PostgreSQL；Runner 开始 Run 时从 CycleDock 进程环境读取。
 
@@ -289,7 +291,7 @@ ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨
 Dispatcher：
 
 - 周期处理所有 Workspace 的 due Schedule 与 lease expiry。
-- 只为启用 Built-in Agent 的 Workspace 自动执行 Trigger。
+- 只为模型配置完整、且订阅模型凭据存在的 Workspace 自动执行 Trigger。
 - 优先启动已经绑定 `cycle_agent` 的 queued Run。
 - 没有 current Run 时，再原子 Claim 最早 pending Trigger。
 - waiting_human 仍占 current Run 槽位，不会被自动越过。
@@ -308,6 +310,11 @@ Runner：
 - Discussion 第一次运行且 title 仍为空时，Runner 先基于首轮 Discussion context 生成标题与描述并原子写回，再进入正式工作轮次。
 - Run 开始时重新构建最新 durable context。
 - 每个 Run 重新 discovery 已启用 outbound MCP tools。
+- 同一 Run 的 system / Workspace / Project / Card / Trigger 前缀只在 Run 开始时构建一次；工具轮次只在后方追加，尽量保持供应商 prompt-cache 可复用的稳定前缀。
+- 每次模型请求前按估算 Token 预算检查当前 Run；旧的已完成工具轮次会被确定性压缩成执行摘要，最近一轮 tool call / tool result 配对保留。
+- 单个最新工具结果过大时可在保持 tool_call_id 配对的前提下缩成明确 preview；raw tool result 仍不会写入 Card Timeline。
+- 如果供应商仍明确返回 context overflow，Runner 自动切换到更保守的输入预算并重试一次，后续工具轮次继续沿用该预算。
+- 自动压缩负责控制上下文增长；独立的隐藏式异常工具循环保护只用于阻止失控模型无限调用工具，不作为用户配置。
 - heartbeat 只更新 lease，不写 Timeline。
 - MCP raw result 只追加到当前内存 model message。
 - 最终 assistant response 作为 Result 通过统一 Store 完成 Run。

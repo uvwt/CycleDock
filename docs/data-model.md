@@ -361,6 +361,8 @@ Model Provider / MCP Connection 不强行塞进 initial core schema。
 
 Secret 与普通展示配置分离，不能通过普通 Settings API 回显。
 
+`workspace_agent_settings` 只保存真正属于 Workspace 产品配置的 provider / model / Agent instructions 与 secret 引用。Cycle Agent 没有用户可写的 enabled、模型 request timeout、max tool rounds；这些执行器策略由 Runtime 统一管理。
+
 ## 12. 初始 migration
 
 新项目没有兼容旧 CycleDock DEV 数据的要求。

@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 type BuiltInRunClaim struct {
@@ -49,7 +48,17 @@ func (s *Store) ClaimNextBuiltInRun(
 		JOIN workspace_agent_settings s
 		  ON s.workspace_id = r.workspace_id
 		 AND s.source_id = r.runner_source_id
-		 AND s.enabled
+		 AND btrim(s.model) <> ''
+		 AND (s.provider_type <> 'openai_compatible' OR btrim(s.provider_base_url) <> '')
+		 AND (
+			s.provider_type = 'openai_compatible'
+			OR EXISTS (
+				SELECT 1
+				FROM model_oauth_credentials credential
+				WHERE credential.workspace_id = s.workspace_id
+				  AND credential.provider = s.provider_type
+			)
+		 )
 		JOIN sources src
 		  ON src.workspace_id = s.workspace_id
 		 AND src.id = s.source_id
@@ -89,7 +98,7 @@ func (s *Store) ClaimNextBuiltInRun(
 		return nil, err
 	}
 
-	// 没有已绑定的 queued Run 时，从所有启用内置 Agent 的 Workspace 中找最早
+	// 没有已绑定的 queued Run 时，从所有模型配置可执行的 Workspace 中找最早
 	// pending Trigger。锁 Card 而不是 Trigger，保持与 interrupt/finish 相同锁顺序。
 	var claim BuiltInRunClaim
 	err = tx.QueryRow(ctx, `
@@ -97,7 +106,17 @@ func (s *Store) ClaimNextBuiltInRun(
 		FROM cards c
 		JOIN workspace_agent_settings settings
 		  ON settings.workspace_id = c.workspace_id
-		 AND settings.enabled
+		 AND btrim(settings.model) <> ''
+		 AND (settings.provider_type <> 'openai_compatible' OR btrim(settings.provider_base_url) <> '')
+		 AND (
+			settings.provider_type = 'openai_compatible'
+			OR EXISTS (
+				SELECT 1
+				FROM model_oauth_credentials credential
+				WHERE credential.workspace_id = settings.workspace_id
+				  AND credential.provider = settings.provider_type
+			)
+		 )
 		JOIN sources src
 		  ON src.workspace_id = settings.workspace_id
 		 AND src.id = settings.source_id
@@ -426,10 +445,6 @@ func scanAgentContextEvents(rows pgx.Rows) ([]AgentContextEvent, error) {
 		return nil, err
 	}
 	return events, nil
-}
-
-func (s *Store) ListEnabledAgentSettings(ctx context.Context) ([]db.WorkspaceAgentSetting, error) {
-	return s.queries.ListEnabledWorkspaceAgentSettings(ctx)
 }
 
 func (s *Store) ListWorkspaceIDs(ctx context.Context) ([]uuid.UUID, error) {

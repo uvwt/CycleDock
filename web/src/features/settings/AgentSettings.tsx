@@ -12,7 +12,6 @@ import {
   Section,
   Spinner,
   TextArea,
-  TextInput,
 } from "../../shared/ui/components";
 
 export function AgentSettings() {
@@ -47,47 +46,6 @@ export function AgentSettings() {
         )}
       >
         <div className="space-y-5">
-          <label className="flex items-center justify-between gap-3 text-sm font-medium">
-            {t("启用 Cycle Agent")}{" "}
-            <input
-              type="checkbox"
-              className="size-4 accent-sky-700"
-              checked={draft.enabled}
-              onChange={(e) =>
-                setDraft({ ...draft, enabled: e.target.checked })
-              }
-            />
-          </label>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={t("请求超时（毫秒）")}>
-              <TextInput
-                type="number"
-                min={1000}
-                max={600000}
-                value={draft.request_timeout_ms}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    request_timeout_ms: Number(e.target.value),
-                  })
-                }
-              />
-            </Field>
-            <Field label={t("最大工具轮次")}>
-              <TextInput
-                type="number"
-                min={1}
-                max={32}
-                value={draft.max_tool_rounds}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    max_tool_rounds: Number(e.target.value),
-                  })
-                }
-              />
-            </Field>
-          </div>
           <Field
             label="Workspace Agent Instructions"
             hint={t("整个工作空间的默认指令，与单个项目的指令分开保存。")}

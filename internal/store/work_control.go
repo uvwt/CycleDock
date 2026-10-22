@@ -331,11 +331,25 @@ func (s *Store) expireAndRecoverBuiltInRun(
 	var triggerID, runnerSourceID uuid.UUID
 	var status, sourceKind, cardKind string
 	var leaseExpiresAt pgtype.Timestamptz
-	var agentEnabled bool
+	var agentRunnable bool
 	var discussionState, todoState, ongoingState pgtype.Text
 	err = tx.QueryRow(ctx, `
 		SELECT r.trigger_id, r.runner_source_id, r.status, r.lease_expires_at,
-		       src.kind, COALESCE(settings.enabled, false),
+		       src.kind,
+		       COALESCE(
+		           btrim(settings.model) <> ''
+		           AND (settings.provider_type <> 'openai_compatible' OR btrim(settings.provider_base_url) <> '')
+		           AND (
+		               settings.provider_type = 'openai_compatible'
+		               OR EXISTS (
+		                   SELECT 1
+		                   FROM model_oauth_credentials credential
+		                   WHERE credential.workspace_id = settings.workspace_id
+		                     AND credential.provider = settings.provider_type
+		               )
+		           ),
+		           false
+		       ),
 		       c.kind, c.discussion_state, c.todo_state, c.ongoing_state
 		FROM agent_runs r
 		JOIN sources src
@@ -349,7 +363,7 @@ func (s *Store) expireAndRecoverBuiltInRun(
 		FOR UPDATE OF r
 	`, workspaceID, cardID, runID).Scan(
 		&triggerID, &runnerSourceID, &status, &leaseExpiresAt,
-		&sourceKind, &agentEnabled, &cardKind, &discussionState, &todoState, &ongoingState,
+		&sourceKind, &agentRunnable, &cardKind, &discussionState, &todoState, &ongoingState,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, false, nil
@@ -386,7 +400,7 @@ func (s *Store) expireAndRecoverBuiltInRun(
 	} else if cardKind == string(domain.CardKindOngoing) {
 		executable = ongoingState.Valid && ongoingState.String == string(domain.OngoingStateActive)
 	}
-	if sourceKind != string(domain.SourceKindCycleAgent) || !agentEnabled || !executable {
+	if sourceKind != string(domain.SourceKindCycleAgent) || !agentRunnable || !executable {
 		if err := tx.Commit(ctx); err != nil {
 			return false, false, err
 		}

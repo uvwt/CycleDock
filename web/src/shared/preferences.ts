@@ -273,9 +273,6 @@ const en = {
   "Agent 配置已保存": "Agent settings saved",
   "这些配置作用于整个 Workspace；具体模型连接请前往「模型服务」。":
     "These settings apply to your workspace; manage providers under Model providers.",
-  "启用 Cycle Agent": "Enable Cycle Agent",
-  "请求超时（毫秒）": "Request timeout (ms)",
-  最大工具轮次: "Maximum tool rounds",
   "整个工作空间的默认指令，与单个项目的指令分开保存。":
     "Workspace-wide instructions; project instructions are saved separately.",
   "保存 Agent 设置": "Save Agent settings",
