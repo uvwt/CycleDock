@@ -171,16 +171,19 @@ Human Comment
 当前实现：
 
 - 每个 Workspace 最多一条专用 `cycle_agent` Source，只有 Workspace owner 可以读取/修改 Built-in Agent settings。
-- provider type / model / Workspace Agent instructions 持久化到 PostgreSQL；Cycle Agent 默认可用，不保存 Workspace 级启用开关。
+- Workspace Agent settings 只保存 Workspace Agent instructions；模型选择拆为有序 `workspace_model_routes`，支持多 Route、启停和排序。Cycle Agent 不保存 Workspace 级启用开关，存在 enabled Route 即可执行。
+- ChatGPT / Grok credential 以独立 ID 支持同 Provider 多账号；订阅 Route 显式绑定 credential，OpenAI-compatible Route 保存 endpoint / api_key_env。
 - 模型请求 timeout、上下文预算和异常工具循环保护属于 Runtime 内部默认策略，不进入 Workspace Settings。
 - Model API Key 与 MCP Bearer Token 不写数据库；配置只保存 `api_key_env` / `bearer_token_env`，运行时从进程环境解析。
-- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 模型配置完整、所需订阅凭据存在的 Workspace。
+- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 至少存在一条 enabled Model Route 的 Workspace。
 - queued Run（例如 interrupt / waiting_human reply）优先恢复；普通 pending Trigger 按 sequence 原子 Claim。
 - Context Builder 每个 Run 从最新 Project / Card / bounded meaningful Timeline / 当前 Trigger 重建上下文。
 - 当前 Run 的 system / Card 前缀保持稳定；工具链按 Token 预算自动把较老的已完成工具轮次压缩为确定性摘要，context overflow 会收紧预算后自动重试。
 - OpenAI-compatible Client 使用非流式 `/chat/completions` tool-call loop，具备 timeout 与响应体上限。
 - ChatGPT Plan 使用官方 Sign in with ChatGPT + public Responses API；Grok Subscription 使用 xAI OAuth + Grok inference proxy；两者都不依赖本地 CLI/runtime。
 - subscription transport 使用 store=false / stream=true Responses SSE，并把 current Run 的 tool-call loop 映射为 function call items。
+- Runner 在每轮模型调用层做 forward-only Route failover；429/5xx/timeout/网络/账号 refresh 等可恢复错误向后切换，成功 Route 对本 Run 后续 tool round 保持 sticky；非模型故障不触发切换。
+- 流式请求已产生 partial text 后发生 failover 时发送 ephemeral text reset，避免把两个模型的半截回答拼在一起。
 - outbound MCP Client 使用官方 MCP Go SDK Streamable HTTP；Bearer 只发送到配置 origin，跨 origin redirect 被拒绝，响应有大小上限。
 - raw model messages / tool args / raw MCP results 只存在于当前 Run 内存；只有 Finding / Result / Check-in / meaningful Progress 进入 Timeline。
 - waiting_human 停止本 Run；Human reply 创建新 Trigger / Run。superseded Run 的迟到模型返回无法写 Result。

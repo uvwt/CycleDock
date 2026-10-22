@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -162,7 +163,7 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 	}
 	defer mcpSessions.Close()
 
-	messages := BuildContext(runContext, settings)
+	messages := BuildContext(runContext, settings.WorkspaceAgentSetting)
 	if nexusDockMounted {
 		bootstrap, err := nexusDockExecutionTargets(runCtx, mcpSessions)
 		if err != nil {
@@ -179,25 +180,27 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 
 	contextInputBudget := defaultRunInputBudgetTokens
 	toolRounds := 0
+	routes := make([]db.WorkspaceModelRoute, 0, len(settings.Routes))
+	for _, route := range settings.Routes {
+		if route.Enabled {
+			routes = append(routes, route)
+		}
+	}
+	if len(routes) == 0 {
+		return errors.New("built-in agent has no enabled model route")
+	}
+	activeRoute := 0
 	for {
 		if err := heartbeatFailure(heartbeatErrors); err != nil {
 			return err
-		}
-		modelConfig, err := r.modelConfig(runCtx, claim.WorkspaceID, settings)
-		if err != nil {
-			return err
-		}
-		if r.live != nil {
-			r.live.Publish(claim.CardID, realtime.Event{Type: "run.stage", RunID: claim.RunID.String(), Stage: "正在生成回复"})
-			modelConfig.OnTextDelta = func(text string) {
-				r.live.Publish(claim.CardID, realtime.Event{Type: "run.text.delta", RunID: claim.RunID.String(), Text: text})
-			}
 		}
 		messages, err = fitRunContext(messages, tools, contextInputBudget)
 		if err != nil {
 			return err
 		}
-		response, err := r.model.Complete(runCtx, modelConfig, messages, tools)
+		response, usedRoute, err := r.completeWithFailover(
+			runCtx, claim, routes, activeRoute, messages, tools,
+		)
 		if err != nil &&
 			modelclient.IsContextTooLargeError(err) &&
 			contextInputBudget != conservativeRunInputBudgetTokens {
@@ -206,7 +209,9 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 			contextInputBudget = conservativeRunInputBudgetTokens
 			messages, err = fitRunContext(messages, tools, contextInputBudget)
 			if err == nil {
-				response, err = r.model.Complete(runCtx, modelConfig, messages, tools)
+				response, usedRoute, err = r.completeWithFailover(
+					runCtx, claim, routes, activeRoute, messages, tools,
+				)
 			}
 		}
 		if err != nil {
@@ -215,6 +220,7 @@ func (r *Runner) Run(ctx context.Context, claim store.BuiltInRunClaim) (runErr e
 			}
 			return err
 		}
+		activeRoute = usedRoute
 		if len(response.ToolCalls) == 0 {
 			result := strings.TrimSpace(response.Content)
 			if result == "" {
@@ -274,7 +280,7 @@ func (r *Runner) startDiscussionMetadata(
 	ctx context.Context,
 	claim store.BuiltInRunClaim,
 	runContext store.AgentRunContext,
-	settings db.WorkspaceAgentSetting,
+	settings store.AgentSettings,
 ) {
 	if runContext.CardKind != domain.CardKindDiscussion ||
 		runContext.DiscussionState != string(domain.DiscussionStateActive) ||
@@ -305,22 +311,40 @@ func (r *Runner) generateDiscussionMetadata(
 	ctx context.Context,
 	claim store.BuiltInRunClaim,
 	runContext store.AgentRunContext,
-	settings db.WorkspaceAgentSetting,
+	settings store.AgentSettings,
 ) error {
-	config, err := r.modelConfig(ctx, claim.WorkspaceID, settings)
-	if err != nil {
-		return err
+	routes := make([]db.WorkspaceModelRoute, 0, len(settings.Routes))
+	for _, route := range settings.Routes {
+		if route.Enabled {
+			routes = append(routes, route)
+		}
 	}
-	// Metadata 不能混入用户可见的流式回复。
-	config.OnTextDelta = nil
-	response, err := r.model.Complete(
-		ctx,
-		config,
-		BuildDiscussionMetadataContext(runContext),
-		[]modelclient.ToolDefinition{discussionMetadataToolDefinition()},
-	)
-	if err != nil {
-		return err
+	if len(routes) == 0 {
+		return errors.New("built-in agent has no enabled model route")
+	}
+
+	messages := BuildDiscussionMetadataContext(runContext)
+	tools := []modelclient.ToolDefinition{discussionMetadataToolDefinition()}
+	var response modelclient.Completion
+	var lastErr error
+	for _, route := range routes {
+		config, err := r.modelConfig(ctx, claim.WorkspaceID, route)
+		if err == nil {
+			// Metadata 是旁路工作，不能混入用户可见的流式回复。
+			config.OnTextDelta = nil
+			response, err = r.model.Complete(ctx, config, messages, tools)
+		}
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		if !isRetryableModelRouteError(ctx, err) {
+			return err
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return fmt.Errorf("all configured model routes failed for discussion metadata: %w", lastErr)
 	}
 	if len(response.ToolCalls) != 1 ||
 		response.ToolCalls[0].Function.Name != "cycledock_set_discussion_metadata" {
@@ -349,46 +373,133 @@ func (r *Runner) waitBackground() {
 	r.background.Wait()
 }
 
+func (r *Runner) completeWithFailover(
+	ctx context.Context,
+	claim store.BuiltInRunClaim,
+	routes []db.WorkspaceModelRoute,
+	start int,
+	messages []modelclient.Message,
+	tools []modelclient.ToolDefinition,
+) (modelclient.Completion, int, error) {
+	var lastErr error
+	for i := start; i < len(routes); i++ {
+		config, err := r.modelConfig(ctx, claim.WorkspaceID, routes[i])
+		if err != nil {
+			if !isRetryableModelRouteError(ctx, err) {
+				return modelclient.Completion{}, i, err
+			}
+			lastErr = err
+			if i+1 < len(routes) {
+				r.publishModelFailover(claim, false)
+			}
+			continue
+		}
+		streamed := false
+		if r.live != nil {
+			r.live.Publish(claim.CardID, realtime.Event{Type: "run.stage", RunID: claim.RunID.String(), Stage: "正在生成回复"})
+			config.OnTextDelta = func(text string) {
+				streamed = true
+				r.live.Publish(claim.CardID, realtime.Event{Type: "run.text.delta", RunID: claim.RunID.String(), Text: text})
+			}
+		}
+		response, err := r.model.Complete(ctx, config, messages, tools)
+		if err == nil {
+			return response, i, nil
+		}
+		if !isRetryableModelRouteError(ctx, err) {
+			return modelclient.Completion{}, i, err
+		}
+		lastErr = err
+		if i+1 < len(routes) {
+			r.publishModelFailover(claim, streamed)
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no model route was available")
+	}
+	return modelclient.Completion{}, len(routes) - 1, fmt.Errorf("all configured model routes failed: %w", lastErr)
+}
+
+func (r *Runner) publishModelFailover(claim store.BuiltInRunClaim, resetText bool) {
+	if r.live == nil {
+		return
+	}
+	if resetText {
+		r.live.Publish(claim.CardID, realtime.Event{Type: "run.text.reset", RunID: claim.RunID.String()})
+	}
+	r.live.Publish(claim.CardID, realtime.Event{
+		Type: "run.stage", RunID: claim.RunID.String(), Stage: "当前模型不可用，正在切换备用模型",
+	})
+}
+
+func isRetryableModelRouteError(ctx context.Context, err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, modelauth.ErrUnavailable) ||
+		errors.Is(err, modelauth.ErrNotConnected) ||
+		errors.Is(err, modelauth.ErrReauthRequired) ||
+		errors.Is(err, modelauth.ErrCredentialRefresh) ||
+		errors.Is(err, modelclient.ErrMalformedResponse) ||
+		errors.Is(err, modelclient.ErrEmptyResponse) {
+		return true
+	}
+	var apiErr *modelclient.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == 401 ||
+			apiErr.StatusCode == 403 ||
+			apiErr.StatusCode == 404 ||
+			apiErr.StatusCode == 408 ||
+			apiErr.StatusCode == 429 ||
+			apiErr.StatusCode >= 500
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
 func (r *Runner) modelConfig(
 	ctx context.Context,
 	workspaceID uuid.UUID,
-	settings db.WorkspaceAgentSetting,
+	route db.WorkspaceModelRoute,
 ) (modelclient.Config, error) {
 	timeout := agentconfig.DefaultModelRequestTimeout
-	switch settings.ProviderType {
+	switch route.ProviderType {
 	case "", "openai_compatible":
-		apiKey, err := secretFromEnv(settings.ApiKeyEnv, "model API key")
+		apiKey, err := secretFromEnv(route.ApiKeyEnv, "model API key")
 		if err != nil {
 			return modelclient.Config{}, err
 		}
 		return modelclient.Config{
-			BaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKey: apiKey,
+			BaseURL: route.ProviderBaseUrl, Model: route.Model, APIKey: apiKey,
 			Timeout: timeout, Temperature: 0,
 		}, nil
 	case string(modelauth.ProviderChatGPT):
-		if r.modelAuth != nil {
-			return r.modelAuth.ModelConfig(ctx, workspaceID, modelauth.ProviderChatGPT, settings.Model, timeout)
+		if r.modelAuth != nil && route.CredentialID.Valid {
+			return r.modelAuth.ModelConfigForCredential(
+				ctx, workspaceID, modelauth.ProviderChatGPT, route.CredentialID.UUID, route.Model, timeout,
+			)
 		}
-		return modelclient.Config{}, modelauth.ErrUnavailable
+		return modelclient.Config{}, modelauth.ErrNotConnected
 	case string(modelauth.ProviderGrok):
-		if r.modelAuth != nil {
-			return r.modelAuth.ModelConfig(ctx, workspaceID, modelauth.ProviderGrok, settings.Model, timeout)
+		if r.modelAuth != nil && route.CredentialID.Valid {
+			return r.modelAuth.ModelConfigForCredential(
+				ctx, workspaceID, modelauth.ProviderGrok, route.CredentialID.UUID, route.Model, timeout,
+			)
 		}
-		return modelclient.Config{}, modelauth.ErrUnavailable
+		return modelclient.Config{}, modelauth.ErrNotConnected
 	default:
-		return modelclient.Config{}, fmt.Errorf("unsupported model provider %q", settings.ProviderType)
+		return modelclient.Config{}, fmt.Errorf("unsupported model provider %q", route.ProviderType)
 	}
 }
 
-func runnableAgentSettings(settings db.WorkspaceAgentSetting) bool {
-	if strings.TrimSpace(settings.Model) == "" {
-		return false
+func runnableAgentSettings(settings store.AgentSettings) bool {
+	for _, route := range settings.Routes {
+		if route.Enabled {
+			return true
+		}
 	}
-	if settings.ProviderType == "" || settings.ProviderType == "openai_compatible" {
-		return strings.TrimSpace(settings.ProviderBaseUrl) != ""
-	}
-	return settings.ProviderType == string(modelauth.ProviderChatGPT) ||
-		settings.ProviderType == string(modelauth.ProviderGrok)
+	return false
 }
 
 func (r *Runner) heartbeat(

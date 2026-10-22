@@ -149,14 +149,25 @@ export type CardDetail = {
   last_checkin: TimelineEvent | null;
 };
 export type Provider = "chatgpt" | "grok" | "openai_compatible";
-export type AgentSettings = {
-  configured: boolean;
+export type ModelRoute = {
+  id: string;
+  enabled: boolean;
   provider_type: Provider;
+  credential_id: string;
   provider_base_url: string;
   model: string;
   api_key_env: string;
+};
+export type AgentSettings = {
+  configured: boolean;
+  routes: ModelRoute[];
   system_instructions: string;
   source_id?: string;
+};
+export type ModelAuthAccount = {
+  id: string;
+  display_label: string;
+  expires_at: string;
 };
 export type ModelAuth = {
   provider: "chatgpt" | "grok";
@@ -165,6 +176,7 @@ export type ModelAuth = {
   reason?: string;
   warning?: string;
   expires_at?: string;
+  accounts: ModelAuthAccount[];
 };
 export type ModelAuthStart = {
   authorization_url: string;

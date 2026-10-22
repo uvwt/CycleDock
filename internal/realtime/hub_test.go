@@ -44,3 +44,20 @@ func TestHubScopesSubscribersAndRestoresSnapshot(t *testing.T) {
 		t.Fatalf("stale stream retained: %+v", liveAfter)
 	}
 }
+
+func TestHubResetClearsOnlyCurrentRunText(t *testing.T) {
+	hub := NewHub()
+	card := uuid.New()
+	hub.Publish(card, Event{Type: "run.started", RunID: "current"})
+	hub.Publish(card, Event{Type: "run.text.delta", RunID: "current", Text: "partial"})
+	hub.Publish(card, Event{Type: "run.text.reset", RunID: "old"})
+	_, beforeReset := hub.Subscribe(card)
+	if beforeReset == nil || beforeReset.Text != "partial" {
+		t.Fatalf("stale reset changed current text: %+v", beforeReset)
+	}
+	hub.Publish(card, Event{Type: "run.text.reset", RunID: "current"})
+	_, afterReset := hub.Subscribe(card)
+	if afterReset == nil || afterReset.Text != "" || afterReset.RunID != "current" {
+		t.Fatalf("current reset snapshot=%+v", afterReset)
+	}
+}

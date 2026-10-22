@@ -26,9 +26,19 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
 )
+
+func testRunnerSettings(modelURL, model string) store.AgentSettingsInput {
+	return store.AgentSettingsInput{
+		Routes: []store.ModelRouteInput{{
+			Enabled: true, ProviderType: "openai_compatible",
+			ProviderBaseURL: modelURL, Model: model,
+		}},
+	}
+}
 
 func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 	dataStore, _ := newAgentIntegrationStore(t)
@@ -94,9 +104,7 @@ func TestRunnerGeneratesFirstDiscussionMetadata(t *testing.T) {
 	if discussion.Title != "" {
 		t.Fatalf("new discussion title=%q, want empty", discussion.Title)
 	}
-	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-	})
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,9 +270,7 @@ func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-	})
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +365,7 @@ func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondMessages := BuildContext(secondContext, settings)
+	secondMessages := BuildContext(secondContext, settings.WorkspaceAgentSetting)
 	if !containsModelMessage(secondMessages, "Durable distilled finding") ||
 		!containsModelMessage(secondMessages, "Durable final result") {
 		t.Fatalf("second Run lost durable knowledge: %+v", secondMessages)
@@ -369,6 +375,117 @@ func TestRunnerUsesEphemeralMCPResultAndPersistsOnlyDurableKnowledge(t *testing.
 		t.Fatalf("second Run inherited raw tool trace: %+v", secondMessages)
 	}
 
+}
+
+func TestRunnerFailsOverOnceAndKeepsSuccessfulRouteForLaterToolRounds(t *testing.T) {
+	dataStore, _ := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	var primaryCalls int
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls++
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer primary.Close()
+
+	var secondaryCalls int
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondaryCalls++
+		w.Header().Set("Content-Type", "application/json")
+		if secondaryCalls == 1 {
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "fallback-finding", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "cycledock_add_finding",
+					Arguments: `{"content":"fallback route is healthy","idempotency_key":"fallback-finding"}`,
+				},
+			}})
+			return
+		}
+		writeModelResponse(t, w, "fallback completed the run", nil)
+	}))
+	defer secondary.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Failover "+uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Failover", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
+		Routes: []store.ModelRouteInput{
+			{Enabled: true, ProviderType: "openai_compatible", ProviderBaseURL: primary.URL, Model: "primary"},
+			{Enabled: true, ProviderType: "openai_compatible", ProviderBaseURL: secondary.URL, Model: "secondary"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SubmitComment(ctx, store.SubmitCommentParams{
+		WorkspaceID: workspace.ID, CardID: card.ID, AuthorSourceID: human.ID,
+		Content: "exercise model failover", IdempotencyKey: "fallback-trigger",
+		DispatchMode: domain.DispatchModeEnqueue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextBuiltInRun(ctx, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.SourceID != settings.SourceID {
+		t.Fatalf("claim source=%s settings source=%s", claim.SourceID, settings.SourceID)
+	}
+
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{LeaseDuration: time.Minute})
+	if err := runner.Run(ctx, *claim); err != nil {
+		t.Fatalf("run with fallback: %v", err)
+	}
+	if primaryCalls != 1 {
+		t.Fatalf("primary route calls=%d, want 1; successful fallback must stay sticky", primaryCalls)
+	}
+	if secondaryCalls != 2 {
+		t.Fatalf("secondary route calls=%d, want 2 across tool rounds", secondaryCalls)
+	}
+	run, err := dataStore.GetRun(ctx, workspace.ID, claim.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != string(domain.RunStatusCompleted) || run.ResultSummary != "fallback completed the run" {
+		t.Fatalf("run after fallback=%+v", run)
+	}
+}
+
+func TestRetryableModelRouteErrorClassification(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "rate limit", err: &modelclient.APIError{StatusCode: 429}, want: true},
+		{name: "provider unavailable", err: &modelclient.APIError{StatusCode: 503}, want: true},
+		{name: "bad request", err: &modelclient.APIError{StatusCode: 400}, want: false},
+		{name: "model auth unavailable", err: modelauth.ErrUnavailable, want: true},
+		{name: "reauth", err: modelauth.ErrReauthRequired, want: true},
+		{name: "malformed response", err: modelclient.ErrMalformedResponse, want: true},
+		{name: "cancelled", err: context.Canceled, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isRetryableModelRouteError(ctx, test.err); got != test.want {
+				t.Fatalf("retryable=%v, want %v for %v", got, test.want, test.err)
+			}
+		})
+	}
 }
 
 func TestRunnerWaitForHumanStopsWithoutResult(t *testing.T) {
@@ -391,9 +508,7 @@ func TestRunnerWaitForHumanStopsWithoutResult(t *testing.T) {
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
-	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-	})
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,9 +562,7 @@ func TestTwoDispatchersExecuteOneTriggerOnce(t *testing.T) {
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
-	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-	}); err != nil {
+	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model")); err != nil {
 		t.Fatal(err)
 	}
 	trigger, err := dataStore.SubmitComment(ctx, store.SubmitCommentParams{
@@ -536,9 +649,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
 	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
-	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelHTTP.URL, Model: "fake-model",
-	})
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,9 +838,7 @@ func runFailureScenario(
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
-		ProviderBaseURL: modelURL, Model: "failure-model",
-	})
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelURL, "failure-model"))
 	if err != nil {
 		t.Fatal(err)
 	}

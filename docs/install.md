@@ -108,12 +108,12 @@ Remote MCP（配置 Public URL 后）：
 Built-in Agent：
 
 1. Workspace owner 打开 Agent Settings。
-2. 选择 ChatGPT Plan、Grok Subscription 或 API Provider。
-3. ChatGPT / Grok：先完成官方账号授权，再从账号模型目录选择 model。
-4. API Provider：配置 endpoint、model 与 API key env 名称。
-5. 使用 **Test provider** 做最小模型请求。
+2. 在模型服务中连接一个或多个 ChatGPT / Grok 账号；同一 Provider 可以连接多个账号。
+3. 添加 Model Route，并为每条 Route 选择 provider、model，以及订阅账号或 API endpoint/env。
+4. 按希望的故障转移优先级排序 Route；不参与路由的条目可以单独禁用。
+5. 对每条 Route 使用 **Test** 做最小模型请求。
 6. MCP connection 使用 **Test**；测试只做 initialize + ListTools，不执行 Tool。
-7. 测试通过后再启用 Agent。
+7. 至少保留一条启用 Route，再启用 Cycle Agent。
 
 ## 7. 备份
 

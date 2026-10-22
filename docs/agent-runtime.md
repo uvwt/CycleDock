@@ -276,22 +276,22 @@ waiting_human 表示：
 
 Workspace owner 可以配置：
 
-- Provider 类型：OpenAI-compatible API、ChatGPT Plan、Grok Subscription。
-- OpenAI-compatible Provider Base URL / API Key 环境变量名（仅 API Provider）。
-- ChatGPT / Grok model account connection（仅订阅 Provider）。
-- Model。
+- 零个或多个有序 Model Route；每条 Route 绑定 provider、model，以及订阅账号或 API endpoint。
+- Route 可以独立启用/停用，数组顺序即故障转移优先级。
+- OpenAI-compatible Route 保存 Provider Base URL / API Key 环境变量名。
+- ChatGPT / Grok 可以连接多个 model account；订阅 Route 显式绑定一个 credential。
 - Workspace Agent instructions。
 - 零个或多个 outbound MCP connection。
 
 MCP connection 保存 URL、timeout、enabled 与 Bearer Token 环境变量名。
 
-Cycle Agent 本身没有 Workspace 级启用开关。模型配置完整且所需账号凭据存在时，Dispatcher 自动把该 Workspace 视为可执行；模型未配置或订阅账号未连接时不 Claim 新工作。
+Cycle Agent 本身没有 Workspace 级启用开关。只要存在至少一条 enabled Model Route，Dispatcher 就把该 Workspace 视为可执行；没有启用 Route 时不 Claim 新工作。订阅 Route 的 credential 由数据库外键保证属于同一 Workspace，且被 Route 引用时不能先断开账号。
 
 模型请求 timeout、上下文预算与异常工具循环保护属于 Runtime 内部策略，不进入 Settings API / PostgreSQL，也不要求用户调参。默认模型请求 timeout 为 120 秒；工具链正常情况下依靠自动上下文压缩持续运行，仅保留一个较高的隐藏式异常循环上限作为安全保险。
 
 Model API Key 与 MCP Bearer Token 本身不进入 Settings API / PostgreSQL；Runner 开始 Run 时从 CycleDock 进程环境读取。
 
-ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨 Run 刷新，因此存放在独立 credential 表并用 CYCLEDOCK_MODEL_SECRET_KEY 做 AES-256-GCM 加密。Workspace Agent settings 只保存所选 provider / model，不复制 OAuth secret。
+ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨 Run 刷新，因此存放在独立 credential 表并用 CYCLEDOCK_MODEL_SECRET_KEY 做 AES-256-GCM 加密。每个 credential 有独立 ID，同一 Provider 可以连接多个账号；重新授权同一稳定 account subject 会更新原 credential。Workspace Agent settings 只保存 instructions，模型选择由 Model Route 保存 credential ID，不复制 OAuth secret。
 
 模型协议：
 
@@ -303,15 +303,16 @@ ChatGPT / Grok OAuth token 不进入 Settings API 或普通日志，但需要跨
 Dispatcher：
 
 - 周期处理所有 Workspace 的 due Schedule 与 lease expiry。
-- 只为模型配置完整、且订阅模型凭据存在的 Workspace 自动执行 Trigger。
+- 只为存在至少一条 enabled Model Route 的 Workspace 自动执行 Trigger。
 - 优先启动已经绑定 `cycle_agent` 的 queued Run。
 - 没有 current Run 时，再原子 Claim 最早 pending Trigger。
 - waiting_human 仍占 current Run 槽位，不会被自动越过。
 
 Connection test：
 
-- OpenAI-compatible Provider Test 对配置 endpoint / model 发最小 /chat/completions 请求。
-- ChatGPT / Grok Provider Test 使用已连接账号与正式 Responses transport 发最小请求。
+- 每条 Model Route 可以独立测试。
+- OpenAI-compatible Route Test 对配置 endpoint / model 发最小 /chat/completions 请求。
+- ChatGPT / Grok Route Test 使用该 Route 绑定的具体账号与正式 Responses transport 发最小请求。
 - MCP Test 复用正式 MCP Client，只做 initialize + ListTools 并返回工具数量，不执行 Tool。
 - endpoint / auth / timeout / malformed / initialize / ListTools 错误只返回安全分类消息。
 
@@ -326,6 +327,9 @@ Runner：
 - 每次模型请求前按估算 Token 预算检查当前 Run；旧的已完成工具轮次会被确定性压缩成执行摘要，最近一轮 tool call / tool result 配对保留。
 - 单个最新工具结果过大时可在保持 tool_call_id 配对的前提下缩成明确 preview；raw tool result 仍不会写入 Card Timeline。
 - 如果供应商仍明确返回 context overflow，Runner 自动切换到更保守的输入预算并重试一次，后续工具轮次继续沿用该预算。
+- 每轮模型推理从当前 active Route 开始；429、5xx、timeout/网络失败、账号需重连或 refresh 失败、空或 malformed model response 等可恢复模型故障才按 Route 顺序向后 failover。普通 400、Run cancellation、MCP 失败与任务状态冲突不切模型。
+- 一旦备用 Route 成功，本 Run 后续 tool round 从该 Route 继续，不重新撞已失败的高优先级 Route，也不回绕。
+- 上游已流出部分文本后才失败时先发送 ephemeral run.text.reset 清空当前未完成文本，再切备用 Route；partial text 不进入 durable Timeline。
 - 自动压缩负责控制上下文增长；独立的隐藏式异常工具循环保护只用于阻止失控模型无限调用工具，不作为用户配置。
 - heartbeat 只更新 lease，不写 Timeline。
 - MCP raw result 只追加到当前内存 model message。

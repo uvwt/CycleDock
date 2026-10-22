@@ -145,8 +145,10 @@ export const api = {
   saveAgent: (x: Omit<AgentSettings, "configured" | "source_id">) =>
     request<AgentSettings>("/agent/settings", "PUT", x),
   authStatuses: () => request<ModelAuth[]>("/agent/model-auth"),
-  models: (p: "chatgpt" | "grok") =>
-    request<{ id: string; name: string }[]>(`/agent/models?provider=${p}`),
+  models: (p: "chatgpt" | "grok", credentialID?: string) =>
+    request<{ id: string; name: string }[]>(
+      `/agent/models?provider=${p}${credentialID ? `&credential_id=${encodeURIComponent(credentialID)}` : ""}`,
+    ),
   chatgptStart: () =>
     request<ModelAuthStart>("/agent/model-auth/chatgpt/start", "POST", {}),
   chatgptComplete: (url: string) =>
@@ -159,10 +161,14 @@ export const api = {
     request<{ status: string }>("/agent/model-auth/grok/poll", "POST", {
       flow_id: id,
     }),
-  modelDisconnect: (p: string) =>
-    request<void>(`/agent/model-auth/${p}`, "DELETE"),
+  modelDisconnect: (p: string, credentialID: string) =>
+    request<void>(
+      `/agent/model-auth/${p}/${encodeURIComponent(credentialID)}`,
+      "DELETE",
+    ),
   testProvider: (value: {
     provider_type: Provider;
+    credential_id: string;
     provider_base_url: string;
     model: string;
     api_key_env: string;

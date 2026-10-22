@@ -211,6 +211,8 @@ func publicRunError(err error) string {
 		return "Built-in Agent secret environment variable is not configured."
 	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):
 		return "Built-in Agent model account must be connected again."
+	case errors.Is(err, modelauth.ErrCredentialRefresh):
+		return "Built-in Agent model account refresh failed."
 	case errors.Is(err, modelauth.ErrUnavailable):
 		return "Built-in Agent model account authentication is not configured."
 	case strings.Contains(err.Error(), "MCP"):

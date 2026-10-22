@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/auth"
 )
@@ -35,8 +38,11 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	cookie := responseCookie(t, login, sessionCookieName)
 
 	unknownSecret := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"provider_base_url": "http://127.0.0.1:18090/v1",
-		"model":             "test", "api_key": "must-never-be-accepted",
+		"routes": []map[string]any{{
+			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
+			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
+			"api_key": "must-never-be-accepted",
+		}},
 		"system_instructions": "",
 	}, cookie, nil)
 	if unknownSecret.Code != http.StatusBadRequest {
@@ -44,16 +50,22 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	}
 
 	lowLevelOption := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"provider_base_url": "http://127.0.0.1:18090/v1",
-		"model":             "test", "max_tool_rounds": 4,
+		"routes": []map[string]any{{
+			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
+			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
+		}},
+		"max_tool_rounds": 4,
 	}, cookie, nil)
 	if lowLevelOption.Code != http.StatusBadRequest {
 		t.Fatalf("runtime-only option was accepted: %d %s", lowLevelOption.Code, lowLevelOption.Body.String())
 	}
 
 	save := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
-		"provider_base_url": "http://127.0.0.1:18090/v1",
-		"model":             "test", "api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
+		"routes": []map[string]any{{
+			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
+			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
+			"api_key_env": "CYCLEDOCK_TEST_MODEL_KEY",
+		}},
 		"system_instructions": "Keep durable facts only.",
 	}, cookie, nil)
 	if save.Code != http.StatusOK {
@@ -62,9 +74,13 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 	if strings.Contains(save.Body.String(), "must-never-be-accepted") {
 		t.Fatalf("plaintext secret leaked into response: %s", save.Body.String())
 	}
+	var responseBody map[string]any
+	if err := json.Unmarshal(save.Body.Bytes(), &responseBody); err != nil {
+		t.Fatal(err)
+	}
 	for _, hidden := range []string{"enabled", "request_timeout_ms", "max_tool_rounds"} {
-		if strings.Contains(save.Body.String(), `"`+hidden+`"`) {
-			t.Fatalf("runtime-only setting %q leaked into response: %s", hidden, save.Body.String())
+		if _, exists := responseBody[hidden]; exists {
+			t.Fatalf("top-level runtime-only setting %q leaked into response: %s", hidden, save.Body.String())
 		}
 	}
 

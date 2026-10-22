@@ -336,19 +336,11 @@ func (s *Store) expireAndRecoverBuiltInRun(
 	err = tx.QueryRow(ctx, `
 		SELECT r.trigger_id, r.runner_source_id, r.status, r.lease_expires_at,
 		       src.kind,
-		       COALESCE(
-		           btrim(settings.model) <> ''
-		           AND (settings.provider_type <> 'openai_compatible' OR btrim(settings.provider_base_url) <> '')
-		           AND (
-		               settings.provider_type = 'openai_compatible'
-		               OR EXISTS (
-		                   SELECT 1
-		                   FROM model_oauth_credentials credential
-		                   WHERE credential.workspace_id = settings.workspace_id
-		                     AND credential.provider = settings.provider_type
-		               )
-		           ),
-		           false
+		       EXISTS (
+		           SELECT 1
+		           FROM workspace_model_routes route
+		           WHERE route.workspace_id = settings.workspace_id
+		             AND route.enabled
 		       ),
 		       c.kind, c.discussion_state, c.todo_state, c.ongoing_state
 		FROM agent_runs r

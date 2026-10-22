@@ -48,16 +48,11 @@ func (s *Store) ClaimNextBuiltInRun(
 		JOIN workspace_agent_settings s
 		  ON s.workspace_id = r.workspace_id
 		 AND s.source_id = r.runner_source_id
-		 AND btrim(s.model) <> ''
-		 AND (s.provider_type <> 'openai_compatible' OR btrim(s.provider_base_url) <> '')
-		 AND (
-			s.provider_type = 'openai_compatible'
-			OR EXISTS (
-				SELECT 1
-				FROM model_oauth_credentials credential
-				WHERE credential.workspace_id = s.workspace_id
-				  AND credential.provider = s.provider_type
-			)
+		 AND EXISTS (
+			SELECT 1
+			FROM workspace_model_routes route
+			WHERE route.workspace_id = s.workspace_id
+			  AND route.enabled
 		 )
 		JOIN sources src
 		  ON src.workspace_id = s.workspace_id
@@ -106,16 +101,11 @@ func (s *Store) ClaimNextBuiltInRun(
 		FROM cards c
 		JOIN workspace_agent_settings settings
 		  ON settings.workspace_id = c.workspace_id
-		 AND btrim(settings.model) <> ''
-		 AND (settings.provider_type <> 'openai_compatible' OR btrim(settings.provider_base_url) <> '')
-		 AND (
-			settings.provider_type = 'openai_compatible'
-			OR EXISTS (
-				SELECT 1
-				FROM model_oauth_credentials credential
-				WHERE credential.workspace_id = settings.workspace_id
-				  AND credential.provider = settings.provider_type
-			)
+		 AND EXISTS (
+			SELECT 1
+			FROM workspace_model_routes route
+			WHERE route.workspace_id = settings.workspace_id
+			  AND route.enabled
 		 )
 		JOIN sources src
 		  ON src.workspace_id = settings.workspace_id

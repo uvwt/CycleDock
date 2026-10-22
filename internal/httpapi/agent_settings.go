@@ -17,13 +17,20 @@ import (
 )
 
 type agentSettingsResponse struct {
-	Configured         bool   `json:"configured"`
-	ProviderType       string `json:"provider_type"`
-	ProviderBaseURL    string `json:"provider_base_url"`
-	Model              string `json:"model"`
-	APIKeyEnv          string `json:"api_key_env"`
-	SystemInstructions string `json:"system_instructions"`
-	SourceID           string `json:"source_id,omitempty"`
+	Configured         bool                 `json:"configured"`
+	Routes             []modelRouteResponse `json:"routes"`
+	SystemInstructions string               `json:"system_instructions"`
+	SourceID           string               `json:"source_id,omitempty"`
+}
+
+type modelRouteResponse struct {
+	ID              string `json:"id"`
+	Enabled         bool   `json:"enabled"`
+	ProviderType    string `json:"provider_type"`
+	CredentialID    string `json:"credential_id,omitempty"`
+	ProviderBaseURL string `json:"provider_base_url"`
+	Model           string `json:"model"`
+	APIKeyEnv       string `json:"api_key_env"`
 }
 
 type mcpConnectionResponse struct {
@@ -43,7 +50,7 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
-			Configured: false, ProviderType: "openai_compatible",
+			Configured: false, Routes: []modelRouteResponse{},
 		})
 		return
 	}
@@ -60,24 +67,49 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		ProviderType       string `json:"provider_type"`
-		ProviderBaseURL    string `json:"provider_base_url"`
-		Model              string `json:"model"`
-		APIKeyEnv          string `json:"api_key_env"`
+		Routes []struct {
+			ID              string `json:"id"`
+			Enabled         bool   `json:"enabled"`
+			ProviderType    string `json:"provider_type"`
+			CredentialID    string `json:"credential_id"`
+			ProviderBaseURL string `json:"provider_base_url"`
+			Model           string `json:"model"`
+			APIKeyEnv       string `json:"api_key_env"`
+		} `json:"routes"`
 		SystemInstructions string `json:"system_instructions"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	request.ProviderType = strings.TrimSpace(request.ProviderType)
-	if request.ProviderType == "" {
-		request.ProviderType = "openai_compatible"
+	routes := make([]store.ModelRouteInput, 0, len(request.Routes))
+	for _, route := range request.Routes {
+		var routeID uuid.UUID
+		if strings.TrimSpace(route.ID) != "" {
+			parsed, err := uuid.Parse(strings.TrimSpace(route.ID))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_route_id", "Model route id is invalid.")
+				return
+			}
+			routeID = parsed
+		}
+		var credentialID *uuid.UUID
+		if strings.TrimSpace(route.CredentialID) != "" {
+			parsed, err := uuid.Parse(strings.TrimSpace(route.CredentialID))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_credential_id", "Model credential id is invalid.")
+				return
+			}
+			credentialID = &parsed
+		}
+		routes = append(routes, store.ModelRouteInput{
+			ID: routeID, Enabled: route.Enabled,
+			ProviderType: strings.TrimSpace(route.ProviderType),
+			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseURL,
+			Model: route.Model, APIKeyEnv: route.APIKeyEnv,
+		})
 	}
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
-		ProviderType:    request.ProviderType,
-		ProviderBaseURL: request.ProviderBaseURL,
-		Model:           request.Model, APIKeyEnv: request.APIKeyEnv,
-		SystemInstructions: request.SystemInstructions,
+		Routes: routes, SystemInstructions: request.SystemInstructions,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -93,6 +125,7 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		ProviderType    string `json:"provider_type"`
+		CredentialID    string `json:"credential_id"`
 		ProviderBaseURL string `json:"provider_base_url"`
 		Model           string `json:"model"`
 		APIKeyEnv       string `json:"api_key_env"`
@@ -118,8 +151,13 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "model_auth_unavailable", "Model account sign-in is not configured.")
 			return
 		}
-		config, err := api.modelAuth.ModelConfig(
-			r.Context(), identity.WorkspaceID, modelauth.Provider(providerType), request.Model, timeout,
+		credentialID, err := uuid.Parse(strings.TrimSpace(request.CredentialID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_credential_id", "Select a connected model account.")
+			return
+		}
+		config, err := api.modelAuth.ModelConfigForCredential(
+			r.Context(), identity.WorkspaceID, modelauth.Provider(providerType), credentialID, request.Model, timeout,
 		)
 		if err != nil {
 			api.writeModelAuthError(w, err)
@@ -251,11 +289,21 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 	return false
 }
 
-func agentSettingsToResponse(settings db.WorkspaceAgentSetting) agentSettingsResponse {
+func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse {
+	routes := make([]modelRouteResponse, 0, len(settings.Routes))
+	for _, route := range settings.Routes {
+		credentialID := ""
+		if route.CredentialID.Valid {
+			credentialID = route.CredentialID.UUID.String()
+		}
+		routes = append(routes, modelRouteResponse{
+			ID: route.ID.String(), Enabled: route.Enabled, ProviderType: route.ProviderType,
+			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseUrl,
+			Model: route.Model, APIKeyEnv: route.ApiKeyEnv,
+		})
+	}
 	return agentSettingsResponse{
-		Configured:      true,
-		ProviderType:    settings.ProviderType,
-		ProviderBaseURL: settings.ProviderBaseUrl, Model: settings.Model, APIKeyEnv: settings.ApiKeyEnv,
+		Configured: true, Routes: routes,
 		SystemInstructions: settings.SystemInstructions, SourceID: settings.SourceID.String(),
 	}
 }

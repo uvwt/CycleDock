@@ -205,10 +205,17 @@ const failFirstComment = new Set();
 let failNextDiscussionCreate = false;
 let settings = {
   configured: true,
-  provider_type: "openai_compatible",
-  provider_base_url: "https://api.example.com/v1",
-  model: "example-model",
-  api_key_env: "CYCLEDOCK_MODEL_API_KEY",
+  routes: [
+    {
+      id: "00000000-0000-4000-8000-000000000101",
+      enabled: true,
+      provider_type: "openai_compatible",
+      credential_id: "",
+      provider_base_url: "https://api.example.com/v1",
+      model: "example-model",
+      api_key_env: "CYCLEDOCK_MODEL_API_KEY",
+    },
+  ],
   system_instructions: "先检查现场，再确认结果",
 };
 const session = {
@@ -606,8 +613,18 @@ http
         }
         if (route === "/agent/model-auth")
           return data(res, [
-            { provider: "chatgpt", available: false, connected: false },
-            { provider: "grok", available: true, connected: false },
+            {
+              provider: "chatgpt",
+              available: false,
+              connected: false,
+              accounts: [],
+            },
+            {
+              provider: "grok",
+              available: true,
+              connected: false,
+              accounts: [],
+            },
           ]);
         if (route === "/agent/nexusdock")
           return data(res, { available: true, connected: false });

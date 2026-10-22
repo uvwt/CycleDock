@@ -102,7 +102,9 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - Grok 使用 auth.x.ai 的 OAuth2 device-code flow；token endpoint 必须来自 xAI OIDC discovery 且 host 限定为 x.ai / *.x.ai。
 - Grok subscription inference 固定发送到 cli-chat-proxy.grok.com/v1，OAuth token 不允许被用户配置转发到任意 endpoint。
 - ChatGPT / Grok access token、refresh token 与 flow payload 存入独立表，并使用 CYCLEDOCK_MODEL_SECRET_KEY 提供的 32-byte key 做 AES-256-GCM 加密；AAD 绑定 Workspace + Provider。
-- Refresh token 轮换在数据库 row lock 内串行完成，避免并发 Run 同时消费同一 rotating refresh token。
+- 同一 Workspace + Provider 可以连接多个账号。credential 使用独立 UUID；ChatGPT 用已验证 ID token 的 sub，Grok 优先使用 user id、缺失时使用 email 作为稳定 account_subject。重新授权同一 subject 更新原 credential。
+- Model Route 只保存 credential ID；数据库复合 FK 阻止跨 Workspace 引用，仍被 Route 使用的 credential 不能断开。
+- Refresh token 轮换按具体 credential row lock 串行完成，避免同一账号的并发 Run 同时消费 rotating refresh token；不同账号互不覆盖。
 
 ## 8. 当前 Human Web 配置
 

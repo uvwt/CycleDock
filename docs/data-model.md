@@ -351,17 +351,19 @@ HTTPS Hosted 使用 Secure + HttpOnly + SameSite=Lax。
 
 Model Provider / MCP Connection 不强行塞进 initial core schema。
 
-在 Built-in Agent Phase 再增加：
+Built-in Agent 当前增加：
 
-- model_providers
-- mcp_connections
-- workspace_agent_settings
-- model_oauth_credentials
-- model_auth_flows
+- workspace_agent_settings：Workspace 级 Agent instructions 与专用 cycle_agent Source；不再承载单一 model/provider，也不保存 enable/timeout/max tool rounds。
+- workspace_model_routes：Workspace 内有序模型路由，保存 position/enabled/provider/model，以及 OpenAI-compatible endpoint/env 引用或订阅 credential_id。
+- workspace_mcp_connections：outbound MCP 配置。
+- model_oauth_credentials：ChatGPT / Grok 加密账号凭据；每个账号有独立 ID，同一 Workspace + Provider 可保存多个账号。
+- model_auth_flows：短生命周期 OAuth/device flow。
+
+workspace_model_routes 的 subscription credential 使用 (workspace_id, credential_id) 复合 FK，保证不能跨 Workspace 引用账号；被 Route 引用的 credential 使用 RESTRICT，不允许先删账号留下悬空 Route。credential 的稳定 account_subject 在同一 Workspace + Provider 内唯一，重新授权同一账号更新原记录。
 
 Secret 与普通展示配置分离，不能通过普通 Settings API 回显。
 
-`workspace_agent_settings` 只保存真正属于 Workspace 产品配置的 provider / model / Agent instructions 与 secret 引用。Cycle Agent 没有用户可写的 enabled、模型 request timeout、max tool rounds；这些执行器策略由 Runtime 统一管理。
+`workspace_agent_settings` 只保存真正属于 Workspace 产品配置的 Agent instructions 与 cycle_agent Source；provider / model / credential / endpoint/env 引用都位于 `workspace_model_routes`。Cycle Agent 没有用户可写的全局 enabled、模型 request timeout、max tool rounds；这些执行器策略由 Runtime 统一管理。
 
 ## 12. 初始 migration
 

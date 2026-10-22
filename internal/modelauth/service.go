@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
@@ -30,10 +31,12 @@ const (
 const grokProxyClientVersion = "1.0.50"
 
 var (
-	ErrUnavailable    = errors.New("model subscription authentication is unavailable")
-	ErrNotConnected   = errors.New("model subscription account is not connected")
-	ErrReauthRequired = errors.New("model subscription account must be connected again")
-	ErrFlowNotFound   = errors.New("model authentication flow not found")
+	ErrUnavailable       = errors.New("model subscription authentication is unavailable")
+	ErrNotConnected      = errors.New("model subscription account is not connected")
+	ErrReauthRequired    = errors.New("model subscription account must be connected again")
+	ErrCredentialRefresh = errors.New("model subscription credential refresh failed")
+	ErrCredentialInUse   = errors.New("model subscription credential is used by a model route")
+	ErrFlowNotFound      = errors.New("model authentication flow not found")
 )
 
 type Config struct {
@@ -46,16 +49,24 @@ type Config struct {
 }
 
 type Status struct {
-	Provider     Provider   `json:"provider"`
-	Available    bool       `json:"available"`
-	Connected    bool       `json:"connected"`
-	Reason       string     `json:"reason,omitempty"`
-	Warning      string     `json:"warning,omitempty"`
-	DisplayLabel string     `json:"display_label,omitempty"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	Provider     Provider        `json:"provider"`
+	Available    bool            `json:"available"`
+	Connected    bool            `json:"connected"`
+	Reason       string          `json:"reason,omitempty"`
+	Warning      string          `json:"warning,omitempty"`
+	DisplayLabel string          `json:"display_label,omitempty"`
+	ExpiresAt    *time.Time      `json:"expires_at,omitempty"`
+	Accounts     []AccountStatus `json:"accounts"`
+}
+
+type AccountStatus struct {
+	ID           uuid.UUID `json:"id"`
+	DisplayLabel string    `json:"display_label"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 type RuntimeCredential struct {
+	ID          uuid.UUID
 	Provider    Provider
 	AccessToken string
 	ExpiresAt   time.Time
@@ -112,7 +123,7 @@ func New(pool *pgxpool.Pool, config Config) (*Service, error) {
 }
 
 func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID, provider Provider) (Status, error) {
-	status := Status{Provider: provider}
+	status := Status{Provider: provider, Accounts: []AccountStatus{}}
 	switch provider {
 	case ProviderChatGPT:
 		switch {
@@ -137,32 +148,57 @@ func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID, provider Pr
 		return Status{}, fmt.Errorf("unsupported model auth provider %q", provider)
 	}
 
-	var expiresAt time.Time
-	err := s.pool.QueryRow(ctx, `
-		SELECT expires_at, display_label
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, expires_at, display_label
 		FROM model_oauth_credentials
 		WHERE workspace_id=$1 AND provider=$2
-	`, workspaceID, string(provider)).Scan(&expiresAt, &status.DisplayLabel)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return status, nil
-	}
+		ORDER BY created_at, id
+	`, workspaceID, string(provider))
 	if err != nil {
 		return Status{}, err
 	}
-	status.Connected = true
-	status.ExpiresAt = &expiresAt
+	defer rows.Close()
+	for rows.Next() {
+		var account AccountStatus
+		if err := rows.Scan(&account.ID, &account.ExpiresAt, &account.DisplayLabel); err != nil {
+			return Status{}, err
+		}
+		status.Accounts = append(status.Accounts, account)
+	}
+	if err := rows.Err(); err != nil {
+		return Status{}, err
+	}
+	status.Connected = len(status.Accounts) > 0
+	if status.Connected {
+		status.DisplayLabel = status.Accounts[0].DisplayLabel
+		expiresAt := status.Accounts[0].ExpiresAt
+		status.ExpiresAt = &expiresAt
+	}
 	return status, nil
 }
 
-func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID, provider Provider) error {
+func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID, provider Provider, credentialID uuid.UUID) error {
 	if provider != ProviderChatGPT && provider != ProviderGrok {
 		return fmt.Errorf("unsupported model auth provider %q", provider)
 	}
-	_, err := s.pool.Exec(ctx, `
+	if credentialID == uuid.Nil {
+		return errors.New("model credential id is required")
+	}
+	result, err := s.pool.Exec(ctx, `
 		DELETE FROM model_oauth_credentials
-		WHERE workspace_id=$1 AND provider=$2
-	`, workspaceID, string(provider))
-	return err
+		WHERE workspace_id=$1 AND provider=$2 AND id=$3
+	`, workspaceID, string(provider), credentialID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrCredentialInUse
+		}
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotConnected
+	}
+	return nil
 }
 
 func (s *Service) ModelConfig(
@@ -172,7 +208,32 @@ func (s *Service) ModelConfig(
 	model string,
 	timeout time.Duration,
 ) (modelclient.Config, error) {
-	credential, err := s.credential(ctx, workspaceID, provider, timeout+time.Minute)
+	return s.modelConfig(ctx, workspaceID, provider, uuid.Nil, model, timeout)
+}
+
+func (s *Service) ModelConfigForCredential(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	provider Provider,
+	credentialID uuid.UUID,
+	model string,
+	timeout time.Duration,
+) (modelclient.Config, error) {
+	if credentialID == uuid.Nil {
+		return modelclient.Config{}, ErrNotConnected
+	}
+	return s.modelConfig(ctx, workspaceID, provider, credentialID, model, timeout)
+}
+
+func (s *Service) modelConfig(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	provider Provider,
+	credentialID uuid.UUID,
+	model string,
+	timeout time.Duration,
+) (modelclient.Config, error) {
+	credential, err := s.credential(ctx, workspaceID, provider, credentialID, timeout+time.Minute)
 	if err != nil {
 		return modelclient.Config{}, err
 	}
@@ -214,6 +275,7 @@ func (s *Service) credential(
 	ctx context.Context,
 	workspaceID uuid.UUID,
 	provider Provider,
+	credentialID uuid.UUID,
 	minimumValidity time.Duration,
 ) (RuntimeCredential, error) {
 	if s.vault == nil {
@@ -229,14 +291,26 @@ func (s *Service) credential(
 	}
 	defer tx.Rollback(ctx)
 
+	var id uuid.UUID
 	var ciphertext []byte
 	var expiresAt time.Time
-	err = tx.QueryRow(ctx, `
-		SELECT credential_ciphertext, expires_at
-		FROM model_oauth_credentials
-		WHERE workspace_id=$1 AND provider=$2
-		FOR UPDATE
-	`, workspaceID, string(provider)).Scan(&ciphertext, &expiresAt)
+	if credentialID == uuid.Nil {
+		err = tx.QueryRow(ctx, `
+			SELECT id, credential_ciphertext, expires_at
+			FROM model_oauth_credentials
+			WHERE workspace_id=$1 AND provider=$2
+			ORDER BY updated_at DESC, id
+			LIMIT 1
+			FOR UPDATE
+		`, workspaceID, string(provider)).Scan(&id, &ciphertext, &expiresAt)
+	} else {
+		err = tx.QueryRow(ctx, `
+			SELECT id, credential_ciphertext, expires_at
+			FROM model_oauth_credentials
+			WHERE workspace_id=$1 AND provider=$2 AND id=$3
+			FOR UPDATE
+		`, workspaceID, string(provider), credentialID).Scan(&id, &ciphertext, &expiresAt)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeCredential{}, ErrNotConnected
 	}
@@ -260,7 +334,7 @@ func (s *Service) credential(
 			return RuntimeCredential{}, err
 		}
 		return RuntimeCredential{
-			Provider: provider, AccessToken: payload.AccessToken, ExpiresAt: expiresAt,
+			ID: id, Provider: provider, AccessToken: payload.AccessToken, ExpiresAt: expiresAt,
 			UserID: payload.UserID, Email: payload.Email,
 		}, nil
 	}
@@ -270,7 +344,7 @@ func (s *Service) credential(
 
 	refreshed, refreshedExpiry, err := s.refreshCredential(ctx, provider, payload)
 	if err != nil {
-		return RuntimeCredential{}, err
+		return RuntimeCredential{}, fmt.Errorf("%w: %v", ErrCredentialRefresh, err)
 	}
 	encrypted, err := s.vault.seal(refreshed, credentialAAD(workspaceID, provider))
 	if err != nil {
@@ -279,15 +353,15 @@ func (s *Service) credential(
 	if _, err := tx.Exec(ctx, `
 		UPDATE model_oauth_credentials
 		SET credential_ciphertext=$3, expires_at=$4, updated_at=now()
-		WHERE workspace_id=$1 AND provider=$2
-	`, workspaceID, string(provider), encrypted, refreshedExpiry); err != nil {
+		WHERE workspace_id=$1 AND provider=$2 AND id=$5
+	`, workspaceID, string(provider), encrypted, refreshedExpiry, id); err != nil {
 		return RuntimeCredential{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return RuntimeCredential{}, err
 	}
 	return RuntimeCredential{
-		Provider: provider, AccessToken: refreshed.AccessToken, ExpiresAt: refreshedExpiry,
+		ID: id, Provider: provider, AccessToken: refreshed.AccessToken, ExpiresAt: refreshedExpiry,
 		UserID: refreshed.UserID, Email: refreshed.Email,
 	}, nil
 }
@@ -298,24 +372,46 @@ func (s *Service) saveCredential(
 	provider Provider,
 	payload credentialPayload,
 	expiresAt time.Time,
-) error {
+	accountSubject string,
+	displayLabel string,
+) (uuid.UUID, error) {
 	encrypted, err := s.vault.seal(payload, credentialAAD(workspaceID, provider))
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
-	label := "Connected"
-	_, err = s.pool.Exec(ctx, `
+	accountSubject = strings.TrimSpace(accountSubject)
+	displayLabel = strings.TrimSpace(displayLabel)
+	if displayLabel == "" {
+		displayLabel = "Connected"
+	}
+	id := uuid.New()
+	if accountSubject == "" {
+		err = s.pool.QueryRow(ctx, `
+			INSERT INTO model_oauth_credentials (
+				id, workspace_id, provider, account_subject,
+				credential_ciphertext, expires_at, display_label
+			)
+			VALUES ($1, $2, $3, '', $4, $5, $6)
+			RETURNING id
+		`, id, workspaceID, string(provider), encrypted, expiresAt, displayLabel).Scan(&id)
+		return id, err
+	}
+	err = s.pool.QueryRow(ctx, `
 		INSERT INTO model_oauth_credentials (
-			workspace_id, provider, credential_ciphertext, expires_at, display_label
+			id, workspace_id, provider, account_subject,
+			credential_ciphertext, expires_at, display_label
 		)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (workspace_id, provider) DO UPDATE
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (workspace_id, provider, account_subject)
+		WHERE btrim(account_subject) <> ''
+		DO UPDATE
 		SET credential_ciphertext=EXCLUDED.credential_ciphertext,
 		    expires_at=EXCLUDED.expires_at,
 		    display_label=EXCLUDED.display_label,
 		    updated_at=now()
-	`, workspaceID, string(provider), encrypted, expiresAt, label)
-	return err
+		RETURNING id
+	`, id, workspaceID, string(provider), accountSubject, encrypted, expiresAt, displayLabel).Scan(&id)
+	return id, err
 }
 
 func credentialAAD(workspaceID uuid.UUID, provider Provider) string {

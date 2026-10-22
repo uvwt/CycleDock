@@ -65,11 +65,11 @@ func TestModelOAuthCredentialsAreEncryptedScopedAndRefreshable(t *testing.T) {
 		}
 	}
 
-	if err := service.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
+	if _, err := service.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
 		AccessToken: "old-access", RefreshToken: "old-refresh",
 		ClientID: xaiClientID, TokenURL: refreshServer.URL,
 		UserID: "user-1", Email: "old@example.com",
-	}, time.Now().Add(-time.Minute)); err != nil {
+	}, time.Now().Add(-time.Minute), "user-1", "old@example.com"); err != nil {
 		t.Fatalf("save credential: %v", err)
 	}
 
@@ -121,6 +121,83 @@ func TestModelOAuthCredentialsAreEncryptedScopedAndRefreshable(t *testing.T) {
 		if bytes.Contains(refreshedCiphertext, []byte(secret)) {
 			t.Fatalf("refreshed ciphertext contains plaintext %q", secret)
 		}
+	}
+}
+
+func TestModelOAuthCredentialsSupportMultipleAccountsAndReconnectSameAccount(t *testing.T) {
+	service, pool := newModelAuthIntegrationService(t, Config{})
+	ctx := context.Background()
+	workspaceID := uuid.New()
+	if _, err := pool.Exec(ctx, "INSERT INTO workspaces (id, name) VALUES ($1, $2)", workspaceID, "Multi account"); err != nil {
+		t.Fatal(err)
+	}
+
+	firstID, err := service.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
+		AccessToken: "first-access", RefreshToken: "first-refresh",
+		ClientID: xaiClientID, TokenURL: "https://example.invalid/token",
+		UserID: "user-a", Email: "a@example.com",
+	}, time.Now().Add(time.Hour), "user-a", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := service.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
+		AccessToken: "second-access", RefreshToken: "second-refresh",
+		ClientID: xaiClientID, TokenURL: "https://example.invalid/token",
+		UserID: "user-b", Email: "b@example.com",
+	}, time.Now().Add(time.Hour), "user-b", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID == secondID {
+		t.Fatal("different accounts reused one credential id")
+	}
+
+	reconnectedID, err := service.saveCredential(ctx, workspaceID, ProviderGrok, credentialPayload{
+		AccessToken: "first-access-new", RefreshToken: "first-refresh-new",
+		ClientID: xaiClientID, TokenURL: "https://example.invalid/token",
+		UserID: "user-a", Email: "a-new@example.com",
+	}, time.Now().Add(2*time.Hour), "user-a", "a-new@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconnectedID != firstID {
+		t.Fatalf("reconnect id=%s, want original %s", reconnectedID, firstID)
+	}
+
+	status, err := service.Status(ctx, workspaceID, ProviderGrok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Connected || len(status.Accounts) != 2 {
+		t.Fatalf("status=%+v, want two connected accounts", status)
+	}
+	var count int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM model_oauth_credentials WHERE workspace_id=$1 AND provider=$2",
+		workspaceID, string(ProviderGrok),
+	).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("credential count=%d, want 2", count)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workspace_model_routes (
+			id, workspace_id, position, enabled, provider_type, credential_id, model
+		)
+		VALUES ($1, $2, 0, true, 'grok', $3, 'grok-test')
+	`, uuid.New(), workspaceID, firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Disconnect(ctx, workspaceID, ProviderGrok, firstID); !errors.Is(err, ErrCredentialInUse) {
+		t.Fatalf("disconnect routed account error=%v, want ErrCredentialInUse", err)
+	}
+	if _, err := pool.Exec(ctx, "DELETE FROM workspace_model_routes WHERE workspace_id=$1", workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Disconnect(ctx, workspaceID, ProviderGrok, firstID); err != nil {
+		t.Fatalf("disconnect unused account: %v", err)
 	}
 }
 
