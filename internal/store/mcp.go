@@ -367,6 +367,7 @@ func (s *Store) CreateAgentFollowup(
 		if err := tx.Commit(ctx); err != nil {
 			return FollowupResult{}, err
 		}
+		s.notifyWorkReady()
 		return FollowupResult{
 			EventID: existing.CauseEventID.UUID, TriggerID: existing.ID, Reused: true,
 		}, nil
@@ -402,6 +403,7 @@ func (s *Store) CreateAgentFollowup(
 	if err := tx.Commit(ctx); err != nil {
 		return FollowupResult{}, err
 	}
+	s.notifyWorkReady()
 	return FollowupResult{EventID: event.ID, TriggerID: trigger.ID}, nil
 }
 

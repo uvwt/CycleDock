@@ -127,7 +127,7 @@ MCP 一套状态机
 2. 写入 human_comment Trigger。
 3. 如果内置 Agent 可执行，创建 queued AgentRun。
 4. commit。
-5. commit 后通知本地 dispatcher。
+5. commit 后通知本地 dispatcher。通知只负责叫醒；有没有 current Run、由谁执行，仍由认领决定。
 
 ### 加入队列
 
@@ -138,6 +138,7 @@ MCP 一套状态机
 3. 不修改 current Run。
 4. 不创建新 Run。
 5. commit。
+6. commit 后通知本地 dispatcher。当前卡仍有 current Run 时，这次通知不会启动新 Run。
 
 ### 立即转向
 
@@ -148,6 +149,7 @@ MCP 一套状态机
 3. 将当前 queued/running/waiting_human Run 变为 superseded。
 4. 创建新 queued Run。
 5. commit。
+6. commit 后通知本地 dispatcher。
 
 不能用“先查询 current Run，再分两次写”的方式实现；并发安全由事务 + 数据库约束共同保证。
 

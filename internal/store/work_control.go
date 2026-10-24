@@ -189,6 +189,7 @@ func (s *Store) RetryTrigger(
 		if err := tx.Commit(ctx); err != nil {
 			return RetryTriggerResult{}, err
 		}
+		s.notifyWorkReady()
 		return RetryTriggerResult{TriggerID: existingRetryID, Reused: true}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -226,6 +227,7 @@ func (s *Store) RetryTrigger(
 		if err := tx.Commit(ctx); err != nil {
 			return RetryTriggerResult{}, err
 		}
+		s.notifyWorkReady()
 		return RetryTriggerResult{TriggerID: keyedID, Reused: true}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -246,6 +248,7 @@ func (s *Store) RetryTrigger(
 	if err := tx.Commit(ctx); err != nil {
 		return RetryTriggerResult{}, err
 	}
+	s.notifyWorkReady()
 	return RetryTriggerResult{TriggerID: retryID}, nil
 }
 

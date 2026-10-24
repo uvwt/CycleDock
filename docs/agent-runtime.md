@@ -307,6 +307,7 @@ Dispatcher：
 - 优先启动已经绑定 `cycle_agent` 的 queued Run。
 - 没有 current Run 时，再原子 Claim 最早 pending Trigger。
 - waiting_human 仍占 current Run 槽位，不会被自动越过。
+- 人类评论、回复续跑、人工重试和 MCP followup 在事务提交后立刻叫醒本机 Dispatcher。1 秒轮询只兜底漏掉的唤醒；Schedule 与 lease 恢复仍由维护循环在同一轮里认领。
 
 Connection test：
 

@@ -135,6 +135,7 @@ func main() {
 		NexusDock: nexusDockService,
 		Live:      live,
 	})
+	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("Cycle Agent dispatcher stopped", "error", err)

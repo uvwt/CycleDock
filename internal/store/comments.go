@@ -83,6 +83,7 @@ func (s *Store) submitComment(ctx context.Context, p SubmitCommentParams, requir
 			if err := tx.Commit(ctx); err != nil {
 				return SubmitCommentResult{}, err
 			}
+			s.notifyWorkReady()
 			return existing.Result, nil
 		}
 	}
@@ -171,6 +172,7 @@ func (s *Store) submitComment(ctx context.Context, p SubmitCommentParams, requir
 	if err := tx.Commit(ctx); err != nil {
 		return SubmitCommentResult{}, err
 	}
+	s.notifyWorkReady()
 	return result, nil
 }
 

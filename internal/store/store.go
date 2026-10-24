@@ -22,10 +22,26 @@ const DefaultClaimLease = 2 * time.Minute
 type Store struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
+	// workReady 在可能产生可认领 Trigger 的事务提交后叫醒本机 Dispatcher。
+	// 未注册时写入仍然成功，只是要等 Dispatcher 下一轮轮询。
+	workReady func()
 }
 
 func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, queries: db.New(pool)}
+}
+
+// SetWorkReadyNotifier 注册事务提交后的叫醒函数。进程启动时由 Dispatcher 注册一次。
+// 评论、回复续跑、人工重试和 MCP followup 都会调用它；Schedule 与 lease 恢复仍由
+// Dispatcher 自己的维护循环立刻认领，不经过这里。
+func (s *Store) SetWorkReadyNotifier(notify func()) {
+	s.workReady = notify
+}
+
+func (s *Store) notifyWorkReady() {
+	if s.workReady != nil {
+		s.workReady()
+	}
 }
 
 func (s *Store) CreateWorkspace(ctx context.Context, name string) (db.Workspace, error) {

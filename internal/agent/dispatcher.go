@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/uvwt/CycleDock/internal/domain"
@@ -35,6 +36,10 @@ type Dispatcher struct {
 	maintenanceEvery time.Duration
 	maxConcurrent    int
 	leaseDuration    time.Duration
+	// wake 只有一个缓冲。pending 补上「信号还在缓冲里、新提交只能丢掉发送」的窗口：
+	// 消费方查完库后若发现期间又有提交，会再查一次。
+	wake    chan struct{}
+	pending atomic.Bool
 }
 
 func NewDispatcher(
@@ -69,6 +74,17 @@ func NewDispatcher(
 		store: dataStore, runner: runner, logger: logger,
 		pollInterval: config.PollInterval, maintenanceEvery: config.MaintenanceEvery,
 		maxConcurrent: config.MaxConcurrent, leaseDuration: config.LeaseDuration,
+		wake: make(chan struct{}, 1),
+	}
+}
+
+// Wake 让 Dispatcher 立刻尝试认领。提交评论、回复、重试或 MCP followup 后调用。
+// 认领仍然由数据库决定；卡上已有 current Run 时，这次唤醒只会空查一次。
+func (d *Dispatcher) Wake() {
+	d.pending.Store(true)
+	select {
+	case d.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -78,14 +94,13 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	maintenance := time.NewTicker(d.maintenanceEvery)
 	defer maintenance.Stop()
 
-	wake := make(chan struct{}, 1)
 	slots := make(chan struct{}, d.maxConcurrent)
 	var workers sync.WaitGroup
 
 	if err := d.maintain(ctx); err != nil {
 		d.logger.Error("Cycle Agent maintenance failed", "error", err)
 	}
-	d.dispatchAvailable(ctx, slots, &workers, wake)
+	d.drainReady(ctx, slots, &workers)
 
 	for {
 		select {
@@ -97,11 +112,22 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			if err := d.maintain(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				d.logger.Error("Cycle Agent maintenance failed", "error", err)
 			}
-			d.dispatchAvailable(ctx, slots, &workers, wake)
+			d.drainReady(ctx, slots, &workers)
 		case <-poll.C:
-			d.dispatchAvailable(ctx, slots, &workers, wake)
-		case <-wake:
-			d.dispatchAvailable(ctx, slots, &workers, wake)
+			d.drainReady(ctx, slots, &workers)
+		case <-d.wake:
+			d.drainReady(ctx, slots, &workers)
+		}
+	}
+}
+
+// drainReady 先清掉 pending，再认领。查询期间若又有提交，pending 会重新变为 true，于是再查一次。
+func (d *Dispatcher) drainReady(ctx context.Context, slots chan struct{}, workers *sync.WaitGroup) {
+	for {
+		d.pending.Store(false)
+		d.dispatchAvailable(ctx, slots, workers)
+		if !d.pending.Load() {
+			return
 		}
 	}
 }
@@ -127,7 +153,6 @@ func (d *Dispatcher) dispatchAvailable(
 	ctx context.Context,
 	slots chan struct{},
 	workers *sync.WaitGroup,
-	wake chan<- struct{},
 ) {
 	for len(slots) < cap(slots) && ctx.Err() == nil {
 		claim, err := d.store.ClaimNextBuiltInRun(ctx, time.Now().UTC(), d.leaseDuration)
@@ -147,10 +172,8 @@ func (d *Dispatcher) dispatchAvailable(
 			defer func() {
 				<-slots
 				workers.Done()
-				select {
-				case wake <- struct{}{}:
-				default:
-				}
+				// Run 结束后马上看下一条，队列里的 Trigger 不用等 ticker。
+				d.Wake()
 			}()
 			d.runClaim(ctx, claim)
 		}(*claim)

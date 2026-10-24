@@ -542,6 +542,78 @@ func TestRunnerWaitForHumanStopsWithoutResult(t *testing.T) {
 	}
 }
 
+func TestCommentWakesDispatcherWithoutWaitingForPoll(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeModelResponse(t, w, "woke without the ticker", nil)
+	}))
+	defer modelHTTP.Close()
+
+	workspace, _ := dataStore.CreateWorkspace(ctx, "Wake Workspace")
+	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
+	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 轮询和维护都远长于断言时间。Run 能在几秒内完成，只能是提交后的 Wake。
+	runCtx, cancel := context.WithCancel(ctx)
+	dispatcher := NewDispatcher(dataStore, modelclient.New(), nil, DispatcherConfig{
+		PollInterval: time.Hour, MaintenanceEvery: time.Hour,
+		MaxConcurrent: 1, LeaseDuration: time.Minute,
+	})
+	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := dispatcher.Run(runCtx); err != nil {
+			t.Errorf("dispatcher: %v", err)
+		}
+	}()
+
+	trigger, err := dataStore.SubmitComment(ctx, store.SubmitCommentParams{
+		WorkspaceID: workspace.ID, CardID: card.ID, AuthorSourceID: human.ID,
+		Content: "start now", IdempotencyKey: "wake-trigger",
+		DispatchMode: domain.DispatchModeEnqueue,
+	})
+	if err != nil {
+		cancel()
+		wg.Wait()
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var status string
+	var scanErr error
+	for {
+		scanErr = pool.QueryRow(ctx,
+			"SELECT status FROM agent_runs WHERE workspace_id=$1 AND trigger_id=$2",
+			workspace.ID, trigger.TriggerID,
+		).Scan(&status)
+		if scanErr == nil && status == string(domain.RunStatusCompleted) {
+			break
+		}
+		if scanErr != nil && !errors.Is(scanErr, pgx.ErrNoRows) {
+			cancel()
+			wg.Wait()
+			t.Fatal(scanErr)
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			wg.Wait()
+			t.Fatalf("comment was not claimed without the poll, status=%q err=%v", status, scanErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	wg.Wait()
+}
+
 func TestTwoDispatchersExecuteOneTriggerOnce(t *testing.T) {
 	dataStore, pool := newAgentIntegrationStore(t)
 	ctx := context.Background()
