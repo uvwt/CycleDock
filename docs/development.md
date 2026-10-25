@@ -1,255 +1,141 @@
 # 开发路线
 
-## 1. 总体策略
+## 1. 当前目标
 
-这是一个全新项目，不在旧 CycleDock 上做 v2 patch。
+CycleDock 在首次公开发布前完成 Session-first / Google ADK Go v2 Runtime 重构。
 
-旧 CycleDock 与 ChatDock 只作为参考实现。
+不迁移旧 DEV Runtime 数据；当前只保留一套 Card → Turn → Attempt Runtime。
 
-第一原则：
+完整决策见 session-first-adk.md。
 
-> 先把数据模型与并发规则做正确，再做 Agent Runtime 和 UI 丰富度。
+## 2. 开发原则
 
-当前实现进度：
+1. Card = persistent Agent Session。
+2. 先把 Session persistence / Turn / Attempt 并发语义做正确，再切 Runner。
+3. PostgreSQL 是唯一正式数据库；pgx + sqlc + Goose。
+4. 不因为 ADK 自带 DatabaseSessionService 就引入 GORM。
+5. 每阶段必须有真实 PostgreSQL 验证。
+6. 不提供旧 Runtime Adapter 兼容层。
+7. 首次公开发布使用已经重整完成的单一 `000001_initial.sql`。
 
-- Phase 0 Foundation：已建立工程、数据库、Web、Docker Compose、CI 与 migration 基线。
-- Phase 1 Work Core：已实现核心 Domain / Store，并以真实 PostgreSQL integration tests 覆盖关键并发一致性。
-- Phase 2 Human Web：已实现 Human 身份、NexusDock OIDC / Administrator fallback、Web Session、HTTP API 与 Project/Card Web 工作台。
-- Phase 3 External MCP：已实现标准 Streamable HTTP MCP、OAuth metadata/DCR/S256 PKCE/token rotation、Workspace approval、统一 Store 工具面、官方 Skill 与 AI Connect。
-- Phase 4 Built-in Cycle Agent：已实现 Workspace Agent settings、Dispatcher、Runner、Context Builder、OpenAI-compatible Model Client 与 outbound MCP Client。
-- Phase 5 Product Polish / Release Preparation：已实现运行恢复、retry/cancel、连接测试、长历史治理、基础 i18n/mobile/accessibility 与发布前强化验证。
-
-## 2. Phase 0 — Foundation
-
-目标：得到干净、可运行、可测试的工程骨架。
+## 3. Phase A — Session Foundation
 
 内容：
 
-- Go module。
-- chi server。
-- React + TypeScript + Vite。
-- PostgreSQL。
-- pgx + sqlc。
-- Goose。
-- Docker Compose。
-- CI。
-- `000001_initial.sql`。
-- `/healthz`。
+- 锁定 Google ADK Go v2。
+- Session-first 架构文档。
+- Card ID = session_id。
+- Workspace ID = user_id。
+- PostgreSQL session.Service。
+- Session state。
+- Event persistence。
+- Compaction metadata。
+- ADK official session conformance。
+- 跨 Turn tool result persistence。
 
-完成条件：
+当前状态：已完成并形成 Phase A 提交；真实 PostgreSQL、ADK conformance、race 与 migration round-trip 均通过。
 
-- 空 PostgreSQL 可以 migration up。
-- migration 可 down/up 验证。
-- Go tests / vet 通过。
-- Web build / lint 通过。
-- Docker Compose 真启动。
+## 4. Phase B — Turn / Attempt
 
-## 3. Phase 1 — Work Core
+删除 Trigger / AgentRun 的目标语义，建立：
 
-实现：
-
-- Workspace。
-- Project。
-- Card。
-- Event。
-- Trigger。
-- AgentRun。
-- CardSchedule。
-
-重点领域行为：
-
-- Discussion Active / Archived 生命周期与 Human-only Archive/Delete。
-- Discussion → Todo / Ongoing 的 AI 派生约束（不是状态转换）；Human Web 另允许在 Board 直接创建无 source Discussion 的 Todo。
-- Todo → Working → Review → Done 状态机。
-- Ongoing 状态机。
-- Comment → Trigger。
+- card_turns。
+- turn_attempts。
+- Human / Schedule / System Turn source。
+- initial / retry / recovery Attempt reason。
 - enqueue。
-- interrupt / supersede。
-- Claim。
-- one-current-run-per-card。
-- FIFO pending Trigger。
+- interrupt。
+- current Attempt 唯一。
+- FIFO pending Turn。
+- heartbeat / lease。
 - waiting_human。
-- heartbeat / lease expiry。
-- stale result protection。
-- Ongoing health 派生。
-- Schedule → Trigger。
-- missed schedule skip。
-- Human-only Done。
+- retry = new Attempt。
+- stale invocation write guard。
 
-必须使用真实 PostgreSQL integration tests。
+必须有真实并发测试：
 
-重点并发测试：
+- 两个 dispatcher 只能 claim 一次。
+- enqueue 不污染 current Session。
+- interrupt 与旧 Attempt event append 并发时旧写入失败。
+- Schedule occurrence 去重。
+- restart recovery 不复活旧 execution identity。
 
-- 两个 Agent 同时 Claim 同 Trigger，只能一个成功。
-- 两个请求同时创建 current Run，只能一个成功。
-- interrupt 与旧 Run finish 并发时，旧 Run 不能覆盖新方向。
-- Scheduler 重复扫描同一 occurrence，只生成一个 Trigger。
+Phase B 已完成并提交，真实 PostgreSQL 并发测试、全仓 test/vet、核心 package -race 与 migration up/down/up 均通过。
 
-## 4. Phase 2 — Human Web
+## 5. Phase C — ADK Runner Cutover
 
-实现：
+Built-in Runtime cutover 已完成：LlmAgent / Runner、Card Session resume、Turn/Attempt Dispatcher、产品 SSE 状态源、Todo integration、Human input/control、Discussion metadata、Generate Work、Schedule Turn、Model Route adapter 与 MCP/NexusDock FunctionTool adapter 已进入正式执行路径。
 
-- Hosted NexusDock OIDC。
-- Self-hosted Administrator fallback。
-- Web Session。
-- Projects。
-- Project Board。
-- Card create/edit/move。
-- Card Detail。
-- Timeline。
-- Comment。
-- Queue UI。
-- “加入队列 / 立即转向”。
-- waiting_human “回复并继续”。
-- Human Review / Done。
-- Ongoing Schedule UI。
-- Health / Last Check-in / Next Run。
+旧执行 loop / Context Builder 已在 Phase F 删除；Built-in Agent 只有 ADK Runner 执行路径。
 
-此阶段即使没有内置 Agent，也应能作为完整人工任务看板运行。
+Phase C 的验收包括真实 PostgreSQL 跨 Turn tool-response continuity：第一 Turn 的 MCP FunctionResponse 能直接进入第二 Turn prompt，且第二 Turn 在不要求 freshness 时不重复调用只读工具。
 
-## 5. Phase 3 — External MCP
+## 6. Phase D — Context / Artifact / History
 
-实现：
+已完成：
 
-- Remote Streamable HTTP MCP。
-- OAuth metadata。
-- DCR。
-- Authorization Code + S256 PKCE。
-- Access / Refresh token。
-- Workspace approval。
-- MCP tools。
-- Claim / Progress / Finish。
-- Confirm。
-- 幂等与并发。
-- 官方 CycleDock Skill。
-- AI connect docs。
+- ADK Tail Retention Context Compaction：生产默认约 24k token 阈值、20 raw Event tail，并使用 bounded summarizer input。
+- PostgreSQL ADK ArtifactService：versioned payload / MIME / metadata / Card Session scope，并通过 advisory lock 保证并发版本唯一。
+- >12k MCP 结果结构化脱敏后外置 Artifact；FunctionResponse 只留 preview/ref，Agent 可通过 `cycledock_read_artifact` 分块读回。
+- `cycledock_search_session_history`：从同 Card 原始 PostgreSQL Session Event 检索被 compaction 覆盖的精确旧证据。
+- Thought / ThoughtSignature 丢弃、结构化 credential 递归脱敏，以及 Compaction bookkeeping ownership guard。
+- 真实 PostgreSQL 验证：Artifact/History 精确值恢复、不重复真实 MCP 调用、raw Event 不被 compaction 删除、五个核心包 `-race`、migration v12 up/down/up。
 
-完成条件：
+Model credential、ordered routes、failover 与普通 MCP/NexusDock 继续通过 ADK adapter 保留；只有在 ADK 原生实现达到同等可靠性时才删除现有 transport/client，不为了框架纯度重写成熟能力。
 
-- 官方 MCP Go SDK 通过真实 HTTP 完成 Protected Resource Metadata、DCR、OAuth、Streamable HTTP Connect / ListTools。
-- 真正调用 list/create/followup/claim/progress/finish/get。
-- 并发 Claim 与 token rotation 验证。
+## 7. Phase E — External MCP / Memory
 
-## 6. Phase 4 — Built-in Cycle Agent
+External MCP Agent cutover 已完成：
 
-从 ChatDock 选择性参考：
+- MCP Server v0.4 使用 `create_turn / claim_attempt / heartbeat_attempt / report_progress / add_finding / check_in / finish_attempt`。
+- External OAuth Source 与 Built-in Agent 共用 `card_turns / turn_attempts`、Card 锁、ownership 与 stale-write guard。
+- `get_card / list_cards` 已切到 `pending_turns / current_attempt / attempt_history`。
+- Card-scoped Claim 保证外部客户端不会因为 Workspace FIFO 抢到别的 Card；同 Source 网络重试复用当前 Attempt。
+- Human reply / Schedule Turn 可由 External Agent Claim；cross-source heartbeat/progress/finish 被拒。
+- 官方 OAuth + Streamable HTTP MCP SDK E2E 与真实 PostgreSQL 并发/race 已通过。
+- 旧 `create_followup / claim_work / heartbeat_run / finish_run` 不提供兼容别名。
 
-- OpenAI-compatible Model Client。
-- MCP Client。
+Memory 仍只在出现跨 Card 知识召回需求后实现；Self-hosted 默认不依赖 Vertex Memory Bank，不提前引入向量数据库。
 
-新增：
+## 8. Phase F — Cleanup / Release
 
-- Workspace Cycle Agent settings。
-- Agent Dispatcher。
-- Agent Runner。
-- Context Builder。
-- Heartbeat。
-- waiting_human。
-- Run lifecycle。
+Cleanup 已完成：
 
-完整链路：
+- 删除旧执行 Runtime Store/API/query/schema 与旧 Context Builder / context_budget。
+- 保留仍承担 credential、ordered failover、OpenAI-compatible / ChatGPT / Grok transport、MCP transport 的 modelclient / mcpclient；它们是 ADK adapter 基础设施，不是第二套 Agent loop。
+- HTTP / MCP / Web / SSE 全面使用 Turn / Attempt 语义；SSE 使用 `attempt.*` + `attempt_id`。
+- Migration 重整为单一首次发布 `000001_initial.sql`，无旧执行表/列。
+- final baseline 已通过普通数据库与自定义 `search_path` 的 migration round-trip，以及 sqlc 稳定生成。
 
-```text
-Human Comment
-→ Trigger
-→ Queue / Interrupt
-→ Run
-→ Context Builder
-→ Model
-→ MCP Tools
-→ Finding / Progress / Result
-→ Review
-```
+当前只剩 Release Gate 的最终全量验证。
 
-必须验证：
+## 9. Release Gate
 
-- 新 Run 不继承旧 Run raw tool context。
-- 新 Run 能看到旧 Finding / Result。
-- 排队 Trigger 开始时读取最新 Card Context。
-- superseded Run 晚返回不污染当前 Card。
+发布前至少：
 
-当前实现：
+- go test ./...
+- go vet ./...
+- core packages -race
+- ADK session conformance on real PostgreSQL
+- Session compaction round-trip
+- cross-Turn tool response continuity
+- stale invocation rejection
+- Turn claim concurrency
+- enqueue / interrupt concurrency
+- Schedule duplicate prevention
+- Workspace isolation
+- migration empty DB up/down/up
+- Web lint/build/audit
+- Docker Linux smoke
+- OIDC / MCP OAuth E2E
+- Human-only Done
+- 文档与实现一致
 
-- 每个 Workspace 最多一条专用 `cycle_agent` Source，只有 Workspace owner 可以读取/修改 Built-in Agent settings。
-- Workspace Agent settings 只保存 Workspace Agent instructions；模型选择拆为有序 `workspace_model_routes`，支持多 Route、启停和排序。Cycle Agent 不保存 Workspace 级启用开关，存在 enabled Route 即可执行。
-- ChatGPT / Grok credential 以独立 ID 支持同 Provider 多账号；订阅 Route 显式绑定 credential，OpenAI-compatible Route 保存 endpoint / api_key_env。
-- 模型请求 timeout、上下文预算和异常工具循环保护属于 Runtime 内部默认策略，不进入 Workspace Settings。
-- Model API Key 与 MCP Bearer Token 不写数据库；配置只保存 `api_key_env` / `bearer_token_env`，运行时从进程环境解析。
-- Dispatcher 同时负责 Schedule / lease maintenance，并只自动 Claim 至少存在一条 enabled Model Route 的 Workspace。
-- queued Run（例如 interrupt / waiting_human reply）优先恢复；普通 pending Trigger 按 sequence 原子 Claim。
-- Context Builder 每个 Run 从最新 Project / Card / bounded meaningful Timeline / 当前 Trigger 重建上下文。
-- 当前 Run 的 system / Card 前缀保持稳定；工具链按 Token 预算自动把较老的已完成工具轮次压缩为确定性摘要，context overflow 会收紧预算后自动重试。
-- OpenAI-compatible Client 使用非流式 `/chat/completions` tool-call loop，具备 timeout 与响应体上限。
-- ChatGPT Plan 使用官方 Sign in with ChatGPT + public Responses API；Grok Subscription 使用 xAI OAuth + Grok inference proxy；两者都不依赖本地 CLI/runtime。
-- subscription transport 使用 store=false / stream=true Responses SSE，并把 current Run 的 tool-call loop 映射为 function call items。
-- Runner 在每轮模型调用层做 forward-only Route failover；429/5xx/timeout/网络/账号 refresh 等可恢复错误向后切换，成功 Route 对本 Run 后续 tool round 保持 sticky；非模型故障不触发切换。
-- 流式请求已产生 partial text 后发生 failover 时发送 ephemeral text reset，避免把两个模型的半截回答拼在一起。
-- outbound MCP Client 使用官方 MCP Go SDK Streamable HTTP；Bearer 只发送到配置 origin，跨 origin redirect 被拒绝，响应有大小上限。
-- raw model messages / tool args / raw MCP results 只存在于当前 Run 内存；只有 Finding / Result / Check-in / meaningful Progress 进入 Timeline。
-- waiting_human 停止本 Run；Human reply 创建新 Trigger / Run。superseded Run 的迟到模型返回无法写 Result。
-- 两 Dispatcher 并发、Context 边界、waiting_human、late model response、Model/MCP HTTP 协议均有 integration tests。
+## 10. Git
 
-## 7. Phase 5 — Product Polish
-
-- expired queued/running lease 不复活旧 Run；Built-in Agent 通过新的 `system_followup` Trigger 恢复。
-- Human cancel pending Trigger / current Run；failed / expired / cancelled work 通过新的 `manual_retry` Trigger retry。
-- Provider / MCP connection test action 与状态反馈；测试不执行任何 MCP Tool。
-- provider timeout、malformed response、MCP initialize/tool transport failure、无法继续压缩的 context budget、异常工具循环都进入明确 failed Run。
-- API Key / MCP token 继续使用部署环境注入；需要跨 Run refresh 的 subscription OAuth token 已使用独立 encrypted credential storage。
-- 基础中英 i18n、mobile Board、loading/error/empty states、键盘拖拽、focus-visible、reduced-motion。
-- 长历史 context 使用 bounded recent Timeline；窗口外 durable facts 原样保留，旧 Comment / Progress 只形成派生 compaction。
-- DST gap / overlap 有明确 occurrence 语义。
-- migration 带数据 up/down/up、production binary、race、OAuth/MCP security 与 cross-workspace isolation 均纳入发布验证。
-
-Human Web 的实时更新 SSE 目前没有加入；Responses Provider 的 SSE 仅是上游模型 transport，不新增产品侧实时通道。
-
-只在真实需求出现后考虑 Card Artifact。
-
-## 8. Release Gate
-
-发布前必须：
-
-- 全量 Go test / vet。
-- 核心 Store / Agent / OAuth / HTTP `-race`。
-- sqlc regenerate clean。
-- Web build / lint / audit。
-- migration empty DB smoke。
-- Docker linux/amd64 smoke。
-- OIDC E2E。
-- MCP OAuth E2E。
-- 两 Agent 并发 Claim。
-- interrupt / supersede race。
-- heartbeat timeout。
-- Schedule duplicate prevention。
-- Schedule timezone / DST 测试。
-- Human-only Done 权限测试。
-- 跨 Workspace 访问隔离测试。
-- 文档与实际工具一致。
-- `npm audit --omit=dev --audit-level=high`。
-- release flags 构建的 production binary 真实启动 smoke。
-
-## 9. Git 工作方式
-
-仓库首次初始化提交后：
-
-- `main` 只保持稳定。
-- 每一阶段使用独立分支 + worktree。
-- 尽量按稳定能力形成小而完整的提交。
-- 完成真实验证后再推送 / PR。
-- 不在主工作区直接开发。
-
-## 10. 第一阶段明确不做
-
-- 兼容旧 CycleDock migration。
-- 数据迁移旧 DEV 测试数据。
-- 独立 Board 表。
-- 通用聊天 Session。
-- raw Agent trace。
-- Agent Marketplace。
-- 多 Agent DAG。
-- Workflow Builder。
-- Redis / MQ / microservices。
-- SQLite。
-- 复杂 RBAC。
-- 自定义 Cron。
-- 向量数据库。
+- main 保持稳定。
+- 短期分支 + 独立 worktree。
+- 当前重构分支：feat/session-first-adk-20261025。
+- 不直接在主工作区改代码。
+- 验证后提交。
+- 不 force push 已共享分支。

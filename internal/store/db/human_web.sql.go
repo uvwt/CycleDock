@@ -68,48 +68,6 @@ func (q *Queries) GetCardSchedule(ctx context.Context, arg GetCardScheduleParams
 	return i, err
 }
 
-const getCurrentRun = `-- name: GetCurrentRun :one
-SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash, cancelled_by_source_id, cancel_reason
-FROM agent_runs
-WHERE workspace_id = $1
-  AND card_id = $2
-  AND status IN ('queued', 'running', 'waiting_human')
-LIMIT 1
-`
-
-type GetCurrentRunParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-}
-
-func (q *Queries) GetCurrentRun(ctx context.Context, arg GetCurrentRunParams) (AgentRun, error) {
-	row := q.db.QueryRow(ctx, getCurrentRun, arg.WorkspaceID, arg.CardID)
-	var i AgentRun
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.CardID,
-		&i.TriggerID,
-		&i.RunnerSourceID,
-		&i.Status,
-		&i.CurrentStage,
-		&i.ProgressSummary,
-		&i.ResultSummary,
-		&i.ErrorSummary,
-		&i.StartedAt,
-		&i.HeartbeatAt,
-		&i.LeaseExpiresAt,
-		&i.FinishedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.FinishIdempotencyKey,
-		&i.FinishRequestHash,
-		&i.CancelledBySourceID,
-		&i.CancelReason,
-	)
-	return i, err
-}
-
 const getProject = `-- name: GetProject :one
 SELECT id, workspace_id, name, description, instructions, created_at, updated_at
 FROM projects
@@ -137,55 +95,8 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 	return i, err
 }
 
-const getTriggerLineage = `-- name: GetTriggerLineage :one
-WITH RECURSIVE lineage AS (
-    SELECT t.id, t.retry_of_trigger_id, t.cause_event_id, 0 AS depth
-    FROM triggers t
-    WHERE t.workspace_id = $1
-      AND t.card_id = $2
-      AND t.id = $3
-
-    UNION ALL
-
-    SELECT parent.id, parent.retry_of_trigger_id, parent.cause_event_id, lineage.depth + 1
-    FROM triggers parent
-    JOIN lineage ON lineage.retry_of_trigger_id = parent.id
-    WHERE parent.workspace_id = $1
-      AND parent.card_id = $2
-)
-SELECT
-    current.retry_of_trigger_id,
-    (
-        SELECT ancestor.cause_event_id
-        FROM lineage ancestor
-        WHERE ancestor.cause_event_id IS NOT NULL
-        ORDER BY ancestor.depth
-        LIMIT 1
-    ) AS source_event_id
-FROM lineage current
-WHERE current.depth = 0
-`
-
-type GetTriggerLineageParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-	TriggerID   uuid.UUID `json:"trigger_id"`
-}
-
-type GetTriggerLineageRow struct {
-	RetryOfTriggerID uuid.NullUUID `json:"retry_of_trigger_id"`
-	SourceEventID    uuid.NullUUID `json:"source_event_id"`
-}
-
-func (q *Queries) GetTriggerLineage(ctx context.Context, arg GetTriggerLineageParams) (GetTriggerLineageRow, error) {
-	row := q.db.QueryRow(ctx, getTriggerLineage, arg.WorkspaceID, arg.CardID, arg.TriggerID)
-	var i GetTriggerLineageRow
-	err := row.Scan(&i.RetryOfTriggerID, &i.SourceEventID)
-	return i, err
-}
-
 const latestCheckinForCard = `-- name: LatestCheckinForCard :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -209,7 +120,7 @@ func (q *Queries) LatestCheckinForCard(ctx context.Context, arg LatestCheckinFor
 		&i.CardID,
 		&i.EventType,
 		&i.ActorSourceID,
-		&i.RunID,
+		&i.AttemptID,
 		&i.Content,
 		&i.CheckinStatus,
 		&i.IdempotencyKey,
@@ -268,18 +179,13 @@ func (q *Queries) ListCardSchedules(ctx context.Context, arg ListCardSchedulesPa
 
 const listCardTimeline = `-- name: ListCardTimeline :many
 SELECT
-    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.run_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
+    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
     s.name AS actor_name,
-    s.kind AS actor_kind,
-    t.id AS trigger_id
+    s.kind AS actor_kind
 FROM events e
 JOIN sources s
   ON s.workspace_id = e.workspace_id
  AND s.id = e.actor_source_id
-LEFT JOIN triggers t
-  ON t.workspace_id = e.workspace_id
- AND t.card_id = e.card_id
- AND t.cause_event_id = e.id
 WHERE e.workspace_id = $1
   AND e.card_id = $2
 ORDER BY e.sequence
@@ -292,12 +198,12 @@ type ListCardTimelineParams struct {
 
 type ListCardTimelineRow struct {
 	ID             uuid.UUID          `json:"id"`
-	Sequence       pgtype.Int8        `json:"sequence"`
+	Sequence       int64              `json:"sequence"`
 	WorkspaceID    uuid.UUID          `json:"workspace_id"`
 	CardID         uuid.UUID          `json:"card_id"`
 	EventType      string             `json:"event_type"`
 	ActorSourceID  uuid.UUID          `json:"actor_source_id"`
-	RunID          uuid.NullUUID      `json:"run_id"`
+	AttemptID      uuid.NullUUID      `json:"attempt_id"`
 	Content        string             `json:"content"`
 	CheckinStatus  pgtype.Text        `json:"checkin_status"`
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
@@ -305,7 +211,6 @@ type ListCardTimelineRow struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	ActorName      string             `json:"actor_name"`
 	ActorKind      string             `json:"actor_kind"`
-	TriggerID      uuid.NullUUID      `json:"trigger_id"`
 }
 
 func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelineParams) ([]ListCardTimelineRow, error) {
@@ -324,7 +229,7 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.CardID,
 			&i.EventType,
 			&i.ActorSourceID,
-			&i.RunID,
+			&i.AttemptID,
 			&i.Content,
 			&i.CheckinStatus,
 			&i.IdempotencyKey,
@@ -332,96 +237,6 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.CreatedAt,
 			&i.ActorName,
 			&i.ActorKind,
-			&i.TriggerID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPendingQueue = `-- name: ListPendingQueue :many
-WITH RECURSIVE trigger_roots AS (
-    SELECT root.id, root.cause_event_id AS source_event_id
-    FROM triggers root
-    WHERE root.workspace_id = $1
-      AND root.card_id = $2
-      AND root.retry_of_trigger_id IS NULL
-
-    UNION ALL
-
-    SELECT child.id, parent.source_event_id
-    FROM triggers child
-    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
-    WHERE child.workspace_id = $1
-      AND child.card_id = $2
-)
-SELECT
-    t.id,
-    t.sequence,
-    t.cause,
-    t.dispatch_mode,
-    t.cause_event_id,
-    t.retry_of_trigger_id,
-    trigger_roots.source_event_id,
-    COALESCE(e.content, '') AS content,
-    t.created_at
-FROM triggers t
-JOIN trigger_roots ON trigger_roots.id = t.id
-LEFT JOIN events e
-  ON e.workspace_id = t.workspace_id
- AND e.card_id = t.card_id
- AND e.id = t.cause_event_id
-LEFT JOIN agent_runs r
-  ON r.workspace_id = t.workspace_id
- AND r.trigger_id = t.id
-WHERE t.workspace_id = $1
-  AND t.card_id = $2
-  AND t.cancelled_at IS NULL
-  AND r.id IS NULL
-ORDER BY t.sequence
-`
-
-type ListPendingQueueParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-}
-
-type ListPendingQueueRow struct {
-	ID               uuid.UUID          `json:"id"`
-	Sequence         pgtype.Int8        `json:"sequence"`
-	Cause            string             `json:"cause"`
-	DispatchMode     string             `json:"dispatch_mode"`
-	CauseEventID     uuid.NullUUID      `json:"cause_event_id"`
-	RetryOfTriggerID uuid.NullUUID      `json:"retry_of_trigger_id"`
-	SourceEventID    uuid.NullUUID      `json:"source_event_id"`
-	Content          string             `json:"content"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-}
-
-func (q *Queries) ListPendingQueue(ctx context.Context, arg ListPendingQueueParams) ([]ListPendingQueueRow, error) {
-	rows, err := q.db.Query(ctx, listPendingQueue, arg.WorkspaceID, arg.CardID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListPendingQueueRow{}
-	for rows.Next() {
-		var i ListPendingQueueRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Sequence,
-			&i.Cause,
-			&i.DispatchMode,
-			&i.CauseEventID,
-			&i.RetryOfTriggerID,
-			&i.SourceEventID,
-			&i.Content,
-			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -459,27 +274,27 @@ WITH activity AS (
     UNION ALL
 
     SELECT
-        r.id,
-        r.card_id,
+        a.id,
+        a.card_id,
         c.title AS card_title,
         c.kind AS card_kind,
-        'run'::text AS activity_type,
-        r.status,
-        COALESCE(NULLIF(r.error_summary, ''), NULLIF(r.result_summary, ''), NULLIF(r.progress_summary, ''), NULLIF(r.current_stage, ''), t.cause) AS content,
+        'attempt'::text AS activity_type,
+        a.status,
+        COALESCE(NULLIF(a.error_summary, ''), NULLIF(a.result_summary, ''), NULLIF(a.progress_summary, ''), NULLIF(a.current_stage, ''), t.content) AS content,
         s.name AS actor_name,
-        COALESCE(r.finished_at, r.started_at, r.created_at) AS occurred_at
-    FROM agent_runs r
+        COALESCE(a.finished_at, a.started_at, a.created_at) AS occurred_at
+    FROM turn_attempts a
     JOIN cards c
-      ON c.workspace_id = r.workspace_id
-     AND c.id = r.card_id
-    JOIN triggers t
-      ON t.workspace_id = r.workspace_id
-     AND t.card_id = r.card_id
-     AND t.id = r.trigger_id
+      ON c.workspace_id = a.workspace_id
+     AND c.id = a.card_id
+    JOIN card_turns t
+      ON t.workspace_id = a.workspace_id
+     AND t.card_id = a.card_id
+     AND t.id = a.turn_id
     JOIN sources s
-      ON s.workspace_id = r.workspace_id
-     AND s.id = r.runner_source_id
-    WHERE r.workspace_id = $2
+      ON s.workspace_id = a.workspace_id
+     AND s.id = a.runner_source_id
+    WHERE a.workspace_id = $2
       AND c.project_id = $3
 
     UNION ALL
@@ -489,24 +304,24 @@ WITH activity AS (
         t.card_id,
         c.title AS card_title,
         c.kind AS card_kind,
-        'trigger'::text AS activity_type,
+        'turn'::text AS activity_type,
         CASE WHEN t.cancelled_at IS NULL THEN 'queued' ELSE 'cancelled' END AS status,
-        COALESCE(NULLIF(t.cancel_reason, ''), t.cause) AS content,
+        COALESCE(NULLIF(t.cancel_reason, ''), t.content) AS content,
         COALESCE(s.name, '') AS actor_name,
         COALESCE(t.cancelled_at, t.created_at) AS occurred_at
-    FROM triggers t
+    FROM card_turns t
     JOIN cards c
       ON c.workspace_id = t.workspace_id
      AND c.id = t.card_id
     LEFT JOIN sources s
       ON s.workspace_id = t.workspace_id
      AND s.id = t.created_by_source_id
-    LEFT JOIN agent_runs r
-      ON r.workspace_id = t.workspace_id
-     AND r.trigger_id = t.id
+    LEFT JOIN turn_attempts a
+      ON a.workspace_id = t.workspace_id
+     AND a.turn_id = t.id
     WHERE t.workspace_id = $2
       AND c.project_id = $3
-      AND (r.id IS NULL OR t.cancelled_at IS NOT NULL)
+      AND (a.id IS NULL OR t.cancelled_at IS NOT NULL)
 )
 SELECT id, card_id, card_title, card_kind, activity_type, status, content, actor_name, occurred_at
 FROM activity
@@ -566,7 +381,7 @@ const listProjectCardSummaries = `-- name: ListProjectCardSummaries :many
 SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
-    current_run.status AS current_run_status
+    current_attempt.status AS current_attempt_status
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT e.checkin_status
@@ -577,10 +392,10 @@ LEFT JOIN LATERAL (
     ORDER BY e.sequence DESC
     LIMIT 1
 ) latest_checkin ON true
-LEFT JOIN agent_runs current_run
-  ON current_run.workspace_id = c.workspace_id
- AND current_run.card_id = c.id
- AND current_run.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
 WHERE c.workspace_id = $1
   AND c.project_id = $2
 ORDER BY c.created_at, c.id
@@ -609,7 +424,7 @@ type ListProjectCardSummariesRow struct {
 	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
 	Health                string             `json:"health"`
-	CurrentRunStatus      pgtype.Text        `json:"current_run_status"`
+	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
 }
 
 func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectCardSummariesParams) ([]ListProjectCardSummariesRow, error) {
@@ -639,7 +454,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.CreateIdempotencyKey,
 			&i.CreateRequestHash,
 			&i.Health,
-			&i.CurrentRunStatus,
+			&i.CurrentAttemptStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -715,24 +530,24 @@ SELECT
     cs.timezone,
     cs.next_trigger_at,
     cs.last_triggered_at,
-    latest_run.status AS last_run_status,
-    latest_run.finished_at AS last_run_finished_at
+    latest_attempt.status AS last_attempt_status,
+    latest_attempt.finished_at AS last_attempt_finished_at
 FROM card_schedules cs
 JOIN cards c
   ON c.workspace_id = cs.workspace_id
  AND c.id = cs.card_id
 LEFT JOIN LATERAL (
-    SELECT r.status, r.finished_at
-    FROM triggers t
-    LEFT JOIN agent_runs r
-      ON r.workspace_id = t.workspace_id
-     AND r.trigger_id = t.id
+    SELECT a.status, a.finished_at
+    FROM card_turns t
+    LEFT JOIN turn_attempts a
+      ON a.workspace_id = t.workspace_id
+     AND a.turn_id = t.id
     WHERE t.workspace_id = cs.workspace_id
       AND t.card_id = cs.card_id
       AND t.schedule_id = cs.id
-    ORDER BY t.scheduled_for DESC, t.created_at DESC
+    ORDER BY t.scheduled_for DESC, a.attempt_number DESC NULLS LAST, t.created_at DESC
     LIMIT 1
-) latest_run ON true
+) latest_attempt ON true
 WHERE cs.workspace_id = $1
   AND c.project_id = $2
   AND c.kind = 'ongoing'
@@ -745,20 +560,20 @@ type ListProjectSchedulesParams struct {
 }
 
 type ListProjectSchedulesRow struct {
-	ID                uuid.UUID          `json:"id"`
-	CardID            uuid.UUID          `json:"card_id"`
-	CardTitle         string             `json:"card_title"`
-	OngoingState      pgtype.Text        `json:"ongoing_state"`
-	Enabled           bool               `json:"enabled"`
-	Frequency         string             `json:"frequency"`
-	DayOfWeek         pgtype.Int2        `json:"day_of_week"`
-	DayOfMonth        pgtype.Int2        `json:"day_of_month"`
-	TimeOfDay         pgtype.Time        `json:"time_of_day"`
-	Timezone          string             `json:"timezone"`
-	NextTriggerAt     pgtype.Timestamptz `json:"next_trigger_at"`
-	LastTriggeredAt   pgtype.Timestamptz `json:"last_triggered_at"`
-	LastRunStatus     pgtype.Text        `json:"last_run_status"`
-	LastRunFinishedAt pgtype.Timestamptz `json:"last_run_finished_at"`
+	ID                    uuid.UUID          `json:"id"`
+	CardID                uuid.UUID          `json:"card_id"`
+	CardTitle             string             `json:"card_title"`
+	OngoingState          pgtype.Text        `json:"ongoing_state"`
+	Enabled               bool               `json:"enabled"`
+	Frequency             string             `json:"frequency"`
+	DayOfWeek             pgtype.Int2        `json:"day_of_week"`
+	DayOfMonth            pgtype.Int2        `json:"day_of_month"`
+	TimeOfDay             pgtype.Time        `json:"time_of_day"`
+	Timezone              string             `json:"timezone"`
+	NextTriggerAt         pgtype.Timestamptz `json:"next_trigger_at"`
+	LastTriggeredAt       pgtype.Timestamptz `json:"last_triggered_at"`
+	LastAttemptStatus     pgtype.Text        `json:"last_attempt_status"`
+	LastAttemptFinishedAt pgtype.Timestamptz `json:"last_attempt_finished_at"`
 }
 
 func (q *Queries) ListProjectSchedules(ctx context.Context, arg ListProjectSchedulesParams) ([]ListProjectSchedulesRow, error) {
@@ -783,8 +598,8 @@ func (q *Queries) ListProjectSchedules(ctx context.Context, arg ListProjectSched
 			&i.Timezone,
 			&i.NextTriggerAt,
 			&i.LastTriggeredAt,
-			&i.LastRunStatus,
-			&i.LastRunFinishedAt,
+			&i.LastAttemptStatus,
+			&i.LastAttemptFinishedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -831,158 +646,24 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 	return items, nil
 }
 
-const listRecentCardWork = `-- name: ListRecentCardWork :many
-WITH RECURSIVE trigger_roots AS (
-    SELECT id, cause_event_id AS source_event_id
-    FROM triggers
-    WHERE workspace_id = $1
-      AND card_id = $2
-      AND retry_of_trigger_id IS NULL
-
-    UNION ALL
-
-    SELECT child.id, parent.source_event_id
-    FROM triggers child
-    JOIN trigger_roots parent ON child.retry_of_trigger_id = parent.id
-    WHERE child.workspace_id = $1
-      AND child.card_id = $2
-)
-SELECT
-    t.id AS trigger_id,
-    t.sequence,
-    t.cause,
-    t.dispatch_mode,
-    t.cause_event_id,
-    trigger_roots.source_event_id,
-    COALESCE(e.content, '') AS content,
-    t.retry_of_trigger_id,
-    t.cancelled_at,
-    t.cancel_reason,
-    t.created_at AS trigger_created_at,
-    r.id AS run_id,
-    r.status AS run_status,
-    r.current_stage,
-    r.progress_summary,
-    r.result_summary,
-    r.error_summary,
-    r.cancel_reason AS run_cancel_reason,
-    r.created_at AS run_created_at,
-    r.finished_at,
-    EXISTS (
-        SELECT 1
-        FROM triggers child
-        WHERE child.workspace_id = t.workspace_id
-          AND child.card_id = t.card_id
-          AND child.retry_of_trigger_id = t.id
-    ) AS has_retry
-FROM triggers t
-JOIN trigger_roots ON trigger_roots.id = t.id
-LEFT JOIN events e
-  ON e.workspace_id = t.workspace_id
- AND e.card_id = t.card_id
- AND e.id = t.cause_event_id
-LEFT JOIN agent_runs r
-  ON r.workspace_id = t.workspace_id
- AND r.trigger_id = t.id
-WHERE t.workspace_id = $1
-  AND t.card_id = $2
-  AND (
-      t.cancelled_at IS NOT NULL
-      OR r.status IN ('completed', 'failed', 'superseded', 'expired', 'cancelled')
-  )
-ORDER BY t.sequence DESC
-LIMIT 20
-`
-
-type ListRecentCardWorkParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-}
-
-type ListRecentCardWorkRow struct {
-	TriggerID        uuid.UUID          `json:"trigger_id"`
-	Sequence         pgtype.Int8        `json:"sequence"`
-	Cause            string             `json:"cause"`
-	DispatchMode     string             `json:"dispatch_mode"`
-	CauseEventID     uuid.NullUUID      `json:"cause_event_id"`
-	SourceEventID    uuid.NullUUID      `json:"source_event_id"`
-	Content          string             `json:"content"`
-	RetryOfTriggerID uuid.NullUUID      `json:"retry_of_trigger_id"`
-	CancelledAt      pgtype.Timestamptz `json:"cancelled_at"`
-	CancelReason     string             `json:"cancel_reason"`
-	TriggerCreatedAt pgtype.Timestamptz `json:"trigger_created_at"`
-	RunID            uuid.NullUUID      `json:"run_id"`
-	RunStatus        pgtype.Text        `json:"run_status"`
-	CurrentStage     pgtype.Text        `json:"current_stage"`
-	ProgressSummary  pgtype.Text        `json:"progress_summary"`
-	ResultSummary    pgtype.Text        `json:"result_summary"`
-	ErrorSummary     pgtype.Text        `json:"error_summary"`
-	RunCancelReason  pgtype.Text        `json:"run_cancel_reason"`
-	RunCreatedAt     pgtype.Timestamptz `json:"run_created_at"`
-	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
-	HasRetry         bool               `json:"has_retry"`
-}
-
-func (q *Queries) ListRecentCardWork(ctx context.Context, arg ListRecentCardWorkParams) ([]ListRecentCardWorkRow, error) {
-	rows, err := q.db.Query(ctx, listRecentCardWork, arg.WorkspaceID, arg.CardID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListRecentCardWorkRow{}
-	for rows.Next() {
-		var i ListRecentCardWorkRow
-		if err := rows.Scan(
-			&i.TriggerID,
-			&i.Sequence,
-			&i.Cause,
-			&i.DispatchMode,
-			&i.CauseEventID,
-			&i.SourceEventID,
-			&i.Content,
-			&i.RetryOfTriggerID,
-			&i.CancelledAt,
-			&i.CancelReason,
-			&i.TriggerCreatedAt,
-			&i.RunID,
-			&i.RunStatus,
-			&i.CurrentStage,
-			&i.ProgressSummary,
-			&i.ResultSummary,
-			&i.ErrorSummary,
-			&i.RunCancelReason,
-			&i.RunCreatedAt,
-			&i.FinishedAt,
-			&i.HasRetry,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const scheduleHasTriggers = `-- name: ScheduleHasTriggers :one
+const scheduleHasTurns = `-- name: ScheduleHasTurns :one
 SELECT EXISTS (
     SELECT 1
-    FROM triggers
+    FROM card_turns
     WHERE workspace_id = $1
       AND card_id = $2
       AND schedule_id = $3::uuid
 )
 `
 
-type ScheduleHasTriggersParams struct {
+type ScheduleHasTurnsParams struct {
 	WorkspaceID uuid.UUID `json:"workspace_id"`
 	CardID      uuid.UUID `json:"card_id"`
 	ScheduleID  uuid.UUID `json:"schedule_id"`
 }
 
-func (q *Queries) ScheduleHasTriggers(ctx context.Context, arg ScheduleHasTriggersParams) (bool, error) {
-	row := q.db.QueryRow(ctx, scheduleHasTriggers, arg.WorkspaceID, arg.CardID, arg.ScheduleID)
+func (q *Queries) ScheduleHasTurns(ctx context.Context, arg ScheduleHasTurnsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, scheduleHasTurns, arg.WorkspaceID, arg.CardID, arg.ScheduleID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

@@ -64,15 +64,6 @@ const (
 	CheckinUnknown  CheckinStatus = "unknown"
 )
 
-type TriggerCause string
-
-const (
-	TriggerCauseHumanComment      TriggerCause = "human_comment"
-	TriggerCauseScheduledFollowup TriggerCause = "scheduled_followup"
-	TriggerCauseManualRetry       TriggerCause = "manual_retry"
-	TriggerCauseSystemFollowup    TriggerCause = "system_followup"
-)
-
 type DispatchMode string
 
 const (
@@ -80,17 +71,33 @@ const (
 	DispatchModeInterrupt DispatchMode = "interrupt"
 )
 
-type RunStatus string
+type TurnSource string
 
 const (
-	RunStatusQueued       RunStatus = "queued"
-	RunStatusRunning      RunStatus = "running"
-	RunStatusWaitingHuman RunStatus = "waiting_human"
-	RunStatusCompleted    RunStatus = "completed"
-	RunStatusFailed       RunStatus = "failed"
-	RunStatusSuperseded   RunStatus = "superseded"
-	RunStatusExpired      RunStatus = "expired"
-	RunStatusCancelled    RunStatus = "cancelled"
+	TurnSourceHuman    TurnSource = "human"
+	TurnSourceSchedule TurnSource = "schedule"
+	TurnSourceSystem   TurnSource = "system"
+)
+
+type AttemptReason string
+
+const (
+	AttemptReasonInitial  AttemptReason = "initial"
+	AttemptReasonRetry    AttemptReason = "retry"
+	AttemptReasonRecovery AttemptReason = "recovery"
+)
+
+type AttemptStatus string
+
+const (
+	AttemptStatusQueued       AttemptStatus = "queued"
+	AttemptStatusRunning      AttemptStatus = "running"
+	AttemptStatusWaitingHuman AttemptStatus = "waiting_human"
+	AttemptStatusCompleted    AttemptStatus = "completed"
+	AttemptStatusFailed       AttemptStatus = "failed"
+	AttemptStatusSuperseded   AttemptStatus = "superseded"
+	AttemptStatusExpired      AttemptStatus = "expired"
+	AttemptStatusCancelled    AttemptStatus = "cancelled"
 )
 
 type ScheduleFrequency string
@@ -106,6 +113,7 @@ var (
 	ErrConflict            = errors.New("conflict")
 	ErrIdempotencyMismatch = errors.New("idempotency key reused with different request")
 	ErrRunNotCurrent       = errors.New("run is no longer current")
+	ErrAttemptNotCurrent   = errors.New("attempt is no longer current")
 	ErrHumanRequired       = errors.New("human source required")
 	ErrInvalidTransition   = errors.New("invalid card state transition")
 )

@@ -107,28 +107,27 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 
 const createAgentEvent = `-- name: CreateAgentEvent :one
 INSERT INTO events (
-    id, workspace_id, card_id, event_type, actor_source_id, run_id,
+    id, workspace_id, card_id, event_type, actor_source_id,
     content, checkin_status, idempotency_key, request_hash
 )
 VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7,
-    $8, $9, $10
+    $5, $6,
+    $7, $8, $9
 )
-RETURNING id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
+RETURNING id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
 `
 
 type CreateAgentEventParams struct {
-	ID             uuid.UUID     `json:"id"`
-	WorkspaceID    uuid.UUID     `json:"workspace_id"`
-	CardID         uuid.UUID     `json:"card_id"`
-	EventType      string        `json:"event_type"`
-	ActorSourceID  uuid.UUID     `json:"actor_source_id"`
-	RunID          uuid.NullUUID `json:"run_id"`
-	Content        string        `json:"content"`
-	CheckinStatus  pgtype.Text   `json:"checkin_status"`
-	IdempotencyKey pgtype.Text   `json:"idempotency_key"`
-	RequestHash    pgtype.Text   `json:"request_hash"`
+	ID             uuid.UUID   `json:"id"`
+	WorkspaceID    uuid.UUID   `json:"workspace_id"`
+	CardID         uuid.UUID   `json:"card_id"`
+	EventType      string      `json:"event_type"`
+	ActorSourceID  uuid.UUID   `json:"actor_source_id"`
+	Content        string      `json:"content"`
+	CheckinStatus  pgtype.Text `json:"checkin_status"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	RequestHash    pgtype.Text `json:"request_hash"`
 }
 
 func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventParams) (Event, error) {
@@ -138,7 +137,6 @@ func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventPara
 		arg.CardID,
 		arg.EventType,
 		arg.ActorSourceID,
-		arg.RunID,
 		arg.Content,
 		arg.CheckinStatus,
 		arg.IdempotencyKey,
@@ -152,7 +150,7 @@ func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventPara
 		&i.CardID,
 		&i.EventType,
 		&i.ActorSourceID,
-		&i.RunID,
+		&i.AttemptID,
 		&i.Content,
 		&i.CheckinStatus,
 		&i.IdempotencyKey,
@@ -162,66 +160,8 @@ func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventPara
 	return i, err
 }
 
-const createAgentFollowupTrigger = `-- name: CreateAgentFollowupTrigger :one
-INSERT INTO triggers (
-    id, workspace_id, card_id, cause, cause_event_id,
-    created_by_source_id, dispatch_mode, idempotency_key, request_hash
-)
-VALUES (
-    $1, $2, $3, $4,
-    $5, $6, 'enqueue',
-    $7, $8
-)
-RETURNING id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at, retry_of_trigger_id, cancelled_at, cancelled_by_source_id, cancel_reason
-`
-
-type CreateAgentFollowupTriggerParams struct {
-	ID                uuid.UUID     `json:"id"`
-	WorkspaceID       uuid.UUID     `json:"workspace_id"`
-	CardID            uuid.UUID     `json:"card_id"`
-	Cause             string        `json:"cause"`
-	CauseEventID      uuid.NullUUID `json:"cause_event_id"`
-	CreatedBySourceID uuid.NullUUID `json:"created_by_source_id"`
-	IdempotencyKey    pgtype.Text   `json:"idempotency_key"`
-	RequestHash       pgtype.Text   `json:"request_hash"`
-}
-
-func (q *Queries) CreateAgentFollowupTrigger(ctx context.Context, arg CreateAgentFollowupTriggerParams) (Trigger, error) {
-	row := q.db.QueryRow(ctx, createAgentFollowupTrigger,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.CardID,
-		arg.Cause,
-		arg.CauseEventID,
-		arg.CreatedBySourceID,
-		arg.IdempotencyKey,
-		arg.RequestHash,
-	)
-	var i Trigger
-	err := row.Scan(
-		&i.ID,
-		&i.Sequence,
-		&i.WorkspaceID,
-		&i.CardID,
-		&i.Cause,
-		&i.CauseEventID,
-		&i.CreatedBySourceID,
-		&i.DispatchMode,
-		&i.ScheduleID,
-		&i.ScheduledFor,
-		&i.IdempotencyKey,
-		&i.RequestHash,
-		&i.CreatedAt,
-		&i.RetryOfTriggerID,
-		&i.CancelledAt,
-		&i.CancelledBySourceID,
-		&i.CancelReason,
-	)
-	return i, err
-}
-
 const getAgentEventRequest = `-- name: GetAgentEventRequest :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
 FROM events
 WHERE workspace_id = $1
   AND actor_source_id = $2
@@ -251,52 +191,12 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 		&i.CardID,
 		&i.EventType,
 		&i.ActorSourceID,
-		&i.RunID,
+		&i.AttemptID,
 		&i.Content,
 		&i.CheckinStatus,
 		&i.IdempotencyKey,
 		&i.RequestHash,
 		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getAgentFollowupRequest = `-- name: GetAgentFollowupRequest :one
-SELECT id, sequence, workspace_id, card_id, cause, cause_event_id, created_by_source_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, created_at, retry_of_trigger_id, cancelled_at, cancelled_by_source_id, cancel_reason
-FROM triggers
-WHERE workspace_id = $1
-  AND created_by_source_id = $2
-  AND cause IN ('manual_retry', 'system_followup')
-  AND idempotency_key = $3
-`
-
-type GetAgentFollowupRequestParams struct {
-	WorkspaceID       uuid.UUID     `json:"workspace_id"`
-	CreatedBySourceID uuid.NullUUID `json:"created_by_source_id"`
-	IdempotencyKey    pgtype.Text   `json:"idempotency_key"`
-}
-
-func (q *Queries) GetAgentFollowupRequest(ctx context.Context, arg GetAgentFollowupRequestParams) (Trigger, error) {
-	row := q.db.QueryRow(ctx, getAgentFollowupRequest, arg.WorkspaceID, arg.CreatedBySourceID, arg.IdempotencyKey)
-	var i Trigger
-	err := row.Scan(
-		&i.ID,
-		&i.Sequence,
-		&i.WorkspaceID,
-		&i.CardID,
-		&i.Cause,
-		&i.CauseEventID,
-		&i.CreatedBySourceID,
-		&i.DispatchMode,
-		&i.ScheduleID,
-		&i.ScheduledFor,
-		&i.IdempotencyKey,
-		&i.RequestHash,
-		&i.CreatedAt,
-		&i.RetryOfTriggerID,
-		&i.CancelledAt,
-		&i.CancelledBySourceID,
-		&i.CancelReason,
 	)
 	return i, err
 }
@@ -339,51 +239,11 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 	return i, err
 }
 
-const getRunByID = `-- name: GetRunByID :one
-SELECT id, workspace_id, card_id, trigger_id, runner_source_id, status, current_stage, progress_summary, result_summary, error_summary, started_at, heartbeat_at, lease_expires_at, finished_at, created_at, updated_at, finish_idempotency_key, finish_request_hash, cancelled_by_source_id, cancel_reason
-FROM agent_runs
-WHERE workspace_id = $1
-  AND id = $2
-`
-
-type GetRunByIDParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	ID          uuid.UUID `json:"id"`
-}
-
-func (q *Queries) GetRunByID(ctx context.Context, arg GetRunByIDParams) (AgentRun, error) {
-	row := q.db.QueryRow(ctx, getRunByID, arg.WorkspaceID, arg.ID)
-	var i AgentRun
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.CardID,
-		&i.TriggerID,
-		&i.RunnerSourceID,
-		&i.Status,
-		&i.CurrentStage,
-		&i.ProgressSummary,
-		&i.ResultSummary,
-		&i.ErrorSummary,
-		&i.StartedAt,
-		&i.HeartbeatAt,
-		&i.LeaseExpiresAt,
-		&i.FinishedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.FinishIdempotencyKey,
-		&i.FinishRequestHash,
-		&i.CancelledBySourceID,
-		&i.CancelReason,
-	)
-	return i, err
-}
-
 const listRecentCardTimeline = `-- name: ListRecentCardTimeline :many
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at, actor_name, actor_kind
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, actor_name, actor_kind
 FROM (
     SELECT
-        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.run_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
+        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
         s.name AS actor_name,
         s.kind AS actor_kind
     FROM events e
@@ -406,12 +266,12 @@ type ListRecentCardTimelineParams struct {
 
 type ListRecentCardTimelineRow struct {
 	ID             uuid.UUID          `json:"id"`
-	Sequence       pgtype.Int8        `json:"sequence"`
+	Sequence       int64              `json:"sequence"`
 	WorkspaceID    uuid.UUID          `json:"workspace_id"`
 	CardID         uuid.UUID          `json:"card_id"`
 	EventType      string             `json:"event_type"`
 	ActorSourceID  uuid.UUID          `json:"actor_source_id"`
-	RunID          uuid.NullUUID      `json:"run_id"`
+	AttemptID      uuid.NullUUID      `json:"attempt_id"`
 	Content        string             `json:"content"`
 	CheckinStatus  pgtype.Text        `json:"checkin_status"`
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
@@ -437,7 +297,7 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 			&i.CardID,
 			&i.EventType,
 			&i.ActorSourceID,
-			&i.RunID,
+			&i.AttemptID,
 			&i.Content,
 			&i.CheckinStatus,
 			&i.IdempotencyKey,
@@ -461,19 +321,19 @@ SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
-    current_run.status AS current_run_status,
+    current_attempt.status AS current_attempt_status,
     (
         SELECT count(*)
-        FROM triggers t
+        FROM card_turns t
         WHERE t.workspace_id = c.workspace_id
           AND t.card_id = c.id
           AND t.cancelled_at IS NULL
           AND NOT EXISTS (
-              SELECT 1 FROM agent_runs r
-              WHERE r.workspace_id = t.workspace_id
-                AND r.trigger_id = t.id
+              SELECT 1 FROM turn_attempts a
+              WHERE a.workspace_id = t.workspace_id
+                AND a.turn_id = t.id
           )
-    ) AS pending_trigger_count
+    ) AS pending_turn_count
 FROM cards c
 JOIN projects p
   ON p.workspace_id = c.workspace_id
@@ -487,10 +347,10 @@ LEFT JOIN LATERAL (
     ORDER BY e.sequence DESC
     LIMIT 1
 ) latest_checkin ON true
-LEFT JOIN agent_runs current_run
-  ON current_run.workspace_id = c.workspace_id
- AND current_run.card_id = c.id
- AND current_run.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
 WHERE c.workspace_id = $1
 ORDER BY p.created_at, c.created_at, c.id
 `
@@ -514,8 +374,8 @@ type ListWorkspaceCardSummariesRow struct {
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
 	ProjectName           string             `json:"project_name"`
 	Health                string             `json:"health"`
-	CurrentRunStatus      pgtype.Text        `json:"current_run_status"`
-	PendingTriggerCount   int64              `json:"pending_trigger_count"`
+	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
+	PendingTurnCount      int64              `json:"pending_turn_count"`
 }
 
 func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceCardSummariesRow, error) {
@@ -546,8 +406,8 @@ func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uu
 			&i.CreateRequestHash,
 			&i.ProjectName,
 			&i.Health,
-			&i.CurrentRunStatus,
-			&i.PendingTriggerCount,
+			&i.CurrentAttemptStatus,
+			&i.PendingTurnCount,
 		); err != nil {
 			return nil, err
 		}

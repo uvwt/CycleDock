@@ -2,90 +2,84 @@
 
 ## 产品定位
 
-CycleDock 是人与 AI Agent 共用的任务看板。产品核心是 Project / Card / Trigger / Run，而不是 Conversation / Session。
+CycleDock 是人与 AI Agent 共用的项目工作台。产品核心仍是 Project / Card，但 Agent Runtime 采用 **Session-first**：一个 Card 就是一个持久 Agent Session。
 
-任何新功能都先判断是否直接服务以下闭环：
+权威架构基线见 `docs/session-first-adk.md`。
+
+核心闭环：
 
 ```text
-Project Board
-→ Discussion
-→ 对话 / 澄清
-→ Generate work（Todo / Ongoing）
-→ Human / Schedule 产生 Trigger
-→ Claim
-→ Run
-→ Progress / Finding / Result / Check-in
-→ Human Review 或下一轮 Cycle
+Project
+→ Card (persistent Agent Session)
+→ Turn
+→ Attempt / ADK invocation
+→ Session Events / Tools / Artifacts
+→ Review / 下一轮 Turn / 下一次 Schedule
 ```
-
-不能直接服务该闭环的功能默认不进入第一版。
 
 ## 领域硬约束
 
-- Project 即一个项目看板；不要重新引入 Board 表或 Board 领域实体。
-- Card 只有 Discussion / Todo / Ongoing 三类；不要重新引入 Normal Card 抽象。
-- Discussion 是新工作的会话入口，生命周期只有 Active / Archived；不能转换成 Todo / Ongoing。
-- 只有 Discussion 可以通过单一 Generate work 动作让 AI 派生 Todo / Ongoing；AI 根据有限任务或长期/周期事项判断类型；Todo / Ongoing 不再派生其他 Card。Human 可以在 Board 直接创建独立 Todo，这类 Card 不设置 source_discussion_id，也不经过模型判断。
-- Todo 状态机固定为 Todo → Working → Review → Done；Review → Done 只允许 Human。
-- Discussion 首轮会话负责生成标题与摘要；归档后禁止继续产生 Trigger/Run，删除 Discussion 不级联删除其派生工作。
-- Card 保存业务状态，不保存 Agent 当前运行状态。
-- Trigger 是不可变工作方向；不要通过修改旧 Trigger 表达“换方向”。
-- 创建 AgentRun 即 Claim Trigger；不要增加 Claims 表。
-- 一个 Trigger 最多对应一个 AgentRun。
-- 一个 Card 同时最多有一个 current Run，current 状态包括 queued / running / waiting_human。
-- waiting_human 占用 current Run 槽位；用户回复时由新 Trigger 接续，旧 Run 进入 superseded。
-- enqueue 不打断当前 Run；interrupt 先 supersede 当前 Run，再优先启动新 Trigger。
-- 旧 Run 在 superseded 后即使返回，也不得修改 Card 当前业务状态。
-- Card 保存长期任务知识；Run 的原始模型消息、工具参数、工具结果只属于当前执行，不自动持久化和继承。
-- 有长期价值的信息必须提升为 Comment / Finding / Progress / Result / Check-in 等 Event。
-- Ongoing health 由最新 Check-in 派生，不维护第二套可写 health 字段。
-- Ongoing Schedule 只负责生成 Trigger，不直接执行 Agent。
-- 定时触发默认不打断当前 Run。
-- AI 可以推动工作进入 Review，但最终 Done 由 Human 决定。
+- Project 本身就是项目看板，不重新引入 Board 表。
+- Card 只有 Discussion / Todo / Ongoing 三类。
+- Card ID 直接作为 Agent Session ID；不要增加一对一 CardSession 领域实体。
+- ADK `user_id` 使用 Workspace ID；Session 不属于某一个 Human。
+- Discussion 是探索/澄清型 Session；只能派生 Todo / Ongoing，不能转换成 Todo / Ongoing。
+- Discussion 派生工作时创建新 Card / 新 Session，只传 Handoff Package，不共享完整 Session。
+- Todo 状态固定为 Todo → Working → Review → Done；Review → Done 只允许 Human。
+- Ongoing 生命周期为 Active / Paused / Archived；Schedule 的每次执行进入同一 Card Session。
+- Turn 表示一次新的工作输入；排队 Turn 在真正 Claim 前不得 append 到 ADK Session。
+- Attempt 表示一次真实 invocation；技术重试创建新 Attempt，不制造新的业务 Turn。
+- 一个 Card 同时最多一个 current Attempt。
+- enqueue 不打断 current Attempt；interrupt 终止/替代 current Attempt 后优先执行新 Turn。
+- superseded/cancelled Attempt 的迟到 Event 不得污染 Session 或 Card 状态。
+- Session Event 可以持久保存 tool call / tool response；不再要求 raw tool context 只能存在于单次 Run 内存。
+- 长 Session 通过 ADK Context Compaction + history retrieval + Artifact 控制上下文，不通过丢弃跨 Turn 工具证据解决。
+- 不保存 chain-of-thought、明文 credential、Cookie、access token 或无必要 secret。
+- Card 保存业务状态；Attempt 保存执行状态；ADK Session 保存 Agent 连续上下文，三者职责不得混淆。
+- AI 可以推进 Todo 到 Review，最终 Done 由 Human 决定。
+
+## Agent Runtime
+
+- Google ADK Go v2 是 Built-in Agent Runtime 基础。
+- CycleDock 实现自己的 ADK `session.Service`，使用 PostgreSQL + pgx/sqlc/Goose；禁止为 ADK Session 引入 GORM AutoMigrate。
+- 普通 MCP 优先使用 ADK McpToolset；NexusDock first-party 授权/bootstrap 仍由 CycleDock 管理。
+- Model credentials、ordered routes、多账号和 failover policy 属于 CycleDock；不要把产品可靠性完全绑定到 ADK experimental model routing。
+- Memory 用于跨 Card 知识；同一 Card 连续上下文首先依赖 Session，不要过早引入向量数据库。
 
 ## 工程原则
 
 - 长期可维护性优先，不做补丁式设计。
+- 本分支不兼容旧 Trigger / AgentRun / Context Builder 数据语义；首次公开发布前允许重整 `000001_initial.sql`。
+- 开发过程中允许按可验证阶段切换，但最终不得保留两套并行 Runtime。
 - Go 代码保持直接、可读，避免 Java 式机械分层。
-- 不提前定义无真实多实现需求的 interface。
-- 不为了测试污染生产 API。
-- 动态 JSON 只停留在 HTTP / MCP 等边界，进入领域逻辑前转换为明确类型。
-- 关键状态变化必须由数据库约束和事务兜底，不能依赖前端约定或“先查再写”。
-- 多租户 scope 必须来自认证上下文，不能信任客户端传入 workspace_id / source_id。
-- 数据库、HTTP、MCP、内置 Agent 不允许各自复制一套状态机。
+- 不提前定义无真实多实现需求的 interface；ADK 官方接口等外部契约除外。
+- 动态 JSON 只停留在明确边界；业务状态使用明确类型。
+- 关键状态变化必须由数据库约束和事务兜底。
+- 多租户 scope 必须来自认证上下文。
+- 数据库、HTTP、MCP、Built-in Agent 不允许复制平行状态机。
 - 不保存 chain-of-thought。
-- 不把 raw tool trace 当成产品数据模型。
 
 ## Git
 
 - 稳定分支为 `main`。
-- 除仓库首次初始化外，默认使用短期分支 + 独立 Git worktree 开发，不直接在主工作区修改代码。
+- 默认使用短期分支 + 独立 Git worktree，不直接修改主工作区。
 - 提交格式：`type(scope): 中文说明`。
 - 修改前确认现状，修改后必须真实验证。
 - 不 force push 已共享分支。
-- 合入前确认工作区干净、测试/文档通过、远端状态符合预期。
 
 ## 数据库
 
 - PostgreSQL 是唯一正式数据库。
 - 使用 pgx + sqlc + Goose。
-- 第一版从 `000001_initial.sql` 开始，不兼容旧 CycleDock 开发数据库。
-- Tenant/Workspace scope 应尽量由数据库 FK、唯一约束和查询条件共同保证。
-- 并发 Claim、current Run 唯一性、Schedule 去重必须由 PostgreSQL 约束参与保证。
+- 首次公开发布前不兼容旧 DEV 数据，可重写 initial migration。
+- Session、Turn、Attempt、Workspace/Card scope 必须由数据库约束和事务共同保证。
+- current Attempt 唯一性、Turn FIFO、Schedule 去重、stale invocation 写保护必须有真实 PostgreSQL 测试。
 
 ## 文档
 
-- 产品规则变化必须同步更新对应 docs。
-- `docs/data-model.md` 是领域数据结构基线。
-- `docs/agent-runtime.md` 是 Trigger / Queue / Run / Context 行为基线。
-- `docs/scheduling.md` 是 Ongoing 定时行为基线。
-- `docs/stack.md` 是依赖选型基线。
-- 尚未真正实现的 MCP 工具或 API 不要写成已经可用。
-
-## 旧代码参考
-
-旧 CycleDock 与 ChatDock 只能按能力选择性参考，不允许整体迁移。
-
-- 旧 CycleDock 可参考 OIDC、OAuth、MCP Server、PostgreSQL/sqlc、Web Session、前端交互和多租户实现。
-- ChatDock 可参考 OpenAI-compatible Model Client、MCP Client、tool schema、streaming、timeout 和 provider error handling。
-- 不迁移 ChatDock 的 SQLite、Session/Message、Prompt Space、完整聊天历史、raw tool trace、旧 Scheduler 数据模型。
+- `docs/session-first-adk.md`：Session-first / ADK 总体决策。
+- `docs/data-model.md`：目标数据结构。
+- `docs/agent-runtime.md`：Session / Turn / Attempt / Context 行为。
+- `docs/scheduling.md`：Ongoing 调度。
+- `docs/stack.md`：依赖选型。
+- 尚未实现的能力必须明确标为目标态，不写成已经可用。

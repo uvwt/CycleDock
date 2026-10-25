@@ -122,30 +122,30 @@ func (api *API) streamPoll(ctx context.Context, workspaceID, cardID uuid.UUID, l
 			return context.Canceled
 		}
 	}
-	var runID, runStatus, stage string
+	var attemptID, attemptStatus, stage string
 	err := api.pool.QueryRow(ctx, `
  SELECT id::text,status,current_stage
- FROM agent_runs WHERE workspace_id=$1 AND card_id=$2
+ FROM turn_attempts WHERE workspace_id=$1 AND card_id=$2
  ORDER BY created_at DESC LIMIT 1
- `, workspaceID, cardID).Scan(&runID, &runStatus, &stage)
+ `, workspaceID, cardID).Scan(&attemptID, &attemptStatus, &stage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	key := runID + ":" + runStatus + ":" + stage
+	key := attemptID + ":" + attemptStatus + ":" + stage
 	if key == *lastStage {
 		return nil
 	}
 	*lastStage = key
 	// 跨实例 Run 状态变化也须能让客户端收口；实时 token 本身由执行实例发送。
-	eventType := "run.stage"
-	switch runStatus {
+	eventType := "attempt.stage"
+	switch attemptStatus {
 	case "completed", "superseded", "cancelled", "expired":
-		eventType = "run.finished"
+		eventType = "attempt.finished"
 	case "failed":
-		eventType = "run.failed"
+		eventType = "attempt.failed"
 	case "queued":
 		stage = "排队中"
 	case "waiting_human":
@@ -155,7 +155,7 @@ func (api *API) streamPoll(ctx context.Context, workspaceID, cardID uuid.UUID, l
 			stage = "正在执行"
 		}
 	}
-	if !send(realtime.Event{Type: eventType, RunID: runID, Stage: stage}, 0) {
+	if !send(realtime.Event{Type: eventType, AttemptID: attemptID, Stage: stage}, 0) {
 		return context.Canceled
 	}
 	return nil

@@ -1,376 +1,227 @@
 # 数据模型
 
-本文定义第一版数据库的领域基线。真正建表时允许根据 PostgreSQL / sqlc 细节调整字段名，但不能改变核心语义而不更新本文。
+本文描述 Session-first 目标模型。首次公开发布前不兼容旧 CycleDock DEV 数据，最终会重整 000001_initial.sql。当前开发分支允许用后续 migration 验证新模型，再在 cutover 后收拢。
 
 ## 1. 总体关系
 
-```text
-human_accounts
-  └── oidc_identities
-
+~~~text
 workspaces
   ├── workspace_memberships
   ├── sources
   └── projects
        └── cards
-            ├── events
-            ├── triggers
-            │    └── agent_runs
-            └── card_schedules
-```
+            ├── card_turns
+            │    └── turn_attempts
+            ├── card_schedules
+            ├── card_activity
+            └── agent session
+                 ├── agent_session_events
+                 └── artifacts
+~~~
 
-另有 Web Session 与 MCP OAuth 基础设施表。
+ADK Session 的产品身份不是额外领域实体：
 
-## 2. 身份与 Workspace
+~~~text
+app_name   = cycledock
+user_id    = workspace_id
+session_id = card_id
+~~~
 
-### workspaces
+## 2. workspaces / projects / cards
 
-建议字段：
+Workspace / Project 语义保持不变。
 
-- id
-- name
-- created_at
-- updated_at
+Card 仍保存三类业务状态：
 
-第一版 Tenant 边界即 Workspace。
+- discussion: active / archived
+- todo: todo / working / review / done
+- ongoing: active / paused / archived
 
-### human_accounts
+Card 是长期工作对象；Attempt status 不写入 Card。
 
-表示 CycleDock 内部的人类主体。
+Discussion 派生 Todo / Ongoing 时新 Card 保存 source_discussion_id，并通过显式 Handoff Package 传递必要上下文。
 
-建议字段：
+## 3. card_turns
 
-- id
-- display_name
-- email_snapshot（仅展示用途，不能作为稳定主键）
-- created_at
-- updated_at
+目标字段：
 
-### oidc_identities
-
-Hosted 使用稳定外部身份：
-
-`issuer + subject`
-
-建议唯一约束：
-
-`UNIQUE (issuer, subject)`
-
-### workspace_memberships
-
-把 Human Account 加入 Workspace。
-
-第一版只需要 owner/member 等非常克制的角色；不要提前做复杂 RBAC。
-
-### sources
-
-统一表示动作来源。
-
-kind 第一版：
-
-- human
-- cycle_agent
-- oauth_client
-
-Event actor 与 AgentRun runner 都引用 Source。
-
-## 3. projects
-
-Project 本身就是项目看板。
-
-建议字段：
-
-- id
-- workspace_id
-- name
-- description
-- instructions
-- created_at
-- updated_at
-
-不要增加 board_id。
-
-未来多种展示方式使用 View 体系，不改变 Card 归属。
-
-## 4. cards
-
-建议字段：
-
-- id
-- workspace_id
-- project_id
-- kind: discussion / todo / ongoing
-- title
-- description
-- discussion_state
-- todo_state
-- ongoing_state
-- source_discussion_id nullable
-- required_confirmations
-- created_by_source_id
-- created_at
-- updated_at
+~~~text
+id uuid
+sequence bigint identity
+workspace_id uuid
+card_id uuid
+source human | schedule | system
+created_by_source_id nullable
+content text
+dispatch_mode enqueue | interrupt
+schedule_id nullable
+scheduled_for nullable
+idempotency_key nullable
+request_hash nullable
+cancelled_at nullable
+created_at
+~~~
 
 约束：
 
-- Discussion 必须有 discussion_state，不能有 todo_state / ongoing_state / source_discussion_id。
-- Todo 必须有 todo_state，不能有 discussion_state / ongoing_state。
-- Ongoing 必须有 ongoing_state，不能有 discussion_state / todo_state。
-- discussion_state 限定 Active / Archived。
-- todo_state 限定 Todo / Working / Review / Done。
-- ongoing_state 限定 Active / Paused / Archived。
-- Todo / Ongoing 可以通过 source_discussion_id 记录来源 Discussion；来源被删除时派生工作继续存在，来源引用置空。
-- workspace_id 与 project_id 必须 tenant-consistent。
-- source_discussion_id 必须与派生 Card 属于同一 Workspace，创建路径必须确认来源 kind=discussion。
-- Discussion 在首轮 AI 元数据生成前允许 title 为空；Todo / Ongoing title 必须非空。
+- Turn 是不可变输入方向。
+- Human Turn 由消息产生。
+- Schedule occurrence 唯一。
+- enqueue Turn 可以 pending。
+- pending Turn 不提前进入 ADK Session。
+- 技术 retry / recovery 不创建新 Turn；它们在 turn_attempts 中形成同一 Turn 的后继 Attempt。
 
-Card 不保存 agent_status、claimed、progress、current_agent。
+## 4. turn_attempts
 
-### 4.1 派生关系
+目标字段：
 
-`source_discussion_id` 表示来源关系，不表示父子生命周期：
+~~~text
+id uuid
+workspace_id uuid
+card_id uuid
+turn_id uuid
+attempt_number integer
+reason initial | retry | recovery
+retry_of_attempt_id uuid nullable
+invocation_id text nullable
+runner_source_id uuid
+model_route_id nullable
+status queued | running | waiting_human |
+       completed | failed | superseded | expired | cancelled
+current_stage text
+error_summary text
+started_at nullable
+heartbeat_at nullable
+lease_expires_at nullable
+finished_at nullable
+created_at
+updated_at
+~~~
 
-```text
-Discussion A
-├── Todo B
-├── Todo C
-└── Ongoing D
-```
+一个 Turn 可以有多个 Attempt；技术 retry 创建新 Attempt。
 
-Discussion 归档不会归档 B/C/D；Discussion 删除也不会级联删除派生工作。
+一个 Card 同时最多一个 queued / running / waiting_human Attempt。
 
-Todo / Ongoing 不允许作为 source_discussion_id，也不允许继续生成其他 Card。
+invocation_id 必须能用于 Session Event stale-write 校验。
 
-## 5. events
+## 5. agent_sessions
 
-Event 是 Card Timeline 的长期工作事实。
+ADK session.Service 的持久化对象：
 
-建议字段：
+~~~text
+app_name text
+user_id text
+id text
+state jsonb
+created_at
+updated_at
 
-- id
-- sequence
-- workspace_id
-- card_id
-- event_type
-- actor_source_id
-- run_id nullable
-- content
-- checkin_status nullable
-- created_at
+PRIMARY KEY(app_name, user_id, id)
+~~~
 
-event_type 第一版：
+CycleDock 正常业务中 app_name=cycledock、user_id=Workspace UUID string、id=Card UUID string。
 
-- comment
-- progress
-- finding
-- result
-- checkin
-- confirm
-- reject
-- status_change
+Session state 只保存可序列化、确实属于 Agent runtime 的动态数据。业务状态仍在 Card / Turn / Attempt 表中。
 
-原则：
+## 6. agent_session_events
 
-- comment 是人类/Agent 可读交流。
-- progress 是有意义的阶段变化，不是 heartbeat。
-- finding 是从执行中提炼出来、值得后续继承的事实。
-- result 是本轮工作结果摘要。
-- checkin 用于 Ongoing 健康结果。
-- 不存 chain-of-thought。
-- 不存 raw tool args/result。
+当前基础字段：
 
-人类写 comment 的 HTTP/MCP 请求应支持幂等键，避免网络重试重复创建 Event。
+~~~text
+sequence bigint identity
+app_name text
+user_id text
+session_id text
+id text
+invocation_id text
+occurred_at timestamptz
+event jsonb
+~~~
 
-## 6. triggers
-
-Trigger 是不可变工作方向，也是队列项。
-
-建议字段：
-
-- id
-- sequence
-- workspace_id
-- card_id
-- cause
-- cause_event_id nullable
-- created_by_source_id nullable
-- dispatch_mode
-- schedule_id nullable
-- scheduled_for nullable
-- idempotency_key nullable
-- request_hash nullable
-- created_at
-
-cause：
-
-- human_comment
-- scheduled_followup
-- manual_retry
-- system_followup
-
-dispatch_mode：
-
-- enqueue
-- interrupt
-
-对于没有 current Run 的“发送并执行”，可以记录 enqueue 语义后立即创建 Run；dispatch_mode 只表达创建时用户/系统的调度意图，不作为 mutable status。
-
-关键约束：
-
-- human_comment Trigger 必须引用对应 comment Event。
-- 同一个 comment Event 最多产生一个 Trigger：`UNIQUE (cause_event_id)`（对非空值）。
-- schedule 触发应通过 `schedule_id + scheduled_for` 唯一约束避免重复。
-- Trigger 一旦创建，不修改其原始意图。
-
-“待执行”不需要 status：
-
-> 没有任何 AgentRun 的 Trigger = pending queue item。
-
-## 7. agent_runs
-
-AgentRun 表示一次具体 Claim / 执行。
-
-建议字段：
-
-- id
-- workspace_id
-- card_id
-- trigger_id
-- runner_source_id
-- status
-- current_stage
-- progress_summary
-- result_summary
-- error_summary
-- started_at nullable
-- heartbeat_at nullable
-- lease_expires_at nullable
-- finished_at nullable
-- created_at
-- updated_at
-
-status：
-
-- queued
-- running
-- waiting_human
-- completed
-- failed
-- superseded
-- expired
-- cancelled
-
-关键约束：
-
-### 一个 Trigger 只能被 Claim 一次
-
-`UNIQUE (trigger_id)`
-
-### 一个 Card 最多一个 current Run
-
-PostgreSQL partial unique index：
-
-```sql
-UNIQUE (card_id)
-WHERE status IN ('queued', 'running', 'waiting_human')
-```
-
-实际建表时还应确保 workspace/card/trigger/source 的 tenant scope 一致，必要时使用 composite FK / unique key。
-
-### 时间约束
-
-- queued 可以没有 started_at。
-- running 应有 started_at / heartbeat / lease。
-- waiting_human 不要求持续 heartbeat。
-- terminal Run 应有 finished_at。
-
-具体 CHECK 在 migration 实现时落地。
-
-## 8. card_schedules
-
-第一版仅 Ongoing Card 可配置。
-
-建议字段：
-
-- id
-- workspace_id
-- card_id
-- enabled
-- frequency: daily / weekly / monthly
-- day_of_week nullable
-- day_of_month nullable
-- time_of_day
-- timezone
-- next_trigger_at
-- last_triggered_at nullable
-- created_at
-- updated_at
+event 保存 ADK Session Event 的可恢复表示，包括 LLM content、function call、function response、EventActions、state delta、artifact delta、compaction metadata、branch / isolation scope 与 long-running tool metadata。
 
 约束：
 
-- 只能绑定 ongoing Card。
-- monthly 的 day_of_month 必须有确定规则；第一版建议只允许 1-28，避免月末歧义，后续若需要“月末”再显式增加语义。
-- weekly 需要 day_of_week。
-- daily 不需要 day 字段。
-- timezone 使用 IANA timezone。
+- partial streaming chunk 不持久化。
+- temp state delta 不持久化。
+- Event 缺少 ID 时 storage 必须分配。
+- compaction record 必须完整 round-trip。
+- 不保存 chain-of-thought / secret。
+- terminal / stale Attempt 的迟到 Event 后续必须在写入层拒绝。
 
-第一版 missed-run policy 固定为 skip，不需要字段。
+当前实现已满足 ADK session.Service conformance，并已接入 Attempt / invocation ownership guard；running Attempt 首个 Event 绑定 invocation_id，waiting_human 仅允许已绑定的同 invocation 尾部 Event，terminal / superseded Attempt 的迟到写入会被拒绝。
 
-## 9. Web Session
+## 7. scoped ADK state
 
-Hosted / Self-hosted Human Web 都使用服务端 Session。
+为满足 ADK state scope：
 
-浏览器只持有随机 opaque Cookie；数据库保存 token digest，不保存明文。
+~~~text
+agent_app_state
+agent_user_state
+agent_sessions.state
+~~~
 
-Session 必须绑定：
+前缀语义：
 
-- workspace
-- human source
-- expires_at
+- app: app scope。
+- user: Workspace scope，因为 ADK user_id = workspace_id。
+- 无前缀：Card Session scope。
+- temp: 单 invocation 临时状态，不持久化。
 
-HTTPS Hosted 使用 Secure + HttpOnly + SameSite=Lax。
+## 8. agent_artifacts
 
-## 10. MCP OAuth
+Phase D 已接入 ADK `artifact.Service` 的 PostgreSQL 实现。`agent_artifacts` 以 `(app_name, user_id, session_id, file_name, version)` 为主键，并保存 `genai.Part` JSON、MIME、metadata 与创建时间；外键绑定 `agent_sessions`，因此 Artifact scope 与 Card Session 一致。
 
-保留标准 OAuth 基础设施：
+自动版本分配使用 PostgreSQL advisory transaction lock，保证同一 logical file 的并发保存得到唯一递增版本。
 
-- oauth_clients
-- oauth_grants
-- oauth_authorization_codes
-- oauth_tokens
+当前大型 MCP 结果阈值为 12k 字符：完整脱敏 payload 存 Artifact，Session Event 只保留最多约 4k preview、artifact ref/version/length。Artifact reader 的 Workspace/Card identity 从当前 Session 推导，调用方不能传入其他租户 identity。
 
-继续遵守：
+## 9. card_activity
 
-- Authorization Code + S256 PKCE。
-- opaque code/token。
-- 数据库保存 SHA-256 digest。
-- Refresh Token rotation。
-- grant 绑定 workspace + human approval + oauth client source。
+产品 Timeline 与 ADK Session Event 分开。
 
-## 11. Agent 配置
+card_activity 只记录 Human 可理解的业务事实，例如 card status change、review、schedule change、archive/reopen、handoff created。
 
-Model Provider / MCP Connection 不强行塞进 initial core schema。
+它不复制完整 model/tool trace。
 
-Built-in Agent 当前增加：
+## 10. schedules
 
-- workspace_agent_settings：Workspace 级 Agent instructions 与专用 cycle_agent Source；不再承载单一 model/provider，也不保存 enable/timeout/max tool rounds。
-- workspace_model_routes：Workspace 内有序模型路由，保存 position/enabled/provider/model，以及 OpenAI-compatible endpoint/env 引用或订阅 credential_id。
-- workspace_mcp_connections：outbound MCP 配置。
-- model_oauth_credentials：ChatGPT / Grok 加密账号凭据；每个账号有独立 ID，同一 Workspace + Provider 可保存多个账号。
-- model_auth_flows：短生命周期 OAuth/device flow。
+Ongoing Schedule 继续属于 Card。
 
-workspace_model_routes 的 subscription credential 使用 (workspace_id, credential_id) 复合 FK，保证不能跨 Workspace 引用账号；被 Route 引用的 credential 使用 RESTRICT，不允许先删账号留下悬空 Route。credential 的稳定 account_subject 在同一 Workspace + Provider 内唯一，重新授权同一账号更新原记录。
+~~~text
+Schedule occurrence
+→ card_turns(source=schedule)
+→ Dispatcher
+→ Attempt
+→ same Card Session
+~~~
 
-Secret 与普通展示配置分离，不能通过普通 Settings API 回显。
+Scheduler 不直接调用 Agent。
 
-`workspace_agent_settings` 只保存真正属于 Workspace 产品配置的 Agent instructions 与 cycle_agent Source；provider / model / credential / endpoint/env 引用都位于 `workspace_model_routes`。Cycle Agent 没有用户可写的全局 enabled、模型 request timeout、max tool rounds；这些执行器策略由 Runtime 统一管理。
+## 11. credentials / model routes / MCP
 
-## 12. 初始 migration
+模型账号、Route、MCP、NexusDock OAuth 的 Workspace scope 继续独立存储。
 
-新项目没有兼容旧 CycleDock DEV 数据的要求。
+Session event 绝不能把 access token、refresh token、Cookie、API key、bearer token 作为普通上下文持久化。
 
-开发初期可以使用：
+## 12. 并发不变量
 
-`db/migrations/000001_initial.sql`
+数据库与事务必须共同保证：
 
-在首次公开发布前仍可根据实际实现重整 initial migration，确保新安装从空 PostgreSQL 一次得到干净 schema。
+- 一个 Card 最多一个 current Attempt。
+- pending Turn FIFO。
+- Schedule occurrence 去重。
+- interrupt 与旧 Attempt finish 并发时旧 Attempt 不能回写。
+- Session AppendEvent 按 Session 串行化。
+- stale invocation 不得写 Session。
+- Workspace / Card tenant scope 不可跨越。
+
+## 13. 当前迁移状态
+
+首次发布 baseline 已完成重整：数据库只保留当前 Session-first 模型，正式 migration 只有 `000001_initial.sql`。
+
+- `card_turns / turn_attempts` 是唯一执行调度模型。
+- `agent_sessions / agent_session_events / agent_artifacts` 保存持久 Agent Session、原始 Event 与大结果 Artifact。
+- `events` 只保存产品 Timeline 事实；旧 Run 外键已删除。Attempt 产生的 Progress/Finding/Check-in/Result 使用 nullable `attempt_id` 关联当前 Attempt，UI 可由 `attempt_id → turn_attempts.turn_id → card_turns.source_event_id` 稳定组织因果轮次，同时 `sequence` 始终保留真实审计顺序。
+- 不保留旧 DEV Runtime 数据迁移或兼容表。
+- final baseline 已验证 fresh `up → down 0 → up`、自定义 PostgreSQL `search_path` 与稳定 `sqlc generate`。

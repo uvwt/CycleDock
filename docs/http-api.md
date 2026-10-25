@@ -1,5 +1,8 @@
 # Human Web HTTP API
 
+> 当前 Built-in Human Web Runtime 已完成 Session-first cutover。Card = persistent ADK Session，Human/Schedule 输入使用 Turn，真实 invocation 使用 Attempt；外部 MCP Agent Server 仍待后续阶段切换。
+
+
 Phase 2 的 HTTP API 只服务 Human Web。所有业务路由的 Workspace 与 Human Source 都来自服务端 Web Session；客户端不能在普通业务请求里提交 `workspace_id` / `source_id` 改写租户作用域。工作空间切换只能通过受 Membership 校验的专用 Session 接口完成。
 
 ## Auth
@@ -29,8 +32,8 @@ Project 即 Board，不存在独立 Board API。
 
 ## Card
 
-- `GET /api/v1/cards/{cardID}`：返回 Card、current Run（包括运行起止时间）、Timeline、pending Trigger queue、最近终态 work history、Schedule、Health / Last Check-in。执行关联同时返回稳定 ID：Timeline Event 可带 `trigger_id`；Queue / Work History 返回 `trigger_id`、`cause_event_id`、`source_event_id`、`retry_of_trigger_id`；current Run 返回 `trigger_id`、`source_event_id` 及重试来源。前端必须使用这些 ID 做 Comment Event → Trigger → Run / Retry 关联，不得按消息文字、时间或数组位置猜测。
-- `GET /api/v1/cards/{cardID}/stream`：Human Session 认证的 SSE，按 Card/Workspace 权限隔离。推送 run.started / run.stage / run.text.delta / run.finished / run.failed / event.created；模型增量是短暂状态，永久历史仍以 Timeline REST 为准。SSE 断线后重新拉取 Card，服务端单实例 Hub 支持在途流快照；提交新的任务不会从 SSE 发起。
+- `GET /api/v1/cards/{cardID}`：返回 Card、`current_attempt`、Timeline、`pending_turns`、`attempt_history`、Schedule、Health / Last Check-in。Human Turn 保存稳定 `source_event_id` 指向创建它的 Comment Event；Attempt 返回 `turn_id`、`source_event_id`、`attempt_number`、`reason`、`retry_of_attempt_id`。前端必须按这些稳定 ID 组织 Comment → Turn → Attempt，不得按文字、时间或数组位置猜测。
+- `GET /api/v1/cards/{cardID}/stream`：Human Session 认证的 SSE，按 Card/Workspace 权限隔离。推送 `attempt.started / attempt.stage / attempt.text.delta / attempt.text.reset / attempt.text.snapshot / attempt.finished / attempt.failed / event.created`，payload 使用 `attempt_id`；模型增量是短暂状态，永久历史仍以 Timeline REST 为准。SSE 断线后重新拉取 Card，服务端单实例 Hub 支持在途流快照；提交新的任务不会从 SSE 发起。
 - `PATCH /api/v1/cards/{cardID}`
 - `POST /api/v1/cards/{cardID}/move`：仅 Todo 状态移动。
 - `POST /api/v1/cards/{cardID}/discussion-state`：当前只允许 Human 将 Discussion 归档。
@@ -43,9 +46,9 @@ Discussion 不能转换为 Todo / Ongoing。Human 直接新建 Todo 与 Discussi
 
 - `POST /api/v1/cards/{cardID}/comments`
 - `POST /api/v1/cards/{cardID}/reply`
-- `POST /api/v1/cards/{cardID}/triggers/{triggerID}/cancel`
-- `POST /api/v1/cards/{cardID}/triggers/{triggerID}/retry`
-- `POST /api/v1/cards/{cardID}/runs/{runID}/cancel`
+- `POST /api/v1/cards/{cardID}/turns/{turnID}/cancel`
+- `POST /api/v1/cards/{cardID}/attempts/{attemptID}/retry`
+- `POST /api/v1/cards/{cardID}/attempts/{attemptID}/cancel`
 
 Comment 请求要求 `Idempotency-Key` Header。
 
@@ -54,23 +57,23 @@ Comment 请求要求 `Idempotency-Key` Header。
 - `enqueue`
 - `interrupt`
 
-Human Web 不提交 runner source。interrupt 与 waiting_human reply 在 Store 的 Card 锁内沿用 current Run 的 Runner，避免 Handler “先查再写”造成并发竞态。
+Human Web 不提交 runner source。Dispatcher 从 Workspace 的 Built-in Agent settings 取得 runner source。interrupt 与 waiting_human reply 都在 Store 的 Card 锁内 supersede 旧 Attempt，避免 Handler “先查再写”造成并发竞态。
 
-没有 AgentRun 的 Trigger 即 pending queue item。
+尚未创建 Attempt 的 Turn 即 pending queue item；pending Turn 在真正 Claim 前不得进入 ADK Session history。
 
 执行链的展示关联规则：
 
-- 普通 Human Comment Trigger 的 `cause_event_id` 指向创建它的 Comment Event，同时该 Event 的 Timeline DTO 暴露 `trigger_id`。
-- retry Trigger 自身可以没有 `cause_event_id`，但通过 `retry_of_trigger_id` 向上追溯后，API 的 `source_event_id` 必须指向最初用户 Comment Event。
-- 没有用户 Event 来源的 Schedule / System Trigger 保留空 `source_event_id`，前端独立展示，不能错误挂到最近一条消息。
-- Work History 保留旧 Trigger / Run，不因 retry 覆盖历史；`can_retry` 仍由服务端根据真实终态和后继关系计算。
+- Human Comment 与 Turn 在同一事务创建；Turn 的 `source_event_id` 指向 Comment Event。
+- Attempt 继承所属 Turn 的 `source_event_id`，因此 retry / recovery 仍稳定挂到同一用户消息。
+- Schedule / System Turn 可以没有 `source_event_id`，前端独立展示，不能错误挂到最近一条消息。
+- Attempt History 保留所有终态 Attempt，不因 retry 覆盖历史；`can_retry` 由服务端根据真实终态和后继关系计算。
 
 取消与 retry 不复写旧历史：
 
-- pending Trigger cancel 只记录该 Trigger 的取消元数据，不伪造 AgentRun。
-- current queued / running / waiting_human Run cancel 后进入 `cancelled`。
-- retry failed / expired / cancelled work 时创建新的 `manual_retry` Trigger。
-- 同一个原 Trigger 只允许一条 retry lineage；幂等请求复用已创建的新 Trigger。
+- pending Turn cancel 只记录该 Turn 的取消元数据，不伪造 Attempt。
+- current queued / running / waiting_human Attempt cancel 后进入 `cancelled`。
+- retry failed / expired / cancelled work 时，在同一个 Turn 下创建新的 Attempt，`reason=retry`。
+- 同一个原 Attempt 只允许一条 retry successor；重复 retry 请求复用已创建的新 Attempt。
 - `interrupt` 表达“立即换方向继续”，`cancel` 表达“停止当前工作”，两者不混用。
 
 ## Built-in Agent settings / connection test
@@ -113,7 +116,7 @@ MCP Test 只执行 connect / initialize / ListTools，返回工具数量，**不
 
 规则仅支持 daily / weekly / monthly + IANA timezone；missed-run policy 固定为 skip。
 
-已经产生 Trigger 历史的 Schedule 不能硬删除；应改为 disabled，以保留 Trigger / Run 审计链。尚无 Trigger 历史的 Schedule 可以删除。
+已经产生 Turn 历史的 Schedule 不能硬删除；应改为 disabled，以保留 Turn / Attempt 审计链。尚无 Turn 历史的 Schedule 可以删除。
 
 ## 写请求安全
 

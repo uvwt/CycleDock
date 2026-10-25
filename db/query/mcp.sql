@@ -3,19 +3,19 @@ SELECT
     c.*,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
-    current_run.status AS current_run_status,
+    current_attempt.status AS current_attempt_status,
     (
         SELECT count(*)
-        FROM triggers t
+        FROM card_turns t
         WHERE t.workspace_id = c.workspace_id
           AND t.card_id = c.id
           AND t.cancelled_at IS NULL
           AND NOT EXISTS (
-              SELECT 1 FROM agent_runs r
-              WHERE r.workspace_id = t.workspace_id
-                AND r.trigger_id = t.id
+              SELECT 1 FROM turn_attempts a
+              WHERE a.workspace_id = t.workspace_id
+                AND a.turn_id = t.id
           )
-    ) AS pending_trigger_count
+    ) AS pending_turn_count
 FROM cards c
 JOIN projects p
   ON p.workspace_id = c.workspace_id
@@ -29,10 +29,10 @@ LEFT JOIN LATERAL (
     ORDER BY e.sequence DESC
     LIMIT 1
 ) latest_checkin ON true
-LEFT JOIN agent_runs current_run
-  ON current_run.workspace_id = c.workspace_id
- AND current_run.card_id = c.id
- AND current_run.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
 WHERE c.workspace_id = sqlc.arg(workspace_id)
 ORDER BY p.created_at, c.created_at, c.id;
 
@@ -69,41 +69,15 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 
 -- name: CreateAgentEvent :one
 INSERT INTO events (
-    id, workspace_id, card_id, event_type, actor_source_id, run_id,
+    id, workspace_id, card_id, event_type, actor_source_id,
     content, checkin_status, idempotency_key, request_hash
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(card_id), sqlc.arg(event_type),
-    sqlc.arg(actor_source_id), sqlc.narg(run_id), sqlc.arg(content),
+    sqlc.arg(actor_source_id), sqlc.arg(content),
     sqlc.narg(checkin_status), sqlc.arg(idempotency_key), sqlc.arg(request_hash)
 )
 RETURNING *;
-
--- name: GetAgentFollowupRequest :one
-SELECT *
-FROM triggers
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND created_by_source_id = sqlc.arg(created_by_source_id)
-  AND cause IN ('manual_retry', 'system_followup')
-  AND idempotency_key = sqlc.arg(idempotency_key);
-
--- name: CreateAgentFollowupTrigger :one
-INSERT INTO triggers (
-    id, workspace_id, card_id, cause, cause_event_id,
-    created_by_source_id, dispatch_mode, idempotency_key, request_hash
-)
-VALUES (
-    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(card_id), sqlc.arg(cause),
-    sqlc.narg(cause_event_id), sqlc.arg(created_by_source_id), 'enqueue',
-    sqlc.arg(idempotency_key), sqlc.arg(request_hash)
-)
-RETURNING *;
-
--- name: GetRunByID :one
-SELECT *
-FROM agent_runs
-WHERE workspace_id = sqlc.arg(workspace_id)
-  AND id = sqlc.arg(id);
 
 -- name: ListRecentCardTimeline :many
 SELECT *

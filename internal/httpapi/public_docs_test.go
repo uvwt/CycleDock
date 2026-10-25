@@ -12,7 +12,7 @@ import (
 	"github.com/uvwt/CycleDock/skills"
 )
 
-func TestAIConnectGuideUsesCurrentInstanceAndPhase3Tools(t *testing.T) {
+func TestAIConnectGuideUsesCurrentInstanceAndTurnAttemptTools(t *testing.T) {
 	response := httptest.NewRecorder()
 	serveAIConnectGuide(response, "https://cycle.example/", "https://cycle.example/mcp")
 
@@ -24,15 +24,18 @@ func TestAIConnectGuideUsesCurrentInstanceAndPhase3Tools(t *testing.T) {
 		"https://cycle.example/docs/ai-connect/",
 		"https://cycle.example/mcp",
 		"https://cycle.example/skills/cycledock/SKILL.md",
-		"list_projects", "list_cards", "create_followup", "claim_work",
-		"report_progress", "add_finding", "check_in", "finish_run", "confirm_card",
+		"list_projects", "list_cards", "create_turn", "claim_attempt", "heartbeat_attempt",
+		"report_progress", "add_finding", "check_in", "finish_attempt", "confirm_card",
 		"原生 Remote MCP", "OAuth",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("guide does not contain %q", expected)
 		}
 	}
-	for _, forbidden := range []string{"board_id", "add_event", "CycleDock 不运行 AI", "CycleDock 不提供 Scheduler"} {
+	for _, forbidden := range []string{
+		"board_id", "add_event", "create_followup", "claim_work", "heartbeat_run", "finish_run",
+		"CycleDock 不运行 AI", "CycleDock 不提供 Scheduler",
+	} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("guide still contains obsolete text %q", forbidden)
 		}
@@ -49,11 +52,15 @@ func TestCycleDockSkillRawAndZIPUseEmbeddedSources(t *testing.T) {
 	if raw.Code != http.StatusOK || raw.Body.String() != skills.CycleDockSkillMarkdown {
 		t.Fatal("raw Skill does not match embedded source")
 	}
-	if !strings.Contains(raw.Body.String(), "create_followup") || !strings.Contains(raw.Body.String(), "claim_work") {
-		t.Fatal("Skill does not describe Phase 3 work semantics")
+	if !strings.Contains(raw.Body.String(), "create_turn") ||
+		!strings.Contains(raw.Body.String(), "claim_attempt") ||
+		!strings.Contains(raw.Body.String(), "finish_attempt") {
+		t.Fatal("Skill does not describe Turn/Attempt work semantics")
 	}
-	if strings.Contains(raw.Body.String(), "BoardID") || strings.Contains(raw.Body.String(), "add_event") {
-		t.Fatal("Skill contains obsolete tool/domain semantics")
+	for _, obsolete := range []string{"BoardID", "add_event", "create_followup", "claim_work", "heartbeat_run", "finish_run"} {
+		if strings.Contains(raw.Body.String(), obsolete) {
+			t.Fatalf("Skill contains obsolete tool/domain semantics %q", obsolete)
+		}
 	}
 
 	archive := httptest.NewRecorder()

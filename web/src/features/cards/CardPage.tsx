@@ -55,7 +55,7 @@ function CardPageContent() {
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
   );
-  const current = detail.data?.current_run;
+  const current = detail.data?.current_attempt;
   const waiting = current?.status === "waiting_human";
   const hasCurrent =
     Boolean(current) &&
@@ -67,8 +67,8 @@ function CardPageContent() {
   const [submitMode, setSubmitMode] = useState<"enqueue" | "interrupt">(
     "enqueue",
   );
-  const [cancelingTriggerID, setCancelingTriggerID] = useState("");
-  const [retryingTriggerID, setRetryingTriggerID] = useState("");
+  const [cancelingTurnID, setCancelingTurnID] = useState("");
+  const [retryingAttemptID, setRetryingAttemptID] = useState("");
 
   useEffect(() => {
     if (actualProjectID && actualProjectID !== activeProjectID) {
@@ -127,29 +127,29 @@ function CardPageContent() {
       toast.error(error instanceof Error ? error.message : t("提交失败")),
   });
 
-  const cancelRun = useMutation({
-    mutationFn: () => api.cancelRun(cardID, current!.id),
+  const cancelAttempt = useMutation({
+    mutationFn: () => api.cancelAttempt(cardID, current!.id),
     onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("取消失败")),
   });
 
-  const cancelTrigger = useMutation({
-    mutationFn: (triggerID: string) => api.cancelTrigger(cardID, triggerID),
-    onMutate: (triggerID) => setCancelingTriggerID(triggerID),
+  const cancelTurn = useMutation({
+    mutationFn: (turnID: string) => api.cancelTurn(cardID, turnID),
+    onMutate: (turnID) => setCancelingTurnID(turnID),
     onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("取消排队失败")),
-    onSettled: () => setCancelingTriggerID(""),
+    onSettled: () => setCancelingTurnID(""),
   });
 
-  const retryTrigger = useMutation({
-    mutationFn: (triggerID: string) => api.retry(cardID, triggerID),
-    onMutate: (triggerID) => setRetryingTriggerID(triggerID),
+  const retryAttempt = useMutation({
+    mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
+    onMutate: (attemptID) => setRetryingAttemptID(attemptID),
     onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("重试失败")),
-    onSettled: () => setRetryingTriggerID(""),
+    onSettled: () => setRetryingAttemptID(""),
   });
 
   function submit() {
@@ -294,13 +294,13 @@ function CardPageContent() {
             events={detail.data.timeline}
             live={stream.live}
             cardKind={card.kind}
-            queue={detail.data.queue}
-            currentRun={detail.data.current_run}
-            workHistory={detail.data.work_history}
-            cancelingTriggerID={cancelingTriggerID}
-            retryingTriggerID={retryingTriggerID}
-            onCancelTrigger={(triggerID) => cancelTrigger.mutate(triggerID)}
-            onRetryTrigger={(triggerID) => retryTrigger.mutate(triggerID)}
+            pendingTurns={detail.data.pending_turns}
+            currentAttempt={detail.data.current_attempt}
+            attemptHistory={detail.data.attempt_history}
+            cancelingTurnID={cancelingTurnID}
+            retryingAttemptID={retryingAttemptID}
+            onCancelTurn={(turnID) => cancelTurn.mutate(turnID)}
+            onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
           />
 
           <div className="shrink-0 bg-white px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pt-3">
@@ -310,13 +310,13 @@ function CardPageContent() {
                   {t("此讨论已归档，不能继续发送消息")}
                 </p>
               )}
-              {(hasCurrent || detail.data.queue.length > 0) && (
+              {(hasCurrent || detail.data.pending_turns.length > 0) && (
                 <p className="mb-1.5 text-center text-[11px] text-slate-400">
                   {hasCurrent
                     ? t("Agent 正在处理当前工作")
                     : t("Agent 当前空闲")}
-                  {detail.data.queue.length > 0
-                    ? " · " + t("另有待处理") + " " + detail.data.queue.length
+                  {detail.data.pending_turns.length > 0
+                    ? " · " + t("另有待处理") + " " + detail.data.pending_turns.length
                     : ""}
                 </p>
               )}
@@ -335,10 +335,10 @@ function CardPageContent() {
                 generatePending={generate.isPending}
                 streamConnected={stream.connected}
                 streamError={stream.lastError}
-                cancelPending={cancelRun.isPending}
+                cancelPending={cancelAttempt.isPending}
                 onSubmit={submit}
                 onGenerate={() => generate.mutate()}
-                onCancel={() => cancelRun.mutate()}
+                onCancel={() => cancelAttempt.mutate()}
               />
             </div>
           </div>

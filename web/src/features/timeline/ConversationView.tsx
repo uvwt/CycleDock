@@ -2,17 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, Bot } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type {
-  QueueItem,
-  Run,
+  Attempt,
+  PendingTurn,
   TimelineEvent,
-  WorkItem,
 } from "../../shared/api/types";
-import type { LiveRun } from "../../shared/realtime/useCardStream";
-import { ExecutionStatus, RunDuration, StandaloneExecution } from "./ExecutionStatus";
+import type { LiveAttempt } from "../../shared/realtime/useCardStream";
+import {
+  ExecutionStatus,
+  RunDuration,
+  StandaloneExecution,
+} from "./ExecutionStatus";
 import { RichText } from "./RichText";
 import {
   groupExecutionAttempts,
-  groupRunEvents,
+  orderTimelineEvents,
   type ExecutionAttempt,
 } from "./execution";
 
@@ -30,6 +33,13 @@ const labels: Record<string, string> = {
   checkin: "巡检",
   confirm: "提交审核",
   reject: "驳回",
+};
+
+type ExecutionActions = {
+  cancelingTurnID?: string;
+  retryingAttemptID?: string;
+  onCancelTurn: (turnID: string) => void;
+  onRetryAttempt: (attemptID: string) => void;
 };
 
 function TimeSeparator({ value }: { value: string }) {
@@ -55,19 +65,12 @@ function EventRow({
   event,
   attempts,
   live,
-  cancelingTriggerID,
-  retryingTriggerID,
-  onCancelTrigger,
-  onRetryTrigger,
+  ...actions
 }: {
   event: TimelineEvent;
   attempts: ExecutionAttempt[];
-  live: LiveRun | null;
-  cancelingTriggerID?: string;
-  retryingTriggerID?: string;
-  onCancelTrigger: (triggerID: string) => void;
-  onRetryTrigger: (triggerID: string) => void;
-}) {
+  live: LiveAttempt | null;
+} & ExecutionActions) {
   const { t } = useTranslation();
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
@@ -79,7 +82,13 @@ function EventRow({
         data-sequence={event.sequence}
       >
         <span
-          className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${event.type === "reject" ? "text-rose-700" : event.type === "confirm" ? "text-amber-700" : "text-slate-500"}`}
+          className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${
+            event.type === "reject"
+              ? "text-rose-700"
+              : event.type === "confirm"
+                ? "text-amber-700"
+                : "text-slate-500"
+          }`}
         >
           {t(labels[event.type] || event.type)} · {event.content}
           {event.checkin_status ? ` · ${event.checkin_status}` : ""}
@@ -90,51 +99,48 @@ function EventRow({
 
   return (
     <>
-    <article
-      id={"event-" + event.id}
-      data-sequence={event.sequence}
-      className={`flex gap-3 ${human ? "justify-end" : "justify-start"}`}
-    >
-      {!human && (
-        <span
-          aria-hidden
-          className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
-        >
-          <Bot className="size-4" />
-        </span>
-      )}
-      <div
-        className={`max-w-[min(88%,740px)] min-w-0 ${human ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3" : "rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3"}`}
+      <article
+        id={"event-" + event.id}
+        data-sequence={event.sequence}
+        className={`flex gap-3 ${human ? "justify-end" : "justify-start"}`}
       >
         {!human && (
-          <p className="mb-1 text-xs font-semibold text-slate-500">
-            {event.actor_name || "Cycle Agent"}
-            {event.type === "finding" && (
-              <span className="ml-2 text-sky-700">{t("发现")}</span>
-            )}
-            {event.type === "result" && (
-              <span className="ml-2 text-emerald-700">{t("结果")}</span>
-            )}
-          </p>
+          <span
+            aria-hidden
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+          >
+            <Bot className="size-4" />
+          </span>
         )}
-        <RichText content={event.content} />
-      </div>
-    </article>
-    {human && (
-      <ExecutionStatus
-        attempts={attempts}
-        live={live}
-        cancelingTriggerID={cancelingTriggerID}
-        retryingTriggerID={retryingTriggerID}
-        onCancelTrigger={onCancelTrigger}
-        onRetryTrigger={onRetryTrigger}
-      />
-    )}
+        <div
+          className={`max-w-[min(88%,740px)] min-w-0 ${
+            human
+              ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3"
+              : "rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3"
+          }`}
+        >
+          {!human && (
+            <p className="mb-1 text-xs font-semibold text-slate-500">
+              {event.actor_name || "Cycle Agent"}
+              {event.type === "finding" && (
+                <span className="ml-2 text-sky-700">{t("发现")}</span>
+              )}
+              {event.type === "result" && (
+                <span className="ml-2 text-emerald-700">{t("结果")}</span>
+              )}
+            </p>
+          )}
+          <RichText content={event.content} />
+        </div>
+      </article>
+      {human && (
+        <ExecutionStatus attempts={attempts} live={live} {...actions} />
+      )}
     </>
   );
 }
 
-function LiveMessage({ live }: { live: LiveRun | null }) {
+function LiveMessage({ live }: { live: LiveAttempt | null }) {
   const { t } = useTranslation();
   if (!live) return null;
   return (
@@ -168,59 +174,46 @@ export function ConversationView({
   events,
   live,
   cardKind,
-  queue,
-  currentRun,
-  workHistory,
-  cancelingTriggerID,
-  retryingTriggerID,
-  onCancelTrigger,
-  onRetryTrigger,
+  pendingTurns,
+  currentAttempt,
+  attemptHistory,
+  ...actions
 }: {
   events: TimelineEvent[];
-  live: LiveRun | null;
+  live: LiveAttempt | null;
   cardKind: string;
-  queue: QueueItem[];
-  currentRun: Run | null;
-  workHistory: WorkItem[];
-  cancelingTriggerID?: string;
-  retryingTriggerID?: string;
-  onCancelTrigger: (triggerID: string) => void;
-  onRetryTrigger: (triggerID: string) => void;
-}) {
+  pendingTurns: PendingTurn[];
+  currentAttempt: Attempt | null;
+  attemptHistory: Attempt[];
+} & ExecutionActions) {
   const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
+
   const sortedEvents = useMemo(
-    () => [...events].sort((a, b) => a.sequence - b.sequence),
-    [events],
+    () => orderTimelineEvents(events, currentAttempt, attemptHistory),
+    [attemptHistory, currentAttempt, events],
   );
   const eventIDs = useMemo(
     () => new Set(sortedEvents.map((event) => event.id)),
     [sortedEvents],
   );
   const { byEvent, standalone } = useMemo(
-    () => groupExecutionAttempts(eventIDs, queue, currentRun, workHistory),
-    [currentRun, eventIDs, queue, workHistory],
-  );
-  const { bySourceEvent, topLevel } = useMemo(
-    () => groupRunEvents(sortedEvents, byEvent),
-    [byEvent, sortedEvents],
-  );
-  const persistedResultRunIDs = useMemo(
     () =>
-      new Set(
-        sortedEvents
-          .filter((event) => event.type === "result" && event.run_id)
-          .map((event) => event.run_id!),
+      groupExecutionAttempts(
+        eventIDs,
+        pendingTurns,
+        currentAttempt,
+        attemptHistory,
       ),
-    [sortedEvents],
+    [attemptHistory, currentAttempt, eventIDs, pendingTurns],
   );
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
-  }, [events, live, queue, currentRun, workHistory]);
+  }, [events, live, pendingTurns, currentAttempt, attemptHistory]);
 
   function onScroll() {
     const element = list.current;
@@ -253,60 +246,35 @@ export function ConversationView({
             </p>
           </div>
         )}
-        {topLevel.map((event, index) => {
-          const previous = topLevel[index - 1];
+
+        {sortedEvents.map((event, index) => {
+          const previous = sortedEvents[index - 1];
           const showTime =
             !!previous &&
             new Date(event.created_at).getTime() -
               new Date(previous.created_at).getTime() >
               TWO_HOURS_MS;
-          const attachedEvents = bySourceEvent.get(event.id) || [];
-          const attempts = (byEvent.get(event.id) || []).filter((attempt) => {
-            if (attempt.kind !== "history" || attempt.value.status !== "completed") {
-              return true;
-            }
-            return !attempt.value.run_id || !persistedResultRunIDs.has(attempt.value.run_id);
-          });
           return (
             <div key={event.id} className="contents">
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
                 event={event}
-                attempts={attempts}
+                attempts={byEvent.get(event.id) || []}
                 live={live}
-                cancelingTriggerID={cancelingTriggerID}
-                retryingTriggerID={retryingTriggerID}
-                onCancelTrigger={onCancelTrigger}
-                onRetryTrigger={onRetryTrigger}
+                {...actions}
               />
-              {attachedEvents.map((attachedEvent) => (
-                <EventRow
-                  key={attachedEvent.id}
-                  event={attachedEvent}
-                  attempts={[]}
-                  live={null}
-                  cancelingTriggerID={cancelingTriggerID}
-                  retryingTriggerID={retryingTriggerID}
-                  onCancelTrigger={onCancelTrigger}
-                  onRetryTrigger={onRetryTrigger}
-                />
-              ))}
             </div>
           );
         })}
+
         <StandaloneExecution
           attempts={standalone}
           live={live}
-          cancelingTriggerID={cancelingTriggerID}
-          retryingTriggerID={retryingTriggerID}
-          onCancelTrigger={onCancelTrigger}
-          onRetryTrigger={onRetryTrigger}
+          {...actions}
         />
         <LiveMessage
           live={
-            live &&
-            currentRun?.id !== live.runID &&
-            !persistedResultRunIDs.has(live.runID)
+            live && currentAttempt?.id !== live.attemptID
               ? live
               : null
           }

@@ -2,17 +2,18 @@
 
 ## 定位
 
-CycleDock Remote MCP 是外部 AI / Agent 的 Adapter。外部客户端通过标准 Streamable HTTP MCP 访问与 Human Web、未来 Built-in Cycle Agent 相同的 Domain / Store。
+CycleDock Remote MCP 是外部 AI / Agent 的标准 Adapter。外部客户端通过 Streamable HTTP MCP 访问与 Human Web、Built-in Cycle Agent 相同的 Project / Card / Turn / Attempt Domain。
+
+Card 是长期业务容器，同时对应一个持久 Agent Session；Turn 是新的工作方向；Attempt 是一次真实执行。
 
 MCP Handler 不复制业务状态机，不能绕过：
 
-- Workspace scope。
-- Trigger 单 Claim。
-- Card 单 current Run。
-- runner ownership。
-- supersede stale-write 防护。
+- Workspace / OAuth Source scope。
+- Card 单 current Attempt。
+- Attempt runner ownership。
+- stale / superseded Attempt 写入保护。
 - Human-only Review → Done。
-- 幂等与并发约束。
+- Turn / Event 幂等与并发约束。
 
 ## 接入地址
 
@@ -28,6 +29,8 @@ MCP Handler 不复制业务状态机，不能绕过：
 - Skill：`{PUBLIC_URL}/skills/cycledock/SKILL.md`
 
 远程 Public URL 必须 HTTPS；localhost / loopback 开发环境允许 HTTP。
+
+当前 MCP Implementation version：`0.4.0`。
 
 ## OAuth
 
@@ -50,19 +53,19 @@ Human 必须先通过 Human Web 身份认证，再在 OAuth consent 页面批准
 
 `Human Membership → OAuth Grant → oauth_client Source`
 
-所有 MCP Event / Run 都使用这个 OAuth Client Source。
+所有 External MCP Event / Attempt 都使用这个 OAuth Client Source。
 
-Refresh token 每次使用都会轮换 access + refresh。已经轮换过的旧 refresh token 被再次使用时，CycleDock 撤销整个 token family，防止合法客户端与泄漏者继续竞速。
+Refresh token 每次使用都会轮换 access + refresh。已经轮换过的旧 refresh token 被再次使用时，CycleDock 撤销整个 token family。
 
 ## Workspace / Source scope
 
-MCP tool input 中没有 `workspace_id` 或 `source_id`。
+MCP tool input 不接受 `workspace_id` 或 `source_id`。
 
-实际 scope 来自：
+真实 scope 来自：
 
 `Bearer access token → OAuth Grant → Workspace + oauth_client Source`
 
-因此客户端不能通过工具参数切换租户，也不能用另一个 Source 的 `run_id` heartbeat / progress / finding / check-in / finish。
+客户端不能通过工具参数切换租户，也不能拿另一个 Source 的 `attempt_id` heartbeat / progress / finding / check-in / finish。
 
 ## 当前工具
 
@@ -72,7 +75,17 @@ MCP tool input 中没有 `workspace_id` 或 `source_id`。
 - `list_cards`
 - `get_card`
 
-`get_card` 返回 Card、最近 durable Timeline、pending Trigger queue、current Run；不会返回 raw model messages / tool trace。
+`list_cards` 返回每个 Card 的 `current_attempt_status`、`pending_turn_count` 和 Ongoing health。
+
+`get_card` 返回：
+
+- Card。
+- bounded durable Timeline。
+- `pending_turns`。
+- `current_attempt`。
+- `attempt_history`。
+
+产品 Timeline 不包含 raw model messages、tool args、tool trace 或 chain-of-thought。
 
 ### Card / Context
 
@@ -81,80 +94,110 @@ MCP tool input 中没有 `workspace_id` 或 `source_id`。
 - `update_card`
 - `move_card`
 - `add_comment`
-- `create_followup`
+- `create_turn`
 
-`create_discussion` 创建一个新的 Discussion。Discussion 是新工作的入口，不要求调用方先选择 Todo / Ongoing。
+`create_discussion` 创建新的 Discussion。Discussion 是新工作的入口，不要求调用方预先选择 Todo / Ongoing。
 
-`generate_work` 只能以 Discussion 为来源创建一个 Todo 或 Ongoing，并写入 `source_discussion_id`。这个工具只有一个入口，`kind` 是 AI 对当前 Discussion 的结构化判断结果，不对应两个用户按钮。Todo / Ongoing 不能作为来源再次调用。
+`generate_work` 只能以 active Discussion 为来源创建 Todo 或 Ongoing，并写入 `source_discussion_id`。Todo / Ongoing 不能继续生成更多 Card。
 
-`add_comment` 只增加长期上下文，不创建 Trigger。
+`add_comment` 只增加 durable Card context，不创建 Turn。
 
-`create_followup` 显式创建新的 Comment Event + pending `system_followup` Trigger；默认 enqueue，不 interrupt，也不自动 Claim。
+`create_turn` 原子创建 Comment Event + queued Turn：
 
-External MCP 第一版不提供 interrupt tool。立即转向是 Human Web 的显式人工决策。
+- 默认 enqueue。
+- 不 interrupt current Attempt。
+- 不自动 Claim。
+- 使用 OAuth Source + `idempotency_key` 保证网络重试安全。
+- Turn 的 `source_event_id` 稳定指向对应 Comment Event。
 
-### Run
+External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式人工决策。
 
-- `claim_work`
-- `heartbeat_run`
+### Attempt
+
+- `claim_attempt`
+- `heartbeat_attempt`
 - `report_progress`
 - `add_finding`
 - `check_in`
-- `finish_run`
+- `finish_attempt`
 
-`claim_work` 在同一个 Card 行锁中原子执行：
+`claim_attempt(card_id)` 在目标 Card 行锁中原子执行：
 
-1. 检查 current Run。
-2. 若当前 Run 已由同一 Source 持有，则作为网络重试返回同一 Run。
-3. 若由其他 Source 持有，返回 conflict。
-4. 否则选择最早 pending Trigger。
-5. 直接创建 running Run。
+1. 若 Card 已有同一 OAuth Source 拥有的 queued / running / waiting_human Attempt，则复用同一 Attempt。
+2. 若 current Attempt 由另一个 Source 持有，返回 conflict。
+3. 否则只在该 Card 内选择最早 pending Turn。
+4. 创建 running Attempt，并记录当前 OAuth Source 为 `runner_source_id`。
 
-因此网络重试不会静默领取下一条 Trigger。
+因此网络重试不会静默领取下一条 Turn，也不会因为 Workspace FIFO 抢到别的 Card。
 
-Heartbeat 只续 lease，不写 Timeline。
+`heartbeat_attempt` 只延长 running Attempt lease，不写 Timeline。
 
-Progress 可更新 `current_stage` / `progress_summary` 并续 lease；只有 `event_content` 非空时才生成 durable progress Event。
+`report_progress` 更新 `current_stage / progress_summary` 并续 lease；只有 `event_content` 非空时才生成 durable Progress Event。
 
-Finding / Result / Check-in 是长期上下文。Raw tool output、临时日志、tool args、chain-of-thought 不应写入 CycleDock。
+`add_finding`、`check_in` 与 completed Result 是长期 Card 事实。Raw tool output、临时日志、tool args、chain-of-thought 不应写入产品 Timeline。
 
-`finish_run` 支持：
+`finish_attempt` 支持：
 
-- `completed`：写 durable Result。
-- `failed`：写 failure summary。
-- `waiting_human`：记录 stage / summary 并等待 Human。
+- `completed`：写 durable Result，并将 Attempt 置为 completed。
+- `failed`：保存 failure summary，并将 Attempt 置为 failed。
+- `waiting_human`：保存 stage / summary，释放 lease，等待 Human reply。
 
-superseded / expired / cancelled Run，或另一个 Source 拥有的 Run，后续写入都会被拒绝。
+同一 Source 对相同 completed / failed / waiting_human 结果进行网络重试是幂等的。
+
+superseded / expired / cancelled Attempt，或另一个 Source 拥有的 Attempt，后续写入都会返回 `ATTEMPT_NOT_CURRENT`。
+
+### Human reply 与 Schedule
+
+Human Web reply 会：
+
+1. supersede 原 waiting_human Attempt；
+2. 在同一个 Card 创建新的 Human Turn；
+3. 保持 Card Session 的连续上下文。
+
+External Agent 随后可以再次 `claim_attempt(card_id)`，领取这个 reply Turn。
+
+Ongoing Schedule 只创建 Schedule Turn，不直接运行模型。External Agent 同样通过 `claim_attempt(card_id)` 领取该 Turn。
 
 ### Review
 
 - `confirm_card`
 
-Agent 只能对 Todo 使用 `move_card`；Discussion 不存在可移动的任务列。Agent 不允许直接 `move_card → review`，必须通过 `confirm_card` 留下确认事实。
+Agent 对 Todo 使用 `move_card` 只能进入 `todo / working`。Agent 不允许直接移动到 Review，必须通过 `confirm_card` 留下确认事实。
 
 达到 `required_confirmations` 后，CycleDock 自动将 Working → Review。Review → Done 始终 Human-only。
 
 ## 幂等
 
-以下写操作使用 `idempotency_key`：
+以下写操作使用显式 `idempotency_key`：
 
-- create_discussion。
-- generate_work。
-- add_comment。
-- create_followup。
-- meaningful progress Event。
-- add_finding。
-- check_in。
-- completed / failed finish_run。
-- confirm_card。
+- `create_discussion`。
+- `generate_work`。
+- `add_comment`。
+- `create_turn`。
+- meaningful `report_progress` Event。
+- `add_finding`。
+- `check_in`。
+- `confirm_card`。
 
-同一逻辑操作网络重试必须复用同一个 key；同一个 key 配不同请求内容会返回 idempotency conflict。
+Attempt lifecycle 本身按 Attempt ID + owner + terminal value 提供幂等：
 
-## Ongoing
+- 重复 `claim_attempt`：同 owner 复用 current Attempt。
+- 重复 `finish_attempt(completed)`：相同 Result 复用终态，不重复写 Result Event。
+- 重复 `finish_attempt(failed)`：相同 summary 复用终态。
+- 重复 `finish_attempt(waiting_human)`：相同 stage / summary 复用 waiting 状态。
 
-CycleDock 原生 Ongoing Schedule 支持 daily / weekly / monthly + IANA timezone。
+## 不兼容旧协议
 
-Schedule 只创建 `scheduled_followup` Trigger，不直接执行模型。外部 AI 客户端如果同时使用自己的定时任务，应先通过 `get_card` / `list_cards` 检查 pending queue，避免重复制造相同工作。
+CycleDock 尚未首次公开发布，因此 v0.4 不保留旧 External MCP Runtime 兼容别名。
+
+以下工具已删除：
+
+- `create_followup`
+- `claim_work`
+- `heartbeat_run`
+- `finish_run`
+
+对应 `trigger_id / run_id / current_run / pending Trigger` 字段也不再属于 External MCP API。
 
 ## 官方 Skill
 
@@ -172,14 +215,16 @@ ZIP 由同一份嵌入源动态生成，不维护第二份 Skill 内容。
 
 ## 验证基线
 
-Phase 3 必须同时验证：
+External MCP cutover 至少验证：
 
 - OAuth PKCE / code 单次消费。
 - access / refresh digest storage。
 - refresh rotation / replay family revoke。
 - 并发 Workspace approval 只生成一个 oauth_client Source。
-- 两 Agent 并发 Claim 只有一个成功。
-- bearer Source 不能写另一个 Source 的 Run。
-- superseded Run late finish 被拒绝。
-- Confirm threshold 与 Human-only Done。
-- 官方 Go MCP SDK 通过真实 HTTP 完成 discovery / DCR / OAuth / Streamable HTTP / tool discovery / tool calls。
+- 官方 MCP SDK Streamable HTTP 完整连接与 tool discovery。
+- 旧 Trigger / Run 工具名不再暴露。
+- 两个 OAuth Source 并发 Claim 同 Card 只有一个成功。
+- 非 owner heartbeat / progress / finish 被拒。
+- 同 owner claim / finish / waiting_human 网络重试幂等。
+- Human reply Turn 与 Schedule Turn 可被 External Agent Claim。
+- Workspace / Card tenant isolation。

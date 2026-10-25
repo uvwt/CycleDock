@@ -221,13 +221,19 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	requiredTools := map[string]bool{
 		"list_projects": false, "list_cards": false, "get_card": false,
 		"create_discussion": false, "generate_work": false, "update_card": false, "move_card": false,
-		"add_comment": false, "create_followup": false, "claim_work": false,
-		"heartbeat_run": false, "report_progress": false, "add_finding": false,
-		"check_in": false, "finish_run": false, "confirm_card": false,
+		"add_comment": false, "create_turn": false, "claim_attempt": false,
+		"heartbeat_attempt": false, "report_progress": false, "add_finding": false,
+		"check_in": false, "finish_attempt": false, "confirm_card": false,
+	}
+	legacyTools := map[string]bool{
+		"create_followup": true, "claim_work": true, "heartbeat_run": true, "finish_run": true,
 	}
 	for _, tool := range tools.Tools {
 		if _, ok := requiredTools[tool.Name]; ok {
 			requiredTools[tool.Name] = true
+		}
+		if legacyTools[tool.Name] {
+			t.Fatalf("legacy Trigger/Run MCP tool is still exposed: %s", tool.Name)
 		}
 	}
 	for name, found := range requiredTools {
@@ -269,41 +275,68 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if !reviewAttempt.IsError {
 		t.Fatalf("external MCP bypassed confirm_card and moved directly to review: %+v", reviewAttempt)
 	}
-	followup := callMCPTool[mcpserver.FollowupOutput](t, ctx, clientSession, "create_followup", map[string]any{
-		"card_id": created.Card.ID, "content": "Execute protocol E2E work", "idempotency_key": "mcp-e2e-followup",
+	turn := callMCPTool[mcpserver.TurnOutput](t, ctx, clientSession, "create_turn", map[string]any{
+		"card_id": created.Card.ID, "content": "Execute protocol E2E work", "idempotency_key": "mcp-e2e-turn",
 	})
-	if followup.TriggerID == "" {
-		t.Fatalf("create_followup output: %+v", followup)
+	if turn.TurnID == "" || turn.EventID == "" {
+		t.Fatalf("create_turn output: %+v", turn)
 	}
-	claimed := callMCPTool[mcpserver.RunOutput](t, ctx, clientSession, "claim_work", map[string]any{
+	claimed := callMCPTool[mcpserver.AttemptOutput](t, ctx, clientSession, "claim_attempt", map[string]any{
 		"card_id": created.Card.ID,
 	})
-	if claimed.Run.ID == "" || claimed.Run.Status != "running" {
-		t.Fatalf("claim_work output: %+v", claimed)
+	if claimed.Attempt.ID == "" || claimed.Attempt.Status != "running" || claimed.Attempt.TurnID != turn.TurnID {
+		t.Fatalf("claim_attempt output: %+v", claimed)
+	}
+	replayedClaim := callMCPTool[mcpserver.AttemptOutput](t, ctx, clientSession, "claim_attempt", map[string]any{
+		"card_id": created.Card.ID,
+	})
+	if !replayedClaim.Reused || replayedClaim.Attempt.ID != claimed.Attempt.ID {
+		t.Fatalf("claim_attempt replay did not reuse current attempt: first=%+v replay=%+v", claimed, replayedClaim)
+	}
+	heartbeat := callMCPTool[mcpserver.AttemptOutput](t, ctx, clientSession, "heartbeat_attempt", map[string]any{
+		"attempt_id": claimed.Attempt.ID,
+	})
+	if heartbeat.Attempt.ID != claimed.Attempt.ID || heartbeat.Attempt.Status != "running" {
+		t.Fatalf("heartbeat_attempt output: %+v", heartbeat)
 	}
 	progress := callMCPTool[mcpserver.ProgressOutput](t, ctx, clientSession, "report_progress", map[string]any{
-		"run_id": claimed.Run.ID, "stage": "verify", "summary": "protocol path verified",
+		"attempt_id": claimed.Attempt.ID, "stage": "verify", "summary": "protocol path verified",
 		"event_content": "OAuth and Streamable HTTP session verified", "idempotency_key": "mcp-e2e-progress",
 	})
 	if progress.EventID == "" {
 		t.Fatalf("report_progress output: %+v", progress)
 	}
-	finished := callMCPTool[mcpserver.FinishRunOutput](t, ctx, clientSession, "finish_run", map[string]any{
-		"run_id": claimed.Run.ID, "outcome": "completed",
-		"result": "Official MCP SDK E2E completed", "idempotency_key": "mcp-e2e-finish",
+	finished := callMCPTool[mcpserver.FinishAttemptOutput](t, ctx, clientSession, "finish_attempt", map[string]any{
+		"attempt_id": claimed.Attempt.ID, "outcome": "completed",
+		"result": "Official MCP SDK E2E completed",
 	})
-	if finished.Run.Status != "completed" {
-		t.Fatalf("finish_run output: %+v", finished)
+	if finished.Attempt.Status != "completed" {
+		t.Fatalf("finish_attempt output: %+v", finished)
 	}
 	cardDetail := callMCPTool[mcpserver.GetCardOutput](t, ctx, clientSession, "get_card", map[string]any{
 		"card_id": created.Card.ID, "event_limit": 50,
 	})
-	if cardDetail.CurrentRun != nil {
-		t.Fatalf("completed card still has current run: %+v", cardDetail.CurrentRun)
+	if cardDetail.CurrentAttempt != nil {
+		t.Fatalf("completed card still has current attempt: %+v", cardDetail.CurrentAttempt)
+	}
+	if len(cardDetail.PendingTurns) != 0 {
+		t.Fatalf("completed turn remained pending: %+v", cardDetail.PendingTurns)
+	}
+	var sawAttempt bool
+	for _, attempt := range cardDetail.AttemptHistory {
+		if attempt.ID == claimed.Attempt.ID && attempt.Status == "completed" {
+			sawAttempt = true
+		}
+	}
+	if !sawAttempt {
+		t.Fatalf("completed attempt missing from history: %+v", cardDetail.AttemptHistory)
 	}
 	var sawResult bool
 	for _, event := range cardDetail.Timeline {
 		if event.Type == "result" && strings.Contains(event.Content, "Official MCP SDK") {
+			if event.AttemptID != claimed.Attempt.ID {
+				t.Fatalf("result attempt_id=%q want=%q", event.AttemptID, claimed.Attempt.ID)
+			}
 			sawResult = true
 		}
 	}

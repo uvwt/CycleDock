@@ -2,262 +2,169 @@
 
 ## 1. 总体结构
 
-```text
-                    ┌──────────────────────┐
-                    │ React Web            │
-                    └──────────┬───────────┘
-                               │ HTTP
-                               ▼
-┌──────────────────────────────────────────────────┐
-│ CycleDock Go Server                              │
-│                                                  │
-│ HTTP API   MCP Server   Auth/OAuth/OIDC          │
-│      \         |          /                     │
-│       \        |         /                      │
-│        ───── Domain + Store ─────                 │
-│                 ▲          │                      │
-│                 │          ▼                      │
-│          Built-in Agent   PostgreSQL              │
-│                 │                                 │
-│        Model Client + MCP Client                  │
-└──────────────────────────────────────────────────┘
-                               ▲
-                               │ Remote MCP
-                     External AI / AgentDock
-```
+~~~text
+React Web
+    │ HTTP / SSE
+    ▼
+CycleDock Go Server
+├── HTTP / Auth / MCP Server
+├── Product Domain + PostgreSQL
+│   └── Project / Card / Turn / Attempt / Schedule / Review
+└── Agent Runtime
+    └── Google ADK Go v2
+        ├── CycleDock SessionService → PostgreSQL
+        ├── Context Compaction
+        ├── Tool / Artifact
+        ├── Model Route Adapter
+        └── MCP / NexusDock
+~~~
 
-第一阶段保持单体 Go 服务 + PostgreSQL。不要提前引入 Redis、Kafka、独立 worker 集群或微服务。
+第一版仍保持单 Go 服务 + PostgreSQL。没有真实负载证明以前，不引入 Redis、Kafka 或独立 worker 集群。
 
 ## 2. 核心领域
 
-```text
+~~~text
 Workspace
 └── Project
-    └── Card
-        ├── Event
-        ├── Trigger
-        │   └── AgentRun
-        └── CardSchedule
-```
+    └── Card = persistent Agent Session
+        ├── Turn
+        │   └── Attempt
+        ├── Session Event
+        ├── CardSchedule
+        └── Business Activity / Review
+~~~
 
-### Project
+Project 是项目与默认看板数据范围，不建立 Board 表。
 
-Project 是项目与默认看板的统一领域对象。
+Card 是长期业务对象，也是 Agent Session 的产品边界。Card 保存业务状态；Attempt status 不写入 Card。
 
-不存在 Board 表。前端 Kanban 只是 Project Cards 的一种 View。
+Turn 是一次新的工作输入，来源可以是 Human、Schedule 或 System。技术 retry / recovery 属于同一 Turn 的新 Attempt，不创建新 Turn。未 Claim 的 Turn 不进入 ADK Session History。
 
-### Card
+Attempt 是某个 Turn 的一次真实执行，对应一个 ADK invocation。一个 Card 同一时间最多一个 current Attempt。
 
-Card 是长期业务对象，保存任务标题、描述和业务状态。
+Session Event 是 Agent Runtime 连续上下文事实源，包括 user input、model response、tool call、tool response、state delta、compaction record、artifact delta、sub-agent branch / isolation metadata。
 
-Card 不保存：
+## 3. Session identity
 
-- 当前 Agent。
-- claimed 布尔值。
-- Agent status。
-- 当前执行百分比。
+CycleDock 使用固定映射：
 
-这些信息属于 AgentRun。
+~~~text
+ADK app_name   = cycledock
+ADK user_id    = workspace_id
+ADK session_id = card_id
+~~~
 
-### Event
+Workspace ID 而不是 Human ID 作为 ADK user_id，因为 Card 是 Workspace 协作资源。
 
-Event 是用户长期可见的工作事实，例如：
+所有 Workspace scope 仍从认证上下文获得，绝不信任客户端传入的 ADK user_id。
 
-- comment
-- progress
-- finding
-- result
-- checkin
-- confirm
-- reject
-- status_change
+## 4. PostgreSQL SessionService
 
-系统不是完整 Event Sourcing。Card / Run 仍直接保存当前状态，Event 用于记录重要事实与历史。
+不使用 ADK 自带 GORM DatabaseSessionService。
 
-### Trigger
+CycleDock 自己实现 session.Service 的 Create / Get / List / Delete / AppendEvent。
 
-Trigger 表示一次不可变的新工作方向。
+原因：
 
-来源：
+- 全项目统一 pgx / sqlc / Goose。
+- 不引入第二套 ORM 与 AutoMigrate。
+- 可以在 AppendEvent 中加入 Attempt ownership / stale invocation 防护。
+- 可以统一 Workspace / Card 的产品隔离规则。
+- 可以对持久 Event / Artifact 做 CycleDock 自己的安全治理。
 
-- human_comment
-- scheduled_followup
-- manual_retry
-- system_followup
+ADK 官方 conformance suite 作为 SessionService 的兼容性回归基线。
 
-同一个 Card 可以在生命周期中产生任意多个 Trigger。
+## 5. Turn 调度
 
-Trigger 没有 AgentRun 时，天然处于待执行队列。
+Dispatcher 的目标职责：
 
-### AgentRun
+~~~text
+pending Turn
+→ lock Card
+→ ensure no current Attempt
+→ create Attempt
+→ invoke ADK Runner with Card Session
+~~~
 
-AgentRun 表示某个 Agent 对某个 Trigger 的一次具体执行。
+Turn 本身就是队列，不额外创建 queue_items。
 
-创建 AgentRun = Claim Trigger。
+enqueue 只写 Turn，当前 Attempt 不受影响。
 
-不建立独立 Claims 表。
+interrupt 在同一事务中创建新 Turn并终止 current Attempt；commit 后 Dispatcher 优先 Claim 该 interrupt Turn，再创建新的 Attempt / invocation。
 
-## 3. 依赖方向
+## 6. stale event 防护
 
-内置 Agent 与外部 MCP Agent 最终必须进入同一套领域状态机：
+仅取消 goroutine 不足以保护 Session。旧 Attempt 可能已经发出网络请求并晚返回。
 
-```text
-Web Handler ─┐
-MCP Server ──┼──> Domain / Store ──> PostgreSQL
-Agent Runner ┘
-```
+任何 AppendEvent 最终都必须能确认 invocation 属于当前 Card、Attempt 未 terminal、Attempt 仍有写 Session 的资格。
 
-禁止形成：
+失去资格的 invocation 不得 append Session Event、修改 Session state、修改 Card 业务状态或写当前结果。
 
-```text
-Web 一套状态机
-MCP 一套状态机
-内置 Agent 又一套状态机
-```
+## 7. Context Architecture
 
-内置 Agent 不调用 CycleDock 自己的 MCP；它直接调用内部领域/存储能力。MCP 是给外部客户端的 Adapter。
+~~~text
+Recent raw Session Events
+          +
+ADK Compaction summary
+          +
+on-demand History Retrieval
+          +
+Artifact references
+          +
+optional cross-Card Memory
+~~~
 
-## 4. 一次人类评论的事务边界
+Compaction 影响 prompt assembly，不删除作为事实源的原始事件。当前生产使用 ADK Tail Retention：约 24k token 触发并保留最近 20 个 raw Event；原始事件继续留在 PostgreSQL，精确旧值通过 Card-scoped history tool 按需检索。
 
-### 无 current Run / 直接执行
+超过 12k 字符的大 MCP 输出在结构化 credential 脱敏后外置到 versioned PostgreSQL Artifact，Session 只保留 preview/ref；模型需要精确旧 payload 时通过 Card-scoped artifact reader 分块读取，而不是重新操作真实设备。
 
-单事务：
+## 8. Discussion handoff
 
-1. 写入 comment Event。
-2. 写入 human_comment Trigger。
-3. 如果内置 Agent 可执行，创建 queued AgentRun。
-4. commit。
-5. commit 后通知本地 dispatcher。通知只负责叫醒；有没有 current Run、由谁执行，仍由认领决定。
+Discussion 生成工作不是 Session fork，也不是共享 Session。
 
-### 加入队列
+~~~text
+Discussion Session
+      │
+      ├─ extract Handoff Package
+      ▼
+New Todo / Ongoing Card
+= New Session
+~~~
 
-单事务：
+Handoff Package 是显式、可审计的跨 Card 知识传递边界。
 
-1. 写入 comment Event。
-2. 写入 human_comment Trigger，dispatch_mode=enqueue。
-3. 不修改 current Run。
-4. 不创建新 Run。
-5. commit。
-6. commit 后通知本地 dispatcher。当前卡仍有 current Run 时，这次通知不会启动新 Run。
+## 9. Model boundary
 
-### 立即转向
+ADK 负责 Agent Runtime；CycleDock 继续拥有 ChatGPT SIWC credential、Grok OAuth credential、OpenAI-compatible endpoint、多账号、ordered model routes、failover / streaming-reset policy。
 
-单事务：
+ADK experimental Model Routing 可以复用，但不是 CycleDock 可靠性的唯一实现。
 
-1. 写入 comment Event。
-2. 写入 human_comment Trigger，dispatch_mode=interrupt。
-3. 将当前 queued/running/waiting_human Run 变为 superseded。
-4. 创建新 queued Run。
-5. commit。
-6. commit 后通知本地 dispatcher。
+## 10. MCP / NexusDock
 
-不能用“先查询 current Run，再分两次写”的方式实现；并发安全由事务 + 数据库约束共同保证。
+普通 outbound MCP 优先迁移到 ADK McpToolset。
 
-## 5. current Run 规则
+NexusDock 保持 first-party Adapter：OAuth grant、token refresh、agentdock_context bootstrap、设备目录、tool filtering、native tool names。
 
-一个 Card 同一时间最多存在一个：
+Session 恢复只恢复上下文，不恢复旧网络连接；每次 invocation 按需重新建立 MCP session。
 
-- queued
-- running
-- waiting_human
+## 11. 依赖方向
 
-的 Run。
+~~~text
+HTTP / MCP Adapter
+        │
+        ▼
+Product Domain / Store
+        │
+        ├── PostgreSQL
+        │
+        └── Agent Runtime Adapter
+             └── ADK Runner / SessionService / Toolsets
+~~~
 
-用 PostgreSQL partial unique index 强制。
+业务状态机不能复制到 Web、MCP 和 Agent 三套实现中。
 
-terminal Run 包括：
+## 12. 当前实施边界
 
-- completed
-- failed
-- superseded
-- expired
-- cancelled
+当前分支已经完成 Built-in 与 External Agent 的 Session-first cutover：Human Web / Schedule / OAuth MCP → Turn → Attempt；Built-in Attempt 进入 ADK Runner + PostgreSQL SessionService，External Attempt 通过同一 Store ownership / stale-write guard 执行。Card detail、Web、SSE 与 MCP 执行视图都使用 Turn / Attempt。
 
-以后如出现明确业务需要，可以增加 skipped。
-
-## 6. stale result 防护
-
-Run 被 superseded 后可能仍有外部调用晚到。
-
-因此任何由 Run 发起、会改变 Card 当前业务状态或写入“当前结果”的操作，都必须验证：
-
-- Run 仍属于该 Card。
-- Run 未 terminal。
-- Run 仍是当前 Run。
-- Trigger / runner source 与请求身份匹配。
-
-旧 Run 的迟到结果不能覆盖新方向。
-
-## 7. Dispatcher
-
-Dispatcher 只负责把“可执行 Trigger”转换成 AgentRun。
-
-一个 current Run 结束后：
-
-1. 锁定 Card。
-2. 检查是否仍有 current Run。
-3. 按 Trigger sequence 找最早的“没有 AgentRun”的 Trigger。
-4. 创建 queued AgentRun。
-5. commit 后交给 Runner。
-
-Trigger 自身就是队列，不额外建立 task_queue / queue_items 表。
-
-## 8. Heartbeat 与 lease
-
-Heartbeat 只更新：
-
-- heartbeat_at
-- lease_expires_at
-
-Heartbeat 不写 Timeline。
-
-lease 超时：
-
-- running / queued Run 可进入 expired。
-- 原 Trigger 已被消费，不重新 Claim。
-- 如需重试，创建 manual_retry / system_followup Trigger + 新 Run。
-
-waiting_human 不继续 heartbeat，也不应该被 Scheduler 自动抢占。
-
-## 9. 扩展原则
-
-优先扩展稳定概念，而不是增加平行系统。
-
-例如：
-
-- 多种看板展示 → View，而不是 Board。
-- Agent 重试 → 新 Trigger / Run，而不是复活旧 Run。
-- 定时执行 → Schedule 生成 Trigger，而不是另一套 Job Runtime。
-- 外部 Agent → MCP Adapter，而不是新的 Card 状态机。
-
-## 10. Hosted 第一方 NexusDock 设备连接
-
-CycleDock Hosted 把 NexusDock 远程设备作为 **First-party Agent Connection**，而不是普通 `workspace_mcp_connections`。
-
-边界如下：
-
-```text
-CycleDock OIDC login
-  -> 只建立 NexusDock account identity (`issuer + sub`)
-
-用户显式连接 NexusDock 远程设备
-  -> NexusDock MCP OAuth consent
-  -> Workspace-scoped MCP grant
-  -> CycleDock 加密保存 grant token
-
-Built-in Agent Run
-  -> CycleDock runtime 读取并刷新第一方 grant
-  -> 自动连接 NexusDock `/mcp`
-  -> 内部 bootstrap `agentdock_context`
-  -> 只把精简设备目录加入 Run context
-  -> 节点工具以原生 tool name 提供给模型
-```
-
-约束：
-
-- OIDC token 永远不能直接作为 NexusDock MCP/device credential。
-- NexusDock 授权不写入 `workspace_mcp_connections`，也不要求用户填写 URL、PAT 或 Token 环境变量。
-- 首次授权必须经过 NexusDock 自己的 consent；CycleDock 不复制 NexusDock 的设备权限模型。
-- `agentdock_context` 是第一方 runtime bootstrap 细节，正常不暴露给模型。设备存在性、`node_id`、在线状态与主要能力属于启动上下文；具体 Workspace/Skill/MCP 内容仍按需读取。
-- CycleDock 不复制 NexusDock 的设备管理页；“在 NexusDock 中管理设备”跳转到 NexusDock Web。
-- 当前传输继续复用 NexusDock 标准 MCP Gateway 与既有 AgentDock WebSocket。只有真实测量证明协议层成为瓶颈时才考虑额外 RPC。
+Phase F 已删除旧执行 Runtime、Context Builder、旧 query/schema 与对应测试夹具，并把首次发布数据库重整为单一 baseline。当前代码只有一套执行状态机，不存在 Trigger/Run 兼容 Adapter。

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,7 +27,7 @@ func (s *Store) MoveTodo(
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
 		return err
 	}
-	if err := moveTodoTx(ctx, tx, workspaceID, cardID, actorSourceID, to, nil); err != nil {
+	if err := moveTodoTx(ctx, tx, workspaceID, cardID, actorSourceID, to); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -39,7 +38,6 @@ func moveTodoTx(
 	tx pgx.Tx,
 	workspaceID, cardID, actorSourceID uuid.UUID,
 	to domain.TodoState,
-	runID *uuid.UUID,
 ) error {
 	var kind string
 	var from string
@@ -83,10 +81,10 @@ func moveTodoTx(
 
 	_, err := tx.Exec(ctx, `
 		INSERT INTO events (
-			id, workspace_id, card_id, event_type, actor_source_id, run_id, content
+			id, workspace_id, card_id, event_type, actor_source_id, content
 		)
-		VALUES ($1, $2, $3, 'status_change', $4, $5, $6)
-	`, uuid.New(), workspaceID, cardID, actorSourceID, runID, fmt.Sprintf("%s -> %s", from, to))
+		VALUES ($1, $2, $3, 'status_change', $4, $5)
+	`, uuid.New(), workspaceID, cardID, actorSourceID, fmt.Sprintf("%s -> %s", from, to))
 	return err
 }
 
@@ -124,33 +122,30 @@ func (s *Store) ArchiveDiscussion(
 		return domain.ErrInvalidTransition
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE agent_runs
-		SET status = 'cancelled',
-			finished_at = now(),
-			heartbeat_at = NULL,
-			lease_expires_at = NULL,
-			cancelled_by_source_id = $3,
-			cancel_reason = 'discussion archived',
-			updated_at = now()
-		WHERE workspace_id = $1
-		  AND card_id = $2
-		  AND status IN ('queued', 'running', 'waiting_human')
-	`, workspaceID, cardID, actorSourceID); err != nil {
+		UPDATE turn_attempts
+		SET status='cancelled',
+		    error_summary='discussion archived',
+		    heartbeat_at=NULL,
+		    lease_expires_at=NULL,
+		    finished_at=now(),
+		    updated_at=now()
+		WHERE workspace_id=$1 AND card_id=$2
+		  AND status IN ('queued','running','waiting_human')
+	`, workspaceID, cardID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE triggers pending
-		SET cancelled_at = now(),
-			cancelled_by_source_id = $3,
-			cancel_reason = 'discussion archived'
-		WHERE pending.workspace_id = $1
-		  AND pending.card_id = $2
+		UPDATE card_turns pending
+		SET cancelled_at=now(),
+		    cancelled_by_source_id=$3,
+		    cancel_reason='discussion archived'
+		WHERE pending.workspace_id=$1
+		  AND pending.card_id=$2
 		  AND pending.cancelled_at IS NULL
 		  AND NOT EXISTS (
-			  SELECT 1
-			  FROM agent_runs existing
-			  WHERE existing.workspace_id = pending.workspace_id
-			    AND existing.trigger_id = pending.id
+			SELECT 1 FROM turn_attempts existing
+			WHERE existing.workspace_id=pending.workspace_id
+			  AND existing.turn_id=pending.id
 		  )
 	`, workspaceID, cardID, actorSourceID); err != nil {
 		return err
@@ -219,65 +214,6 @@ func (s *Store) DeleteDiscussion(
 	}
 	if command.RowsAffected() != 1 {
 		return fmt.Errorf("%w: discussion card required", domain.ErrInvalidTransition)
-	}
-	return tx.Commit(ctx)
-}
-
-// SetDiscussionMetadataForRun writes first-message metadata without coupling its
-// lifetime to the user-visible reply. Completed/failed Runs may finish metadata
-// afterward, but superseded/expired/cancelled Runs must never rename the Discussion.
-func (s *Store) SetDiscussionMetadataForRun(
-	ctx context.Context,
-	workspaceID, runID, runnerSourceID uuid.UUID,
-	title, description string,
-) error {
-	title = strings.TrimSpace(title)
-	description = strings.TrimSpace(description)
-	if title == "" {
-		return fmt.Errorf("%w: discussion title is required", domain.ErrConflict)
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	cardID, status, actualRunnerSourceID, err := lockRunCard(ctx, tx, workspaceID, runID)
-	if err != nil {
-		return err
-	}
-	if actualRunnerSourceID != runnerSourceID {
-		return domain.ErrRunNotCurrent
-	}
-	switch status {
-	case domain.RunStatusRunning,
-		domain.RunStatusWaitingHuman,
-		domain.RunStatusCompleted,
-		domain.RunStatusFailed:
-	default:
-		return domain.ErrRunNotCurrent
-	}
-	var kind, state, existingTitle string
-	if err := tx.QueryRow(ctx, `
-		SELECT kind, COALESCE(discussion_state, ''), title
-		FROM cards
-		WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, cardID).Scan(&kind, &state, &existingTitle); err != nil {
-		return err
-	}
-	if kind != string(domain.CardKindDiscussion) || state != string(domain.DiscussionStateActive) {
-		return fmt.Errorf("%w: active discussion required", domain.ErrInvalidTransition)
-	}
-	if strings.TrimSpace(existingTitle) != "" {
-		return tx.Commit(ctx)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE cards
-		SET title = $3, description = $4, updated_at = now()
-		WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, cardID, title, description); err != nil {
-		return err
 	}
 	return tx.Commit(ctx)
 }

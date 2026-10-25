@@ -37,9 +37,9 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
-	r.Post("/cards/{cardID}/triggers/{triggerID}/cancel", api.cancelPendingTrigger)
-	r.Post("/cards/{cardID}/triggers/{triggerID}/retry", api.retryTrigger)
-	r.Post("/cards/{cardID}/runs/{runID}/cancel", api.cancelRun)
+	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
+	r.Post("/cards/{cardID}/attempts/{attemptID}/retry", api.retryAttempt)
+	r.Post("/cards/{cardID}/attempts/{attemptID}/cancel", api.cancelAttempt)
 
 	r.Get("/cards/{cardID}/schedules", api.listSchedules)
 	r.Post("/cards/{cardID}/schedules", api.createSchedule)
@@ -76,31 +76,34 @@ type projectResponse struct {
 }
 
 type cardResponse struct {
-	ID                 string    `json:"id"`
-	ProjectID          string    `json:"project_id"`
-	Kind               string    `json:"kind"`
-	Title              string    `json:"title"`
-	Description        string    `json:"description"`
-	DiscussionState    string    `json:"discussion_state,omitempty"`
-	TodoState          string    `json:"todo_state,omitempty"`
-	OngoingState       string    `json:"ongoing_state,omitempty"`
-	SourceDiscussionID string    `json:"source_discussion_id,omitempty"`
-	Health             string    `json:"health,omitempty"`
-	CurrentRunStatus   string    `json:"current_run_status,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	ProjectID            string    `json:"project_id"`
+	Kind                 string    `json:"kind"`
+	Title                string    `json:"title"`
+	Description          string    `json:"description"`
+	DiscussionState      string    `json:"discussion_state,omitempty"`
+	TodoState            string    `json:"todo_state,omitempty"`
+	OngoingState         string    `json:"ongoing_state,omitempty"`
+	SourceDiscussionID   string    `json:"source_discussion_id,omitempty"`
+	Health               string    `json:"health,omitempty"`
+	CurrentAttemptStatus string    `json:"current_attempt_status,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-type runResponse struct {
+type attemptResponse struct {
 	ID               string     `json:"id"`
-	TriggerID        string     `json:"trigger_id"`
-	RetryOfTriggerID string     `json:"retry_of_trigger_id,omitempty"`
+	TurnID           string     `json:"turn_id"`
 	SourceEventID    string     `json:"source_event_id,omitempty"`
+	AttemptNumber    int        `json:"attempt_number"`
+	Reason           string     `json:"reason"`
+	RetryOfAttemptID string     `json:"retry_of_attempt_id,omitempty"`
 	Status           string     `json:"status"`
 	CurrentStage     string     `json:"current_stage,omitempty"`
 	ProgressSummary  string     `json:"progress_summary,omitempty"`
 	ResultSummary    string     `json:"result_summary,omitempty"`
 	ErrorSummary     string     `json:"error_summary,omitempty"`
+	CanRetry         bool       `json:"can_retry,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	StartedAt        *time.Time `json:"started_at,omitempty"`
 	FinishedAt       *time.Time `json:"finished_at,omitempty"`
@@ -110,26 +113,22 @@ type eventResponse struct {
 	ID            string    `json:"id"`
 	Sequence      int64     `json:"sequence"`
 	Type          string    `json:"type"`
+	AttemptID     string    `json:"attempt_id,omitempty"`
 	Content       string    `json:"content"`
 	CheckinStatus string    `json:"checkin_status,omitempty"`
 	ActorName     string    `json:"actor_name"`
 	ActorKind     string    `json:"actor_kind"`
-	RunID         string    `json:"run_id,omitempty"`
-	TriggerID     string    `json:"trigger_id,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-type queueItemResponse struct {
-	ID               string    `json:"id"`
-	TriggerID        string    `json:"trigger_id"`
-	Sequence         int64     `json:"sequence"`
-	Cause            string    `json:"cause"`
-	DispatchMode     string    `json:"dispatch_mode"`
-	CauseEventID     string    `json:"cause_event_id,omitempty"`
-	RetryOfTriggerID string    `json:"retry_of_trigger_id,omitempty"`
-	SourceEventID    string    `json:"source_event_id,omitempty"`
-	Content          string    `json:"content"`
-	CreatedAt        time.Time `json:"created_at"`
+type pendingTurnResponse struct {
+	ID            string    `json:"id"`
+	Sequence      int64     `json:"sequence"`
+	Source        string    `json:"source"`
+	DispatchMode  string    `json:"dispatch_mode"`
+	SourceEventID string    `json:"source_event_id,omitempty"`
+	Content       string    `json:"content"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type scheduleResponse struct {
@@ -146,21 +145,21 @@ type scheduleResponse struct {
 }
 
 type projectScheduleResponse struct {
-	ID                string     `json:"id"`
-	CardID            string     `json:"card_id"`
-	CardTitle         string     `json:"card_title"`
-	OngoingState      string     `json:"ongoing_state"`
-	Enabled           bool       `json:"enabled"`
-	Frequency         string     `json:"frequency"`
-	DayOfWeek         *int       `json:"day_of_week,omitempty"`
-	DayOfMonth        *int       `json:"day_of_month,omitempty"`
-	Hour              int        `json:"hour"`
-	Minute            int        `json:"minute"`
-	Timezone          string     `json:"timezone"`
-	NextTriggerAt     time.Time  `json:"next_trigger_at"`
-	LastTriggeredAt   *time.Time `json:"last_triggered_at,omitempty"`
-	LastRunStatus     string     `json:"last_run_status,omitempty"`
-	LastRunFinishedAt *time.Time `json:"last_run_finished_at,omitempty"`
+	ID                    string     `json:"id"`
+	CardID                string     `json:"card_id"`
+	CardTitle             string     `json:"card_title"`
+	OngoingState          string     `json:"ongoing_state"`
+	Enabled               bool       `json:"enabled"`
+	Frequency             string     `json:"frequency"`
+	DayOfWeek             *int       `json:"day_of_week,omitempty"`
+	DayOfMonth            *int       `json:"day_of_month,omitempty"`
+	Hour                  int        `json:"hour"`
+	Minute                int        `json:"minute"`
+	Timezone              string     `json:"timezone"`
+	NextTriggerAt         time.Time  `json:"next_trigger_at"`
+	LastTriggeredAt       *time.Time `json:"last_triggered_at,omitempty"`
+	LastAttemptStatus     string     `json:"last_attempt_status,omitempty"`
+	LastAttemptFinishedAt *time.Time `json:"last_attempt_finished_at,omitempty"`
 }
 
 type projectActivityResponse struct {
@@ -176,45 +175,24 @@ type projectActivityResponse struct {
 }
 
 type cardDetailResponse struct {
-	Card        cardResponse          `json:"card"`
-	CurrentRun  *runResponse          `json:"current_run"`
-	Timeline    []eventResponse       `json:"timeline"`
-	Queue       []queueItemResponse   `json:"queue"`
-	WorkHistory []workHistoryResponse `json:"work_history"`
-	Schedules   []scheduleResponse    `json:"schedules"`
-	Health      string                `json:"health"`
-	LastCheckin *eventResponse        `json:"last_checkin"`
+	Card           cardResponse          `json:"card"`
+	CurrentAttempt *attemptResponse      `json:"current_attempt"`
+	Timeline       []eventResponse       `json:"timeline"`
+	PendingTurns   []pendingTurnResponse `json:"pending_turns"`
+	AttemptHistory []attemptResponse     `json:"attempt_history"`
+	Schedules      []scheduleResponse    `json:"schedules"`
+	Health         string                `json:"health"`
+	LastCheckin    *eventResponse        `json:"last_checkin"`
 }
 
 type commentResultResponse struct {
-	EventID   string `json:"event_id"`
-	TriggerID string `json:"trigger_id"`
-	RunID     string `json:"run_id,omitempty"`
-	Reused    bool   `json:"reused"`
-}
-
-type workHistoryResponse struct {
-	TriggerID        string     `json:"trigger_id"`
-	CauseEventID     string     `json:"cause_event_id,omitempty"`
-	SourceEventID    string     `json:"source_event_id,omitempty"`
-	RunID            string     `json:"run_id,omitempty"`
-	Sequence         int64      `json:"sequence"`
-	Cause            string     `json:"cause"`
-	Status           string     `json:"status"`
-	Content          string     `json:"content"`
-	RetryOfTriggerID string     `json:"retry_of_trigger_id,omitempty"`
-	CurrentStage     string     `json:"current_stage,omitempty"`
-	ProgressSummary  string     `json:"progress_summary,omitempty"`
-	ResultSummary    string     `json:"result_summary,omitempty"`
-	ErrorSummary     string     `json:"error_summary,omitempty"`
-	CancelReason     string     `json:"cancel_reason,omitempty"`
-	CanRetry         bool       `json:"can_retry"`
-	CreatedAt        time.Time  `json:"created_at"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
+	EventID string `json:"event_id"`
+	TurnID  string `json:"turn_id"`
+	Reused  bool   `json:"reused"`
 }
 
 type retryResultResponse struct {
-	TriggerID string `json:"trigger_id"`
+	AttemptID string `json:"attempt_id"`
 	Reused    bool   `json:"reused"`
 }
 
@@ -354,12 +332,12 @@ func (api *API) listProjectSchedules(w http.ResponseWriter, r *http.Request) {
 			value := row.LastTriggeredAt.Time
 			item.LastTriggeredAt = &value
 		}
-		if row.LastRunStatus.Valid {
-			item.LastRunStatus = row.LastRunStatus.String
+		if row.LastAttemptStatus.Valid {
+			item.LastAttemptStatus = row.LastAttemptStatus.String
 		}
-		if row.LastRunFinishedAt.Valid {
-			value := row.LastRunFinishedAt.Time
-			item.LastRunFinishedAt = &value
+		if row.LastAttemptFinishedAt.Valid {
+			value := row.LastAttemptFinishedAt.Time
+			item.LastAttemptFinishedAt = &value
 		}
 		response = append(response, item)
 	}
@@ -468,7 +446,7 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	currentRun, err := api.store.CurrentRun(r.Context(), identity.WorkspaceID, cardID)
+	currentAttempt, err := api.store.CurrentAttemptView(r.Context(), identity.WorkspaceID, cardID)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -478,12 +456,12 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	queue, err := api.store.ListPendingQueue(r.Context(), identity.WorkspaceID, cardID)
+	pendingTurns, err := api.store.ListPendingTurns(r.Context(), identity.WorkspaceID, cardID)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
-	workHistory, err := api.store.ListRecentCardWork(r.Context(), identity.WorkspaceID, cardID)
+	attemptHistory, err := api.store.ListRecentAttempts(r.Context(), identity.WorkspaceID, cardID, 50)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -505,30 +483,17 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := cardDetailResponse{
-		Card:        cardToResponse(card),
-		Timeline:    timelineToResponse(timeline),
-		Queue:       queueToResponse(queue),
-		WorkHistory: workHistoryToResponse(workHistory),
-		Schedules:   schedulesToResponse(schedules),
-		Health:      string(health),
+		Card:           cardToResponse(card),
+		Timeline:       timelineToResponse(timeline),
+		PendingTurns:   pendingTurnsToResponse(pendingTurns),
+		AttemptHistory: attemptsToResponse(attemptHistory),
+		Schedules:      schedulesToResponse(schedules),
+		Health:         string(health),
 	}
-	if currentRun != nil {
-		run := runToResponse(*currentRun)
-		lineage, err := api.store.GetTriggerLineage(
-			r.Context(), identity.WorkspaceID, cardID, currentRun.TriggerID,
-		)
-		if err != nil {
-			api.handleError(w, err)
-			return
-		}
-		if lineage.RetryOfTriggerID.Valid {
-			run.RetryOfTriggerID = lineage.RetryOfTriggerID.UUID.String()
-		}
-		if lineage.SourceEventID.Valid {
-			run.SourceEventID = lineage.SourceEventID.UUID.String()
-		}
-		response.CurrentRun = &run
-		response.Card.CurrentRunStatus = currentRun.Status
+	if currentAttempt != nil {
+		attempt := attemptToResponse(*currentAttempt)
+		response.CurrentAttempt = &attempt
+		response.Card.CurrentAttemptStatus = string(currentAttempt.Status)
 	}
 	if lastCheckin != nil {
 		for i := len(response.Timeline) - 1; i >= 0; i-- {
@@ -711,7 +676,7 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity := identityFromRequest(r)
-	result, err := api.store.SubmitComment(r.Context(), store.SubmitCommentParams{
+	result, err := api.store.SubmitSessionComment(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID: identity.SourceID,
 		Content:        request.Content, IdempotencyKey: idempotencyKey,
@@ -747,7 +712,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	identity := identityFromRequest(r)
-	result, err := api.store.ReplyAndContinue(r.Context(), store.SubmitCommentParams{
+	result, err := api.store.ReplySessionAndContinue(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID: identity.SourceID,
 		Content:        request.Content, IdempotencyKey: idempotencyKey,
@@ -759,12 +724,12 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
 }
 
-func (api *API) cancelPendingTrigger(w http.ResponseWriter, r *http.Request) {
+func (api *API) cancelPendingTurn(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
 		return
 	}
-	triggerID, ok := parseUUIDParam(w, r, "triggerID")
+	turnID, ok := parseUUIDParam(w, r, "turnID")
 	if !ok {
 		return
 	}
@@ -775,8 +740,8 @@ func (api *API) cancelPendingTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.CancelPendingTrigger(
-		r.Context(), identity.WorkspaceID, cardID, triggerID, identity.SourceID, request.Reason,
+	if err := api.store.CancelPendingTurn(
+		r.Context(), identity.WorkspaceID, cardID, turnID, identity.SourceID, request.Reason,
 	); err != nil {
 		api.handleError(w, err)
 		return
@@ -784,12 +749,12 @@ func (api *API) cancelPendingTrigger(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (api *API) cancelRun(w http.ResponseWriter, r *http.Request) {
+func (api *API) cancelAttempt(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
 		return
 	}
-	runID, ok := parseUUIDParam(w, r, "runID")
+	attemptID, ok := parseUUIDParam(w, r, "attemptID")
 	if !ok {
 		return
 	}
@@ -800,8 +765,8 @@ func (api *API) cancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.CancelRun(
-		r.Context(), identity.WorkspaceID, cardID, runID, identity.SourceID, request.Reason,
+	if err := api.store.CancelAttempt(
+		r.Context(), identity.WorkspaceID, cardID, attemptID, identity.SourceID, request.Reason, time.Now().UTC(),
 	); err != nil {
 		api.handleError(w, err)
 		return
@@ -809,12 +774,12 @@ func (api *API) cancelRun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (api *API) retryTrigger(w http.ResponseWriter, r *http.Request) {
+func (api *API) retryAttempt(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
 		return
 	}
-	triggerID, ok := parseUUIDParam(w, r, "triggerID")
+	attemptID, ok := parseUUIDParam(w, r, "attemptID")
 	if !ok {
 		return
 	}
@@ -822,21 +787,21 @@ func (api *API) retryTrigger(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" {
-		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+	identity := identityFromRequest(r)
+	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
 		return
 	}
-	identity := identityFromRequest(r)
-	result, err := api.store.RetryTrigger(
-		r.Context(), identity.WorkspaceID, cardID, triggerID, identity.SourceID, idempotencyKey,
+	result, err := api.store.RetryAttempt(
+		r.Context(), identity.WorkspaceID, cardID, attemptID, settings.SourceID, domain.AttemptReasonRetry,
 	)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, retryResultResponse{
-		TriggerID: result.TriggerID.String(),
+		AttemptID: result.Attempt.ID.String(),
 		Reused:    result.Reused,
 	})
 }
@@ -1017,25 +982,41 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	if card.SourceDiscussionID.Valid {
 		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
-	if card.CurrentRunStatus.Valid {
-		response.CurrentRunStatus = card.CurrentRunStatus.String
+	if card.CurrentAttemptStatus.Valid {
+		response.CurrentAttemptStatus = card.CurrentAttemptStatus.String
 	}
 	return response
 }
 
-func runToResponse(run db.AgentRun) runResponse {
-	response := runResponse{
-		ID: run.ID.String(), TriggerID: run.TriggerID.String(), Status: run.Status, CurrentStage: run.CurrentStage,
-		ProgressSummary: run.ProgressSummary, ResultSummary: run.ResultSummary,
-		ErrorSummary: run.ErrorSummary, CreatedAt: run.CreatedAt.Time,
+func attemptToResponse(item store.SessionAttemptView) attemptResponse {
+	response := attemptResponse{
+		ID:              item.ID.String(),
+		TurnID:          item.TurnID.String(),
+		AttemptNumber:   item.AttemptNumber,
+		Reason:          string(item.Reason),
+		Status:          string(item.Status),
+		CurrentStage:    item.CurrentStage,
+		ProgressSummary: item.ProgressSummary,
+		ResultSummary:   item.ResultSummary,
+		ErrorSummary:    item.ErrorSummary,
+		CanRetry:        item.CanRetry,
+		CreatedAt:       item.CreatedAt,
+		StartedAt:       item.StartedAt,
+		FinishedAt:      item.FinishedAt,
 	}
-	if run.StartedAt.Valid {
-		start := run.StartedAt.Time
-		response.StartedAt = &start
+	if item.SourceEventID.Valid {
+		response.SourceEventID = item.SourceEventID.UUID.String()
 	}
-	if run.FinishedAt.Valid {
-		finish := run.FinishedAt.Time
-		response.FinishedAt = &finish
+	if item.RetryOfAttemptID.Valid {
+		response.RetryOfAttemptID = item.RetryOfAttemptID.UUID.String()
+	}
+	return response
+}
+
+func attemptsToResponse(items []store.SessionAttemptView) []attemptResponse {
+	response := make([]attemptResponse, 0, len(items))
+	for _, item := range items {
+		response = append(response, attemptToResponse(item))
 	}
 	return response
 }
@@ -1044,98 +1025,35 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 	response := make([]eventResponse, 0, len(rows))
 	for _, row := range rows {
 		item := eventResponse{
-			ID: row.ID.String(), Sequence: row.Sequence.Int64, Type: row.EventType,
+			ID: row.ID.String(), Sequence: row.Sequence, Type: row.EventType,
 			Content: row.Content, ActorName: row.ActorName, ActorKind: row.ActorKind,
 			CreatedAt: row.CreatedAt.Time,
 		}
 		if row.CheckinStatus.Valid {
 			item.CheckinStatus = row.CheckinStatus.String
 		}
-		if row.RunID.Valid {
-			item.RunID = row.RunID.UUID.String()
-		}
-		if row.TriggerID.Valid {
-			item.TriggerID = row.TriggerID.UUID.String()
+		if row.AttemptID.Valid {
+			item.AttemptID = row.AttemptID.UUID.String()
 		}
 		response = append(response, item)
 	}
 	return response
 }
 
-func queueToResponse(items []store.PendingTrigger) []queueItemResponse {
-	response := make([]queueItemResponse, 0, len(items))
+func pendingTurnsToResponse(items []store.PendingTurnView) []pendingTurnResponse {
+	response := make([]pendingTurnResponse, 0, len(items))
 	for _, item := range items {
-		entry := queueItemResponse{
-			ID: item.ID.String(), TriggerID: item.ID.String(), Sequence: item.Sequence, Cause: string(item.Cause),
-			DispatchMode: string(item.DispatchMode), Content: item.Content, CreatedAt: item.CreatedAt,
-		}
-		if item.CauseEventID.Valid {
-			entry.CauseEventID = item.CauseEventID.UUID.String()
-		}
-		if item.RetryOfTriggerID.Valid {
-			entry.RetryOfTriggerID = item.RetryOfTriggerID.UUID.String()
+		entry := pendingTurnResponse{
+			ID:           item.ID.String(),
+			Sequence:     item.Sequence,
+			Source:       string(item.Source),
+			DispatchMode: string(item.DispatchMode),
+			Content:      item.Content,
+			CreatedAt:    item.CreatedAt,
 		}
 		if item.SourceEventID.Valid {
 			entry.SourceEventID = item.SourceEventID.UUID.String()
 		}
-		response = append(response, entry)
-	}
-	return response
-}
-
-func workHistoryToResponse(items []db.ListRecentCardWorkRow) []workHistoryResponse {
-	response := make([]workHistoryResponse, 0, len(items))
-	for _, item := range items {
-		status := string(domain.RunStatusCancelled)
-		if item.RunStatus.Valid {
-			status = item.RunStatus.String
-		}
-		entry := workHistoryResponse{
-			TriggerID: item.TriggerID.String(),
-			Sequence:  item.Sequence.Int64,
-			Cause:     item.Cause,
-			Status:    status,
-			Content:   item.Content,
-			CreatedAt: item.TriggerCreatedAt.Time,
-		}
-		if item.CauseEventID.Valid {
-			entry.CauseEventID = item.CauseEventID.UUID.String()
-		}
-		if item.SourceEventID.Valid {
-			entry.SourceEventID = item.SourceEventID.UUID.String()
-		}
-		if item.RunID.Valid {
-			entry.RunID = item.RunID.UUID.String()
-		}
-		if item.RetryOfTriggerID.Valid {
-			entry.RetryOfTriggerID = item.RetryOfTriggerID.UUID.String()
-		}
-		if item.CurrentStage.Valid {
-			entry.CurrentStage = item.CurrentStage.String
-		}
-		if item.ProgressSummary.Valid {
-			entry.ProgressSummary = item.ProgressSummary.String
-		}
-		if item.ResultSummary.Valid {
-			entry.ResultSummary = item.ResultSummary.String
-		}
-		if item.ErrorSummary.Valid {
-			entry.ErrorSummary = item.ErrorSummary.String
-		}
-		if item.RunCancelReason.Valid && item.RunCancelReason.String != "" {
-			entry.CancelReason = item.RunCancelReason.String
-		} else {
-			entry.CancelReason = item.CancelReason
-		}
-		if item.FinishedAt.Valid {
-			value := item.FinishedAt.Time
-			entry.FinishedAt = &value
-		}
-		entry.CanRetry = !item.HasRetry &&
-			((!item.RunID.Valid && item.CancelledAt.Valid) ||
-				status == string(domain.RunStatusFailed) ||
-				status == string(domain.RunStatusExpired) ||
-				status == string(domain.RunStatusCancelled))
 		response = append(response, entry)
 	}
 	return response
@@ -1191,12 +1109,10 @@ func scheduleFromStore(item store.CardSchedule) scheduleResponse {
 	return response
 }
 
-func commentResultToResponse(result store.SubmitCommentResult) commentResultResponse {
-	response := commentResultResponse{
-		EventID: result.EventID.String(), TriggerID: result.TriggerID.String(), Reused: result.Reused,
+func commentResultToResponse(result store.SubmitSessionCommentResult) commentResultResponse {
+	return commentResultResponse{
+		EventID: result.EventID.String(),
+		TurnID:  result.TurnID.String(),
+		Reused:  result.Reused,
 	}
-	if result.RunID != nil {
-		response.RunID = result.RunID.String()
-	}
-	return response
 }

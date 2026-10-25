@@ -181,9 +181,9 @@ export default function PlanPage() {
                         {t("上次")} {localTime(item.last_triggered_at)}
                       </span>
                     )}
-                    {item.last_run_status && (
+                    {item.last_attempt_status && (
                       <span>
-                        {t("最近运行")} · {item.last_run_status}
+                        {t("最近运行")} · {item.last_attempt_status}
                       </span>
                     )}
                   </span>

@@ -2,227 +2,165 @@
 
 ## 1. 一句话定位
 
-CycleDock 是一个以项目看板和任务为核心的人机协作系统：人类和 AI Agent 围绕同一个 Card 持续推进工作，CycleDock 负责保存任务状态、长期上下文、执行队列、进度、结果与 Review。
+CycleDock 是一个以 Project 和 Card 为核心的人机协作工作台。每个 Card 同时是一个持久 Agent Session：Human、Schedule 与 AI 围绕同一个工作对象持续对话和执行，CycleDock 负责业务状态、队列、权限与审核，Agent Runtime 负责连续上下文、工具调用、压缩与产物。
+
+完整决策见 session-first-adk.md。
 
 ## 2. 用户心智
 
-用户不需要先创建 Workspace、Project、Board 三层容器。
+用户看到的是项目、讨论和任务，不需要理解 Session、Invocation 或 Agent Trace。
 
-核心路径保持简单：
-
-```text
+~~~text
 创建 Project
 → 新建 Discussion
-→ 在 Discussion 中持续讨论、澄清和收集信息
-→ “生成任务”
-→ AI 根据语义生成 Todo 或 Ongoing
-→ Todo 执行 / Review / Done，或 Ongoing 持续运行
-```
+→ 持续讨论 / 调研 / 工具执行
+→ 生成任务
+→ Todo 或 Ongoing 获得自己的 Card Session
+→ 多轮执行 / 追问
+→ Review / Done，或继续下一次 Ongoing Cycle
+~~~
 
-Human 也可以在 Project Board 直接填写并创建 Todo。直接创建用于用户已经知道“要做什么”的场景，不要求先建 Discussion，也不调用模型；AI 生成 Todo / Ongoing 的入口仍然只存在于 Discussion。
+Project 本身就是看板数据范围；Board 只是 UI View，不建立 Board 领域实体。
 
-Project 本身就是一张项目看板。Board 只作为 UI 视图概念存在，不作为数据库实体。
+## 3. Card = 工作对象 + Agent Session
 
-未来如果需要 Kanban、List、My Tasks、Review、Critical Ongoing 等不同展示方式，应优先设计 View / Saved View，让不同 View 读取同一批 Card，而不是在 Project 下创建多个 Board。
+Card 只有三类。
 
-## 3. Card 类型
+### Discussion
 
-### 3.1 Discussion Card
+用于探索、澄清和收集信息。首次发送消息时才真正创建 Card；首轮由 Agent 异步生成标题与摘要。
 
-Discussion 是所有新工作的默认入口，也是一个真正的 AI 会话对象。它负责“把事情想清楚”，不属于 Todo 的状态机。
+生命周期为 Active → Archived。
 
-新建 Discussion 时不要求用户填写标题或描述；第一次会话运行时由 Built-in Agent 根据首轮上下文自动生成标题与描述。生成前 UI 使用“New discussion / 新讨论”作为展示占位，不把占位文本写成业务标题。
+Discussion 不能转换成 Todo / Ongoing。生成任务时创建新 Card / 新 Session，并传递 Handoff Package，而不是共享 Discussion 的完整 Session History。
 
-点击“新建讨论”本身只进入当前 Project 的前端草稿态，不创建 Discussion Card。只有用户首次发送非空消息时，才创建 Discussion 并提交首条 Comment；因此用户打开新会话后直接离开不会留下空 Discussion。
+### Todo
 
-Discussion 生命周期：
+用于有明确完成终点的一次性工作。
 
-```text
-Active → Archived
-```
-
-规则：
-
-- Discussion 永远不能通过状态转换变成 Todo 或 Ongoing。
-- Discussion 不能进入 Working / Review / Done。
-- Discussion 可以继续对话、归档或由 Human 删除。
-- Discussion 是唯一允许“生成任务”的 Card 类型。
-- 一个 Discussion 可以生成多个后续工作。
-
-### 3.2 Todo Card
-
-Todo 用于有明确完成终点的一次性工作。
-
-固定业务状态：
-
-```text
+~~~text
 Todo → Working → Review → Done
-```
+~~~
 
-规则：
+Agent 可以推进到 Review；Review → Done 只允许 Human。
 
-- Todo 可以由 Discussion 的“生成任务”动作派生，也可以由 Human 在 Board 直接创建；两者都不是 Discussion 状态转换。
-- Human 直接创建的 Todo 不设置 `source_discussion_id`，标题与描述以用户输入为准，不调用模型生成。
-- Todo 自身不能再生成 Todo 或 Ongoing，避免任务树无限分叉。
-- Agent 可以开始执行并推进到 Working。
-- Agent 完成验证后通过 Confirm 进入 Review。
-- Review → Done 只允许 Human。
+Todo 可以来自 Discussion，也可以由 Human 在 Work 视图直接创建。Todo 自身不再派生其他 Card。
 
-### 3.3 Ongoing Card
+### Ongoing
 
-用于长期持续事项，例如：
+用于长期维护、周期巡检和持续观察。
 
-- 每日服务器健康巡检。
-- 每周备份检查。
-- 每月账单或资源检查。
-- 长期 SEO / 内容巡检。
-- 持续跟踪某个系统状态。
-
-生命周期：
-
-```text
+~~~text
 Active / Paused / Archived
-```
+~~~
 
-Ongoing Card 不进入 Done。
+Ongoing 不进入 Done。Schedule 每次触发产生一个新的 Turn，但继续使用同一个 Card Session，因此近期执行上下文天然连续。
 
-Ongoing 与 Todo 一样由 Discussion 派生。用户不需要在“生成任务”前先选择类型；AI 根据 Discussion 上下文判断：
+Health 由最近一次 Check-in 派生：healthy / warning / critical / unknown。
 
-- 有明确完成终点 → Todo。
-- 长期维护、周期执行、持续观察 → Ongoing。
+## 4. 连续对话与执行
 
-如果是 Ongoing，Agent 可以根据上下文给出并创建合适的 Schedule；Schedule 仍遵守现有 daily / weekly / monthly + IANA timezone 规则。
+同一个 Card 内，用户的后续消息是同一 Session 的新 Turn。
 
-Health 不作为独立可写状态，而由最近一次 Check-in 派生：
+~~~text
+Turn 1: 检查服务器上的容器
+Agent: tool_call docker_ps
+Tool: 返回 20 个容器
+Agent: 汇报检查结果
 
-- healthy
-- warning
-- critical
-- 没有 Check-in 时为 unknown
+Turn 2: 刚才第 8 个容器是什么镜像？
+~~~
 
-## 4. Discussion 与工作详情
+Turn 2 应能使用 Session 中已经持久化的上一轮 tool response，不应因为换了一个 Run 而重复调用工具。
 
-Discussion Detail 是会话界面；Todo / Ongoing Detail 是工作执行界面。它们都继续使用 Card + Event + Trigger + Run 基础设施，不建立另一套通用 Conversation / Session 数据模型。
+如果用户问“现在第 8 个容器还是这个镜像吗？”，这是 freshness 要求，Agent 应重新查询真实环境。CycleDock 要区分“记忆缺失”与“需要最新事实”。
 
-人与 Agent 的交互仍直接发生在 Card Detail：
+## 5. Turn / Attempt
 
-- 标题和描述
-- 当前业务状态
-- 当前 Run
-- 当前阶段 / Progress
-- 待执行队列
-- Timeline
-- 评论输入框
-- Ongoing 的 Schedule / Health / Last Check-in / Next Run
+Turn 是一次新的工作输入：Human message、Schedule occurrence 或 System continuation。技术 retry / recovery 是同一 Turn 的新 Attempt，不是新的业务 Turn。
 
-Discussion 上的“聊天”负责澄清与产生工作；Todo / Ongoing 上的对话负责推进已经生成的工作。模型原始 message/tool trace 仍不作为长期业务数据保存。
+Attempt 是执行某个 Turn 的一次真实 Agent invocation。
 
-### 4.1 Chat / Work 双入口交互
+~~~text
+Turn 42
+├── Attempt 1 failed
+└── Attempt 2 completed
+~~~
 
-桌面端使用 64px 的全局图标导航 rail，一级入口只有 **Chat** 与 **Work**；品牌入口使用正式 CycleDock Logo，rail 底部只保留 **Settings**，不再提供账户 / Workspace 快捷侧栏。账户信息、当前 Workspace 与退出登录统一放在 Settings → Account。移动端使用紧凑顶栏，不复制第二套常驻导航。Project 是两种模式共同的数据范围。
+技术重试不制造新的业务 Turn。
 
-- `/chat`：Discussion 模式。桌面左侧显示当前 Project 的 Discussion 列表，主区是新讨论入口或当前 Discussion 对话；移动端 Discussion 列表通过左侧抽屉进入。
-- `/board/:projectID`：Work 模式。展示 Todo 四列与 Ongoing 区域，并允许 Human 直接创建独立 Todo。
-- `/chat/:projectID/:cardID`：Discussion 详情。继续使用统一对话 Timeline、SSE 与两态 Composer。
-- `/cards/:projectID/:cardID`：Todo / Ongoing 详情。主区保持对话式 Timeline；标题旁提供任务状态切换与信息按钮，业务信息通过紧凑锚定浮层按需查看，桌面和移动端都不再占用固定右侧列。
-- `/settings/*`：共享设置中心，不增加第三套工作模式。
+排队 Turn 在真正开始执行以前不能写入 ADK Session History，否则当前正在执行的 Attempt 可能看到未来消息。
 
-新 Discussion 的首条消息属于一个原子用户意图，但网络请求分成“创建 Discussion Card”和“提交首条 Comment”。因此 UI 在 Card 创建成功后立即持久保存 `Card ID + 原始草稿 + Comment 幂等键`；若第二步失败，用户重试同一 Card/同一幂等键，不能创建重复 Discussion，也不能清空原文。草稿按 Project 保存。
+## 6. Queue / Interrupt
 
-Card Timeline 仍以 REST 持久 Event 为最终事实源，SSE 只承载低延迟 Run 状态与文本增量。Human Comment Event → Trigger → Run / retry 通过稳定 ID 关联；Queue、running、waiting_human、失败、取消、retry 状态显示在对应消息附近，无用户来源的 Schedule/System Trigger 或无法建立稳定来源的旧数据独立显示，绝不按文本、时间或数组位置猜测关联。
+当前没有 Attempt 时，发送消息立即创建并执行 Turn。
 
-Todo / Ongoing 任务信息继续包含目标、来源 Discussion、业务状态、Ongoing Health / Schedule 等 durable 信息。Discussion 的标题 / 摘要保持 AI 管理；Todo / Ongoing 可由 Human 显式编辑。Review → Done、enqueue / interrupt、waiting_human 等权限与状态规则始终由服务端执行。
+当前 Attempt 正在运行时：
 
-## 5. 生成任务
+- 加入队列：保存新 Turn，但暂不送进 Session Runtime。
+- 立即转向：终止 / supersede 当前 Attempt，新 Turn 优先执行。
 
-Discussion 只有一个面向 AI 的“生成任务”动作，不提供“生成 Todo / 生成 Ongoing”两个按钮。
+waiting-human 场景在 Session-first Runtime 中通过 Human Input / Attempt 状态表达，用户回复后继续同一 Card Session。
 
-流程：
+旧 Attempt 即使晚返回，也不得追加 Session Event 或修改 Card 当前业务状态。
 
-```text
-Discussion
-→ Human 点击“生成任务”或在会话中明确要求生成工作
-→ Agent 阅读当前 Discussion durable context
-→ Agent 判断 kind = todo | ongoing
-→ 创建新的 Card，并记录 source_discussion_id
-```
+## 7. Context / Artifact / Memory
 
-“生成任务”是派生，不是类型转换。生成出的 Todo / Ongoing 立即成为独立工作对象，后续生命周期不会反向改变来源 Discussion。
+CycleDock 不再要求 Agent 把所有工具结果提炼成 Finding 才能跨轮次记住。
 
-Todo / Ongoing 不暴露生成其他 Card 的能力。
+上下文分层：
 
-该规则只约束 **AI 派生工作**。Human 在 Board 的“新建待办”是直接创建独立 Todo，不需要来源 Discussion；第一版不提供 Human 直接创建 Ongoing，避免把长期事项的 Schedule / Health 语义拆散。
+1. Recent Session Events：近期原始 user / model / tool event。
+2. ADK Context Compaction：压缩较早历史。
+3. Session History Retrieval：按需读取被压缩的精确旧事件。
+4. Artifact：大型输出、文件、截图、日志、报告。
+5. Memory：跨 Card / 跨 Session 的长期知识。
 
-## 6. 用户发送新方向
+Memory 不用于替代同一 Card 的连续 Session。
 
-### 没有 current Run
+## 8. Discussion 生成工作
 
-默认动作：
+Discussion 只有一个“生成任务”入口。Agent 判断：
 
-`发送并执行`
+- 有明确终点 → Todo。
+- 长期 / 周期工作 → Ongoing。
 
-后端创建 Comment Event + Trigger，并在可执行条件满足时创建 Run。
+生成时创建新的 Card Session，并传递 Handoff Package：goal、constraints、acceptance criteria、confirmed decisions、relevant findings、relevant artifact refs、source_card_id。
 
-### 当前 Run 为 queued / running
+这样新任务继承必要知识，但不会继承 Discussion 中数百轮无关上下文。
 
-输入框提供两个动作：
+## 9. Human Review
 
-#### 加入队列
+- Agent 可以输出结果并建议进入 Review。
+- 服务端根据业务规则推进 Todo。
+- Review → Done 只允许 Human。
+- Human 可以重新打开已完成 Todo。
+- Agent Session 历史不能绕过业务权限。
 
-默认、安全动作。
+## 10. 产品不做什么
 
-当前 Run 不受影响，新评论产生新的 Trigger；该 Trigger 没有 Run，因此天然处于待执行队列。
+首次公开发布前不做：
 
-#### 立即转向
-
-表示用户明确希望新的方向优先。
-
-当前 Run 进入 superseded；新评论产生 Trigger，并优先创建新的 Run。
-
-已经排队的旧 Trigger 默认保留，不因为一次转向被自动删除。用户如果明确希望取消旧队列，应执行显式取消操作。
-
-### 当前 Run 为 waiting_human
-
-UI 不再显示“加入队列 / 立即转向”，而显示：
-
-`回复并继续`
-
-底层仍通过新 Comment → 新 Trigger → 新 Run 接续；旧 waiting_human Run 进入 superseded。
-
-## 7. Review 与人类控制
-
-CycleDock 允许 Agent 持续推进任务，但最终完成权保留给人类。
-
-推荐规则：
-
-- Agent 可以输出 Result。
-- Agent 可以 Confirm 工作已经达到 Review 条件。
-- 服务端根据规则把 Working 推进到 Review。
-- 只有 Human 可以把 Review 变成 Done。
-- Human 可以根据实际需要把 Done 重新打开。
-
-## 8. 产品不做什么
-
-第一版明确不做：
-
-- 脱离 Project / Card 的通用 Chat 产品。
+- 脱离 Project / Card 的通用 Chat。
 - Agent Marketplace。
-- 多 Agent DAG / Workflow Builder。
-- 完整模型 trace 产品。
-- raw tool call / raw tool result 浏览器。
-- 虚假的百分比进度。
-- Redis / 消息队列 / 微服务化。
-- SQLite / 多数据库兼容。
+- 通用 DAG / Workflow Builder。
+- 面向用户的完整 raw trace 浏览器。
+- Redis / Kafka / 微服务化。
+- SQLite 多数据库兼容。
 - 复杂 RBAC。
-- 多 Board 体系。
-- 通用 if/else 自动化编排。
+- 多 Board 领域模型。
+- 为跨 Card Memory 过早引入向量数据库。
 
-## 9. 产品设计目标
+Session Event 是 Runtime 数据，不等于产品要把所有内部事件原样展示给 Human。
 
-CycleDock 应做到：
+## 11. 当前重构状态
 
-1. 用户第一眼看到的是任务和看板，而不是 Agent 技术概念。
-2. Agent 执行过程可观察，但只展示有意义的进度，不暴露内部思维链。
-3. 新方向、排队、转向、等待人类等行为有稳定可解释的状态模型。
-4. 同一个 Card 可以跨多次 Run 长期积累工作知识。
-5. Ongoing Card 可以自然形成一轮又一轮 Cycle。
+Session-first 重构正在 feat/session-first-adk-20261025 开发：
+
+- 架构决策已确定。
+- Google ADK Go v2.6 已接入。
+- PostgreSQL-backed ADK SessionService 已建立并通过官方 conformance。
+- Built-in 与 External MCP Agent 已完成统一 Session-first Runtime：Turn / Attempt 调度、stale-write/ownership guard、ADK Runner、Web Human input/control、Schedule Turn、Model Route/MCP Adapter、Context Compaction、Artifact/history retrieval 均已通过真实 PostgreSQL 验证。
+- Phase F 已删除旧执行 Runtime / Context Builder，并把首次发布 schema 重整为单一 `000001_initial.sql`；SSE 也已统一使用 Attempt 语义。
+
+首次公开发布不迁移旧 DEV Runtime 数据，也不保留旧执行 API 或数据库兼容层。

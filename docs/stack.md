@@ -1,7 +1,5 @@
 # 技术栈
 
-新 CycleDock 沿用已经在旧 CycleDock / ChatDock 中验证过的技术方向，但重新实现领域模型。
-
 ## Backend
 
 - Go
@@ -10,14 +8,16 @@
 - pgx
 - sqlc
 - Goose
-- 官方 Model Context Protocol Go SDK（实际版本开发时锁定）
+- Google Agent Development Kit (ADK) Go v2
+- 官方 Model Context Protocol Go SDK
 
 原则：
 
-- 不使用 GORM 作为核心数据层。
-- 不为 Self-hosted 平行支持 SQLite。
-- 不提前建立 Repository interface 抽象。
-- SQL 中 tenant/workspace scope 必须显式。
+- PostgreSQL 是唯一正式数据库。
+- 不使用 GORM 作为 CycleDock 数据层。
+- ADK 自带 GORM DatabaseSessionService 不进入正式架构。
+- CycleDock 自己实现 ADK session.Service。
+- 不提前引入 Redis / Kafka / worker 微服务。
 
 ## Frontend
 
@@ -36,72 +36,66 @@
 - react-markdown + remark-gfm
 - date-fns
 
-第一版不引入：
-
-- Next.js
-- Redux
-- GraphQL
-- 重型富文本编辑器
-- 复杂实时框架
-
-需要实时感时先评估 polling / SSE。
+产品实时更新继续优先 SSE。
 
 ## Agent Runtime
 
-### Model Client
+### Google ADK Go v2
 
-当前 Built-in Agent 有三种明确的 Provider 路径：
+ADK 负责 Agent Runner / event loop、Session / Event、state、context compaction、tool loop、artifact interface、sub-agent / branch / isolation，以及 future multi-agent workflow。
 
-- openai_compatible：保留 /chat/completions + 部署环境 API Key，兼容既有自定义 Provider。
-- chatgpt：使用 OpenAI Sign in with ChatGPT OAuth access token，直接请求 api.openai.com/v1/responses。
-- grok：使用 xAI OAuth access token，直接请求 cli-chat-proxy.grok.com/v1/responses。
+当前锁定基线：google.golang.org/adk/v2 v2.6.0。
 
-订阅 Provider 共用 Responses transport，但认证流程与固定官方 origin 保持各自明确，不引入大型通用 multi-provider framework。Workspace 的模型选择由轻量有序 Model Routes 表达；同一 Provider 可绑定不同 credential/model 形成多条 Route，Runner 只在可恢复模型故障时向后 failover。
+### Session persistence
 
-Responses transport：
+CycleDock 使用 PostgreSQL 自定义实现 internal/agentsession。
 
-- 固定 store=false、stream=true 并消费 SSE。
-- 每轮发送当前 Run 所需完整上下文，不依赖服务端持久会话。
-- function/custom tool 转换为 Responses function_call / function_call_output。
-- 继续执行 timeout、context cancellation、响应大小上限和脱敏 provider error mapping。
+正式实现必须满足 ADK session.Service conformance，并继续使用 pgx / Goose。
 
-模型目录使用与正式推理相同的 OAuth access token 读取，避免展示当前账号不可用的模型。
+~~~text
+app_name = cycledock
+user_id = workspace_id
+session_id = card_id
+~~~
 
-### MCP Client
+### Model
 
-参考 ChatDock 已验证的 MCP Client：
+ADK Go 的 OpenAI model adapter 可作为通用协议基础，但 CycleDock 保留自己的认证和 route policy：OpenAI-compatible、ChatGPT Sign in with ChatGPT、Grok OAuth、multiple credentials、ordered routes、failover、partial stream reset。
 
-- MCP protocol/session。
-- tool list。
-- tool schema。
-- tool call。
-- timeout / response limit。
+ADK experimental Model Routing 不作为唯一生产故障转移实现。
 
-不要迁移 ChatDock 的 Session / Message / Prompt Space。
+### MCP
+
+普通 outbound MCP 优先使用 ADK McpToolset。
+
+NexusDock first-party connection 继续由 CycleDock 管 OAuth、refresh、bootstrap、device scope、hidden tools、native names。
+
+### Context
+
+~~~text
+recent Session Events
++ ADK Context Compaction
++ history retrieval
++ Artifact
++ optional cross-Card Memory
+~~~
+
+不再使用“每个 Run 丢掉旧 raw tool context”的设计。
+
+### Memory
+
+第一阶段不引入外部向量数据库。
+
+ADK MemoryService 只在跨 Card / 跨 Session 的长期知识需求出现后实现；Self-hosted 不依赖 Google Cloud Memory Bank 才能工作。
 
 ## Runtime / Deployment
 
-第一版继续：
+第一版继续单 Go 服务 + PostgreSQL + React build；Docker Compose 作为 Self-hosted / DEV 基线。
 
-- 单 Go 服务。
-- PostgreSQL。
-- React build 嵌入 Go binary 或在同一镜像内静态托管。
-- Docker Compose 作为 Self-hosted / DEV 基线。
-
-只有真实负载证明需要时再引入：
-
-- Redis。
-- 外部队列。
-- 独立 Agent worker。
-- 多服务拆分。
+只有真实负载证明需要时再引入 Redis、外部队列、独立 Agent worker、多服务拆分。
 
 ## Observability
 
-需要：
+需要 structured logs、request/card/turn/attempt/invocation correlation、agent event metrics、scheduler/dispatcher 错误、context/compaction 基础指标。
 
-- structured logs。
-- request / run correlation id。
-- 基础运行指标。
-- scheduler / dispatcher 错误可定位。
-
-但产品层不提供 raw model/tool tracing。
+产品层不默认暴露完整 raw trace 或 chain-of-thought。

@@ -85,146 +85,6 @@ func (s *Store) CreateSchedule(
 	}, nil
 }
 
-func (s *Store) ProcessDueSchedules(ctx context.Context, workspaceID uuid.UUID, now time.Time, limit int) ([]uuid.UUID, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 100
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id
-		FROM card_schedules
-		WHERE workspace_id = $1 AND enabled AND next_trigger_at <= $2
-		ORDER BY next_trigger_at, id
-		LIMIT $3
-	`, workspaceID, now, limit)
-	if err != nil {
-		return nil, err
-	}
-	var scheduleIDs []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		scheduleIDs = append(scheduleIDs, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-
-	created := make([]uuid.UUID, 0, len(scheduleIDs))
-	for _, scheduleID := range scheduleIDs {
-		triggerID, ok, err := s.ProcessDueSchedule(ctx, workspaceID, scheduleID, now)
-		if err != nil {
-			return created, err
-		}
-		if ok {
-			created = append(created, triggerID)
-		}
-	}
-	return created, nil
-}
-
-// ProcessDueSchedule 与其他 Card 状态事务一样先锁 Card、再锁 Schedule，
-// 避免 Scheduler 与暂停/恢复操作使用相反锁顺序。数据库 unique index 再兜底 occurrence 去重。
-// next occurrence 总是基于 now 计算，因此服务离线多周期后固定 skip，不会批量补历史 Trigger。
-func (s *Store) ProcessDueSchedule(
-	ctx context.Context,
-	workspaceID, scheduleID uuid.UUID,
-	now time.Time,
-) (uuid.UUID, bool, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	defer tx.Rollback(ctx)
-
-	var cardID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		SELECT card_id
-		FROM card_schedules
-		WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, scheduleID).Scan(&cardID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, domain.ErrNotFound
-	}
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return uuid.Nil, false, err
-	}
-
-	row, err := loadScheduleForUpdate(ctx, tx, workspaceID, scheduleID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, domain.ErrNotFound
-	}
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	if !row.Enabled || row.NextTriggerAt.After(now) {
-		if err := tx.Commit(ctx); err != nil {
-			return uuid.Nil, false, err
-		}
-		return uuid.Nil, false, nil
-	}
-
-	rule, err := row.Rule()
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	next, err := rule.NextAfter(now)
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-
-	var triggerID uuid.UUID
-	created := false
-	active := row.CardKind == domain.CardKindOngoing && row.OngoingState == domain.OngoingStateActive
-	if active {
-		triggerID = uuid.New()
-		err = tx.QueryRow(ctx, `
-			INSERT INTO triggers (
-				id, workspace_id, card_id, cause, dispatch_mode, schedule_id, scheduled_for
-			)
-			VALUES ($1, $2, $3, 'scheduled_followup', 'enqueue', $4, $5)
-			ON CONFLICT (schedule_id, scheduled_for)
-			WHERE schedule_id IS NOT NULL
-			DO NOTHING
-			RETURNING id
-		`, triggerID, workspaceID, row.CardID, scheduleID, row.NextTriggerAt).Scan(&triggerID)
-		if err == nil {
-			created = true
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, false, err
-		}
-	}
-
-	if active {
-		_, err = tx.Exec(ctx, `
-			UPDATE card_schedules
-			SET last_triggered_at = $3, next_trigger_at = $4, updated_at = now()
-			WHERE workspace_id = $1 AND id = $2
-		`, workspaceID, scheduleID, row.NextTriggerAt, next)
-	} else {
-		// Paused/Archived 仍向未来推进 next_trigger_at，避免 due scanner 热循环；恢复 Active 时会再次重算。
-		_, err = tx.Exec(ctx, `
-			UPDATE card_schedules
-			SET next_trigger_at = $3, updated_at = now()
-			WHERE workspace_id = $1 AND id = $2
-		`, workspaceID, scheduleID, next)
-	}
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, false, err
-	}
-	return triggerID, created, nil
-}
-
 type scheduleRow struct {
 	CardID        uuid.UUID
 	Enabled       bool
@@ -273,6 +133,155 @@ func (r scheduleRow) Rule() (domain.ScheduleRule, error) {
 		rule.DayOfMonth = &day
 	}
 	return rule, rule.Validate()
+}
+
+const scheduledTurnContent = "Run the scheduled follow-up for this ongoing Card. Check the current state, perform the ongoing work that is due now, and record an evidence-based check-in."
+
+func (s *Store) ProcessDueScheduleTurns(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	now time.Time,
+	limit int,
+) ([]uuid.UUID, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id
+		FROM card_schedules
+		WHERE workspace_id=$1 AND enabled AND next_trigger_at <= $2
+		ORDER BY next_trigger_at, id
+		LIMIT $3
+	`, workspaceID, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	var scheduleIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		scheduleIDs = append(scheduleIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	created := make([]uuid.UUID, 0, len(scheduleIDs))
+	for _, scheduleID := range scheduleIDs {
+		turnID, ok, err := s.ProcessDueScheduleTurn(ctx, workspaceID, scheduleID, now)
+		if err != nil {
+			return created, err
+		}
+		if ok {
+			created = append(created, turnID)
+		}
+	}
+	if len(created) > 0 {
+		s.notifyWorkReady()
+	}
+	return created, nil
+}
+
+func (s *Store) ProcessDueScheduleTurn(
+	ctx context.Context,
+	workspaceID, scheduleID uuid.UUID,
+	now time.Time,
+) (uuid.UUID, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var cardID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT card_id
+		FROM card_schedules
+		WHERE workspace_id=$1 AND id=$2
+	`, workspaceID, scheduleID).Scan(&cardID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, domain.ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
+		return uuid.Nil, false, err
+	}
+
+	row, err := loadScheduleForUpdate(ctx, tx, workspaceID, scheduleID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, domain.ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if !row.Enabled || row.NextTriggerAt.After(now) {
+		if err := tx.Commit(ctx); err != nil {
+			return uuid.Nil, false, err
+		}
+		return uuid.Nil, false, nil
+	}
+
+	rule, err := row.Rule()
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	next, err := rule.NextAfter(now)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+
+	var turnID uuid.UUID
+	created := false
+	active := row.CardKind == domain.CardKindOngoing &&
+		row.OngoingState == domain.OngoingStateActive
+	if active {
+		turnID = uuid.New()
+		err = tx.QueryRow(ctx, `
+			INSERT INTO card_turns (
+				id, workspace_id, card_id, source, content,
+				dispatch_mode, schedule_id, scheduled_for
+			)
+			VALUES ($1,$2,$3,'schedule',$4,'enqueue',$5,$6)
+			ON CONFLICT (schedule_id, scheduled_for)
+			WHERE schedule_id IS NOT NULL
+			DO NOTHING
+			RETURNING id
+		`, turnID, workspaceID, row.CardID, scheduledTurnContent,
+			scheduleID, row.NextTriggerAt).Scan(&turnID)
+		if err == nil {
+			created = true
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, err
+		}
+	}
+
+	if active {
+		_, err = tx.Exec(ctx, `
+			UPDATE card_schedules
+			SET last_triggered_at=$3, next_trigger_at=$4, updated_at=now()
+			WHERE workspace_id=$1 AND id=$2
+		`, workspaceID, scheduleID, row.NextTriggerAt, next)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE card_schedules
+			SET next_trigger_at=$3, updated_at=now()
+			WHERE workspace_id=$1 AND id=$2
+		`, workspaceID, scheduleID, next)
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, false, err
+	}
+	return turnID, created, nil
 }
 
 func recalculateCardSchedulesTx(

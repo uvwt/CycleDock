@@ -8,9 +8,9 @@
 
 ## 1. 目标与边界
 
-- 前端代码从零开发；不复用旧页面、旧组件、旧样式或旧交互。保留 Go + PostgreSQL、OIDC、Model Provider、MCP 与 Card / Event / Trigger / Run 后端业务域。
+- 前端代码从零开发；不复用旧页面、旧组件、旧样式或旧交互。保留 Go + PostgreSQL、OIDC、Model Provider、MCP 与 Card / Event / Turn / Attempt 后端业务域。
 - 核心用户路径：Discussion 中澄清 → 唯一 Generate task 操作由 AI 识别派生 Todo 或 Ongoing → 独立任务页继续协作 → Review（人类决定 Done）。用户已经明确任务时，也可在 Board 直接手填 Todo，不调用模型。
-- Discussion 与 Todo / Ongoing 都是 Card，统一使用 Card Timeline、Trigger、Run；绝不另建聊天 Session 或另一套 Chat Message 数据模型。
+- Discussion 与 Todo / Ongoing 都是 Card；一个 Card 对应一个持久 Agent Session，产品 Timeline 展示 durable Event，执行调度使用 Turn / Attempt，不另建第二套聊天业务模型。
 - Project 仍是看板领域实体；Board 只是界面。
 - PC / 移动端响应式，普通白、灰中性色，色彩只辅助交互/状态；默认可读与低视觉噪音。
 - 数据隔离、Human-only Done、waiting_human、enqueue/interrupt 等领域规则由后端执行，前端只表达它们。
@@ -33,9 +33,9 @@
 
 - Discussion、Todo、Ongoing 的核心区域都是统一对话流：左侧 Agent / Result，右侧 Human，系统事件在中间居中灰字显示。Discussion 详情使用 Discussion 二级列表；Todo / Ongoing 使用 Work 二级列表，二者复用同一 Context Sidebar 基础组件，但业务数据与分组逻辑独立。
 - 相同后端 `events` 表 / `timeline` 返回：comment(Human)=右，comment(Agent)、finding、result=左；status_change=居中小字；progress/checkin=简短阶段节点；confirm/reject 按重要性增强。
-- 服务端 `sequence` 始终保留为真实审计顺序和去重依据；会话展示优先按稳定因果关系组织轮次。若 `source_event_id → Run → run_id Event` 关联完整，同一 Run 的 Agent 事件应紧跟触发它的来源消息展示，即使这些 Result 在审计序列里晚于后续已入队的 Human 消息；同一轮内部仍按 `sequence` 排序。缺少稳定关联的旧数据或系统触发不得按文本、时间或数组位置猜测，继续按原审计顺序独立展示。
+- 服务端 `sequence` 始终保留为真实审计顺序和去重依据；会话展示优先按稳定因果关系组织轮次。Session-first Runtime 使用 `Comment Event ← source_event_id ← Turn ← Attempt ← attempt_id ← Agent Event` 稳定关联；Attempt 产生的 Result/Finding 等产品 Event 携带 `attempt_id`，同一 Attempt 的执行状态与 durable Agent Event 应紧跟触发它的来源消息展示。缺少用户来源的 Schedule / System Turn 独立展示，不得按文本、时间或数组位置猜测归属。
 - Todo/Ongoing 详情不保留右侧常驻栏。业务状态以标题旁紧凑状态切换器呈现；任务目标、来源 Discussion、Health / Schedule 等 durable 信息通过标题栏最右侧的信息按钮打开紧凑浮层。浮层默认阅读，Human 显式点击编辑后才显示保存/取消表单，移动端同样使用浮层而不是独立详情抽屉。
-- 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Run 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
+- 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Attempt 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
 - Discussion 的 Generate task 只在输入框右上角显示 Sparkles 图标，通过 `title / aria-label` 保留可访问名称，不显示额外文字按钮。跳到最新同样只显示向下图标。
 - Discussion 仅能生成任务而非转换状态，一个 Discussion 可生成多个工作；Todo/Ongoing 不再产生工作。
 - Human 可以在 Board 直接打开“新建待办”表单创建 Todo；AI Generate work 仍然只来自 Discussion。
@@ -49,11 +49,11 @@
 不能通过 15 秒轮询模拟流式。必须完成 Go 模型层 → Agent Runner → 认证后 SSE → React 的真正增量传输。
 
 - 传输：原生 EventSource，同源 HttpOnly Cookie；每个 Card 的只读 SSE 订阅基于后端鉴权范围。
-- 短暂文本增量仅保存在 Run 的临时流中；最终有意义的 Result/Finding/Progress/Comment 入原有 events 表，不把原始工具参数/结果/CoT 持久化。
-- SSE 合约建议：`run.started`、`run.stage`、`run.text.delta`、`event.created`、`run.finished`、`run.failed`；`id`/游标应可重连、幂等消重。
-- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。同一 Run 的流式正文与最终持久 Result 占用同一 Agent 回复位置：运行中显示 SSE 增量，Result 到达后由持久事件接管，不能再额外保留一份 `result_summary` 正文。
+- 短暂文本增量只存在于 Attempt 的实时流中；最终有意义的 Result/Finding/Progress/Comment 进入产品 `events`。其中 Attempt 产生的 durable Event 保存 nullable `attempt_id` 作为因果关联，不把它当作另一套执行状态。ADK Session Events 另行持久化模型消息、tool call 与 FunctionResponse 作为连续 Agent 上下文，但不保存 chain-of-thought 或 secret，也不把原始工具事件直接当作产品 Timeline 气泡。
+- SSE 合约：`attempt.started`、`attempt.stage`、`attempt.text.delta`、`attempt.text.reset`、`attempt.text.snapshot`、`event.created`、`attempt.finished`、`attempt.failed`；执行标识统一为 `attempt_id`。
+- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。同一 Attempt 的流式正文与最终持久 Result 占用同一 Agent 回复位置：运行中显示 SSE 增量，Result 到达后由持久事件接管，不能再额外保留一份 `result_summary` 正文。
 - 加载中提供轻量动态点或 Spinner 和真实阶段。运行耗时从 `started_at` 至 `finished_at` / 当前服务端时间计算；Queued 不计为运行时间。
-- 单次 SSE 网络中断不能取消后台 Agent Run，失败/等待人工/取消必须准确表达。
+- 单次 SSE 网络中断不能取消后台 Attempt，失败/等待人工/取消必须准确表达。
 - OpenAI-compatible Transport 也要支持增量输出；不能只对 ChatGPT/Grok 实现。
 - 对不支持推流的外部 Agent，按它生成的 Event 实时呈现，不虚构模型 Token。
 
@@ -89,7 +89,7 @@ React + TypeScript + Vite + React Router + TanStack Query + Tailwind CSS 4。基
 
 前端从零重建已进入 `main`。2026-10-21 的项目工作台优化以 `feat/chat-workbench-20261021@12966fb` 为实施基线，并在独立 worktree / 短期分支 `feat/project-workbench-impl-20261021` 完成；未推送、未合并、未部署。布局与交互以 `docs/project-workbench-plan.md` 为当前约束。
 
-**已实现：** 根路由默认进入 Project Board；旧全局侧栏移除，顶栏使用 Project 选择器 + Account 菜单，并提供受 Membership 校验的 Workspace Session 切换。Discussion 详情使用 Discussion 二级列表，Todo/Ongoing 详情使用同一基础骨架的可折叠 Work 分组列表；Board 右下角提供新 Discussion Composer，首条 Comment 失败时持久保留原文、已创建 Card ID 与幂等键并安全重试。Card 详情保留独立 URL 与持久 Timeline；Todo/Ongoing 增加工作摘要、来源 Discussion / 派生工作入口。任务信息在桌面和手机均默认关闭且不预留右列，打开后默认只读，Todo/Ongoing 需显式编辑；Ongoing Schedule 也先阅读、后新增/编辑。Queue / cancel / retry / current Run 状态按稳定的 `source_event_id / trigger_id / retry_of_trigger_id` 关联到用户 Comment 下，无用户来源或旧数据单独展示。
+**已实现：** 根路由默认进入 Project Board；旧全局侧栏移除，顶栏使用 Project 选择器 + Account 菜单，并提供受 Membership 校验的 Workspace Session 切换。Discussion 详情使用 Discussion 二级列表，Todo/Ongoing 详情使用同一基础骨架的可折叠 Work 分组列表；Board 右下角提供新 Discussion Composer，首条 Comment 失败时持久保留原文、已创建 Card ID 与幂等键并安全重试。Card 详情保留独立 URL 与持久 Timeline；Todo/Ongoing 增加工作摘要、来源 Discussion / 派生工作入口。任务信息在桌面和手机均默认关闭且不预留右列，打开后默认只读，Todo/Ongoing 需显式编辑；Ongoing Schedule 也先阅读、后新增/编辑。Session-first cutover 后，pending Turn / cancel / retry / current Attempt 按稳定的 `source_event_id / turn_id / retry_of_attempt_id` 关联到用户 Comment，下游 UI 不再依赖 Trigger / AgentRun；无用户来源的 Schedule/System Turn 独立展示。
 
 **本轮验证：** `npm run lint` 为 0 warning / 0 error；`npm run build` production build 通过。更新后的 `web/e2e/smoke.py` 对 mock server 执行 14 条 Python Playwright 浏览器 E2E，覆盖 Board 主工作台、无旧全局导航、A/B Project 数据隔离、Human 手工 Todo、项目 URL 直达/刷新/前进后退、375×812 移动端 Discussion/任务信息双抽屉、新 Discussion 创建失败草稿保留/跨 Project 草稿恢复/首发失败后同 Card 重试、编辑保存失败保留输入、Ongoing Schedule 阅读→编辑、语言/主题回归、Timeline 执行状态稳定挂载、无用户来源 Trigger 独立展示及 Workspace 切换，14/14 通过；新增覆盖 Work 二级侧栏状态折叠、信息按钮右对齐和 375×812 Work 抽屉。`sqlc generate`、`go test ./...`、`go vet ./...` 均通过；另外使用 TianYi 本机 PostgreSQL 17.11 测试实例真实执行 `TestHumanWorkControlHTTPFlowAndWorkspaceIsolation` 与 `TestHumanWorkspaceSwitchUsesMembershipScope`，每次均从 migration 000001 跑到 000007 后 PASS，确认并非因缺少 `TEST_DATABASE_URL` 而 skip。TianYi Neo 对 1408×757 桌面真实构建确认 Board/共享 Discussion/按需任务信息与时间线执行状态无控制台错误；375×812 手机布局另由 Playwright 实际 viewport E2E 验证，Neo 当前自动附着外部 Edge 时无法覆盖已有 viewport，因此不把其桌面尺寸冒充手机证据。
 

@@ -165,7 +165,7 @@ export function WorkSidebar({
                           meta={
                             card.kind === "ongoing"
                               ? card.health || card.ongoing_state
-                              : card.current_run_status || undefined
+                              : card.current_attempt_status || undefined
                           }
                         />
                       );

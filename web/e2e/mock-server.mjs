@@ -69,7 +69,7 @@ const cards = [
     title: "检查 RN 服务器异常日志",
     description: "重点检查最近24小时的 Docker 和系统错误日志",
     todo_state: "working",
-    current_run_status: "running",
+    current_attempt_status: "running",
     created_at: now(),
     updated_at: now(),
   },
@@ -155,7 +155,6 @@ const events = {
       content: "todo -> working",
       actor_kind: "cycle_agent",
       actor_name: "Cycle Agent",
-      run_id: "run-demo",
       created_at: now(),
     },
     {
@@ -165,7 +164,7 @@ const events = {
       content: "已经找到日志目录，正在分析错误频次。",
       actor_kind: "cycle_agent",
       actor_name: "Cycle Agent",
-      run_id: "run-demo",
+      attempt_id: "attempt-running",
       created_at: now(),
     },
     {
@@ -184,7 +183,7 @@ const events = {
       content: "**上一轮日志检查完成**\n\n没有发现新的错误。",
       actor_kind: "cycle_agent",
       actor_name: "Cycle Agent",
-      run_id: "run-completed",
+      attempt_id: "attempt-completed",
       created_at: now(),
     },
   ],
@@ -274,72 +273,72 @@ function details(id) {
   return {
     card,
     timeline: events[id] || [],
-    current_run: card.current_run_status
+    current_attempt: card.current_attempt_status
       ? {
-          id: "run-demo",
-          trigger_id: "trigger-running",
+          id: "attempt-running",
+          turn_id: "turn-running",
           source_event_id: "event-3",
-          status: card.current_run_status,
+          attempt_number: 1,
+          reason: "initial",
+          status: card.current_attempt_status,
           current_stage: "分析错误日志",
           created_at: now(),
           started_at: new Date(Date.now() - 32000).toISOString(),
         }
       : null,
-    queue:
+    pending_turns:
       id === "todo-1"
         ? [
             {
-              id: "trigger-queued",
-              trigger_id: "trigger-queued",
+              id: "turn-queued",
               sequence: 6,
-              cause: "comment",
+              source: "human",
               dispatch_mode: "enqueue",
-              cause_event_id: "event-7",
               source_event_id: "event-7",
               content: "顺便检查磁盘空间。",
               created_at: now(),
             },
           ]
         : [],
-    work_history:
+    attempt_history:
       id === "todo-1"
         ? [
             {
-              trigger_id: "trigger-failed",
-              cause_event_id: "event-8",
+              id: "attempt-failed",
+              turn_id: "turn-failed",
               source_event_id: "event-8",
+              attempt_number: 1,
+              reason: "initial",
               status: "failed",
-              sequence: 1,
-              content: "先检查昨天的日志。",
-              cause: "comment",
               error_summary: "远程节点暂时不可用",
               can_retry: true,
               created_at: hoursAgo(5),
+              started_at: hoursAgo(5),
               finished_at: hoursAgo(4.9),
             },
             {
-              trigger_id: "trigger-completed",
-              cause_event_id: "event-9",
+              id: "attempt-completed",
+              turn_id: "turn-completed",
               source_event_id: "event-9",
-              run_id: "run-completed",
+              attempt_number: 1,
+              reason: "initial",
               status: "completed",
-              sequence: 2,
-              content: "先检查上一轮日志。",
-              cause: "comment",
               result_summary: "**上一轮日志检查完成**\n\n没有发现新的错误。",
               can_retry: false,
               created_at: hoursAgo(1),
+              started_at: hoursAgo(1),
               finished_at: hoursAgo(0.9),
             },
             {
-              trigger_id: "trigger-schedule-history",
+              id: "attempt-schedule-history",
+              turn_id: "turn-schedule-history",
+              attempt_number: 1,
+              reason: "initial",
               status: "completed",
-              sequence: 2,
-              content: "定时巡检触发",
-              cause: "schedule",
               result_summary: "巡检完成",
               can_retry: false,
               created_at: hoursAgo(2),
+              started_at: hoursAgo(2),
               finished_at: hoursAgo(1.9),
             },
           ]
@@ -480,24 +479,24 @@ http
               const timers = [
                 setTimeout(
                   () =>
-                    send("run.started", {
-                      run_id: "run-demo",
+                    send("attempt.started", {
+                      attempt_id: "attempt-running",
                       started_at: new Date(Date.now() - 35000).toISOString(),
                     }),
                   500,
                 ),
                 setTimeout(
                   () =>
-                    send("run.text.delta", {
-                      run_id: "run-demo",
+                    send("attempt.text.delta", {
+                      attempt_id: "attempt-running",
                       text: "正在读取 RN 服务器日志。",
                     }),
                   1100,
                 ),
                 setTimeout(
                   () =>
-                    send("run.text.delta", {
-                      run_id: "run-demo",
+                    send("attempt.text.delta", {
+                      attempt_id: "attempt-running",
                       text: "\n\n已定位 Docker 容器的错误记录。",
                     }),
                   1600,
@@ -564,7 +563,7 @@ http
             });
             return data(
               res,
-              { event_id: "event-" + seq, trigger_id: "trigger-demo" },
+              { event_id: "event-" + seq, turn_id: "turn-demo" },
               201,
             );
           }
@@ -581,7 +580,7 @@ http
             });
             return data(
               res,
-              { event_id: "event-" + seq, trigger_id: "trigger-demo" },
+              { event_id: "event-" + seq, turn_id: "turn-demo" },
               201,
             );
           }
@@ -601,8 +600,9 @@ http
               req.method === "DELETE" ? undefined : await body(req),
               req.method === "DELETE" ? 204 : 200,
             );
-          if (rest?.includes("/cancel") || rest?.includes("/retry"))
-            return data(res, { trigger_id: "retry-demo" });
+          if (rest?.includes("/cancel")) return data(res, {});
+          if (rest?.includes("/retry"))
+            return data(res, { attempt_id: "attempt-retry-demo" });
         }
         if (route === "/agent/settings") {
           if (req.method === "PUT") {

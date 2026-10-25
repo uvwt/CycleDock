@@ -40,22 +40,22 @@ type AddCommentInput struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-type CreateFollowupInput struct {
+type CreateTurnInput struct {
 	CardID         string `json:"card_id"`
-	Content        string `json:"content" jsonschema:"Durable new work direction added to the Card context"`
-	IdempotencyKey string `json:"idempotency_key"`
+	Content        string `json:"content" jsonschema:"Durable new work direction queued on this Card"`
+	IdempotencyKey string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`
 }
 
-type ClaimWorkInput struct {
+type ClaimAttemptInput struct {
 	CardID string `json:"card_id"`
 }
 
-type HeartbeatRunInput struct {
-	RunID string `json:"run_id"`
+type HeartbeatAttemptInput struct {
+	AttemptID string `json:"attempt_id"`
 }
 
 type ReportProgressInput struct {
-	RunID          string `json:"run_id"`
+	AttemptID      string `json:"attempt_id"`
 	Stage          string `json:"stage"`
 	Summary        string `json:"summary" jsonschema:"Current durable progress summary"`
 	EventContent   string `json:"event_content,omitempty" jsonschema:"Only set when progress itself is a meaningful timeline fact"`
@@ -63,25 +63,24 @@ type ReportProgressInput struct {
 }
 
 type AddFindingInput struct {
-	RunID          string `json:"run_id"`
-	Content        string `json:"content" jsonschema:"Durable finding worth carrying into future runs"`
+	AttemptID      string `json:"attempt_id"`
+	Content        string `json:"content" jsonschema:"Durable finding worth carrying into future turns"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type CheckInInput struct {
-	RunID          string `json:"run_id"`
+	AttemptID      string `json:"attempt_id"`
 	Status         string `json:"status" jsonschema:"healthy, warning, or critical"`
 	Content        string `json:"content"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
-type FinishRunInput struct {
-	RunID          string `json:"run_id"`
-	Outcome        string `json:"outcome" jsonschema:"completed, failed, or waiting_human"`
-	Result         string `json:"result,omitempty" jsonschema:"Durable final result when completed"`
-	Stage          string `json:"stage,omitempty" jsonschema:"Current stage when waiting_human"`
-	Summary        string `json:"summary,omitempty" jsonschema:"Failure or waiting_human summary"`
-	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Required for completed or failed outcomes"`
+type FinishAttemptInput struct {
+	AttemptID string `json:"attempt_id"`
+	Outcome   string `json:"outcome" jsonschema:"completed, failed, or waiting_human"`
+	Result    string `json:"result,omitempty" jsonschema:"Durable final result when completed"`
+	Stage     string `json:"stage,omitempty" jsonschema:"Current stage when waiting_human"`
+	Summary   string `json:"summary,omitempty" jsonschema:"Failure or waiting_human summary"`
 }
 
 type ConfirmCardInput struct {
@@ -110,39 +109,47 @@ type CardView struct {
 	SourceDiscussionID    string `json:"source_discussion_id,omitempty"`
 	Health                string `json:"health,omitempty"`
 	RequiredConfirmations int32  `json:"required_confirmations"`
-	CurrentRunStatus      string `json:"current_run_status,omitempty"`
-	PendingTriggerCount   int64  `json:"pending_trigger_count,omitempty"`
+	CurrentAttemptStatus  string `json:"current_attempt_status,omitempty"`
+	PendingTurnCount      int64  `json:"pending_turn_count,omitempty"`
 }
 
 type EventView struct {
 	ID            string `json:"id"`
 	Sequence      int64  `json:"sequence"`
 	Type          string `json:"type"`
+	AttemptID     string `json:"attempt_id,omitempty"`
 	ActorName     string `json:"actor_name"`
 	ActorKind     string `json:"actor_kind"`
 	Content       string `json:"content"`
 	CheckinStatus string `json:"checkin_status,omitempty"`
-	RunID         string `json:"run_id,omitempty"`
 	CreatedAt     string `json:"created_at"`
 }
 
-type RunView struct {
-	ID              string `json:"id"`
-	CardID          string `json:"card_id"`
-	TriggerID       string `json:"trigger_id"`
-	Status          string `json:"status"`
-	CurrentStage    string `json:"current_stage,omitempty"`
-	ProgressSummary string `json:"progress_summary,omitempty"`
-	ResultSummary   string `json:"result_summary,omitempty"`
-	ErrorSummary    string `json:"error_summary,omitempty"`
+type PendingTurnView struct {
+	ID            string `json:"id"`
+	SourceEventID string `json:"source_event_id,omitempty"`
+	Sequence      int64  `json:"sequence"`
+	Source        string `json:"source"`
+	DispatchMode  string `json:"dispatch_mode"`
+	Content       string `json:"content"`
+	CreatedAt     string `json:"created_at"`
 }
 
-type QueueView struct {
-	ID           string `json:"id"`
-	Sequence     int64  `json:"sequence"`
-	Cause        string `json:"cause"`
-	DispatchMode string `json:"dispatch_mode"`
-	Content      string `json:"content"`
+type AttemptView struct {
+	ID               string `json:"id"`
+	CardID           string `json:"card_id"`
+	TurnID           string `json:"turn_id"`
+	SourceEventID    string `json:"source_event_id,omitempty"`
+	AttemptNumber    int    `json:"attempt_number"`
+	Reason           string `json:"reason"`
+	RetryOfAttemptID string `json:"retry_of_attempt_id,omitempty"`
+	Status           string `json:"status"`
+	CurrentStage     string `json:"current_stage,omitempty"`
+	ProgressSummary  string `json:"progress_summary,omitempty"`
+	ResultSummary    string `json:"result_summary,omitempty"`
+	ErrorSummary     string `json:"error_summary,omitempty"`
+	StartedAt        string `json:"started_at,omitempty"`
+	FinishedAt       string `json:"finished_at,omitempty"`
 }
 
 type ListProjectsOutput struct {
@@ -154,10 +161,11 @@ type ListCardsOutput struct {
 }
 
 type GetCardOutput struct {
-	Card       CardView    `json:"card"`
-	Timeline   []EventView `json:"timeline"`
-	Queue      []QueueView `json:"queue"`
-	CurrentRun *RunView    `json:"current_run,omitempty"`
+	Card           CardView          `json:"card"`
+	Timeline       []EventView       `json:"timeline"`
+	PendingTurns   []PendingTurnView `json:"pending_turns"`
+	CurrentAttempt *AttemptView      `json:"current_attempt,omitempty"`
+	AttemptHistory []AttemptView     `json:"attempt_history"`
 }
 
 type CardOutput struct {
@@ -170,15 +178,15 @@ type EventOutput struct {
 	Reused  bool   `json:"reused,omitempty"`
 }
 
-type FollowupOutput struct {
-	EventID   string `json:"event_id"`
-	TriggerID string `json:"trigger_id"`
-	Reused    bool   `json:"reused,omitempty"`
+type TurnOutput struct {
+	EventID string `json:"event_id"`
+	TurnID  string `json:"turn_id"`
+	Reused  bool   `json:"reused,omitempty"`
 }
 
-type RunOutput struct {
-	Run    RunView `json:"run"`
-	Reused bool    `json:"reused,omitempty"`
+type AttemptOutput struct {
+	Attempt AttemptView `json:"attempt"`
+	Reused  bool        `json:"reused,omitempty"`
 }
 
 type ProgressOutput struct {
@@ -186,8 +194,8 @@ type ProgressOutput struct {
 	Reused  bool   `json:"reused,omitempty"`
 }
 
-type FinishRunOutput struct {
-	Run RunView `json:"run"`
+type FinishAttemptOutput struct {
+	Attempt AttemptView `json:"attempt"`
 }
 
 type ConfirmCardOutput struct {

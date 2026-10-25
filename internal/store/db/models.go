@@ -9,27 +9,49 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type AgentRun struct {
-	ID                   uuid.UUID          `json:"id"`
-	WorkspaceID          uuid.UUID          `json:"workspace_id"`
-	CardID               uuid.UUID          `json:"card_id"`
-	TriggerID            uuid.UUID          `json:"trigger_id"`
-	RunnerSourceID       uuid.UUID          `json:"runner_source_id"`
-	Status               string             `json:"status"`
-	CurrentStage         string             `json:"current_stage"`
-	ProgressSummary      string             `json:"progress_summary"`
-	ResultSummary        string             `json:"result_summary"`
-	ErrorSummary         string             `json:"error_summary"`
-	StartedAt            pgtype.Timestamptz `json:"started_at"`
-	HeartbeatAt          pgtype.Timestamptz `json:"heartbeat_at"`
-	LeaseExpiresAt       pgtype.Timestamptz `json:"lease_expires_at"`
-	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	FinishIdempotencyKey pgtype.Text        `json:"finish_idempotency_key"`
-	FinishRequestHash    pgtype.Text        `json:"finish_request_hash"`
-	CancelledBySourceID  uuid.NullUUID      `json:"cancelled_by_source_id"`
-	CancelReason         string             `json:"cancel_reason"`
+type AgentAppState struct {
+	AppName   string             `json:"app_name"`
+	State     []byte             `json:"state"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentArtifact struct {
+	AppName        string             `json:"app_name"`
+	UserID         string             `json:"user_id"`
+	SessionID      string             `json:"session_id"`
+	FileName       string             `json:"file_name"`
+	Version        int64              `json:"version"`
+	Part           []byte             `json:"part"`
+	MimeType       string             `json:"mime_type"`
+	CustomMetadata []byte             `json:"custom_metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentSession struct {
+	AppName   string             `json:"app_name"`
+	UserID    string             `json:"user_id"`
+	ID        string             `json:"id"`
+	State     []byte             `json:"state"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentSessionEvent struct {
+	Sequence     int64              `json:"sequence"`
+	AppName      string             `json:"app_name"`
+	UserID       string             `json:"user_id"`
+	SessionID    string             `json:"session_id"`
+	ID           string             `json:"id"`
+	InvocationID string             `json:"invocation_id"`
+	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
+	Event        []byte             `json:"event"`
+}
+
+type AgentUserState struct {
+	AppName   string             `json:"app_name"`
+	UserID    string             `json:"user_id"`
+	State     []byte             `json:"state"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Card struct {
@@ -67,14 +89,34 @@ type CardSchedule struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type CardTurn struct {
+	ID                  uuid.UUID          `json:"id"`
+	Sequence            int64              `json:"sequence"`
+	WorkspaceID         uuid.UUID          `json:"workspace_id"`
+	CardID              uuid.UUID          `json:"card_id"`
+	Source              string             `json:"source"`
+	Content             string             `json:"content"`
+	CreatedBySourceID   uuid.NullUUID      `json:"created_by_source_id"`
+	SourceEventID       uuid.NullUUID      `json:"source_event_id"`
+	DispatchMode        string             `json:"dispatch_mode"`
+	ScheduleID          uuid.NullUUID      `json:"schedule_id"`
+	ScheduledFor        pgtype.Timestamptz `json:"scheduled_for"`
+	IdempotencyKey      pgtype.Text        `json:"idempotency_key"`
+	RequestHash         pgtype.Text        `json:"request_hash"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
+	CancelReason        string             `json:"cancel_reason"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type Event struct {
 	ID             uuid.UUID          `json:"id"`
-	Sequence       pgtype.Int8        `json:"sequence"`
+	Sequence       int64              `json:"sequence"`
 	WorkspaceID    uuid.UUID          `json:"workspace_id"`
 	CardID         uuid.UUID          `json:"card_id"`
 	EventType      string             `json:"event_type"`
 	ActorSourceID  uuid.UUID          `json:"actor_source_id"`
-	RunID          uuid.NullUUID      `json:"run_id"`
+	AttemptID      uuid.NullUUID      `json:"attempt_id"`
 	Content        string             `json:"content"`
 	CheckinStatus  pgtype.Text        `json:"checkin_status"`
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
@@ -202,24 +244,27 @@ type Source struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
-type Trigger struct {
-	ID                  uuid.UUID          `json:"id"`
-	Sequence            pgtype.Int8        `json:"sequence"`
-	WorkspaceID         uuid.UUID          `json:"workspace_id"`
-	CardID              uuid.UUID          `json:"card_id"`
-	Cause               string             `json:"cause"`
-	CauseEventID        uuid.NullUUID      `json:"cause_event_id"`
-	CreatedBySourceID   uuid.NullUUID      `json:"created_by_source_id"`
-	DispatchMode        string             `json:"dispatch_mode"`
-	ScheduleID          uuid.NullUUID      `json:"schedule_id"`
-	ScheduledFor        pgtype.Timestamptz `json:"scheduled_for"`
-	IdempotencyKey      pgtype.Text        `json:"idempotency_key"`
-	RequestHash         pgtype.Text        `json:"request_hash"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	RetryOfTriggerID    uuid.NullUUID      `json:"retry_of_trigger_id"`
-	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
-	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
-	CancelReason        string             `json:"cancel_reason"`
+type TurnAttempt struct {
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	CardID           uuid.UUID          `json:"card_id"`
+	TurnID           uuid.UUID          `json:"turn_id"`
+	AttemptNumber    int32              `json:"attempt_number"`
+	Reason           string             `json:"reason"`
+	RetryOfAttemptID uuid.NullUUID      `json:"retry_of_attempt_id"`
+	RunnerSourceID   uuid.UUID          `json:"runner_source_id"`
+	InvocationID     pgtype.Text        `json:"invocation_id"`
+	Status           string             `json:"status"`
+	CurrentStage     string             `json:"current_stage"`
+	ProgressSummary  string             `json:"progress_summary"`
+	ResultSummary    string             `json:"result_summary"`
+	ErrorSummary     string             `json:"error_summary"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	HeartbeatAt      pgtype.Timestamptz `json:"heartbeat_at"`
+	LeaseExpiresAt   pgtype.Timestamptz `json:"lease_expires_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebAuthFlow struct {

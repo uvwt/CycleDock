@@ -14,18 +14,6 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-type PendingTrigger struct {
-	ID               uuid.UUID
-	Sequence         int64
-	Cause            domain.TriggerCause
-	DispatchMode     domain.DispatchMode
-	CauseEventID     uuid.NullUUID
-	RetryOfTriggerID uuid.NullUUID
-	SourceEventID    uuid.NullUUID
-	Content          string
-	CreatedAt        time.Time
-}
-
 func (s *Store) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]db.Project, error) {
 	return s.queries.ListProjects(ctx, workspaceID)
 }
@@ -125,79 +113,6 @@ func (s *Store) UpdateCardText(
 		return db.Card{}, domain.ErrNotFound
 	}
 	return card, err
-}
-
-func (s *Store) CurrentRun(ctx context.Context, workspaceID, cardID uuid.UUID) (*db.AgentRun, error) {
-	run, err := s.queries.GetCurrentRun(ctx, db.GetCurrentRunParams{
-		WorkspaceID: workspaceID,
-		CardID:      cardID,
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &run, nil
-}
-
-// GetTriggerLineage 把当前 Trigger 映射回最初的人类 Comment Event。
-// retry Trigger 自身没有 cause_event_id，因此必须沿 retry_of_trigger_id 链追溯，
-// 不能让 HTTP/UI 根据消息内容或时间位置猜测归属。
-func (s *Store) GetTriggerLineage(
-	ctx context.Context,
-	workspaceID, cardID, triggerID uuid.UUID,
-) (db.GetTriggerLineageRow, error) {
-	lineage, err := s.queries.GetTriggerLineage(ctx, db.GetTriggerLineageParams{
-		WorkspaceID: workspaceID,
-		CardID:      cardID,
-		TriggerID:   triggerID,
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return db.GetTriggerLineageRow{}, domain.ErrNotFound
-	}
-	return lineage, err
-}
-
-func (s *Store) ListPendingQueue(ctx context.Context, workspaceID, cardID uuid.UUID) ([]PendingTrigger, error) {
-	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListPendingQueue(ctx, db.ListPendingQueueParams{
-		WorkspaceID: workspaceID,
-		CardID:      cardID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	items := make([]PendingTrigger, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, PendingTrigger{
-			ID:               row.ID,
-			Sequence:         row.Sequence.Int64,
-			Cause:            domain.TriggerCause(row.Cause),
-			DispatchMode:     domain.DispatchMode(row.DispatchMode),
-			CauseEventID:     row.CauseEventID,
-			RetryOfTriggerID: row.RetryOfTriggerID,
-			SourceEventID:    row.SourceEventID,
-			Content:          row.Content,
-			CreatedAt:        row.CreatedAt.Time,
-		})
-	}
-	return items, nil
-}
-
-func (s *Store) ListRecentCardWork(
-	ctx context.Context,
-	workspaceID, cardID uuid.UUID,
-) ([]db.ListRecentCardWorkRow, error) {
-	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
-		return nil, err
-	}
-	return s.queries.ListRecentCardWork(ctx, db.ListRecentCardWorkParams{
-		WorkspaceID: workspaceID,
-		CardID:      cardID,
-	})
 }
 
 func (s *Store) ListSchedules(ctx context.Context, workspaceID, cardID uuid.UUID) ([]db.CardSchedule, error) {
@@ -318,7 +233,7 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 		return err
 	}
 	q := db.New(tx)
-	hasHistory, err := q.ScheduleHasTriggers(ctx, db.ScheduleHasTriggersParams{
+	hasHistory, err := q.ScheduleHasTurns(ctx, db.ScheduleHasTurnsParams{
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
 		ScheduleID:  scheduleID,
@@ -327,9 +242,9 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 		return err
 	}
 	if hasHistory {
-		// Scheduled Trigger 是长期任务事实。已有历史后不允许级联删除 Schedule，
-		// 否则会破坏 Trigger/Run 审计链；此时应把 Schedule disabled。
-		return fmt.Errorf("%w: schedule has trigger history; disable it instead", domain.ErrConflict)
+		// Scheduled Turn 是长期任务事实。已有历史后不允许级联删除 Schedule，
+		// 否则会破坏 Turn/Attempt 审计链；此时应把 Schedule disabled。
+		return fmt.Errorf("%w: schedule has turn history; disable it instead", domain.ErrConflict)
 	}
 	affected, err := q.DeleteCardSchedule(ctx, db.DeleteCardScheduleParams{
 		WorkspaceID: workspaceID,

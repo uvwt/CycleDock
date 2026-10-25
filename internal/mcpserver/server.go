@@ -36,9 +36,9 @@ func New(dataStore *store.Store, oauthService *oauth.Service, logger *slog.Logge
 		Name:        "cycledock",
 		Title:       "CycleDock",
 		Description: "Shared project and task state for humans and AI agents.",
-		Version:     "0.3.0",
+		Version:     "0.4.0",
 	}, &mcp.ServerOptions{
-		Instructions: "Use CycleDock as shared durable work state. New work starts as a Discussion; only generate_work may derive a Todo or Ongoing Card from an active Discussion. Todo/Ongoing Cards never generate more Cards. Claim pending work, preserve durable findings/results/check-ins instead of raw tool traces, and use confirm_card to move verified Working Todo work to Review. Only a human can move Review to Done.",
+		Instructions: "Use CycleDock as shared durable work state. A Card owns a persistent Agent Session. New work direction is a Turn; one real execution is an Attempt. New work starts as a Discussion; only generate_work may derive a Todo or Ongoing Card from an active Discussion. Todo/Ongoing Cards never generate more Cards. Create or claim Turns, report durable findings/results/check-ins through the owned Attempt, and use confirm_card to move verified Working Todo work to Review. Only a human can move Review to Done.",
 	})
 	registerTools(server, dataStore)
 
@@ -114,8 +114,8 @@ func stableToolError(err error) error {
 		return errors.New("NOT_FOUND: resource is not accessible in this workspace")
 	case errors.Is(err, domain.ErrIdempotencyMismatch):
 		return errors.New("IDEMPOTENCY_CONFLICT: idempotency_key was reused for a different request")
-	case errors.Is(err, domain.ErrRunNotCurrent):
-		return errors.New("RUN_NOT_CURRENT: run is no longer current or is owned by another source")
+	case errors.Is(err, domain.ErrAttemptNotCurrent):
+		return errors.New("ATTEMPT_NOT_CURRENT: attempt is no longer current or is owned by another source")
 	case errors.Is(err, domain.ErrHumanRequired):
 		return errors.New("HUMAN_REQUIRED: this action is reserved for a human")
 	case errors.Is(err, domain.ErrInvalidTransition):

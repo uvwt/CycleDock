@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/agent"
+	"github.com/uvwt/CycleDock/internal/agentartifact"
+	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
@@ -130,10 +132,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	sessionService := agentsession.NewPostgresService(pool)
+	artifactService := agentartifact.NewPostgresService(pool)
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
-		ModelAuth: modelAuthService,
-		NexusDock: nexusDockService,
-		Live:      live,
+		SessionService:  sessionService,
+		ArtifactService: artifactService,
+		ModelAuth:       modelAuthService,
+		NexusDock:       nexusDockService,
+		Live:            live,
 	})
 	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
 	go func() {

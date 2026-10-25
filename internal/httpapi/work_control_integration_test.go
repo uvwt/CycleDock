@@ -12,7 +12,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
-func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
+func TestHumanTurnAttemptControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	handler, _, dataStore := newHTTPIntegration(t)
 
 	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
@@ -28,7 +28,7 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	humanSourceID := uuid.MustParse(identity.Source.ID)
 
 	projectRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
-		"name": "Work control", "description": "", "instructions": "",
+		"name": "Session control", "description": "", "instructions": "",
 	}, cookie, nil)
 	var project projectResponse
 	decodeRecorder(t, projectRecorder, &project)
@@ -40,126 +40,180 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	var card cardResponse
 	decodeRecorder(t, cardRecorder, &card)
 
+	settings, err := dataStore.SaveAgentSettings(
+		context.Background(),
+		workspaceID,
+		store.AgentSettingsInput{
+			Routes: []store.ModelRouteInput{{
+				Enabled:         true,
+				ProviderType:    "openai_compatible",
+				ProviderBaseURL: "http://127.0.0.1:1/v1",
+				Model:           "test-model",
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	comment := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+card.ID+"/comments", map[string]any{
 		"content": "queued work", "dispatch_mode": "enqueue",
-	}, cookie, map[string]string{"Idempotency-Key": "http-work-control-original"})
+	}, cookie, map[string]string{"Idempotency-Key": "http-turn-original"})
 	if comment.Code != http.StatusCreated {
 		t.Fatalf("comment: %d %s", comment.Code, comment.Body.String())
 	}
 	var original commentResultResponse
 	decodeRecorder(t, comment, &original)
-	if original.TriggerID == "" || original.RunID != "" {
-		t.Fatalf("unexpected pending result: %+v", original)
+	if original.EventID == "" || original.TurnID == "" {
+		t.Fatalf("unexpected turn result: %+v", original)
 	}
 
-	// UI 必须能用稳定 ID 把原始 Comment、Trigger 与排队状态关联起来。
 	detailRecorder := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
 	var detail cardDetailResponse
 	decodeRecorder(t, detailRecorder, &detail)
-	if len(detail.Timeline) != 1 || len(detail.Queue) != 1 {
-		t.Fatalf("pending linkage timeline=%d queue=%d", len(detail.Timeline), len(detail.Queue))
+	if len(detail.Timeline) != 1 || len(detail.PendingTurns) != 1 || detail.CurrentAttempt != nil {
+		t.Fatalf("pending linkage timeline=%d pending=%d current=%+v", len(detail.Timeline), len(detail.PendingTurns), detail.CurrentAttempt)
 	}
-	if detail.Timeline[0].ID != original.EventID || detail.Timeline[0].TriggerID != original.TriggerID {
-		t.Fatalf("comment linkage=%+v original=%+v", detail.Timeline[0], original)
+	if detail.Timeline[0].ID != original.EventID {
+		t.Fatalf("comment event=%+v original=%+v", detail.Timeline[0], original)
 	}
-	if detail.Queue[0].TriggerID != original.TriggerID ||
-		detail.Queue[0].CauseEventID != original.EventID ||
-		detail.Queue[0].SourceEventID != original.EventID {
-		t.Fatalf("pending trigger linkage=%+v original=%+v", detail.Queue[0], original)
+	if detail.PendingTurns[0].ID != original.TurnID ||
+		detail.PendingTurns[0].SourceEventID != original.EventID {
+		t.Fatalf("pending turn linkage=%+v original=%+v", detail.PendingTurns[0], original)
 	}
 
 	cancelPending := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/cards/"+card.ID+"/triggers/"+original.TriggerID+"/cancel",
+		"/api/v1/cards/"+card.ID+"/turns/"+original.TurnID+"/cancel",
 		map[string]any{"reason": "changed priority"}, cookie, nil,
 	)
 	if cancelPending.Code != http.StatusNoContent {
-		t.Fatalf("cancel pending: %d %s", cancelPending.Code, cancelPending.Body.String())
+		t.Fatalf("cancel pending turn: %d %s", cancelPending.Code, cancelPending.Body.String())
+	}
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	decodeRecorder(t, detailRecorder, &detail)
+	if len(detail.PendingTurns) != 0 || detail.CurrentAttempt != nil {
+		t.Fatalf("cancelled pending turn remained active: pending=%+v current=%+v", detail.PendingTurns, detail.CurrentAttempt)
+	}
+
+	second := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+card.ID+"/comments", map[string]any{
+		"content": "run and then stop", "dispatch_mode": "enqueue",
+	}, cookie, map[string]string{"Idempotency-Key": "http-attempt-control"})
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second comment: %d %s", second.Code, second.Body.String())
+	}
+	var secondResult commentResultResponse
+	decodeRecorder(t, second, &secondResult)
+
+	claim, err := dataStore.ClaimNextTurnAttempt(
+		context.Background(), workspaceID, settings.SourceID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Turn.ID.String() != secondResult.TurnID {
+		t.Fatalf("claimed turn=%s want=%s", claim.Turn.ID, secondResult.TurnID)
 	}
 
 	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
 	decodeRecorder(t, detailRecorder, &detail)
-	if len(detail.Queue) != 0 || len(detail.WorkHistory) != 1 {
-		t.Fatalf("after pending cancel queue=%d history=%d", len(detail.Queue), len(detail.WorkHistory))
+	if detail.CurrentAttempt == nil ||
+		detail.CurrentAttempt.ID != claim.Attempt.ID.String() ||
+		detail.CurrentAttempt.TurnID != secondResult.TurnID ||
+		detail.CurrentAttempt.SourceEventID != secondResult.EventID {
+		t.Fatalf("current attempt linkage=%+v claim=%+v", detail.CurrentAttempt, claim)
 	}
-	if detail.WorkHistory[0].Status != string(domain.RunStatusCancelled) || !detail.WorkHistory[0].CanRetry {
-		t.Fatalf("cancelled pending history=%+v", detail.WorkHistory[0])
+	progressID, _, err := dataStore.ReportAttemptProgress(
+		context.Background(),
+		store.AttemptProgressParams{
+			WorkspaceID:    workspaceID,
+			CardID:         uuid.MustParse(card.ID),
+			AttemptID:      claim.Attempt.ID,
+			RunnerSourceID: settings.SourceID,
+			Stage:          "inspect",
+			Summary:        "attempt-linked progress",
+			EventContent:   "attempt-linked durable progress",
+			IdempotencyKey: "http-attempt-linked-progress",
+			LeaseDuration:  time.Minute,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if detail.WorkHistory[0].SourceEventID != original.EventID || detail.WorkHistory[0].CauseEventID != original.EventID {
-		t.Fatalf("cancelled work linkage=%+v original=%+v", detail.WorkHistory[0], original)
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	decodeRecorder(t, detailRecorder, &detail)
+	var sawLinkedProgress bool
+	for _, event := range detail.Timeline {
+		if event.ID == progressID.String() {
+			if event.AttemptID != claim.Attempt.ID.String() {
+				t.Fatalf("progress attempt_id=%q want=%q", event.AttemptID, claim.Attempt.ID)
+			}
+			sawLinkedProgress = true
+		}
+	}
+	if !sawLinkedProgress {
+		t.Fatalf("attempt-linked progress missing from timeline: %+v", detail.Timeline)
 	}
 
-	retryHeaders := map[string]string{"Idempotency-Key": "http-retry-cancelled"}
+	cancelAttempt := doJSON(
+		t, handler, http.MethodPost,
+		"/api/v1/cards/"+card.ID+"/attempts/"+claim.Attempt.ID.String()+"/cancel",
+		map[string]any{"reason": "human stop"}, cookie, nil,
+	)
+	if cancelAttempt.Code != http.StatusNoContent {
+		t.Fatalf("cancel attempt: %d %s", cancelAttempt.Code, cancelAttempt.Body.String())
+	}
+
+	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
+	decodeRecorder(t, detailRecorder, &detail)
+	if detail.CurrentAttempt != nil || len(detail.AttemptHistory) == 0 {
+		t.Fatalf("cancelled attempt view current=%+v history=%+v", detail.CurrentAttempt, detail.AttemptHistory)
+	}
+	cancelled := detail.AttemptHistory[0]
+	if cancelled.ID != claim.Attempt.ID.String() ||
+		cancelled.Status != string(domain.AttemptStatusCancelled) ||
+		!cancelled.CanRetry ||
+		cancelled.SourceEventID != secondResult.EventID {
+		t.Fatalf("cancelled attempt history=%+v", cancelled)
+	}
+
 	retry := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/cards/"+card.ID+"/triggers/"+original.TriggerID+"/retry",
-		map[string]any{}, cookie, retryHeaders,
+		"/api/v1/cards/"+card.ID+"/attempts/"+claim.Attempt.ID.String()+"/retry",
+		map[string]any{}, cookie, nil,
 	)
 	if retry.Code != http.StatusCreated {
-		t.Fatalf("retry: %d %s", retry.Code, retry.Body.String())
+		t.Fatalf("retry attempt: %d %s", retry.Code, retry.Body.String())
 	}
 	var retried retryResultResponse
 	decodeRecorder(t, retry, &retried)
-	retryReplay := doJSON(
+	if retried.AttemptID == "" {
+		t.Fatalf("retry result=%+v", retried)
+	}
+
+	replay := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/cards/"+card.ID+"/triggers/"+original.TriggerID+"/retry",
-		map[string]any{}, cookie, retryHeaders,
+		"/api/v1/cards/"+card.ID+"/attempts/"+claim.Attempt.ID.String()+"/retry",
+		map[string]any{}, cookie, nil,
 	)
-	var replay retryResultResponse
-	decodeRecorder(t, retryReplay, &replay)
-	if retryReplay.Code != http.StatusCreated || !replay.Reused || replay.TriggerID != retried.TriggerID {
-		t.Fatalf("retry replay status=%d first=%+v replay=%+v", retryReplay.Code, retried, replay)
+	var replayed retryResultResponse
+	decodeRecorder(t, replay, &replayed)
+	if replay.Code != http.StatusCreated || !replayed.Reused || replayed.AttemptID != retried.AttemptID {
+		t.Fatalf("retry replay status=%d first=%+v replay=%+v", replay.Code, retried, replayed)
 	}
 
 	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
 	decodeRecorder(t, detailRecorder, &detail)
-	if len(detail.Queue) != 1 || detail.Queue[0].TriggerID != retried.TriggerID ||
-		detail.Queue[0].RetryOfTriggerID != original.TriggerID ||
-		detail.Queue[0].SourceEventID != original.EventID || detail.Queue[0].CauseEventID != "" {
-		t.Fatalf("retry queue linkage=%+v original=%+v retried=%+v", detail.Queue, original, retried)
+	if detail.CurrentAttempt == nil ||
+		detail.CurrentAttempt.ID != retried.AttemptID ||
+		detail.CurrentAttempt.RetryOfAttemptID != claim.Attempt.ID.String() ||
+		detail.CurrentAttempt.AttemptNumber != 2 ||
+		detail.CurrentAttempt.Reason != string(domain.AttemptReasonRetry) ||
+		detail.CurrentAttempt.SourceEventID != secondResult.EventID {
+		t.Fatalf("retry current attempt=%+v first=%+v", detail.CurrentAttempt, claim.Attempt)
 	}
 
-	agent, err := dataStore.CreateSource(context.Background(), workspaceID, domain.SourceKindCycleAgent, "HTTP Agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := dataStore.ClaimNextTrigger(
-		context.Background(), workspaceID, uuid.MustParse(card.ID), agent.ID, time.Minute,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := dataStore.StartRun(context.Background(), workspaceID, run.ID, agent.ID, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
-	decodeRecorder(t, detailRecorder, &detail)
-	if detail.CurrentRun == nil || detail.CurrentRun.TriggerID != retried.TriggerID ||
-		detail.CurrentRun.RetryOfTriggerID != original.TriggerID ||
-		detail.CurrentRun.SourceEventID != original.EventID {
-		t.Fatalf("current retry linkage=%+v original=%+v retried=%+v", detail.CurrentRun, original, retried)
-	}
-	cancelRun := doJSON(
-		t, handler, http.MethodPost,
-		"/api/v1/cards/"+card.ID+"/runs/"+run.ID.String()+"/cancel",
-		map[string]any{"reason": "human stop"}, cookie, nil,
-	)
-	if cancelRun.Code != http.StatusNoContent {
-		t.Fatalf("cancel run: %d %s", cancelRun.Code, cancelRun.Body.String())
-	}
-
-	detailRecorder = doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+card.ID, nil, cookie, nil)
-	decodeRecorder(t, detailRecorder, &detail)
-	if detail.CurrentRun != nil || len(detail.WorkHistory) < 2 {
-		t.Fatalf("cancelled run still current or missing history: current=%+v history=%+v", detail.CurrentRun, detail.WorkHistory)
-	}
-	if detail.WorkHistory[0].TriggerID != retried.TriggerID ||
-		detail.WorkHistory[0].Status != string(domain.RunStatusCancelled) ||
-		!detail.WorkHistory[0].CanRetry {
-		t.Fatalf("cancelled run history=%+v", detail.WorkHistory[0])
-	}
-
-	otherWorkspace, err := dataStore.CreateWorkspace(context.Background(), "Other work-control workspace")
+	otherWorkspace, err := dataStore.CreateWorkspace(context.Background(), "Other session workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,40 +229,51 @@ func TestHumanWorkControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCard, err := dataStore.CreateTodoCard(context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID, "Private", "", uuid.NullUUID{}, 1)
+	otherCard, err := dataStore.CreateTodoCard(
+		context.Background(), otherWorkspace.ID, otherProject.ID, otherHuman.ID,
+		"Private", "", uuid.NullUUID{}, 1,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherWork, err := dataStore.SubmitComment(context.Background(), store.SubmitCommentParams{
-		WorkspaceID: otherWorkspace.ID, CardID: otherCard.ID, AuthorSourceID: otherHuman.ID,
-		RunnerSourceID: &otherAgent.ID,
-		Content:        "private work", IdempotencyKey: "other-work",
-		DispatchMode: domain.DispatchModeEnqueue,
-	})
-	if err != nil || otherWork.RunID == nil {
-		t.Fatalf("other work=%+v err=%v", otherWork, err)
+	otherTurn, err := dataStore.CreateHumanTurn(
+		context.Background(), otherWorkspace.ID, otherCard.ID, otherHuman.ID,
+		"private work", "other-turn", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherClaim, err := dataStore.ClaimNextTurnAttempt(
+		context.Background(), otherWorkspace.ID, otherAgent.ID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherClaim.Turn.ID != otherTurn.Turn.ID {
+		t.Fatalf("other claim=%+v turn=%+v", otherClaim, otherTurn)
 	}
 
 	crossCancel := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/cards/"+otherCard.ID.String()+"/runs/"+otherWork.RunID.String()+"/cancel",
+		"/api/v1/cards/"+otherCard.ID.String()+"/attempts/"+otherClaim.Attempt.ID.String()+"/cancel",
 		map[string]any{"reason": "must not work"}, cookie, nil,
 	)
 	if crossCancel.Code != http.StatusNotFound {
-		t.Fatalf("cross-workspace run cancel: %d %s", crossCancel.Code, crossCancel.Body.String())
+		t.Fatalf("cross-workspace attempt cancel: %d %s", crossCancel.Code, crossCancel.Body.String())
 	}
 	crossRetry := doJSON(
 		t, handler, http.MethodPost,
-		"/api/v1/cards/"+otherCard.ID.String()+"/triggers/"+otherWork.TriggerID.String()+"/retry",
-		map[string]any{}, cookie, map[string]string{"Idempotency-Key": "cross-retry"},
+		"/api/v1/cards/"+otherCard.ID.String()+"/attempts/"+otherClaim.Attempt.ID.String()+"/retry",
+		map[string]any{}, cookie, nil,
 	)
 	if crossRetry.Code != http.StatusNotFound {
-		t.Fatalf("cross-workspace retry: %d %s", crossRetry.Code, crossRetry.Body.String())
+		t.Fatalf("cross-workspace attempt retry: %d %s", crossRetry.Code, crossRetry.Body.String())
 	}
 
-	otherCurrent, err := dataStore.CurrentRun(context.Background(), otherWorkspace.ID, otherCard.ID)
-	if err != nil || otherCurrent == nil || otherCurrent.ID != *otherWork.RunID {
-		t.Fatalf("cross-workspace request changed private work: run=%+v err=%v", otherCurrent, err)
+	stillCurrent, err := dataStore.GetAttempt(context.Background(), otherWorkspace.ID, otherClaim.Attempt.ID)
+	if err != nil || stillCurrent.Status != domain.AttemptStatusRunning {
+		t.Fatalf("cross-workspace request changed private attempt: attempt=%+v err=%v", stillCurrent, err)
 	}
+
 	_ = humanSourceID
 }

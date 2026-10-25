@@ -99,7 +99,7 @@ function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
         {card.description}
       </p>
       <div className="mt-4 flex items-center justify-between text-[11px] text-slate-400">
-        <span>{card.current_run_status || t("未运行")}</span>
+        <span>{card.current_attempt_status || t("未运行")}</span>
         <Clock3 className="size-3" />
       </div>
     </button>

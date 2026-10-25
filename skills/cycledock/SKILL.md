@@ -1,6 +1,6 @@
 ---
 name: cycledock
-description: Use when working through CycleDock MCP to inspect Projects/Cards, start Discussions, generate Todo/Ongoing work from Discussions, claim queued work, record durable progress/findings/results/check-ins, create explicit follow-ups, confirm completed Todo cards, or coordinate recurring Ongoing work. Do not use it to store raw model/tool traces, generate work from Todo/Ongoing cards, or bypass Human Review/Done.
+description: Use when working through CycleDock MCP to inspect Projects/Cards, start Discussions, generate Todo/Ongoing work, create or claim Turns, operate Attempts, record durable progress/findings/results/check-ins, confirm completed Todo cards, or coordinate recurring Ongoing work. Do not bypass Human Review/Done or store raw reasoning/tool noise as product facts.
 ---
 
 # CycleDock
@@ -9,95 +9,85 @@ CycleDock is shared durable work state for humans and AI agents.
 
 The core model is:
 
-`Workspace → Project → Card → Event / Trigger → AgentRun`
+`Workspace → Project → Card → Turn → Attempt`
 
-A Project is the board. There is no separate Board object.
-
-## Operating model
-
-- **Card retains knowledge; Run retains execution state.**
-- A **Trigger** is one immutable work direction and is also the queue item.
-- A Trigger with no Run is pending work.
-- Claiming work creates a Run. At most one current Run may exist for a Card.
-- Durable Card context includes comments, findings, results, check-ins, meaningful progress and status changes.
-- Do not put chain-of-thought, raw tool arguments/results, temporary commands or noisy heartbeat logs into CycleDock.
+A Card is the long-lived business container and persistent Agent Session boundary. A Turn is one new work direction. An Attempt is one real execution of a Turn. A Project is the board.
 
 ## Start every work cycle by reading reality
 
 1. Call `list_projects`.
 2. Call `list_cards`.
-3. Before acting on a Card, call `get_card` and read its current state, recent Timeline, pending queue and current Run.
-4. Never infer that a Card is still in the state you remember from an earlier turn.
+3. Before acting on a Card, call `get_card` and read its state, Timeline, `pending_turns`, `current_attempt` and `attempt_history`.
+4. Never assume a remembered state is still current.
 
 ## Existing queued work
 
-When a Card already has a pending Trigger, use `claim_work`.
+When a Card has a pending Turn, use `claim_attempt`.
 
-- Claim is atomic.
-- If another Source already owns the current Run, do not work around it.
-- If your own previous claim response was lost, retrying `claim_work` returns your existing current Run.
-- Do not create a duplicate follow-up merely because you are unsure whether a claim succeeded.
+- Claim is Card-scoped and atomic.
+- If another Source owns the current Attempt, do not work around it.
+- If your own claim response was lost, retry `claim_attempt`; CycleDock returns your existing current Attempt.
+- Do not create a duplicate Turn merely because you are unsure whether a claim succeeded.
 
 ## Starting and generating work
 
-New work starts with `create_discussion`. A Discussion is a conversation entry point, not a Todo state.
+New work starts with `create_discussion`.
 
-When the Discussion has become concrete enough to create work, use the single `generate_work` action. Classify the result yourself:
+When a Discussion is concrete enough, use `generate_work`:
 
 - finite work with a completion point → `todo`
 - long-term, periodic, recurring, or continuously monitored work → `ongoing`
 
-A Discussion may generate multiple work Cards. Never call `generate_work` from a Todo or Ongoing Card, and never simulate generation by moving a Discussion into another state.
+A Discussion may generate multiple work Cards. Never call `generate_work` from Todo or Ongoing.
 
-Use `create_followup` only when a new direction should enter the queue of the **same existing Card**. Use `add_comment` when you only need to append durable context and do not want to create a Trigger.
+Use `create_turn` when a new direction should enter the queue of the same existing Card. Use `add_comment` only for durable context that should not create work.
 
-External MCP deliberately has no interrupt tool. Do not simulate an interrupt by creating extra Triggers or editing Run state. Human Web owns the “interrupt now” decision.
+External MCP deliberately has no interrupt tool. Human Web owns “interrupt now”.
 
-## While a Run is active
+## While an Attempt is active
 
-- Use `heartbeat_run` only to extend the lease. It does not write Timeline.
-- Use `report_progress` for the current stage and a concise meaningful progress summary.
-- Set `event_content` only when that progress is itself a durable fact worth keeping.
-- Use `add_finding` for discoveries future Runs need to know.
-- On an Ongoing Card, use `check_in` for the latest healthy / warning / critical fact.
-- Reuse the same `idempotency_key` when retrying the **same logical write**. Use a new key for a new logical action.
+- Use `heartbeat_attempt` only to extend the lease.
+- Use `report_progress` for current stage and concise durable progress.
+- Set `event_content` only when the progress itself is worth preserving.
+- Use `add_finding` for discoveries later Turns need.
+- On Ongoing Cards, use `check_in` for healthy / warning / critical.
+- Every execution write must use the current `attempt_id`; foreign or stale Attempts reject writes.
+- Reuse the same `idempotency_key` when retrying the same logical Event write.
 
-## Finishing a Run
+## Finishing an Attempt
 
-Use `finish_run`:
+Use `finish_attempt`:
 
-- `completed`: include the durable Result and an idempotency key.
-- `failed`: include a concise failure summary and an idempotency key.
-- `waiting_human`: include the current stage and exactly what human input is needed, then stop work on that Run.
+- `completed`: include the durable Result.
+- `failed`: include a concise failure summary.
+- `waiting_human`: include stage and exactly what human input is required, then stop.
 
-When a human replies to a waiting Run, CycleDock creates a new Trigger / Run and supersedes the old waiting Run. Never continue writing to the superseded Run.
+Lifecycle retries are safe: repeating the same terminal value or waiting_human state for the same owned Attempt is idempotent.
+
+When a human replies to waiting_human, CycleDock supersedes the old Attempt and creates a new Human Turn in the same Card Session. Claim the new Turn with `claim_attempt`; never keep writing to the superseded Attempt.
 
 ## Review and completion
 
-For a Todo Card:
+Todo lifecycle:
 
 `Todo → Working → Review → Done`
 
-- Agents may move a Todo between Todo and Working with `move_card`.
-- Agents must use `confirm_card` to hand verified Working work to Review.
+- Agents may move Todo ↔ Working with `move_card`.
+- Use `confirm_card` to hand verified Working work to Review.
 - Confirmation thresholds are enforced by CycleDock.
-- **Only a human can move Review → Done.**
-- Do not report a Card as Done merely because a Run completed or because it reached Review.
+- Only a human can move Review → Done.
+- Attempt completed does not mean Card Done.
 
-Discussion lifecycle is `Active → Archived`; it never enters the Todo workflow.
+Discussion lifecycle is `Active → Archived`.
 
-For Ongoing Cards:
-
-`Active / Paused / Archived`
-
-Health is derived from the latest Check-in; it is not a separately writable field.
+Ongoing lifecycle is `Active / Paused / Archived`. Health comes from the latest Check-in.
 
 ## Recurring work
 
-CycleDock can schedule Ongoing Cards daily, weekly or monthly. A schedule creates a `scheduled_followup` Trigger; it does not itself execute a model.
+CycleDock Ongoing schedules create Schedule Turns; they do not directly execute a model.
 
-Before creating an external client-side recurring automation, inspect the Card and its pending queue so you do not duplicate an existing CycleDock schedule or pending Trigger.
+Before adding external recurring automation, inspect the Card's `pending_turns` and `current_attempt` to avoid duplicate work. External agents claim Schedule Turns with `claim_attempt` like any other pending Turn.
 
 ## Tool reference
 
-Read [references/tools.md](references/tools.md) for the exact purpose and boundary of every current MCP tool.
+Read [references/tools.md](references/tools.md) for exact current MCP tool boundaries.

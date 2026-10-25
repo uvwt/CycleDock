@@ -1,83 +1,55 @@
 # CycleDock
 
-CycleDock 是一个以 Discussion、Todo / Ongoing 工作和项目看板为核心的人机协作系统。
-
-它不是通用聊天产品，也不是 Agent tracing 平台。新工作先进入 Discussion；人类与 AI 把需求聊清楚后，通过唯一的“生成任务”动作派生 Todo 或 Ongoing。有限任务进入 Todo → Working → Review → Done，长期/周期事项进入 Ongoing。每一个新的工作方向形成 Trigger，每一次具体执行形成 Run；系统记录工作的进展、发现与结果，而不是保存模型内部完整对话和工具调用轨迹。
+CycleDock 是一个以 Project / Card 为核心的人机协作工作台。每个 Card 同时是一个持久 Agent Session：Human、Schedule 与 AI Agent 围绕同一个工作对象持续讨论和执行，CycleDock 负责业务状态、队列、权限、Schedule 与 Review，Agent Runtime 负责连续上下文、工具调用、压缩和产物。
 
 核心关系：
 
-```text
+~~~text
 Workspace
 └── Project
-    └── Card
-        ├── Event
-        ├── Trigger
-        │   └── AgentRun
-        └── Schedule   # 仅 Ongoing Card
-```
+    └── Card = persistent Agent Session
+        ├── Turn
+        │   └── Attempt
+        ├── Session Events
+        ├── Artifact
+        └── Schedule / Business State
+~~~
 
 关键原则：
 
-- Project 本身就是一个项目看板，不存在独立 Board 领域实体。
-- Card 分为 Discussion、Todo、Ongoing；Discussion 不是 Todo 的前置状态。
-- Discussion 可以派生多个 Todo / Ongoing；Todo / Ongoing 不继续派生 Card。
-- “生成任务”只有一个入口，AI 根据有限工作或长期/周期工作自动判断 Todo / Ongoing。
-- Trigger 是一次新的工作方向，也是天然的待执行队列项。
-- 创建 AgentRun 即表示成功 Claim 一个 Trigger，不单独建立 Claims 表。
-- Run 只保存执行状态；旧 Run 的原始模型消息、工具参数和工具结果不会自动传给后续 Run。
-- Tool Result 是原材料，Finding / Result 才是任务记忆。
-- 用户可选择把新方向“加入队列”或“立即转向”。
-- Ongoing Card 可按日、周、月自动产生 Trigger。
-- 内置 Agent 与外部 MCP Agent 共用同一套领域状态机。
-- 最终 Review / Done 保留人类控制。
+- Project 本身就是项目看板，不建立独立 Board 领域实体。
+- Card 分为 Discussion / Todo / Ongoing。
+- 一个 Card 对应一个持久 Agent Session。
+- Card ID 直接作为 ADK Session ID；Workspace ID 作为 ADK user_id。
+- 同一 Card 后续追问可以使用前面 Turn 的 tool call / tool response。
+- 长历史通过 Context Compaction、History Retrieval 与 Artifact 管理，而不是跨 Turn 丢弃工具证据。
+- Turn 是一次新工作输入；Attempt 是一次真实 invocation。
+- 排队 Turn 只有真正开始执行时才进入 Agent Session。
+- Todo 保持 Todo → Working → Review → Done；最终 Done 由 Human 控制。
+- Ongoing 的每次 Schedule 进入同一 Card Session。
+- Discussion 派生 Todo / Ongoing 时创建新 Session，并通过 Handoff Package 传递必要知识。
+- Google ADK Go v2 是 Built-in Agent Runtime 基础；CycleDock 保留业务调度、认证、Model Routes、NexusDock 与 PostgreSQL ownership。
 
 ## 文档
 
-- [产品定义](docs/product.md)
-- [系统架构](docs/architecture.md)
-- [数据模型](docs/data-model.md)
-- [Agent Runtime 与上下文](docs/agent-runtime.md)
-- [Ongoing 调度](docs/scheduling.md)
-- [MCP 设计](docs/mcp.md)
-- [认证与租户](docs/auth.md)
-- [Human Web HTTP API](docs/http-api.md)
-- [AI Connect](docs/ai-connect.md)
-- [Self-host 安装](docs/install.md)
-- [升级指南](docs/upgrade.md)
-- [技术栈](docs/stack.md)
-- [全新前端产品与实现基线](docs/frontend-rebuild.md)
-- [开发路线](docs/development.md)
-- [旧项目参考边界](docs/legacy-reference.md)
-
-## 旧项目
-
-本仓库是全新一代 CycleDock，从零开始设计，不继承旧仓库 migration 和领域结构。
-
-- 旧 CycleDock：<https://github.com/uvwt/CycleDock-old>
-- ChatDock：<https://github.com/uvwt/chatdock>
-
-旧项目只作为经过验证的实现参考。新代码应按当前文档重新判断职责和模型，不能直接把旧结构整体复制进来。
+- Session-first / ADK 架构决策：docs/session-first-adk.md
+- 产品定义：docs/product.md
+- 系统架构：docs/architecture.md
+- 数据模型：docs/data-model.md
+- Agent Runtime 与上下文：docs/agent-runtime.md
+- Ongoing 调度：docs/scheduling.md
+- MCP 设计：docs/mcp.md
+- 认证与租户：docs/auth.md
+- Human Web HTTP API：docs/http-api.md
+- AI Connect：docs/ai-connect.md
+- Self-host 安装：docs/install.md
+- 技术栈：docs/stack.md
+- 开发路线：docs/development.md
 
 ## 当前阶段
 
-Phase 0 Foundation、Phase 1 Work Core、Phase 2 Human Web、Phase 3 External MCP、Phase 4 Built-in Cycle Agent 与 Phase 5 Product Polish / Release Preparation 已形成可运行基线：
+CycleDock 尚未首次公开发布，因此当前 Session-first 重构不迁移旧 DEV Runtime 数据。
 
-- 干净的 `000001_initial.sql` 与 PostgreSQL / pgx / sqlc / Goose 数据层。
-- Trigger Claim、current Run、enqueue / interrupt / supersede、waiting_human、heartbeat / lease。
-- Ongoing Schedule / Check-in / Health 与 Human-only Done。
-- 真实 PostgreSQL 并发 integration tests。
-- Go + React 单镜像、Docker Compose migration 流程与 CI 骨架。
-- Hosted NexusDock OIDC / Self-hosted Administrator fallback 与 opaque Web Session。
-- Project Board、Card Detail、Timeline、Queue、Human Review/Done 与 Ongoing Schedule Human Web。
-- 标准 Remote Streamable HTTP MCP、OAuth metadata / DCR / S256 PKCE / refresh rotation。
-- Workspace-scoped MCP tools、原子 Claim、Progress/Finding/Check-in/Finish/Confirm 与官方 CycleDock Skill。
-- Workspace-scoped Built-in Cycle Agent settings、Dispatcher、Runner 与 Context Builder。
-- OpenAI-compatible Model Client 与 outbound MCP Client；模型/tool raw trace 只存在于当前 Run 内存。
-- Built-in Agent 支持 OpenAI-compatible API Key、ChatGPT Plan（Sign in with ChatGPT + Responses API）与 Grok Subscription（xAI OAuth + inference proxy）三类模型接入。
-- Model API Key / MCP Bearer Token 继续只保存环境变量名；ChatGPT / Grok OAuth 凭据与普通 Settings 分离，并使用部署主密钥加密后持久化。
-- expired lease 恢复、Human retry / cancel 与 stale Run 防回写采用统一 Trigger / Run 生命周期。
-- Provider / MCP connection test 只做当前 Provider 的最小模型请求与 MCP initialize + ListTools，不执行 MCP Tool。
-- Card Detail 展示 current Run、pending queue 与终态 work history，并支持 Human cancel / retry。
-- 长历史上下文采用 bounded recent Timeline + durable historical facts + 派生 Comment/Progress compaction；原 Timeline 始终是审计事实源。
-- Web 已重新按 `docs/frontend-rebuild.md` 从零实现 Chat / Board / 独立 Card / Settings，支持初版 SSE 消息流与响应式布局。当前中文为默认语言；完整中英 i18n、正式视觉回归和生产环境 SSE 验收仍待后续完成。
-- CI 同时执行 PostgreSQL integration、核心 race、Web lint/build/audit 与 Linux Docker Compose smoke。
+当前开发分支已经完成统一 Session-first Runtime：Human Web、Schedule、Built-in ADK 与 OAuth MCP 全部使用同一 Card → Turn → Attempt 模型；长 Session 的 Tail Retention Context Compaction、PostgreSQL Artifact、大 MCP 结果外置、Artifact 按需读取和 Session history retrieval 也已完成。
+
+Phase F cleanup 已删除旧执行 Runtime 与旧 Context Builder，并把数据库重整为单一首次发布 baseline：schema 中只保留 Turn / Attempt，`events` 不再携带旧执行外键。当前进入最终 release verification，不保留旧 Runtime API、MCP 工具或数据库兼容层。

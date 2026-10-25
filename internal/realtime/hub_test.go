@@ -15,10 +15,10 @@ func TestHubScopesSubscribersAndRestoresSnapshot(t *testing.T) {
 	}
 	subB, _ := hub.Subscribe(cardB)
 	defer subB.Close()
-	hub.Publish(cardA, Event{Type: "run.started", RunID: "r1", StartedAt: "2026-10-21T00:00:00Z"})
-	hub.Publish(cardA, Event{Type: "run.text.delta", RunID: "r1", Text: "Hello "})
-	hub.Publish(cardA, Event{Type: "run.text.delta", RunID: "r1", Text: "world"})
-	if got := <-subA.Events; got.Type != "run.started" {
+	hub.Publish(cardA, Event{Type: "attempt.started", AttemptID: "r1", StartedAt: "2026-10-21T00:00:00Z"})
+	hub.Publish(cardA, Event{Type: "attempt.text.delta", AttemptID: "r1", Text: "Hello "})
+	hub.Publish(cardA, Event{Type: "attempt.text.delta", AttemptID: "r1", Text: "world"})
+	if got := <-subA.Events; got.Type != "attempt.started" {
 		t.Fatalf("got %+v", got)
 	}
 	if got := <-subA.Events; got.Text != "Hello " {
@@ -34,10 +34,10 @@ func TestHubScopesSubscribersAndRestoresSnapshot(t *testing.T) {
 	}
 	restored, live := hub.Subscribe(cardA)
 	defer restored.Close()
-	if live == nil || live.Text != "Hello world" || live.RunID != "r1" {
+	if live == nil || live.Text != "Hello world" || live.AttemptID != "r1" {
 		t.Fatalf("snapshot = %+v", live)
 	}
-	hub.Publish(cardA, Event{Type: "run.finished", RunID: "r1"})
+	hub.Publish(cardA, Event{Type: "attempt.finished", AttemptID: "r1"})
 	after, liveAfter := hub.Subscribe(cardA)
 	defer after.Close()
 	if liveAfter != nil {
@@ -48,16 +48,16 @@ func TestHubScopesSubscribersAndRestoresSnapshot(t *testing.T) {
 func TestHubResetClearsOnlyCurrentRunText(t *testing.T) {
 	hub := NewHub()
 	card := uuid.New()
-	hub.Publish(card, Event{Type: "run.started", RunID: "current"})
-	hub.Publish(card, Event{Type: "run.text.delta", RunID: "current", Text: "partial"})
-	hub.Publish(card, Event{Type: "run.text.reset", RunID: "old"})
+	hub.Publish(card, Event{Type: "attempt.started", AttemptID: "current"})
+	hub.Publish(card, Event{Type: "attempt.text.delta", AttemptID: "current", Text: "partial"})
+	hub.Publish(card, Event{Type: "attempt.text.reset", AttemptID: "old"})
 	_, beforeReset := hub.Subscribe(card)
 	if beforeReset == nil || beforeReset.Text != "partial" {
 		t.Fatalf("stale reset changed current text: %+v", beforeReset)
 	}
-	hub.Publish(card, Event{Type: "run.text.reset", RunID: "current"})
+	hub.Publish(card, Event{Type: "attempt.text.reset", AttemptID: "current"})
 	_, afterReset := hub.Subscribe(card)
-	if afterReset == nil || afterReset.Text != "" || afterReset.RunID != "current" {
+	if afterReset == nil || afterReset.Text != "" || afterReset.AttemptID != "current" {
 		t.Fatalf("current reset snapshot=%+v", afterReset)
 	}
 }

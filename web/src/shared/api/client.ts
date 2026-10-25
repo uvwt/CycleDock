@@ -111,29 +111,28 @@ export const api = {
     dispatch_mode: "enqueue" | "interrupt",
     idempotencyKey?: string,
   ) =>
-    request<{ event_id: string; trigger_id: string }>(
+    request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
       "POST",
       { content, dispatch_mode },
       idempotencyKey || true,
     ),
   reply: (id: string, content: string) =>
-    request<{ event_id: string; trigger_id: string }>(
+    request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
       "POST",
       { content },
       true,
     ),
-  cancelRun: (id: string, runID: string) =>
-    request<void>(`/cards/${id}/runs/${runID}/cancel`, "POST", {}),
-  cancelTrigger: (id: string, trigger: string) =>
-    request<void>(`/cards/${id}/triggers/${trigger}/cancel`, "POST", {}),
-  retry: (id: string, trigger: string) =>
-    request<{ trigger_id: string }>(
-      `/cards/${id}/triggers/${trigger}/retry`,
+  cancelAttempt: (id: string, attemptID: string) =>
+    request<void>(`/cards/${id}/attempts/${attemptID}/cancel`, "POST", {}),
+  cancelTurn: (id: string, turnID: string) =>
+    request<void>(`/cards/${id}/turns/${turnID}/cancel`, "POST", {}),
+  retryAttempt: (id: string, attemptID: string) =>
+    request<{ attempt_id: string }>(
+      `/cards/${id}/attempts/${attemptID}/retry`,
       "POST",
       {},
-      true,
     ),
   createSchedule: (id: string, input: ScheduleInput) =>
     request<Schedule>(`/cards/${id}/schedules`, "POST", input),

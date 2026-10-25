@@ -46,7 +46,7 @@ h2{margin:0;font-size:19px}h3{margin:0;font-size:14px}.prompt,.endpoint{display:
 <section class="card">
 <h2>当前工具</h2>
 <div class="tools">
-<span class="tool">list_projects</span><span class="tool">list_cards</span><span class="tool">get_card</span><span class="tool">create_discussion</span><span class="tool">generate_work</span><span class="tool">update_card</span><span class="tool">move_card</span><span class="tool">add_comment</span><span class="tool">create_followup</span><span class="tool">claim_work</span><span class="tool">heartbeat_run</span><span class="tool">report_progress</span><span class="tool">add_finding</span><span class="tool">check_in</span><span class="tool">finish_run</span><span class="tool">confirm_card</span>
+<span class="tool">list_projects</span><span class="tool">list_cards</span><span class="tool">get_card</span><span class="tool">create_discussion</span><span class="tool">generate_work</span><span class="tool">update_card</span><span class="tool">move_card</span><span class="tool">add_comment</span><span class="tool">create_turn</span><span class="tool">claim_attempt</span><span class="tool">heartbeat_attempt</span><span class="tool">report_progress</span><span class="tool">add_finding</span><span class="tool">check_in</span><span class="tool">finish_attempt</span><span class="tool">confirm_card</span>
 </div>
 </section>
 
@@ -54,7 +54,7 @@ h2{margin:0;font-size:19px}h3{margin:0;font-size:14px}.prompt,.endpoint{display:
 <h2>重要语义</h2>
 <ul>
 <li>Project 本身就是看板，没有独立 Board。</li>
-<li><code>add_comment</code> 只增加长期上下文；只有 <code>create_followup</code> 才创建新 Trigger。</li>
+<li><code>add_comment</code> 只增加长期上下文；只有 <code>create_turn</code> 才创建新的 queued Turn，执行时再用 <code>claim_attempt</code>。</li>
 <li>Claim 是原子的；一个 Card 同时最多一个 current Run。</li>
 <li>外部 MCP 不提供 interrupt。立即转向属于 Human Web 决策。</li>
 <li>Finding / Result / Check-in 是长期事实；不要上传 raw tool trace 或 chain-of-thought。</li>

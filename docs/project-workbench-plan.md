@@ -1,5 +1,8 @@
 # CycleDock 项目工作台优化方案与实施交接
 
+> 历史说明：本文是 2026-10-21 的前端方案存档，其中“不要增加 Session / Message 模型”和 Trigger / Run 术语已被 2026-10-25 的 Session-first / ADK 决策替代。前端布局仍可参考，Agent Runtime 领域规则不得再以本文为准。
+
+
 > 状态：待实现、待验收的设计方案，不代表当前产品已具备这些能力。
 > 整理日期：2026-10-21。代码审查基线：`feat/chat-workbench-20261021` / `9e3888a`。
 > 历史版本说明：本文第 1–7 节记录了 2026-10-21 早期统一工作台方案；当天后续确定的双模式信息架构见第 8 节，若冲突，以第 8 节为准。
@@ -154,7 +157,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 不把 `web/` 简单整体回退到 `092f521`。后端、API 契约及安全边界保持当前 `main`：Workspace membership/switch、Trigger lineage、OAuth、SSE、Human-only Done、enqueue / interrupt / waiting_human 等全部保留。
 - Card 详情基于 `092f521` 页面结构重新开发。Timeline 继续是对话式：Human 消息在右，Agent / Result 在左，系统事件居中；相邻持久事件间隔严格超过 2 小时才显示时间分隔。
 - SSE 继续使用 Card stream：`run.started` / `run.stage` / `run.text.delta` / `run.text.snapshot` / terminal / `event.created`。SSE 只表示暂态和低延迟输出，REST Timeline 是最终事实源。
-- Queue / current Run / retry / cancel 通过服务端稳定的 `source_event_id / trigger_id / retry_of_trigger_id` 关联到原始 Human Comment；无稳定来源的 Schedule/System Trigger 独立展示，不允许按文字或时间猜测。
+- pending Turn / current Attempt / retry / cancel 通过服务端稳定的 `source_event_id / turn_id / retry_of_attempt_id` 关联到原始 Human Comment；无稳定来源的 Schedule/System Turn 独立展示，不允许按文字或时间猜测。
 - 新 Discussion 首页保留 `092f521` 的收起 / 聚焦展开两态输入框，但补回可靠首轮语义：Card 创建成功后立即保存原始草稿、Card ID 与幂等键；首条 Comment 失败只允许重试同一 Card。
 - Todo/Ongoing 继续使用对话式工作详情；取消右侧常驻任务信息栏，标题旁保留紧凑状态切换器，信息按钮固定在标题栏最右侧。桌面左侧新增 Work 二级列表，视觉与 DiscussionSidebar 共用同一基础组件，但内容按 Todo / Working / Review / Done / Ongoing 折叠分组；默认只展开当前任务所在分组。移动端从左抽屉打开同一 Work 列表。任务目标、来源 Discussion、Ongoing Health/Schedule 和显式编辑继续保留在信息浮层中；Human 手工 Todo 与 Human-only Done 规则不变。
 - Workspace membership/switch API 与服务端 Session scope 继续保留，但 Shell 不再暴露 Workspace 快捷切换侧栏；账户与当前 Workspace 信息统一进入 Settings → Account。若未来重新提供 Workspace 切换入口，仍必须先清理旧租户 Query cache 再写入新 Identity。所有真实租户权限继续由服务端 Session 与数据库约束保证。

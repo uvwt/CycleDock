@@ -97,8 +97,18 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 	var detail cardDetailResponse
 	decodeRecorder(t, detailRecorder, &detail)
-	if len(detail.Timeline) != 1 || len(detail.Queue) != 1 || detail.CurrentRun != nil {
-		t.Fatalf("idempotent pending direction mismatch: timeline=%d queue=%d run=%+v", len(detail.Timeline), len(detail.Queue), detail.CurrentRun)
+	if len(detail.Timeline) != 1 || len(detail.PendingTurns) != 1 || detail.CurrentAttempt != nil {
+		t.Fatalf("idempotent pending direction mismatch: timeline=%d pending=%d attempt=%+v", len(detail.Timeline), len(detail.PendingTurns), detail.CurrentAttempt)
+	}
+	if err := dataStore.CancelPendingTurn(
+		context.Background(),
+		workspaceID,
+		uuid.MustParse(card.ID),
+		uuid.MustParse(detail.PendingTurns[0].ID),
+		humanSourceID,
+		"test fixture cleanup",
+	); err != nil {
+		t.Fatalf("cancel earlier pending turn: %v", err)
 	}
 
 	todoRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/todos", map[string]any{
@@ -132,50 +142,69 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	runCardRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/discussions", map[string]any{}, cookie, nil)
 	var runCard cardResponse
 	decodeRecorder(t, runCardRecorder, &runCard)
+	runCardID := uuid.MustParse(runCard.ID)
 	agent, err := dataStore.CreateSource(context.Background(), workspaceID, domain.SourceKindCycleAgent, "Agent")
 	if err != nil {
 		t.Fatalf("create agent source: %v", err)
 	}
-	initial, err := dataStore.SubmitComment(context.Background(), store.SubmitCommentParams{
-		WorkspaceID: workspaceID, CardID: uuid.MustParse(runCard.ID),
-		AuthorSourceID: humanSourceID, RunnerSourceID: &agent.ID,
-		Content: "Original direction", IdempotencyKey: "run-initial",
-		DispatchMode: domain.DispatchModeEnqueue,
-	})
-	if err != nil || initial.RunID == nil {
-		t.Fatalf("create initial run: result=%+v err=%v", initial, err)
+	initialHTTP := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/comments", map[string]any{
+		"content": "Original direction", "dispatch_mode": "enqueue",
+	}, cookie, map[string]string{"Idempotency-Key": "attempt-initial"})
+	if initialHTTP.Code != http.StatusCreated {
+		t.Fatalf("create initial turn: %d %s", initialHTTP.Code, initialHTTP.Body.String())
+	}
+	initialClaim, err := dataStore.ClaimNextTurnAttempt(
+		context.Background(), workspaceID, agent.ID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim initial attempt: %v", err)
 	}
 
 	interrupt := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/comments", map[string]any{
 		"content": "Turn now", "dispatch_mode": "interrupt",
-	}, cookie, map[string]string{"Idempotency-Key": "run-interrupt"})
+	}, cookie, map[string]string{"Idempotency-Key": "attempt-interrupt"})
 	if interrupt.Code != http.StatusCreated {
 		t.Fatalf("interrupt: %d %s", interrupt.Code, interrupt.Body.String())
 	}
-	current, err := dataStore.CurrentRun(context.Background(), workspaceID, uuid.MustParse(runCard.ID))
-	if err != nil || current == nil || current.ID == *initial.RunID || current.RunnerSourceID != agent.ID {
-		t.Fatalf("interrupt did not inherit current runner: run=%+v err=%v", current, err)
+	oldAttempt, err := dataStore.GetAttempt(context.Background(), workspaceID, initialClaim.Attempt.ID)
+	if err != nil || oldAttempt.Status != domain.AttemptStatusSuperseded {
+		t.Fatalf("interrupt did not supersede current attempt: attempt=%+v err=%v", oldAttempt, err)
 	}
-	if err := dataStore.StartRun(context.Background(), workspaceID, current.ID, agent.ID, time.Minute); err != nil {
-		t.Fatalf("start interrupted run: %v", err)
+	current, err := dataStore.ClaimNextTurnAttempt(
+		context.Background(), workspaceID, agent.ID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim interrupted turn: %v", err)
 	}
-	if err := dataStore.WaitForHuman(context.Background(), workspaceID, current.ID, agent.ID, "clarification", "Need target"); err != nil {
+	if current.Attempt.ID == initialClaim.Attempt.ID || current.Attempt.RunnerSourceID != agent.ID {
+		t.Fatalf("interrupt claim=%+v initial=%+v", current, initialClaim)
+	}
+	if err := dataStore.WaitAttemptForHuman(
+		context.Background(), workspaceID, runCardID, current.Attempt.ID, time.Now().UTC(),
+	); err != nil {
 		t.Fatalf("wait for human: %v", err)
 	}
+
 	reply := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/reply", map[string]any{
 		"content": "Use target B",
-	}, cookie, map[string]string{"Idempotency-Key": "run-reply"})
+	}, cookie, map[string]string{"Idempotency-Key": "attempt-reply"})
 	if reply.Code != http.StatusCreated {
 		t.Fatalf("reply and continue: %d %s", reply.Code, reply.Body.String())
 	}
 	var replyResult commentResultResponse
 	decodeRecorder(t, reply, &replyResult)
-	if replyResult.EventID == "" || replyResult.TriggerID == "" || replyResult.RunID == "" {
-		t.Fatalf("reply response does not expose snake_case IDs: %+v body=%s", replyResult, reply.Body.String())
+	if replyResult.EventID == "" || replyResult.TurnID == "" {
+		t.Fatalf("reply response does not expose session IDs: %+v body=%s", replyResult, reply.Body.String())
 	}
-	continued, err := dataStore.CurrentRun(context.Background(), workspaceID, uuid.MustParse(runCard.ID))
-	if err != nil || continued == nil || continued.ID == current.ID || continued.RunnerSourceID != agent.ID {
-		t.Fatalf("reply did not continue with runner: run=%+v err=%v", continued, err)
+	waitingAttempt, err := dataStore.GetAttempt(context.Background(), workspaceID, current.Attempt.ID)
+	if err != nil || waitingAttempt.Status != domain.AttemptStatusSuperseded {
+		t.Fatalf("reply did not supersede waiting attempt: attempt=%+v err=%v", waitingAttempt, err)
+	}
+	continued, err := dataStore.ClaimNextTurnAttempt(
+		context.Background(), workspaceID, agent.ID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil || continued.Turn.ID.String() != replyResult.TurnID || continued.Attempt.RunnerSourceID != agent.ID {
+		t.Fatalf("reply did not continue as next turn: claim=%+v err=%v", continued, err)
 	}
 
 	ongoing, err := dataStore.CreateOngoingCard(
@@ -196,13 +225,13 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if scheduleData.NextTriggerAt.IsZero() || scheduleData.Timezone != "Asia/Shanghai" {
 		t.Fatalf("unexpected schedule: %+v", scheduleData)
 	}
-	if _, created, err := dataStore.ProcessDueSchedule(
+	if _, created, err := dataStore.ProcessDueScheduleTurn(
 		context.Background(),
 		workspaceID,
 		uuid.MustParse(scheduleData.ID),
 		scheduleData.NextTriggerAt.Add(time.Second),
 	); err != nil || !created {
-		t.Fatalf("create scheduled trigger history: created=%v err=%v", created, err)
+		t.Fatalf("create scheduled turn history: created=%v err=%v", created, err)
 	}
 	projectSchedules := doJSON(
 		t, handler, http.MethodGet,
@@ -234,14 +263,14 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	var sawScheduledQueue bool
 	for _, item := range activityItems {
 		if item.CardID == ongoing.ID.String() &&
-			item.ActivityType == "trigger" &&
+			item.ActivityType == "turn" &&
 			item.Status == "queued" {
 			sawScheduledQueue = true
 			break
 		}
 	}
 	if !sawScheduledQueue {
-		t.Fatalf("scheduled trigger missing from project activity: %+v", activityItems)
+		t.Fatalf("scheduled turn missing from project activity: %+v", activityItems)
 	}
 	badActivityLimit := doJSON(
 		t, handler, http.MethodGet,

@@ -31,11 +31,11 @@
 
 ## 周期工作建议
 
-CycleDock 自带 Ongoing Schedule，它只创建 scheduled_followup Trigger。
+CycleDock 自带 Ongoing Schedule，它只创建 Schedule Turn，不直接执行 Agent。
 
 如果当前 AI 客户端还要使用自己的定时任务：
 
-- 先读取 Card 与 pending queue。
-- 不要重复创建已经存在的 follow-up。
+- 先通过 `get_card` 读取 Card 与 `pending_turns / current_attempt`。
+- 不要重复创建已经存在的 Turn。
 - 周期巡检完成后用 `check_in` 写 Health 事实。
-- 真正需要另一个独立工作方向时再使用 `create_followup`。
+- 真正需要另一个独立工作方向时使用 `create_turn`；要执行某个 Card 的 pending Turn 时再调用 `claim_attempt`。

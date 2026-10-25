@@ -46,13 +46,3 @@ WHERE workspace_id = $1
   AND event_type = 'checkin'
 ORDER BY sequence DESC
 LIMIT 1;
-
--- name: ListPendingTriggers :many
-SELECT t.*
-FROM triggers t
-LEFT JOIN agent_runs r ON r.trigger_id = t.id
-WHERE t.workspace_id = $1
-  AND t.card_id = $2
-  AND t.cancelled_at IS NULL
-  AND r.id IS NULL
-ORDER BY t.sequence;

@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/session"
+
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
@@ -23,6 +26,8 @@ type DispatcherConfig struct {
 	MaintenanceEvery time.Duration
 	MaxConcurrent    int
 	LeaseDuration    time.Duration
+	SessionService   session.Service
+	ArtifactService  artifact.Service
 	ModelAuth        *modelauth.Service
 	NexusDock        *nexusdock.Service
 	Live             *realtime.Hub
@@ -66,6 +71,8 @@ func NewDispatcher(
 	runner := NewRunner(dataStore, model, logger, RunnerConfig{
 		HeartbeatInterval: config.LeaseDuration / 4,
 		LeaseDuration:     config.LeaseDuration,
+		SessionService:    config.SessionService,
+		ArtifactService:   config.ArtifactService,
 		ModelAuth:         config.ModelAuth,
 		NexusDock:         config.NexusDock,
 		Live:              config.Live,
@@ -106,7 +113,6 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			workers.Wait()
-			d.runner.waitBackground()
 			return nil
 		case <-maintenance.C:
 			if err := d.maintain(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -139,11 +145,11 @@ func (d *Dispatcher) maintain(ctx context.Context) error {
 	}
 	now := time.Now().UTC()
 	for _, workspaceID := range workspaceIDs {
-		if _, err := d.store.ProcessDueSchedules(ctx, workspaceID, now, 100); err != nil {
-			return fmt.Errorf("process schedules for workspace %s: %w", workspaceID, err)
+		if _, err := d.store.ProcessDueScheduleTurns(ctx, workspaceID, now, 100); err != nil {
+			return fmt.Errorf("process schedule turns for workspace %s: %w", workspaceID, err)
 		}
-		if _, err := d.store.ExpireAndRecoverBuiltInLeases(ctx, workspaceID, now, 100); err != nil {
-			return fmt.Errorf("recover expired leases for workspace %s: %w", workspaceID, err)
+		if _, err := d.store.ExpireAndRecoverBuiltInAttempts(ctx, workspaceID, now, 100); err != nil {
+			return fmt.Errorf("recover expired attempts for workspace %s: %w", workspaceID, err)
 		}
 	}
 	return nil
@@ -155,56 +161,86 @@ func (d *Dispatcher) dispatchAvailable(
 	workers *sync.WaitGroup,
 ) {
 	for len(slots) < cap(slots) && ctx.Err() == nil {
-		claim, err := d.store.ClaimNextBuiltInRun(ctx, time.Now().UTC(), d.leaseDuration)
+		claim, err := d.claimNextAttempt(ctx)
 		if errors.Is(err, domain.ErrNotFound) {
 			return
 		}
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
-				d.logger.Error("Cycle Agent claim failed", "error", err)
+				d.logger.Error("Cycle Agent attempt claim failed", "error", err)
 			}
 			return
 		}
 
 		slots <- struct{}{}
 		workers.Add(1)
-		go func(claim store.BuiltInRunClaim) {
+		go func(claim store.AttemptClaim) {
 			defer func() {
 				<-slots
 				workers.Done()
-				// Run 结束后马上看下一条，队列里的 Trigger 不用等 ticker。
 				d.Wake()
 			}()
-			d.runClaim(ctx, claim)
+			d.runAttempt(ctx, claim)
 		}(*claim)
 	}
 }
 
-func (d *Dispatcher) runClaim(ctx context.Context, claim store.BuiltInRunClaim) {
-	err := d.runner.Run(ctx, claim)
-	if err == nil || errors.Is(err, domain.ErrRunNotCurrent) || errors.Is(err, context.Canceled) {
+func (d *Dispatcher) claimNextAttempt(ctx context.Context) (*store.AttemptClaim, error) {
+	workspaceIDs, err := d.store.ListWorkspaceIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, workspaceID := range workspaceIDs {
+		settings, err := d.store.GetAgentSettings(ctx, workspaceID)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !runnableAgentSettings(settings) {
+			continue
+		}
+		claim, err := d.store.ClaimNextTurnAttempt(
+			ctx,
+			workspaceID,
+			settings.SourceID,
+			time.Now().UTC(),
+			d.leaseDuration,
+		)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return claim, nil
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (d *Dispatcher) runAttempt(ctx context.Context, claim store.AttemptClaim) {
+	err := d.runner.RunAttempt(ctx, claim)
+	if err == nil ||
+		errors.Is(err, domain.ErrAttemptNotCurrent) ||
+		errors.Is(err, context.Canceled) {
 		return
 	}
-	d.logger.Error(
-		"Cycle Agent run failed",
-		"workspace_id", claim.WorkspaceID,
-		"card_id", claim.CardID,
-		"run_id", claim.RunID,
-		"summary", publicRunError(err),
-	)
 	summary := publicRunError(err)
-	if failErr := d.store.FailRun(
+	logADKAttemptFailure(d.logger, claim, err)
+	if failErr := d.store.FinishAttempt(
 		context.WithoutCancel(ctx),
-		claim.WorkspaceID,
-		claim.RunID,
-		claim.SourceID,
+		claim.Attempt.WorkspaceID,
+		claim.Attempt.CardID,
+		claim.Attempt.ID,
+		domain.AttemptStatusFailed,
 		summary,
-		"builtin-fail:"+claim.RunID.String(),
-	); failErr != nil && !errors.Is(failErr, domain.ErrRunNotCurrent) {
+		time.Now().UTC(),
+	); failErr != nil && !errors.Is(failErr, domain.ErrAttemptNotCurrent) {
 		d.logger.Error(
 			"Cycle Agent failure could not be persisted",
-			"workspace_id", claim.WorkspaceID,
-			"run_id", claim.RunID,
+			"workspace_id", claim.Attempt.WorkspaceID,
+			"attempt_id", claim.Attempt.ID,
 			"error", failErr,
 		)
 	}
@@ -221,15 +257,12 @@ func publicRunError(err error) string {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "Built-in Agent operation timed out."
 	case errors.Is(err, modelclient.ErrMalformedResponse),
-		errors.Is(err, modelclient.ErrEmptyResponse),
-		errors.Is(err, errMalformedModelResult):
+		errors.Is(err, modelclient.ErrEmptyResponse):
 		return "Model provider returned an invalid response."
 	case errors.Is(err, modelclient.ErrResponseTooLarge):
 		return "Model provider response exceeded the safety limit."
 	case errors.Is(err, errRunawayToolLoop):
 		return "Built-in Agent stopped an unusually long tool loop before completion."
-	case errors.Is(err, errRunContextBudgetExceeded):
-		return "Built-in Agent context could not be reduced enough to continue safely."
 	case strings.Contains(err.Error(), "environment variable"):
 		return "Built-in Agent secret environment variable is not configured."
 	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):

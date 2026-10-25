@@ -38,13 +38,14 @@ export type Card = {
   ongoing_state?: OngoingState;
   source_discussion_id?: string;
   health?: string;
-  current_run_status?: string;
+  current_attempt_status?: string;
   created_at: string;
   updated_at: string;
 };
 export type TimelineEvent = {
   id: string;
   sequence: number;
+  attempt_id?: string;
   type:
     | "comment"
     | "progress"
@@ -58,54 +59,33 @@ export type TimelineEvent = {
   actor_name: string;
   content: string;
   checkin_status?: string;
-  run_id?: string;
-  trigger_id?: string;
   created_at: string;
 };
-export type Run = {
+export type Attempt = {
   id: string;
-  trigger_id: string;
-  retry_of_trigger_id?: string;
+  turn_id: string;
   source_event_id?: string;
+  attempt_number: number;
+  reason: "initial" | "retry" | "recovery";
+  retry_of_attempt_id?: string;
   status: string;
   current_stage?: string;
   progress_summary?: string;
   result_summary?: string;
   error_summary?: string;
+  can_retry?: boolean;
   created_at: string;
   started_at?: string;
   finished_at?: string;
 };
-export type QueueItem = {
+export type PendingTurn = {
   id: string;
-  trigger_id: string;
   sequence: number;
-  cause: string;
+  source: "human" | "schedule" | "system";
   dispatch_mode: string;
-  cause_event_id?: string;
-  retry_of_trigger_id?: string;
   source_event_id?: string;
   content: string;
   created_at: string;
-};
-export type WorkItem = {
-  trigger_id: string;
-  cause_event_id?: string;
-  source_event_id?: string;
-  retry_of_trigger_id?: string;
-  run_id?: string;
-  status: string;
-  sequence: number;
-  content: string;
-  can_retry: boolean;
-  cause: string;
-  current_stage?: string;
-  progress_summary?: string;
-  result_summary?: string;
-  error_summary?: string;
-  cancel_reason?: string;
-  created_at: string;
-  finished_at?: string;
 };
 export type Schedule = {
   id: string;
@@ -124,15 +104,15 @@ export type ProjectSchedule = Schedule & {
   card_title: string;
   ongoing_state: OngoingState;
   last_triggered_at?: string;
-  last_run_status?: string;
-  last_run_finished_at?: string;
+  last_attempt_status?: string;
+  last_attempt_finished_at?: string;
 };
 export type ProjectActivity = {
   id: string;
   card_id: string;
   card_title: string;
   card_kind: CardKind;
-  activity_type: "event" | "run" | "trigger";
+  activity_type: "event" | "attempt" | "turn";
   status: string;
   content: string;
   actor_name?: string;
@@ -140,10 +120,10 @@ export type ProjectActivity = {
 };
 export type CardDetail = {
   card: Card;
-  current_run: Run | null;
+  current_attempt: Attempt | null;
   timeline: TimelineEvent[];
-  queue: QueueItem[];
-  work_history: WorkItem[];
+  pending_turns: PendingTurn[];
+  attempt_history: Attempt[];
   schedules: Schedule[];
   health: string;
   last_checkin: TimelineEvent | null;

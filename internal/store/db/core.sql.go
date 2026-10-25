@@ -225,7 +225,7 @@ func (q *Queries) GetSource(ctx context.Context, arg GetSourceParams) (Source, e
 }
 
 const latestCheckin = `-- name: LatestCheckin :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -249,7 +249,7 @@ func (q *Queries) LatestCheckin(ctx context.Context, arg LatestCheckinParams) (E
 		&i.CardID,
 		&i.EventType,
 		&i.ActorSourceID,
-		&i.RunID,
+		&i.AttemptID,
 		&i.Content,
 		&i.CheckinStatus,
 		&i.IdempotencyKey,
@@ -260,7 +260,7 @@ func (q *Queries) LatestCheckin(ctx context.Context, arg LatestCheckinParams) (E
 }
 
 const listCardEvents = `-- name: ListCardEvents :many
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, run_id, content, checkin_status, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
 FROM events
 WHERE workspace_id = $1 AND card_id = $2
 ORDER BY sequence
@@ -287,66 +287,12 @@ func (q *Queries) ListCardEvents(ctx context.Context, arg ListCardEventsParams) 
 			&i.CardID,
 			&i.EventType,
 			&i.ActorSourceID,
-			&i.RunID,
+			&i.AttemptID,
 			&i.Content,
 			&i.CheckinStatus,
 			&i.IdempotencyKey,
 			&i.RequestHash,
 			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPendingTriggers = `-- name: ListPendingTriggers :many
-SELECT t.id, t.sequence, t.workspace_id, t.card_id, t.cause, t.cause_event_id, t.created_by_source_id, t.dispatch_mode, t.schedule_id, t.scheduled_for, t.idempotency_key, t.request_hash, t.created_at, t.retry_of_trigger_id, t.cancelled_at, t.cancelled_by_source_id, t.cancel_reason
-FROM triggers t
-LEFT JOIN agent_runs r ON r.trigger_id = t.id
-WHERE t.workspace_id = $1
-  AND t.card_id = $2
-  AND t.cancelled_at IS NULL
-  AND r.id IS NULL
-ORDER BY t.sequence
-`
-
-type ListPendingTriggersParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-}
-
-func (q *Queries) ListPendingTriggers(ctx context.Context, arg ListPendingTriggersParams) ([]Trigger, error) {
-	rows, err := q.db.Query(ctx, listPendingTriggers, arg.WorkspaceID, arg.CardID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Trigger{}
-	for rows.Next() {
-		var i Trigger
-		if err := rows.Scan(
-			&i.ID,
-			&i.Sequence,
-			&i.WorkspaceID,
-			&i.CardID,
-			&i.Cause,
-			&i.CauseEventID,
-			&i.CreatedBySourceID,
-			&i.DispatchMode,
-			&i.ScheduleID,
-			&i.ScheduledFor,
-			&i.IdempotencyKey,
-			&i.RequestHash,
-			&i.CreatedAt,
-			&i.RetryOfTriggerID,
-			&i.CancelledAt,
-			&i.CancelledBySourceID,
-			&i.CancelReason,
 		); err != nil {
 			return nil, err
 		}

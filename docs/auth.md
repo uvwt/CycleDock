@@ -71,11 +71,11 @@ MCP tool input 不接受用于越权切换租户的 workspace_id / source_id。
 
 Human Web Event 使用 Human Source。
 
-内置 AgentRun 使用 tenant-scoped Cycle Agent Source。
+内置 Agent Attempt 使用 tenant-scoped Cycle Agent Source。
 
-外部 MCP Run 使用该 OAuth Client 对应的 oauth_client Source。
+外部 MCP Attempt 使用该 OAuth Client 对应的 oauth_client Source。`claim_attempt`、heartbeat、progress、finding、check-in、finish 都校验 Attempt 的 `runner_source_id`；知道另一个 Attempt UUID 也不能越权写入。
 
-这样 Timeline / Run history 可以知道“谁做的”，但不需要建立复杂 Agent 角色系统。
+这样 Timeline / Attempt history 可以知道“谁做的”，但不需要建立复杂 Agent 角色系统。
 
 ## 7. Secret
 
@@ -86,7 +86,7 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - DB 中如需持久化，必须与普通展示配置分离，并采用明确的 secret storage / encryption 方案。
 - 当前 Built-in Agent **不把 Model API Key / MCP Bearer Token 写入数据库**。
 - Workspace Agent settings 只保存 `api_key_env`；MCP connection 只保存 `bearer_token_env`。
-- Runner 在每个 Run 开始时从 CycleDock 进程环境解析对应变量；变量缺失时 Run 以脱敏摘要失败。
+- Built-in Runner 在每个 Attempt 开始时从 CycleDock 进程环境解析对应变量；变量缺失时 Attempt 以脱敏摘要失败。
 - 默认 Docker Compose 提供 `CYCLEDOCK_MODEL_API_KEY` 与 `CYCLEDOCK_MCP_TOKEN` 两个可直接转发的环境变量。更多连接需要由部署层显式把对应变量注入 app container。
 - 只有 Workspace owner 可以读取或修改 Agent settings / MCP connections。
 - Provider / MCP connection test 同样要求 Workspace owner；测试结果只返回分类状态，不回显 secret 或上游原始错误体。
