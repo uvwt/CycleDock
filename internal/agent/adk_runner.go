@@ -283,12 +283,9 @@ func (r *Runner) openADKMCPSessions(
 	}
 	mcpConnections := make([]mcpclient.Connection, 0, len(connections)+1)
 	for _, connection := range connections {
-		token, err := secretFromEnv(
-			connection.BearerTokenEnv,
-			"MCP bearer token for "+connection.Name,
-		)
+		token, err := r.store.MCPBearerToken(connection)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("decrypt MCP bearer token for %s: %w", connection.Name, err)
 		}
 		mcpConnections = append(mcpConnections, mcpclient.Connection{
 			Name:        connection.Name,

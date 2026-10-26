@@ -188,12 +188,16 @@ export const api = {
   removeMCP: (id: string) =>
     request<void>(`/agent/mcp-connections/${id}`, "DELETE"),
   testMCP: (
-    value: Pick<MCPInput, "name" | "url" | "bearer_token_env" | "timeout_ms">,
+    value: Pick<MCPInput, "name" | "url" | "bearer_token" | "timeout_ms" | "clear_bearer_token"> & {
+      connection_id?: string;
+    },
   ) =>
     request<TestResult>("/agent/mcp-test", "POST", {
       name: value.name,
       url: value.url,
-      bearer_token_env: value.bearer_token_env,
+      bearer_token: value.bearer_token,
+      connection_id: value.connection_id,
+      clear_bearer_token: value.clear_bearer_token,
       timeout_ms: value.timeout_ms,
     }),
 };

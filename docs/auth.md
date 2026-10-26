@@ -84,10 +84,11 @@ Model API Key、MCP token、OAuth client secret 等敏感信息：
 - 不通过普通 GET Settings 回显。
 - 日志中不得输出。
 - DB 中如需持久化，必须与普通展示配置分离，并采用明确的 secret storage / encryption 方案。
-- 当前 Built-in Agent **不把 Model API Key / MCP Bearer Token 写入数据库**。
-- Workspace Agent settings 只保存 `api_key_env`；MCP connection 只保存 `bearer_token_env`。
-- Built-in Runner 在每个 Attempt 开始时从 CycleDock 进程环境解析对应变量；变量缺失时 Attempt 以脱敏摘要失败。
-- 默认 Docker Compose 提供 `CYCLEDOCK_MODEL_API_KEY` 与 `CYCLEDOCK_MCP_TOKEN` 两个可直接转发的环境变量。更多连接需要由部署层显式把对应变量注入 app container。
+- Built-in Agent 的 Model API Key 仍采用 `api_key_env` 环境变量引用。
+- 普通 MCP 连接可由 Workspace owner 在前端填写真实 `bearer_token`；数据库只存储 `bearer_token_ciphertext`（AES-256-GCM），不保存明文或环境变量名称。
+- MCP 加密使用部署侧 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`（32 字节 base64 或 hex）；随机 nonce，AEAD AAD 绑定 Workspace ID 与连接 ID，密钥只在服务端。
+- MCP GET / POST / PUT 响应只有 `token_configured`，从不回显明文或密文。PUT 留空保留已配置 Token，`clear_bearer_token: true` 显式清除。
+- 保存与测试带 Token 连接必须有可用密钥；密钥丢失或密文损坏时安全失败。Test 可以使用新输入的 Token，或通过同 Workspace 的 `connection_id` 测试已保存的 Token。
 - 只有 Workspace owner 可以读取或修改 Agent settings / MCP connections。
 - Provider / MCP connection test 同样要求 Workspace owner；测试结果只返回分类状态，不回显 secret 或上游原始错误体。
 - MCP connection test 只做 initialize + ListTools，不执行任何有副作用 Tool。
@@ -169,4 +170,4 @@ Hosted 第一方连接由部署层配置：
 - `CYCLEDOCK_NEXUSDOCK_WEB_URL`
 - `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`
 
-这些是 Hosted 服务配置，不是终端用户需要填写的 MCP 设置。未配置时第一方 NexusDock 设备卡片不可用，Self-hosted 的普通 MCP 能力不受影响。
+这些是服务端部署配置，不是终端用户填写的 MCP 设置。未配置第一方 NexusDock 参数时设备卡片不可用；普通 MCP 无 Token 连接仍能使用，但要保存或调用带 Bearer Token 的普通 MCP，必须配置加密密钥。

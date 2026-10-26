@@ -74,7 +74,8 @@ docker compose logs --no-color app
 
 升级不会把 secret 移入普通 Session/Event 数据。请确认：
 
-- Settings 中的 `api_key_env / bearer_token_env` 名称仍对应部署环境。
+- 模型 `api_key_env` 名称仍对应部署环境。普通 MCP 已由 `bearer_token_env` 迁移到加密存储：旧记录只保存环境变量名，**不会自动读取原有环境变量并迁移密钥**；升级后请在前端重新填写真实 Bearer Token。
+- 配置并安全备份固定的 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`，否则无法保存或使用带 Token 的普通 MCP 连接。已配置第一方 NexusDock 时可沿用同一个部署密钥。
 - Provider Test 成功。
 - MCP Test 成功并显示预期工具数量。
 - waiting_human Attempt 仍保持 waiting，不会被 lease recovery 误过期。

@@ -41,14 +41,15 @@ CYCLEDOCK_OIDC_ISSUER=https://<issuer>
 CYCLEDOCK_OIDC_CLIENT_ID=<client-id>
 ```
 
-Built-in Cycle Agent 的 secret 值由进程环境注入。默认 Compose 已转发两个常用变量：
+Built-in Cycle Agent 的**模型 API Key** 仍由进程环境注入。默认 Compose 转发常用变量：
 
 ```env
 CYCLEDOCK_MODEL_API_KEY=<secret>
-CYCLEDOCK_MCP_TOKEN=<secret>
 ```
 
-Settings 页面保存的是环境变量**名称**，不是 secret 明文。更多 Provider / MCP connection 使用其他 env 名称时，需要在部署层显式把对应变量传入 app container。
+模型设置保存的是环境变量**名称**。普通 MCP 设置直接填写真实 Bearer Token，由后端加密写入 PostgreSQL，不再依赖单独注入 MCP Token 环境变量；无 Token 的 MCP 连接可以直接配置。
+
+若要保存带 Bearer Token 的普通 MCP 连接，在服务端配置固定的 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`（32 字节随机值，base64 或 hex），并确保所有副本使用同一密钥。该密钥仅由服务端读取，不能写入 PostgreSQL、前端或 Git。
 
 要允许 Workspace 连接 ChatGPT / Grok subscription account，还必须配置固定部署主密钥 CYCLEDOCK_MODEL_SECRET_KEY。该值应由 32-byte 随机数据做 base64 编码，例如可用 openssl rand -base64 32 生成。
 
@@ -119,7 +120,7 @@ Built-in Agent：
 
 至少备份 PostgreSQL volume / database。升级前必须先做可恢复备份。
 
-CycleDock 不把 Model API Key / MCP Bearer Token 明文存入数据库，因此同时要保留部署侧 secret 配置。
+CycleDock 不把 Model API Key / MCP Bearer Token 明文存入数据库。备份时须分别保留模型的环境配置与 MCP 加密主密钥；只恢复 PostgreSQL 而丢失密钥将无法使用原有 MCP Token。
 
 ChatGPT / Grok OAuth credential 是加密后的业务配置；备份数据库时还必须安全备份 CYCLEDOCK_MODEL_SECRET_KEY。
 
@@ -135,4 +136,4 @@ CYCLEDOCK_NEXUSDOCK_WEB_URL=https://www.nexusdock.co
 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<32-byte random key, base64>
 ```
 
-`CYCLEDOCK_CONNECTION_ENCRYPTION_KEY` 只用于服务端可逆加密第一方 OAuth token，不发送给浏览器或 NexusDock。变更该 key 前必须先完成密钥迁移；直接替换会让已有连接无法解密，需要重新授权。
+`CYCLEDOCK_CONNECTION_ENCRYPTION_KEY` 用于服务端加密第一方 OAuth token 和普通 MCP Bearer Token，不发送给浏览器或 NexusDock。变更该 key 前必须先完成密钥迁移；直接替换会让已有连接无法解密，需要重新授权或重新输入 Token。

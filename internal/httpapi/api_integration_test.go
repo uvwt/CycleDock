@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -383,6 +384,9 @@ func newHTTPIntegration(t *testing.T) (http.Handler, *pgxpool.Pool, *store.Store
 		t.Fatalf("create auth service: %v", err)
 	}
 	dataStore := store.New(pool)
+	if err := dataStore.ConfigureMCPEncryption(base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))); err != nil {
+		t.Fatalf("configure MCP encryption: %v", err)
+	}
 	return NewRouter(pool, dataStore, authService, Config{}), pool, dataStore
 }
 

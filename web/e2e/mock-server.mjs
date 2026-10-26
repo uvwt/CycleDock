@@ -245,7 +245,7 @@ let mcp = [
     name: "示例 MCP",
     url: "https://example.com/mcp",
     enabled: true,
-    bearer_token_env: "",
+    token_configured: false,
     timeout_ms: 30000,
   },
 ];
@@ -631,7 +631,8 @@ http
         if (route === "/agent/mcp-connections") {
           if (req.method === "GET") return data(res, mcp);
           if (req.method === "POST") {
-            const item = { id: "mcp-" + Date.now(), ...(await body(req)) };
+            const { bearer_token, ...settings } = await body(req);
+            const item = { id: "mcp-" + Date.now(), ...settings, token_configured: !!bearer_token };
             mcp.push(item);
             return data(res, item, 201);
           }
@@ -644,14 +645,17 @@ http
             return data(res, {}, 204);
           }
           if (req.method === "PUT") {
-            Object.assign(item, await body(req));
+            const { bearer_token, clear_bearer_token, ...settings } = await body(req);
+            Object.assign(item, settings);
+            if (bearer_token) item.token_configured = true;
+            if (clear_bearer_token) item.token_configured = false;
             return data(res, item);
           }
         }
         if (route === "/agent/mcp-test") {
           const input = await body(req);
           // Match Go decodeJSON's strict contract; passing MCP.enabled would fail in production.
-          const allowed = ["name", "url", "bearer_token_env", "timeout_ms"];
+          const allowed = ["name", "url", "bearer_token", "connection_id", "clear_bearer_token", "timeout_ms"];
           if (Object.keys(input).some((key) => !allowed.includes(key)))
             return data(
               res,

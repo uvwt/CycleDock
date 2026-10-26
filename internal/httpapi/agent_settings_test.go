@@ -27,7 +27,7 @@ func TestAgentSettingsRequireWorkspaceOwner(t *testing.T) {
 	}
 }
 
-func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
+func TestAgentSettingsHTTPAndMCPBearerToken(t *testing.T) {
 	handler, _, _ := newHTTPIntegration(t)
 	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"password": httpIntegrationPassword,
@@ -86,14 +86,14 @@ func TestAgentSettingsHTTPUsesEnvironmentReferencesOnly(t *testing.T) {
 
 	connection := doJSON(t, handler, http.MethodPost, "/api/v1/agent/mcp-connections", map[string]any{
 		"name": "tools", "url": "http://127.0.0.1:18091/mcp",
-		"bearer_token_env": "CYCLEDOCK_TEST_MCP_TOKEN", "enabled": true, "timeout_ms": 5000,
+		"bearer_token": "test-sensitive-bearer-token", "enabled": true, "timeout_ms": 5000,
 	}, cookie, nil)
 	if connection.Code != http.StatusCreated {
 		t.Fatalf("save MCP connection: %d %s", connection.Code, connection.Body.String())
 	}
 	var saved mcpConnectionResponse
 	decodeRecorder(t, connection, &saved)
-	if saved.BearerTokenEnv != "CYCLEDOCK_TEST_MCP_TOKEN" {
+	if !saved.TokenConfigured || strings.Contains(connection.Body.String(), "test-sensitive-bearer-token") {
 		t.Fatalf("connection=%+v", saved)
 	}
 }

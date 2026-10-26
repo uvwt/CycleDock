@@ -34,12 +34,12 @@ type modelRouteResponse struct {
 }
 
 type mcpConnectionResponse struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	BearerTokenEnv string `json:"bearer_token_env"`
-	Enabled        bool   `json:"enabled"`
-	TimeoutMS      int32  `json:"timeout_ms"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	URL             string `json:"url"`
+	TokenConfigured bool   `json:"token_configured"`
+	Enabled         bool   `json:"enabled"`
+	TimeoutMS       int32  `json:"timeout_ms"`
 }
 
 func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
@@ -177,10 +177,12 @@ func (api *API) testAgentMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Name           string `json:"name"`
-		URL            string `json:"url"`
-		BearerTokenEnv string `json:"bearer_token_env"`
-		TimeoutMS      int32  `json:"timeout_ms"`
+		Name             string `json:"name"`
+		URL              string `json:"url"`
+		ConnectionID     string `json:"connection_id"`
+		BearerToken      string `json:"bearer_token"`
+		ClearBearerToken bool   `json:"clear_bearer_token"`
+		TimeoutMS        int32  `json:"timeout_ms"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -192,11 +194,37 @@ func (api *API) testAgentMCP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_timeout", "timeout_ms must be between 1000 and 300000")
 		return
 	}
+	if request.ClearBearerToken && strings.TrimSpace(request.BearerToken) != "" {
+		writeError(w, http.StatusBadRequest, "invalid_bearer_token", "Cannot set and clear MCP bearer token together.")
+		return
+	}
+	if strings.TrimSpace(request.BearerToken) == "" && !request.ClearBearerToken && request.ConnectionID != "" {
+		connectionID, err := uuid.Parse(request.ConnectionID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_connection_id", "MCP connection id is invalid.")
+			return
+		}
+		connection, err := api.store.GetMCPConnection(r.Context(), identity.WorkspaceID, connectionID)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		// 已保存的密钥只能用于原连接地址，不能借测试接口转发到攻击者控制的 URL。
+		if len(connection.BearerTokenCiphertext) != 0 && strings.TrimSpace(request.URL) != connection.Url {
+			writeError(w, http.StatusBadRequest, "mcp_url_changed", "Enter a new bearer token to test a different MCP URL.")
+			return
+		}
+		request.BearerToken, err = api.store.MCPBearerToken(connection)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "mcp_token_unavailable", "Saved MCP bearer token cannot be decrypted.")
+			return
+		}
+	}
 	result := agentcheck.New().MCP(r.Context(), agentcheck.MCPInput{
-		Name:           request.Name,
-		URL:            request.URL,
-		BearerTokenEnv: request.BearerTokenEnv,
-		Timeout:        time.Duration(request.TimeoutMS) * time.Millisecond,
+		Name:        request.Name,
+		URL:         request.URL,
+		BearerToken: request.BearerToken,
+		Timeout:     time.Duration(request.TimeoutMS) * time.Millisecond,
 	})
 	writeJSON(w, http.StatusOK, result)
 }
@@ -236,11 +264,12 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	var request struct {
-		Name           string `json:"name"`
-		URL            string `json:"url"`
-		BearerTokenEnv string `json:"bearer_token_env"`
-		Enabled        *bool  `json:"enabled"`
-		TimeoutMS      int32  `json:"timeout_ms"`
+		Name             string `json:"name"`
+		URL              string `json:"url"`
+		BearerToken      string `json:"bearer_token"`
+		ClearBearerToken bool   `json:"clear_bearer_token"`
+		Enabled          *bool  `json:"enabled"`
+		TimeoutMS        int32  `json:"timeout_ms"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -251,7 +280,7 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 	}
 	connection, err := api.store.SaveMCPConnection(r.Context(), identity.WorkspaceID, store.MCPConnectionInput{
 		ID: connectionID, Name: strings.TrimSpace(request.Name), URL: strings.TrimSpace(request.URL),
-		BearerTokenEnv: strings.TrimSpace(request.BearerTokenEnv), Enabled: enabled,
+		BearerToken: request.BearerToken, ClearBearerToken: request.ClearBearerToken, Enabled: enabled,
 		TimeoutMS: request.TimeoutMS,
 	})
 	if err != nil {
@@ -311,7 +340,7 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 func mcpConnectionToResponse(connection db.WorkspaceMcpConnection) mcpConnectionResponse {
 	return mcpConnectionResponse{
 		ID: connection.ID.String(), Name: connection.Name, URL: connection.Url,
-		BearerTokenEnv: connection.BearerTokenEnv, Enabled: connection.Enabled,
+		TokenConfigured: len(connection.BearerTokenCiphertext) != 0, Enabled: connection.Enabled,
 		TimeoutMS: connection.TimeoutMs,
 	}
 }

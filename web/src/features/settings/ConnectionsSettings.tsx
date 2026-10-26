@@ -97,7 +97,7 @@ const blank: MCPInput = {
   name: "",
   url: "",
   enabled: true,
-  bearer_token_env: "",
+  bearer_token: "",
   timeout_ms: 30000,
 };
 export function MCPSettings() {
@@ -124,7 +124,8 @@ export function MCPSettings() {
     onError: (e) => toast.error(String(e)),
   });
   const test = useMutation({
-    mutationFn: (value: MCPInput) => api.testMCP(value),
+    mutationFn: (value: MCPInput) =>
+      api.testMCP({ ...value, connection_id: picked?.id }),
     onSuccess: (r) =>
       toast[r.ok ? "success" : "warning"](
         `${r.message} · ${r.tool_count ?? 0} tools · ${r.duration_ms} ms`,
@@ -134,7 +135,7 @@ export function MCPSettings() {
   return (
     <Section
       title="MCP 服务"
-      description="Agent 在执行开始时发现 MCP 工具；Bearer Token 从服务端环境变量获取。"
+      description="Agent 在执行开始时发现 MCP 工具；Bearer Token 由服务端加密保存。"
     >
       <div className="mb-5 flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">自定义 MCP 连接</p>
@@ -205,13 +206,21 @@ function MCPForm({
   onDelete,
   busy,
 }: {
-  initial: MCPInput;
+  initial: MCPInput | MCPConnection;
   onSave: (v: MCPInput) => void;
   onTest: (v: MCPInput) => void;
   onDelete?: () => void;
   busy: boolean;
 }) {
-  const [value, setValue] = useState<MCPInput>({ ...initial });
+  // 编辑连接只展示是否已配置，绝不向浏览器回传已保存的 Token。
+  const [value, setValue] = useState<MCPInput>({
+    name: initial.name,
+    url: initial.url,
+    enabled: initial.enabled,
+    timeout_ms: initial.timeout_ms,
+    bearer_token: "",
+  });
+  const configured = "token_configured" in initial && initial.token_configured;
   return (
     <div className="space-y-4">
       <Field label="连接名称">
@@ -227,14 +236,31 @@ function MCPForm({
           placeholder="https://mcp.example.com/mcp"
         />
       </Field>
-      <Field label="Bearer Token 环境变量名称">
+      <Field label="Bearer Token（可选）">
         <TextInput
-          value={value.bearer_token_env}
+          type="password"
+          autoComplete="new-password"
+          value={value.bearer_token}
           onChange={(e) =>
-            setValue({ ...value, bearer_token_env: e.target.value })
+            setValue({ ...value, bearer_token: e.target.value, clear_bearer_token: false })
           }
-          placeholder="可选，例如 CYCLEDOCK_MCP_TOKEN"
+          placeholder={configured ? "留空则保留现有 Token" : "粘贴真实 Bearer Token"}
         />
+        {configured && (
+          <p className="mt-1 text-xs text-slate-500">已保存 Token。留空不会覆盖；填写新值将替换。</p>
+        )}
+        {configured && (
+          <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={!!value.clear_bearer_token}
+              onChange={(e) =>
+                setValue({ ...value, clear_bearer_token: e.target.checked, bearer_token: "" })
+              }
+            />
+            清除已保存的 Token（改为匿名连接）
+          </label>
+        )}
       </Field>
       <Field label="请求超时（毫秒）">
         <TextInput

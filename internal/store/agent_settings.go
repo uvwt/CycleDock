@@ -207,12 +207,13 @@ func (s *Store) SaveAgentSettings(
 }
 
 type MCPConnectionInput struct {
-	ID             uuid.UUID
-	Name           string
-	URL            string
-	BearerTokenEnv string
-	Enabled        bool
-	TimeoutMS      int32
+	ID               uuid.UUID
+	Name             string
+	URL              string
+	BearerToken      string
+	ClearBearerToken bool
+	Enabled          bool
+	TimeoutMS        int32
 }
 
 func (s *Store) ListMCPConnections(ctx context.Context, workspaceID uuid.UUID) ([]db.WorkspaceMcpConnection, error) {
@@ -223,6 +224,16 @@ func (s *Store) ListEnabledMCPConnections(ctx context.Context, workspaceID uuid.
 	return s.queries.ListEnabledWorkspaceMCPConnections(ctx, workspaceID)
 }
 
+func (s *Store) GetMCPConnection(ctx context.Context, workspaceID, id uuid.UUID) (db.WorkspaceMcpConnection, error) {
+	connection, err := s.queries.GetWorkspaceMCPConnection(ctx, db.GetWorkspaceMCPConnectionParams{
+		WorkspaceID: workspaceID, ID: id,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkspaceMcpConnection{}, domain.ErrNotFound
+	}
+	return connection, err
+}
+
 func (s *Store) SaveMCPConnection(
 	ctx context.Context,
 	workspaceID uuid.UUID,
@@ -230,7 +241,7 @@ func (s *Store) SaveMCPConnection(
 ) (db.WorkspaceMcpConnection, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.URL = strings.TrimSpace(input.URL)
-	input.BearerTokenEnv = strings.TrimSpace(input.BearerTokenEnv)
+	input.BearerToken = strings.TrimSpace(input.BearerToken)
 	isCreate := input.ID == uuid.Nil
 	if isCreate {
 		input.ID = uuid.New()
@@ -241,8 +252,11 @@ func (s *Store) SaveMCPConnection(
 	if err := agentconfig.ValidateEndpoint(input.URL); err != nil {
 		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
-	if input.BearerTokenEnv != "" && !agentconfig.ValidEnvName(input.BearerTokenEnv) {
-		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: bearer_token_env must be an environment variable name", domain.ErrConflict)
+	if len(input.BearerToken) > 8192 || strings.ContainsAny(input.BearerToken, "\r\n") {
+		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: invalid MCP bearer token", domain.ErrConflict)
+	}
+	if input.BearerToken != "" && input.ClearBearerToken {
+		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: cannot set and clear MCP bearer token together", domain.ErrConflict)
 	}
 	if input.TimeoutMS == 0 {
 		input.TimeoutMS = 30000
@@ -258,18 +272,35 @@ func (s *Store) SaveMCPConnection(
 		return db.WorkspaceMcpConnection{}, domain.ErrNotFound
 	}
 	if !isCreate {
-		if _, err := s.queries.GetWorkspaceMCPConnection(ctx, db.GetWorkspaceMCPConnectionParams{
+		existing, err := s.queries.GetWorkspaceMCPConnection(ctx, db.GetWorkspaceMCPConnectionParams{
 			WorkspaceID: workspaceID, ID: input.ID,
-		}); errors.Is(err, pgx.ErrNoRows) {
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
 			return db.WorkspaceMcpConnection{}, domain.ErrNotFound
 		} else if err != nil {
+			return db.WorkspaceMcpConnection{}, err
+		}
+		// 不允许编辑 URL 时悄悄将原服务的密钥带到另一个服务。
+		if existing.Url != input.URL && len(existing.BearerTokenCiphertext) != 0 && input.BearerToken == "" && !input.ClearBearerToken {
+			return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: changing MCP URL requires replacing or clearing its bearer token", domain.ErrConflict)
+		}
+	}
+	var ciphertext []byte
+	if input.BearerToken != "" {
+		var err error
+		ciphertext, err = s.encryptMCPBearerToken(workspaceID.String(), input.ID.String(), input.BearerToken)
+		if err != nil {
 			return db.WorkspaceMcpConnection{}, err
 		}
 	}
 	connection, err := s.queries.UpsertWorkspaceMCPConnection(ctx, db.UpsertWorkspaceMCPConnectionParams{
 		ID: input.ID, WorkspaceID: workspaceID, Name: input.Name, Url: input.URL,
-		BearerTokenEnv: input.BearerTokenEnv, Enabled: input.Enabled, TimeoutMs: input.TimeoutMS,
+		BearerTokenCiphertext: ciphertext, ReplaceBearerToken: input.BearerToken != "" || input.ClearBearerToken,
+		Enabled: input.Enabled, TimeoutMs: input.TimeoutMS,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: changing MCP URL requires replacing or clearing its bearer token", domain.ErrConflict)
+	}
 	if err != nil {
 		return db.WorkspaceMcpConnection{}, mapConstraintError(err)
 	}
