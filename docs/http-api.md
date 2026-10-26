@@ -107,6 +107,13 @@ MCP Test 只执行 connect / initialize / ListTools，返回工具数量，**不
 
 测试响应只返回分类后的状态、消息、耗时与工具数量，不回显 secret 或上游原始响应体。
 
+普通 MCP Connection 的凭证协议（仅 Workspace owner 可调用）：
+
+- POST / PUT `/api/v1/agent/mcp-connections`（PUT 带 `/{connectionID}`）：可选 `bearer_token` 填写真实 Token；PUT 不传或传空串表示保留原 Token，`clear_bearer_token: true` 表示清除。
+- GET / POST / PUT 连接响应返回 `token_configured: boolean`，绝不输出 Token 或密文。
+- POST `/api/v1/agent/mcp-test` 可以直接提供 `bearer_token` 测试新凭证，或提供 `connection_id` 测试同 Workspace 的已保存凭证；后一种情况下 URL 必须与已存连接一致，防止 Token 转发到其他地址。
+- 数据库 `workspace_mcp_connections.bearer_token_ciphertext` 为 AEAD 密文；加密密钥 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY` 仅由服务端部署环境提供。
+
 ## Ongoing Schedule
 
 - `GET /api/v1/cards/{cardID}/schedules`

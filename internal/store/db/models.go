@@ -303,15 +303,15 @@ type WorkspaceAgentSetting struct {
 }
 
 type WorkspaceMcpConnection struct {
-	ID             uuid.UUID          `json:"id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	Name           string             `json:"name"`
-	Url            string             `json:"url"`
-	BearerTokenEnv string             `json:"bearer_token_env"`
-	Enabled        bool               `json:"enabled"`
-	TimeoutMs      int32              `json:"timeout_ms"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                    uuid.UUID          `json:"id"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	Name                  string             `json:"name"`
+	Url                   string             `json:"url"`
+	Enabled               bool               `json:"enabled"`
+	TimeoutMs             int32              `json:"timeout_ms"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	BearerTokenCiphertext []byte             `json:"bearer_token_ciphertext"`
 }
 
 type WorkspaceMembership struct {

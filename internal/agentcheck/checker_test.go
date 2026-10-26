@@ -137,7 +137,7 @@ func TestMCPTestInitializesAndListsWithoutCallingTools(t *testing.T) {
 
 	result := New().MCP(context.Background(), MCPInput{
 		Name: "safe-test", URL: httpServer.URL,
-		BearerTokenEnv: "CYCLEDOCK_TEST_MCP_TOKEN", Timeout: 2 * time.Second,
+		BearerToken: secret, Timeout: 2 * time.Second,
 	})
 	if !result.OK || result.Code != "ok" || result.ToolCount != 1 {
 		t.Fatalf("result=%+v", result)
@@ -206,7 +206,7 @@ func TestMCPDiagnosticsDoNotEchoSecret(t *testing.T) {
 
 	result := New().MCP(context.Background(), MCPInput{
 		Name: "auth-test", URL: server.URL,
-		BearerTokenEnv: "CYCLEDOCK_TEST_BAD_MCP_TOKEN", Timeout: time.Second,
+		BearerToken: secret, Timeout: time.Second,
 	})
 	if result.OK || result.Code != "authentication_failed" {
 		t.Fatalf("result=%+v", result)

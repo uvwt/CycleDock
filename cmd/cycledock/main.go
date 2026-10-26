@@ -73,6 +73,10 @@ func main() {
 		secureCookie = true
 	}
 	dataStore := store.New(pool)
+	if err := dataStore.ConfigureMCPEncryption(os.Getenv("CYCLEDOCK_CONNECTION_ENCRYPTION_KEY")); err != nil {
+		logger.Error("configure MCP token encryption", "error", err)
+		os.Exit(1)
+	}
 	nexusDockService, err := nexusdock.New(pool, nexusdock.Config{
 		MCPURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_MCP_URL"),
 		WebURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_WEB_URL"),

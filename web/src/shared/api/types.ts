@@ -173,11 +173,14 @@ export type MCPConnection = {
   id: string;
   name: string;
   url: string;
-  bearer_token_env: string;
+  token_configured: boolean;
   enabled: boolean;
   timeout_ms: number;
 };
-export type MCPInput = Omit<MCPConnection, "id">;
+export type MCPInput = Omit<MCPConnection, "id" | "token_configured"> & {
+  bearer_token: string;
+  clear_bearer_token?: boolean;
+};
 export type NexusConnection = {
   available: boolean;
   connected: boolean;

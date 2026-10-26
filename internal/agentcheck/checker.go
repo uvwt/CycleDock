@@ -29,10 +29,10 @@ type ProviderInput struct {
 }
 
 type MCPInput struct {
-	Name           string
-	URL            string
-	BearerTokenEnv string
-	Timeout        time.Duration
+	Name        string
+	URL         string
+	BearerToken string
+	Timeout     time.Duration
 }
 
 type Checker struct {
@@ -135,26 +135,22 @@ func (c *Checker) MCP(ctx context.Context, input MCPInput) Result {
 	started := time.Now()
 	input.Name = strings.TrimSpace(input.Name)
 	input.URL = strings.TrimSpace(input.URL)
-	input.BearerTokenEnv = strings.TrimSpace(input.BearerTokenEnv)
+	input.BearerToken = strings.TrimSpace(input.BearerToken)
 	if input.Name == "" {
 		return failure(started, "invalid_name", "MCP connection name is required.")
 	}
 	if err := agentconfig.ValidateEndpoint(input.URL); err != nil {
 		return failure(started, "invalid_endpoint", err.Error())
 	}
-	if input.BearerTokenEnv != "" && !agentconfig.ValidEnvName(input.BearerTokenEnv) {
-		return failure(started, "invalid_secret_env", "MCP bearer token environment variable name is invalid.")
-	}
-	token, ok := resolveSecret(input.BearerTokenEnv)
-	if !ok {
-		return failure(started, "secret_env_missing", "Configured MCP bearer token environment variable is not set.")
+	if len(input.BearerToken) > 8192 || strings.ContainsAny(input.BearerToken, "\r\n") {
+		return failure(started, "invalid_bearer_token", "MCP bearer token is invalid.")
 	}
 	if input.Timeout <= 0 {
 		input.Timeout = 30 * time.Second
 	}
 
 	sessions, err := mcpclient.Connect(ctx, []mcpclient.Connection{{
-		Name: input.Name, URL: input.URL, BearerToken: token, Timeout: input.Timeout,
+		Name: input.Name, URL: input.URL, BearerToken: input.BearerToken, Timeout: input.Timeout,
 	}})
 	if err == nil {
 		defer sessions.Close()

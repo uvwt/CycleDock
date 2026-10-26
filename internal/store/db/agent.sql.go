@@ -114,7 +114,7 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 }
 
 const getWorkspaceMCPConnection = `-- name: GetWorkspaceMCPConnection :one
-SELECT id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms, created_at, updated_at
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
   AND id = $2
@@ -133,17 +133,17 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 		&i.WorkspaceID,
 		&i.Name,
 		&i.Url,
-		&i.BearerTokenEnv,
 		&i.Enabled,
 		&i.TimeoutMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BearerTokenCiphertext,
 	)
 	return i, err
 }
 
 const listEnabledWorkspaceMCPConnections = `-- name: ListEnabledWorkspaceMCPConnections :many
-SELECT id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms, created_at, updated_at
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
   AND enabled
@@ -164,11 +164,11 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 			&i.WorkspaceID,
 			&i.Name,
 			&i.Url,
-			&i.BearerTokenEnv,
 			&i.Enabled,
 			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BearerTokenCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -181,7 +181,7 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 }
 
 const listWorkspaceMCPConnections = `-- name: ListWorkspaceMCPConnections :many
-SELECT id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms, created_at, updated_at
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
 ORDER BY name, id
@@ -201,11 +201,11 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 			&i.WorkspaceID,
 			&i.Name,
 			&i.Url,
-			&i.BearerTokenEnv,
 			&i.Enabled,
 			&i.TimeoutMs,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BearerTokenCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -290,7 +290,7 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 
 const upsertWorkspaceMCPConnection = `-- name: UpsertWorkspaceMCPConnection :one
 INSERT INTO workspace_mcp_connections (
-    id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms
+    id, workspace_id, name, url, bearer_token_ciphertext, enabled, timeout_ms
 )
 VALUES (
     $1, $2, $3, $4,
@@ -299,21 +299,28 @@ VALUES (
 ON CONFLICT (workspace_id, id) DO UPDATE
 SET name = EXCLUDED.name,
     url = EXCLUDED.url,
-    bearer_token_env = EXCLUDED.bearer_token_env,
+    bearer_token_ciphertext = CASE
+        WHEN $8::boolean THEN EXCLUDED.bearer_token_ciphertext
+        ELSE workspace_mcp_connections.bearer_token_ciphertext
+    END,
     enabled = EXCLUDED.enabled,
     timeout_ms = EXCLUDED.timeout_ms,
     updated_at = now()
-RETURNING id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms, created_at, updated_at
+WHERE workspace_mcp_connections.url = EXCLUDED.url
+   OR workspace_mcp_connections.bearer_token_ciphertext IS NULL
+   OR $8::boolean
+RETURNING id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
 `
 
 type UpsertWorkspaceMCPConnectionParams struct {
-	ID             uuid.UUID `json:"id"`
-	WorkspaceID    uuid.UUID `json:"workspace_id"`
-	Name           string    `json:"name"`
-	Url            string    `json:"url"`
-	BearerTokenEnv string    `json:"bearer_token_env"`
-	Enabled        bool      `json:"enabled"`
-	TimeoutMs      int32     `json:"timeout_ms"`
+	ID                    uuid.UUID `json:"id"`
+	WorkspaceID           uuid.UUID `json:"workspace_id"`
+	Name                  string    `json:"name"`
+	Url                   string    `json:"url"`
+	BearerTokenCiphertext []byte    `json:"bearer_token_ciphertext"`
+	Enabled               bool      `json:"enabled"`
+	TimeoutMs             int32     `json:"timeout_ms"`
+	ReplaceBearerToken    bool      `json:"replace_bearer_token"`
 }
 
 func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWorkspaceMCPConnectionParams) (WorkspaceMcpConnection, error) {
@@ -322,9 +329,10 @@ func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWo
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Url,
-		arg.BearerTokenEnv,
+		arg.BearerTokenCiphertext,
 		arg.Enabled,
 		arg.TimeoutMs,
+		arg.ReplaceBearerToken,
 	)
 	var i WorkspaceMcpConnection
 	err := row.Scan(
@@ -332,11 +340,11 @@ func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWo
 		&i.WorkspaceID,
 		&i.Name,
 		&i.Url,
-		&i.BearerTokenEnv,
 		&i.Enabled,
 		&i.TimeoutMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BearerTokenCiphertext,
 	)
 	return i, err
 }

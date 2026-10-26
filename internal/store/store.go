@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/cipher"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,8 +21,9 @@ import (
 const DefaultClaimLease = 2 * time.Minute
 
 type Store struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
+	pool      *pgxpool.Pool
+	queries   *db.Queries
+	mcpCipher cipher.AEAD
 	// workReady 在可能产生可认领 Trigger 的事务提交后叫醒本机 Dispatcher。
 	// 未注册时写入仍然成功，只是要等 Dispatcher 下一轮轮询。
 	workReady func()

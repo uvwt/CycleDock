@@ -58,19 +58,25 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 
 -- name: UpsertWorkspaceMCPConnection :one
 INSERT INTO workspace_mcp_connections (
-    id, workspace_id, name, url, bearer_token_env, enabled, timeout_ms
+    id, workspace_id, name, url, bearer_token_ciphertext, enabled, timeout_ms
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(name), sqlc.arg(url),
-    sqlc.arg(bearer_token_env), sqlc.arg(enabled), sqlc.arg(timeout_ms)
+    sqlc.arg(bearer_token_ciphertext), sqlc.arg(enabled), sqlc.arg(timeout_ms)
 )
 ON CONFLICT (workspace_id, id) DO UPDATE
 SET name = EXCLUDED.name,
     url = EXCLUDED.url,
-    bearer_token_env = EXCLUDED.bearer_token_env,
+    bearer_token_ciphertext = CASE
+        WHEN sqlc.arg(replace_bearer_token)::boolean THEN EXCLUDED.bearer_token_ciphertext
+        ELSE workspace_mcp_connections.bearer_token_ciphertext
+    END,
     enabled = EXCLUDED.enabled,
     timeout_ms = EXCLUDED.timeout_ms,
     updated_at = now()
+WHERE workspace_mcp_connections.url = EXCLUDED.url
+   OR workspace_mcp_connections.bearer_token_ciphertext IS NULL
+   OR sqlc.arg(replace_bearer_token)::boolean
 RETURNING *;
 
 -- name: DeleteWorkspaceMCPConnection :execrows
