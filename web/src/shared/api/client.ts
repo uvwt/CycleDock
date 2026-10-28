@@ -35,30 +35,44 @@ async function request<T>(
   method = "GET",
   body?: unknown,
   idempotency?: boolean | string,
+  timeoutMS = 15_000,
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (idempotency)
     headers["Idempotency-Key"] =
       typeof idempotency === "string" ? idempotency : crypto.randomUUID();
-  const response = await fetch("/api/v1" + path, {
-    method,
-    credentials: "same-origin",
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as {
-      error?: { code?: string; message?: string };
-    } | null;
-    throw new APIError(
-      response.status,
-      error?.error?.code ?? "http_error",
-      error?.error?.message ?? `HTTP ${response.status}`,
-    );
+  const signal = AbortSignal.timeout(timeoutMS);
+  try {
+    const response = await fetch("/api/v1" + path, {
+      signal,
+      method,
+      credentials: "same-origin",
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const error = (await response.json().catch(() => null)) as {
+        error?: { code?: string; message?: string };
+      } | null;
+      throw new APIError(
+        response.status,
+        error?.error?.code ?? "http_error",
+        error?.error?.message ?? `HTTP ${response.status}`,
+      );
+    }
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  } catch (error) {
+    if (signal.aborted) {
+      throw new APIError(
+        0,
+        "request_timeout",
+        "请求超时，请检查操作结果后重试",
+      );
+    }
+    throw error;
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 export const api = {
   loginMethods: () => request<LoginMethods>("/auth/methods"),
@@ -171,7 +185,15 @@ export const api = {
     provider_base_url: string;
     model: string;
     api_key_env: string;
-  }) => request<TestResult>("/agent/provider-test", "POST", value),
+  }) =>
+    // 模型测试的服务端预算是 120 秒，前端留出返回测试结果的时间。
+    request<TestResult>(
+      "/agent/provider-test",
+      "POST",
+      value,
+      undefined,
+      125_000,
+    ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
   nexusConnect: () =>
     request<{ authorization_url: string }>(
@@ -188,16 +210,25 @@ export const api = {
   removeMCP: (id: string) =>
     request<void>(`/agent/mcp-connections/${id}`, "DELETE"),
   testMCP: (
-    value: Pick<MCPInput, "name" | "url" | "bearer_token" | "timeout_ms" | "clear_bearer_token"> & {
+    value: Pick<
+      MCPInput,
+      "name" | "url" | "bearer_token" | "timeout_ms" | "clear_bearer_token"
+    > & {
       connection_id?: string;
     },
   ) =>
-    request<TestResult>("/agent/mcp-test", "POST", {
-      name: value.name,
-      url: value.url,
-      bearer_token: value.bearer_token,
-      connection_id: value.connection_id,
-      clear_bearer_token: value.clear_bearer_token,
-      timeout_ms: value.timeout_ms,
-    }),
+    request<TestResult>(
+      "/agent/mcp-test",
+      "POST",
+      {
+        name: value.name,
+        url: value.url,
+        bearer_token: value.bearer_token,
+        connection_id: value.connection_id,
+        clear_bearer_token: value.clear_bearer_token,
+        timeout_ms: value.timeout_ms,
+      },
+      undefined,
+      (value.timeout_ms || 30_000) + 5_000,
+    ),
 };

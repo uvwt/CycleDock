@@ -237,6 +237,8 @@ const en = {
   加入队列: "Queue",
   立即转向: "Interrupt",
   回复并继续: "Reply and continue",
+  已收到回复: "Reply received",
+  执行完成: "Completed",
   "正在连接实时通道…": "Connecting to live updates…",
   "此讨论已归档，不能继续发送消息": "This discussion is archived",
   讨论已归档: "Archived discussion",

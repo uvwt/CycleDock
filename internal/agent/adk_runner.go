@@ -202,11 +202,31 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 			}
 			return fmt.Errorf("ADK invocation failed: %w", eventErr)
 		}
-		if event == nil || event.Content == nil || !event.IsFinalResponse() {
+		if event == nil || event.Partial || event.Content == nil ||
+			event.Content.Role != genai.RoleModel || event.Actions.Compaction != nil {
 			continue
 		}
-		if text := textFromADKContent(event.Content); text != "" {
+		text := textFromADKContent(event.Content)
+		if text == "" {
+			continue
+		}
+		if event.IsFinalResponse() {
 			finalText = text
+			continue
+		}
+		// 每条完整的过程回复独立落库；工具和思考内容不投影到产品消息。
+		if _, _, err := r.store.AddAttemptEvent(runCtx, store.AttemptEventParams{
+			WorkspaceID: cardContext.WorkspaceID, CardID: cardContext.CardID,
+			AttemptID: cardContext.AttemptID, RunnerSourceID: cardContext.RunnerSourceID,
+			Type: domain.EventTypeComment, Content: text,
+			IdempotencyKey: "model:" + cardContext.AttemptID.String() + ":" + event.ID,
+		}); err != nil {
+			return fmt.Errorf("save agent message: %w", err)
+		}
+		if r.live != nil {
+			r.live.Publish(cardContext.CardID, realtime.Event{
+				Type: "attempt.text.reset", AttemptID: cardContext.AttemptID.String(),
+			})
 		}
 	}
 	if toolErr := toolRuntime.fatal.get(); toolErr != nil {
@@ -384,6 +404,7 @@ func buildADKInstructions(
 	out.WriteString("- On Ongoing Cards, use cycledock_check_in when you establish a health fact.\n")
 	out.WriteString("- If human input is required, call cycledock_wait_for_human and stop.\n")
 	out.WriteString("- Use cycledock_confirm_card only after verified Todo work. Human Review -> Done is never your action.\n")
+	out.WriteString("- Ordinary response text is user-visible and saved as separate timeline messages, including text before tool calls. Use it for concise updates, not internal reasoning.\n")
 	out.WriteString("- Never output chain-of-thought or hidden reasoning.\n")
 	if extra := strings.TrimSpace(workspaceInstructions); extra != "" {
 		out.WriteString("\nWorkspace Agent instructions:\n")

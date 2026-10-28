@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { keys } from "../../app/query";
 export type LiveAttempt = {
@@ -12,15 +12,26 @@ export type StreamState = {
   live: LiveAttempt | null;
   lastError?: string;
 };
+function subscribeVisibility(onChange: () => void) {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
 /** SSE 只负责临时状态和低延迟通知；REST timeline 是最终一致的事实源。 */
 export function useCardStream(cardID: string, projectID: string): StreamState {
   const query = useQueryClient();
+  const visible = useSyncExternalStore(
+    subscribeVisibility,
+    () => document.visibilityState === "visible",
+    () => true,
+  );
   const [state, setState] = useState<StreamState>({
     connected: false,
     live: null,
   });
   useEffect(() => {
-    if (!cardID) return;
+    // HTTP/1.1 的连接额度由同域标签页共享，后台卡片不占用长连接。
+    if (!cardID || !visible) return;
     let active = true;
     const stream = new EventSource(
       `/api/v1/cards/${encodeURIComponent(cardID)}/stream`,
@@ -103,6 +114,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
             ? { ...s.live, text: "" }
             : s.live,
       }));
+      sync();
     };
     const onSnapshot = (e: Event) => {
       const v = parse(e);
@@ -160,6 +172,6 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       active = false;
       stream.close();
     };
-  }, [cardID, projectID, query]);
-  return state;
+  }, [cardID, projectID, query, visible]);
+  return visible ? state : { connected: false, live: null };
 }

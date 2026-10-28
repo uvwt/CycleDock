@@ -224,7 +224,7 @@ type AttemptEventParams struct {
 
 func (s *Store) AddAttemptEvent(ctx context.Context, p AttemptEventParams) (uuid.UUID, bool, error) {
 	switch p.Type {
-	case domain.EventTypeFinding, domain.EventTypeCheckin:
+	case domain.EventTypeComment, domain.EventTypeFinding, domain.EventTypeCheckin:
 	default:
 		return uuid.Nil, false, fmt.Errorf("unsupported attempt event type %q", p.Type)
 	}
@@ -329,6 +329,26 @@ func (s *Store) WaitAttemptForHumanWithPrompt(
 	}
 	if status != domain.AttemptStatusRunning {
 		return domain.ErrAttemptNotCurrent
+	}
+	// 提问与等待状态一起提交；模型已发出的同一问题不再重复保存。
+	var promptAlreadySent bool
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT event_type='comment' AND content=$3
+			FROM events WHERE workspace_id=$1 AND attempt_id=$2
+			ORDER BY sequence DESC LIMIT 1
+		), false)
+	`, workspaceID, attemptID, summary).Scan(&promptAlreadySent); err != nil {
+		return err
+	}
+	if !promptAlreadySent {
+		if _, _, err := appendAttemptActivity(
+			ctx, tx, workspaceID, cardID, attemptID, runnerSourceID,
+			domain.EventTypeComment, summary, nil, "wait:"+attemptID.String(),
+			stableRequestHash("wait_prompt", attemptID.String(), stage, summary),
+		); err != nil {
+			return err
+		}
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE turn_attempts

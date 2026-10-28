@@ -18,9 +18,11 @@ const attemptLabels: Record<string, string> = {
 
 export function RunDuration({
   startedAt,
+  finishedAt,
   active,
 }: {
   startedAt?: string;
+  finishedAt?: string;
   active: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -29,10 +31,12 @@ export function RunDuration({
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [active, startedAt]);
-  if (!startedAt || !active) return null;
+  if (!startedAt || (!active && !finishedAt)) return null;
   const start = new Date(startedAt).getTime();
   if (!Number.isFinite(start)) return null;
-  const seconds = Math.max(0, Math.floor((now - start) / 1000));
+  const end = active ? now : new Date(finishedAt || "").getTime();
+  if (!Number.isFinite(end)) return null;
+  const seconds = Math.max(0, Math.floor((end - start) / 1000));
   return (
     <span
       className="shrink-0 text-[11px] tabular-nums text-slate-400"
@@ -66,11 +70,16 @@ function AgentAttempt({
   const id = pending?.id || execution?.id || "";
   const status = pending ? "queued" : execution?.status || "queued";
   const sameLiveAttempt = Boolean(current && live?.attemptID === current.id);
+  const humanReplied =
+    status === "superseded" &&
+    execution?.error_summary === "superseded by human reply";
+  // 问题和回复由时间线承载，状态行只展示执行中的进度及失败原因。
   const summary =
-    execution?.error_summary ||
-    execution?.progress_summary ||
-    execution?.current_stage ||
-    "";
+    status === "running"
+      ? execution?.progress_summary || execution?.current_stage || ""
+      : status === "failed" || status === "expired" || status === "cancelled"
+        ? execution?.error_summary || ""
+        : "";
   const failed =
     status === "failed" || status === "expired" || status === "cancelled";
   const retried = Boolean(
@@ -78,106 +87,99 @@ function AgentAttempt({
   );
 
   return (
-    <article
-      className="flex min-w-0 items-start gap-3"
-      data-execution-id={id}
-    >
-      <span
-        aria-hidden
-        className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
-      >
-        <Bot className="size-4" />
-      </span>
-      <div className="min-w-0 max-w-[min(88%,740px)] flex-1 rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-xs font-semibold text-slate-600">
-            Cycle Agent
+    <>
+      {attempt.question && (
+        <article className="flex gap-3" data-attempt-question={id}>
+          <span
+            aria-hidden
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+          >
+            <Bot className="size-4" />
           </span>
-          {current?.status === "running" && (
-            <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] text-sky-700">
-              <span className="live-dot size-1.5 rounded-full bg-sky-500" />
-              {t("运行中")}
-              <RunDuration
-                startedAt={
-                  current.started_at ||
-                  (sameLiveAttempt ? live?.startedAt : undefined)
-                }
-                active
-              />
-            </span>
-          )}
-        </div>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p
-              className={`text-xs font-medium ${
-                failed
-                  ? "text-rose-700"
-                  : status === "running"
-                    ? "text-sky-700"
-                    : "text-slate-600"
-              }`}
-            >
-              {t(attemptLabels[status] || status)}
-              {pending?.dispatch_mode === "interrupt"
-                ? " · " + t("立即转向")
-                : ""}
-              {retried ? " · " + t("重试") : ""}
+          <div className="min-w-0 max-w-[min(88%,740px)]">
+            <p className="mb-1.5 text-xs font-semibold text-slate-500">
+              Cycle Agent
             </p>
-            {summary && (
-              <div className="mt-1 text-sm leading-6 text-slate-600">
-                <RichText content={summary} />
-              </div>
-            )}
-            {sameLiveAttempt && live?.text && (
-              <div className="mt-2 border-t border-slate-200 pt-2">
-                <RichText content={live.text} />
-              </div>
-            )}
-            {sameLiveAttempt && !live?.text && status === "running" && (
-              <div
-                aria-label={t("Agent 正在工作")}
-                className="mt-2 flex items-center gap-1"
+            <div className="rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3">
+              <RichText content={attempt.question} />
+            </div>
+          </div>
+        </article>
+      )}
+      <article
+        className="ml-12 min-w-0 border-l-2 border-slate-200 py-1 pl-3"
+        data-execution-id={id}
+      >
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p
+                className={`text-xs font-medium ${
+                  failed
+                    ? "text-rose-700"
+                    : status === "running"
+                      ? "text-sky-700"
+                      : "text-slate-600"
+                }`}
               >
-                <span className="live-dot size-1.5 rounded-full bg-slate-400" />
-                <span className="live-dot size-1.5 rounded-full bg-slate-400" />
-                <span className="live-dot size-1.5 rounded-full bg-slate-400" />
-              </div>
+                {t(
+                  humanReplied ? "已收到回复" : attemptLabels[status] || status,
+                )}
+                {pending?.dispatch_mode === "interrupt"
+                  ? " · " + t("立即转向")
+                  : ""}
+                {retried ? " · " + t("重试") : ""}
+                <span className="ml-2 inline-flex">
+                  <RunDuration
+                    startedAt={
+                      execution?.started_at ||
+                      (sameLiveAttempt ? live?.startedAt : undefined)
+                    }
+                    finishedAt={execution?.finished_at}
+                    active={status === "running"}
+                  />
+                </span>
+              </p>
+              {summary && (
+                <div className="mt-1 text-sm leading-6 text-slate-600">
+                  <RichText content={summary} />
+                </div>
+              )}
+            </div>
+            {pending && (
+              <button
+                type="button"
+                disabled={cancelingTurnID === pending.id}
+                onClick={() => onCancelTurn(pending.id)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-white disabled:opacity-40"
+              >
+                {cancelingTurnID === pending.id ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : (
+                  <X className="size-3" />
+                )}
+                {t("取消排队")}
+              </button>
+            )}
+            {history?.can_retry && (
+              <button
+                type="button"
+                disabled={retryingAttemptID === history.id}
+                onClick={() => onRetryAttempt(history.id)}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+              >
+                {retryingAttemptID === history.id ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : (
+                  <RotateCcw className="size-3" />
+                )}
+                {t("重试")}
+              </button>
             )}
           </div>
-          {pending && (
-            <button
-              type="button"
-              disabled={cancelingTurnID === pending.id}
-              onClick={() => onCancelTurn(pending.id)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-white disabled:opacity-40"
-            >
-              {cancelingTurnID === pending.id ? (
-                <LoaderCircle className="size-3 animate-spin" />
-              ) : (
-                <X className="size-3" />
-              )}
-              {t("取消排队")}
-            </button>
-          )}
-          {history?.can_retry && (
-            <button
-              type="button"
-              disabled={retryingAttemptID === history.id}
-              onClick={() => onRetryAttempt(history.id)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-40"
-            >
-              {retryingAttemptID === history.id ? (
-                <LoaderCircle className="size-3 animate-spin" />
-              ) : (
-                <RotateCcw className="size-3" />
-              )}
-              {t("重试")}
-            </button>
-          )}
         </div>
-      </div>
-    </article>
+      </article>
+    </>
   );
 }
 

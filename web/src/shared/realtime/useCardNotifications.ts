@@ -23,18 +23,16 @@ export function useCardNotifications(workspaceID: string) {
     )
       return;
     let active = true;
+    const controller = new AbortController();
+    let release: (() => void) | undefined;
+    let channel: BroadcastChannel | undefined;
     let stream: EventSource | undefined;
     let previousCards: Map<string, CardUpdate> | undefined;
     void notificationWorker()
-      .then((registration) => {
+      .then(async (registration) => {
         if (!active) return;
-        stream = new EventSource("/api/v1/cards/updates/stream", {
-          withCredentials: true,
-        });
-        stream.addEventListener("cards.snapshot", (event) => {
-          const cards = JSON.parse(
-            (event as MessageEvent<string>).data,
-          ) as CardUpdate[];
+        const onSnapshot = (event: MessageEvent<string>) => {
+          const cards = JSON.parse(event.data) as CardUpdate[];
           // 首次快照只建立基线；原生 SSE 重连保留基线，补齐断线期间变化。
           if (previousCards) {
             for (const card of cards) {
@@ -66,7 +64,34 @@ export function useCardNotifications(workspaceID: string) {
             }
           }
           previousCards = new Map(cards.map((card) => [card.id, card]));
-        });
+        };
+        const connect = () => {
+          stream = new EventSource("/api/v1/cards/updates/stream", {
+            withCredentials: true,
+          });
+          stream.addEventListener("cards.snapshot", (event) => {
+            channel?.postMessage((event as MessageEvent<string>).data);
+            onSnapshot(event as MessageEvent<string>);
+          });
+        };
+        if (navigator.locks && typeof BroadcastChannel !== "undefined") {
+          // 同域只保留一条通知 SSE；其他标签页通过广播获得同一份更新。
+          channel = new BroadcastChannel(
+            `cycledock:card-updates:${workspaceID}`,
+          );
+          channel.onmessage = onSnapshot;
+          await navigator.locks.request(
+            "cycledock:card-notifications",
+            { signal: controller.signal },
+            () =>
+              new Promise<void>((resolve) => {
+                release = resolve;
+                connect();
+              }),
+          );
+        } else {
+          connect();
+        }
       })
       .catch((error: unknown) => {
         if (active)
@@ -74,7 +99,10 @@ export function useCardNotifications(workspaceID: string) {
       });
     return () => {
       active = false;
+      controller.abort();
       stream?.close();
+      channel?.close();
+      release?.();
     };
   }, [enabled, workspaceID, query]);
 }

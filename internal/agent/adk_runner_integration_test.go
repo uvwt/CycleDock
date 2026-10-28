@@ -77,7 +77,7 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 			if !requestIncludesTool(body, "mcp_lab_inventory") {
 				t.Errorf("first turn did not expose inventory tool")
 			}
-			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+			writeModelResponse(t, w, "I will inspect the inventory.", []modelclient.ToolCall{{
 				ID:   "inventory-call-1",
 				Type: "function",
 				Function: modelclient.ToolFunction{
@@ -172,6 +172,22 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 	}
 	if err := runner.RunAttempt(ctx, *firstClaim); err != nil {
 		t.Fatal(err)
+	}
+
+	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	for _, event := range timeline {
+		if event.AttemptID.Valid && event.AttemptID.UUID == firstClaim.Attempt.ID &&
+			(event.EventType == "comment" || event.EventType == "result") {
+			messages = append(messages, event.Content)
+		}
+	}
+	if len(messages) != 2 || messages[0] != "I will inspect the inventory." ||
+		messages[1] != "The nginx container uses nginx:1.25." {
+		t.Fatalf("agent timeline messages=%v", messages)
 	}
 
 	secondTurn, err := dataStore.CreateHumanTurn(
@@ -874,6 +890,20 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	}
 	if firstAttempt.Status != domain.AttemptStatusWaitingHuman {
 		t.Fatalf("first attempt status=%s want waiting_human", firstAttempt.Status)
+	}
+	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompts int
+	for _, event := range timeline {
+		if event.EventType == "comment" && event.Content == "Which target should I use?" &&
+			event.AttemptID.Valid && event.AttemptID.UUID == firstClaim.Attempt.ID {
+			prompts++
+		}
+	}
+	if prompts != 1 {
+		t.Fatalf("persisted questions=%d want 1", prompts)
 	}
 	modelMu.Lock()
 	callsAfterWait := modelCalls

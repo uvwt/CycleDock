@@ -157,7 +157,7 @@ export function ConversationComposer({
                     : t("发送")
               }
               disabled={sendPending || !comment.trim() || blocked}
-              className={`grid size-9 shrink-0 place-items-center rounded-full text-white transition disabled:opacity-30 ${submitMode === "interrupt" && !waiting ? "bg-rose-600 hover:bg-rose-700" : "bg-slate-900 hover:bg-slate-700"}`}
+              className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-white transition disabled:opacity-30 ${waiting ? "px-3" : "w-9"} ${submitMode === "interrupt" && !waiting ? "bg-rose-600 hover:bg-rose-700" : "bg-slate-900 hover:bg-slate-700"}`}
             >
               {submitMode === "interrupt" && !waiting ? (
                 <Zap className="size-4" />
@@ -165,6 +165,9 @@ export function ConversationComposer({
                 <ListPlus className="size-4" />
               ) : (
                 <ArrowUp className="size-4" />
+              )}
+              {waiting && (
+                <span className="text-xs font-medium">{t("回复并继续")}</span>
               )}
             </button>
           </div>
@@ -194,12 +197,19 @@ export function ConversationComposer({
           )}
           <button
             type="submit"
-            title={t("发送")}
-            aria-label={t("发送")}
+            title={t(waiting ? "回复并继续" : "发送")}
+            aria-label={t(waiting ? "回复并继续" : "发送")}
             disabled={sendPending || !comment.trim() || blocked}
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:opacity-30"
+            className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:opacity-30 ${waiting ? "px-3" : "w-9"}`}
           >
-            <ArrowUp className="size-4" />
+            {waiting ? (
+              <ListPlus className="size-4" />
+            ) : (
+              <ArrowUp className="size-4" />
+            )}
+            {waiting && (
+              <span className="text-xs font-medium">{t("回复并继续")}</span>
+            )}
           </button>
         </>
       )}

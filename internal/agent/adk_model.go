@@ -111,6 +111,10 @@ func (m *adkRouteModel) GenerateContent(
 
 			streamed := false
 			if m.live != nil {
+				// 新一轮模型回复从独立消息开始，不串接上一条工具前的说明。
+				m.live.Publish(m.cardID, realtime.Event{
+					Type: "attempt.text.reset", AttemptID: m.attemptID.String(),
+				})
 				m.publishStage("正在生成回复")
 				config.OnTextDelta = func(text string) {
 					streamed = true

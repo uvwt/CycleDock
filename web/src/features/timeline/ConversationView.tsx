@@ -64,11 +64,13 @@ function TimeSeparator({ value }: { value: string }) {
 function EventRow({
   event,
   attempts,
+  completedAttempt,
   live,
   ...actions
 }: {
   event: TimelineEvent;
   attempts: ExecutionAttempt[];
+  completedAttempt?: Attempt;
   live: LiveAttempt | null;
 } & ExecutionActions) {
   const { t } = useTranslation();
@@ -76,24 +78,27 @@ function EventRow({
   const human = event.actor_kind === "human";
   if (system) {
     return (
-      <div
-        id={"event-" + event.id}
-        className="flex justify-center py-1"
-        data-sequence={event.sequence}
-      >
-        <span
-          className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${
-            event.type === "reject"
-              ? "text-rose-700"
-              : event.type === "confirm"
-                ? "text-amber-700"
-                : "text-slate-500"
-          }`}
+      <>
+        <div
+          id={"event-" + event.id}
+          className="flex justify-center py-1"
+          data-sequence={event.sequence}
         >
-          {t(labels[event.type] || event.type)} · {event.content}
-          {event.checkin_status ? ` · ${event.checkin_status}` : ""}
-        </span>
-      </div>
+          <span
+            className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${
+              event.type === "reject"
+                ? "text-rose-700"
+                : event.type === "confirm"
+                  ? "text-amber-700"
+                  : "text-slate-500"
+            }`}
+          >
+            {t(labels[event.type] || event.type)} · {event.content}
+            {event.checkin_status ? ` · ${event.checkin_status}` : ""}
+          </span>
+        </div>
+        <ExecutionStatus attempts={attempts} live={live} {...actions} />
+      </>
     );
   }
 
@@ -112,15 +117,9 @@ function EventRow({
             <Bot className="size-4" />
           </span>
         )}
-        <div
-          className={`max-w-[min(88%,740px)] min-w-0 ${
-            human
-              ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3"
-              : "rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3"
-          }`}
-        >
+        <div className="min-w-0 max-w-[min(88%,740px)]">
           {!human && (
-            <p className="mb-1 text-xs font-semibold text-slate-500">
+            <p className="mb-1.5 text-xs font-semibold text-slate-500">
               {event.actor_name || "Cycle Agent"}
               {event.type === "finding" && (
                 <span className="ml-2 text-sky-700">{t("发现")}</span>
@@ -130,12 +129,37 @@ function EventRow({
               )}
             </p>
           )}
-          <RichText content={event.content} />
+          <div
+            className={
+              human
+                ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3"
+                : undefined
+            }
+          >
+            <RichText content={event.content} />
+            {completedAttempt && (
+              <p
+                data-execution-id={completedAttempt.id}
+                className="mt-2 text-[11px] text-slate-400"
+              >
+                {t("执行完成")}
+                <span className="ml-2 inline-flex">
+                  <RunDuration
+                    startedAt={completedAttempt.started_at}
+                    finishedAt={completedAttempt.finished_at}
+                    active={false}
+                  />
+                </span>
+                {completedAttempt.retry_of_attempt_id ||
+                completedAttempt.reason === "retry"
+                  ? " · " + t("重试")
+                  : ""}
+              </p>
+            )}
+          </div>
         </div>
       </article>
-      {human && (
-        <ExecutionStatus attempts={attempts} live={live} {...actions} />
-      )}
+      <ExecutionStatus attempts={attempts} live={live} {...actions} />
     </>
   );
 }
@@ -148,23 +172,25 @@ function LiveMessage({ live }: { live: LiveAttempt | null }) {
       <span className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100">
         <Bot className="size-4" />
       </span>
-      <div className="min-w-0 max-w-[min(88%,740px)] rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3">
-        <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+      <div className="min-w-0 max-w-[min(88%,740px)]">
+        <div className="mb-1.5 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
           <span>Cycle Agent · {live.stage || t("正在执行")}</span>
           <RunDuration startedAt={live.startedAt} active />
         </div>
-        {live.text ? (
-          <RichText content={live.text} />
-        ) : (
-          <div
-            aria-label={t("Agent 正在工作")}
-            className="flex h-7 items-center gap-1"
-          >
-            <span className="live-dot size-1.5 rounded-full bg-slate-500" />
-            <span className="live-dot size-1.5 rounded-full bg-slate-500" />
-            <span className="live-dot size-1.5 rounded-full bg-slate-500" />
-          </div>
-        )}
+        <div>
+          {live.text ? (
+            <RichText content={live.text} />
+          ) : (
+            <div
+              aria-label={t("Agent 正在工作")}
+              className="flex h-7 items-center gap-1"
+            >
+              <span className="live-dot size-1.5 rounded-full bg-slate-500" />
+              <span className="live-dot size-1.5 rounded-full bg-slate-500" />
+              <span className="live-dot size-1.5 rounded-full bg-slate-500" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -192,23 +218,16 @@ export function ConversationView({
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
 
-  const sortedEvents = useMemo(
-    () => orderTimelineEvents(events, currentAttempt, attemptHistory),
-    [attemptHistory, currentAttempt, events],
-  );
-  const eventIDs = useMemo(
-    () => new Set(sortedEvents.map((event) => event.id)),
-    [sortedEvents],
-  );
-  const { byEvent, standalone } = useMemo(
+  const sortedEvents = useMemo(() => orderTimelineEvents(events), [events]);
+  const { byEvent, standalone, completedByResult } = useMemo(
     () =>
       groupExecutionAttempts(
-        eventIDs,
+        sortedEvents,
         pendingTurns,
         currentAttempt,
         attemptHistory,
       ),
-    [attemptHistory, currentAttempt, eventIDs, pendingTurns],
+    [attemptHistory, currentAttempt, sortedEvents, pendingTurns],
   );
 
   useEffect(() => {
@@ -260,6 +279,7 @@ export function ConversationView({
               <EventRow
                 event={event}
                 attempts={byEvent.get(event.id) || []}
+                completedAttempt={completedByResult.get(event.id)}
                 live={live}
                 {...actions}
               />
@@ -267,18 +287,8 @@ export function ConversationView({
           );
         })}
 
-        <StandaloneExecution
-          attempts={standalone}
-          live={live}
-          {...actions}
-        />
-        <LiveMessage
-          live={
-            live && currentAttempt?.id !== live.attemptID
-              ? live
-              : null
-          }
-        />
+        <StandaloneExecution attempts={standalone} live={live} {...actions} />
+        <LiveMessage live={live?.text ? live : null} />
         <div ref={bottom} className="h-1" />
       </div>
 
