@@ -30,6 +30,7 @@ import {
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
+import { NotificationSettings } from "./NotificationSettings";
 import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { MCPSettings, NexusSettings } from "./ConnectionsSettings";
@@ -124,6 +125,7 @@ export default function SettingsPage({ role }: { role: string }) {
               )}
             >
               <div className="space-y-4 text-[13px]">
+                <NotificationSettings />
                 <Field label={t("界面语言")}>
                   <select
                     aria-label={t("界面语言")}

@@ -79,6 +79,22 @@ export function useTheme(): [Theme, (next: Theme) => void] {
 }
 
 const en = {
+  开启卡片更新通知: "Enable card update notifications",
+  "离开卡片或切到后台，也能及时看到模型回复与卡片更新。":
+    "See model replies and card updates when viewing another card or working in the background.",
+  暂不开启: "Not now",
+  浏览器通知: "Browser notifications",
+  开启通知: "Enable notifications",
+  关闭通知: "Disable notifications",
+  卡片有更新: "Card updated",
+  "卡片有更新，点击查看": "Card updated. Click to view.",
+  浏览器通知启动失败: "Failed to start browser notifications",
+  "切到后台或离开当前卡片后，卡片有更新时通知。网页需保持打开。":
+    "Notify on card updates when in the background or viewing another card. Keep the page open.",
+  "当前环境不支持浏览器通知，请使用 HTTPS 或本机浏览器。":
+    "Notifications are unavailable. Use HTTPS or localhost in a supported browser.",
+  "通知权限已被阻止，请在浏览器的网站设置中允许通知。":
+    "Notifications are blocked. Allow them in your browser's site settings.",
   聊天: "Chat",
   看板: "Board",
   工作: "Work",
@@ -256,7 +272,8 @@ const en = {
   "Agent 正在处理当前工作": "Agent is handling the current work",
   "Agent 当前空闲": "Agent is idle",
   另有待处理: "queued",
-  "新讨论发送失败，草稿已保留": "Failed to send the new discussion. Draft saved.",
+  "新讨论发送失败，草稿已保留":
+    "Failed to send the new discussion. Draft saved.",
   "重试失败，草稿仍已保留": "Retry failed. Draft remains saved.",
   "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card，不会重复创建讨论。":
     "The discussion was created, but the first message is not confirmed. Retry reuses the same Card and will not create a duplicate.",

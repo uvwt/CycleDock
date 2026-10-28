@@ -28,6 +28,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
 	r.Post("/projects/{projectID}/todos", api.createTodo)
 
+	r.Get("/cards/updates/stream", api.streamCardUpdates)
 	r.Get("/cards/{cardID}", api.getCard)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
 	r.Patch("/cards/{cardID}", api.updateCard)

@@ -10,6 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, APIError } from "../shared/api/client";
 import { keys, queryClient } from "./query";
 import { ErrorView, Spinner } from "../shared/ui/components";
+import { NotificationPermissionPrompt } from "../shared/realtime/NotificationPermissionPrompt";
+import { useCardNotifications } from "../shared/realtime/useCardNotifications";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
 import { ProjectProvider } from "./ProjectContext";
@@ -27,6 +29,7 @@ function Authenticated() {
   const me = useQuery({ queryKey: keys.me, queryFn: api.me, retry: false });
   const location = useLocation();
   const navigate = useNavigate();
+  useCardNotifications(me.data?.workspace.id || "");
   useEffect(() => {
     if (!me.data) return;
     const params = new URLSearchParams(location.search);
@@ -59,6 +62,7 @@ function Authenticated() {
   return (
     <ProjectProvider>
       <Shell>
+        <NotificationPermissionPrompt />
         <Suspense
           fallback={
             <div className="grid min-h-[50vh] place-items-center">
