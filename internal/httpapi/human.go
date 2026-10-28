@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -110,15 +111,16 @@ type attemptResponse struct {
 }
 
 type eventResponse struct {
-	ID            string    `json:"id"`
-	Sequence      int64     `json:"sequence"`
-	Type          string    `json:"type"`
-	AttemptID     string    `json:"attempt_id,omitempty"`
-	Content       string    `json:"content"`
-	CheckinStatus string    `json:"checkin_status,omitempty"`
-	ActorName     string    `json:"actor_name"`
-	ActorKind     string    `json:"actor_kind"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string          `json:"id"`
+	Sequence      int64           `json:"sequence"`
+	Type          string          `json:"type"`
+	AttemptID     string          `json:"attempt_id,omitempty"`
+	Content       string          `json:"content"`
+	CheckinStatus string          `json:"checkin_status,omitempty"`
+	Message       json.RawMessage `json:"message,omitempty"`
+	ActorName     string          `json:"actor_name"`
+	ActorKind     string          `json:"actor_kind"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 type pendingTurnResponse struct {
@@ -1031,6 +1033,9 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		}
 		if row.CheckinStatus.Valid {
 			item.CheckinStatus = row.CheckinStatus.String
+		}
+		if row.EventType == "message" && len(row.Message) > 0 {
+			item.Message = json.RawMessage(row.Message)
 		}
 		if row.AttemptID.Valid {
 			item.AttemptID = row.AttemptID.UUID.String()

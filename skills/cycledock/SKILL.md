@@ -47,18 +47,19 @@ External MCP deliberately has no interrupt tool. Human Web owns “interrupt now
 ## While an Attempt is active
 
 - Use `heartbeat_attempt` only to extend the lease.
-- Use `report_progress` for current stage and concise durable progress.
-- Set `event_content` only when the progress itself is worth preserving.
-- Use `add_finding` for discoveries later Turns need.
+- Use `reply_message` for every user-visible bubble. One invocation creates one message, and you may invoke it repeatedly.
+- Set `end_turn=false` to continue working; use `end_turn=true` for the last text/attachment bubble, or with `type=choice` and `widget` to wait for a human choice.
 - On Ongoing Cards, use `check_in` for healthy / warning / critical.
 - Every execution write must use the current `attempt_id`; foreign or stale Attempts reject writes.
 - Reuse the same `idempotency_key` when retrying the same logical Event write.
 
 ## Finishing an Attempt
 
-Use `finish_attempt`:
+Normally finish with `reply_message(end_turn=true)`, which completes the Attempt after publishing the final bubble. If human input is needed, use `type=choice` and `widget.question / widget.options` instead; the Attempt enters `waiting_human` automatically.
 
-- `completed`: include the durable Result.
+Use `finish_attempt` for exceptional lifecycle handling:
+
+- `completed`: legacy completion for callers that did not publish a final message.
 - `failed`: include a concise failure summary.
 - `waiting_human`: include stage and exactly what human input is required, then stop.
 

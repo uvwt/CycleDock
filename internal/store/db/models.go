@@ -122,6 +122,7 @@ type Event struct {
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 	RequestHash    pgtype.Text        `json:"request_hash"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Message        []byte             `json:"message"`
 }
 
 type HumanAccount struct {

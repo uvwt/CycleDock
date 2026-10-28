@@ -116,8 +116,7 @@ External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式�
 
 - `claim_attempt`
 - `heartbeat_attempt`
-- `report_progress`
-- `add_finding`
+- `reply_message`
 - `check_in`
 - `finish_attempt`
 
@@ -132,9 +131,9 @@ External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式�
 
 `heartbeat_attempt` 只延长 running Attempt lease，不写 Timeline。
 
-`report_progress` 更新 `current_stage / progress_summary` 并续 lease；只有 `event_content` 非空时才生成 durable Progress Event。
+`reply_message` 每调用一次生成独立用户消息气泡；`end_turn=true` 的文字/附件结束 Attempt，选择卡会原子进入 `waiting_human`，详情见 `docs/reply-message.md`。
 
-`add_finding`、`check_in` 与 completed Result 是长期 Card 事实。Raw tool output、临时日志、tool args、chain-of-thought 不应写入产品 Timeline。
+`check_in` 仍记录 Ongoing 结构化健康事实；`confirm_card` 仍负责 Todo 审核。原始工具调用和 chain-of-thought 不写入产品 Timeline。
 
 `finish_attempt` 支持：
 
@@ -174,8 +173,7 @@ Agent 对 Todo 使用 `move_card` 只能进入 `todo / working`。Agent 不允�
 - `generate_work`。
 - `add_comment`。
 - `create_turn`。
-- meaningful `report_progress` Event。
-- `add_finding`。
+- 每条 `reply_message` 的 Message Event。
 - `check_in`。
 - `confirm_card`。
 

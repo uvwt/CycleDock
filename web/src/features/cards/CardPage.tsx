@@ -112,6 +112,13 @@ function CardPageContent() {
       toast.error(error instanceof Error ? error.message : t("发送失败")),
   });
 
+  const choose = useMutation({
+    mutationFn: (value: string) => api.reply(cardID, value),
+    onSuccess: sync,
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("发送失败")),
+  });
+
   const generate = useMutation({
     mutationFn: () =>
       api.send(
@@ -297,6 +304,9 @@ function CardPageContent() {
             pendingTurns={detail.data.pending_turns}
             currentAttempt={detail.data.current_attempt}
             attemptHistory={detail.data.attempt_history}
+            waitingAttemptID={waiting ? current?.id : undefined}
+            choicePending={choose.isPending}
+            onChoose={(value) => choose.mutate(value)}
             cancelingTurnID={cancelingTurnID}
             retryingAttemptID={retryingAttemptID}
             onCancelTurn={(turnID) => cancelTurn.mutate(turnID)}

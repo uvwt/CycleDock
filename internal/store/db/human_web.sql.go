@@ -96,7 +96,7 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 }
 
 const latestCheckinForCard = `-- name: LatestCheckinForCard :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -126,6 +126,7 @@ func (q *Queries) LatestCheckinForCard(ctx context.Context, arg LatestCheckinFor
 		&i.IdempotencyKey,
 		&i.RequestHash,
 		&i.CreatedAt,
+		&i.Message,
 	)
 	return i, err
 }
@@ -179,7 +180,7 @@ func (q *Queries) ListCardSchedules(ctx context.Context, arg ListCardSchedulesPa
 
 const listCardTimeline = `-- name: ListCardTimeline :many
 SELECT
-    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at,
+    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message,
     s.name AS actor_name,
     s.kind AS actor_kind
 FROM events e
@@ -209,6 +210,7 @@ type ListCardTimelineRow struct {
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 	RequestHash    pgtype.Text        `json:"request_hash"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Message        []byte             `json:"message"`
 	ActorName      string             `json:"actor_name"`
 	ActorKind      string             `json:"actor_kind"`
 }
@@ -235,6 +237,7 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.IdempotencyKey,
 			&i.RequestHash,
 			&i.CreatedAt,
+			&i.Message,
 			&i.ActorName,
 			&i.ActorKind,
 		); err != nil {

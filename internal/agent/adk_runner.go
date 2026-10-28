@@ -98,6 +98,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	defer mcpSessions.Close()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
+	replies := &replyState{}
 	toolRuntime := attemptToolRuntime{
 		store:           r.store,
 		context:         cardContext,
@@ -105,15 +106,17 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		artifactService: r.artifactService,
 		historyService:  historyService,
 		fatal:           &attemptToolFatal{},
+		replies:         replies,
 	}
 	tools, err := buildADKTools(toolRuntime)
 	if err != nil {
 		return err
 	}
+	// 模型原始文本不直接展示；用户气泡唯一来源是持久 reply_message。
 	llm, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
-		r.live,
+		nil,
 		cardContext.WorkspaceID,
 		cardContext.CardID,
 		cardContext.AttemptID,
@@ -229,13 +232,28 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	case domain.AttemptStatusWaitingHuman:
 		return nil
 	case domain.AttemptStatusRunning:
+		// 未调用结束工具的旧式模型输出走同一个持久消息通道兜底，
+		// 不能回到旧 result 气泡和临时流文本两套并行机制。
+		replies.mu.Lock()
+		ended := replies.ended
+		replies.mu.Unlock()
+		if !ended && finalText != "" {
+			if _, _, err := r.store.PublishReply(runCtx, store.PublishReplyParams{
+				WorkspaceID: cardContext.WorkspaceID, CardID: cardContext.CardID,
+				AttemptID: cardContext.AttemptID, RunnerSourceID: cardContext.RunnerSourceID,
+				Message:        store.ReplyMessage{Type: "text", Content: finalText, EndTurn: true},
+				IdempotencyKey: "runner-final-" + cardContext.AttemptID.String(),
+			}); err != nil {
+				return err
+			}
+		}
 		if err := r.store.CompleteAttempt(
 			runCtx,
 			cardContext.WorkspaceID,
 			cardContext.CardID,
 			cardContext.AttemptID,
 			cardContext.RunnerSourceID,
-			finalText,
+			"",
 			time.Now().UTC(),
 		); err != nil {
 			return err
@@ -356,6 +374,14 @@ func (r *Runner) heartbeatAttempt(
 			if err == nil {
 				continue
 			}
+			// choice 消息会在数据库事务内先切换 waiting_human，然后 ADK
+			// 才写回 FunctionResponse。该正常状态转换不能被 heartbeat 误判成失败。
+			if errors.Is(err, domain.ErrAttemptNotCurrent) {
+				attempt, lookupErr := r.store.GetAttempt(ctx, card.WorkspaceID, card.AttemptID)
+				if lookupErr == nil && attempt.Status == domain.AttemptStatusWaitingHuman {
+					return
+				}
+			}
 			select {
 			case errCh <- fmt.Errorf("attempt heartbeat failed: %w", err):
 			default:
@@ -376,13 +402,12 @@ func buildADKInstructions(
 	out.WriteString("This Card is a persistent Agent Session. Prior user messages, model responses, tool calls, and tool responses from this Card can be present in the Session history. Use them when they answer the current follow-up. Do not repeat a read-only tool call merely because it happened in an earlier Turn. Re-query when the user asks for current/fresh state, when the old result may be stale, or when a write action must actually be performed.\n\n")
 	out.WriteString("Rules:\n")
 	out.WriteString("- Treat the current Project/Card business metadata below as authoritative.\n")
-	out.WriteString("- Use cycledock_add_finding only for distilled durable business facts; the Session already preserves ordinary tool evidence.\n")
+	out.WriteString("- All user-visible content must use reply_message. Each call creates exactly one separate bubble; you may call it several times per Turn. Do not put replies in plain assistant text.\n")
+	out.WriteString("- Send progress as reply_message(type=text,end_turn=false); finish with end_turn=true. A choice reply must include widget.question and widget.options and end_turn=true, which waits for human input. Use a unique idempotency_key for each bubble.\n")
 	out.WriteString("- If an earlier FunctionResponse contains artifact_ref, use cycledock_read_artifact to inspect that historical payload instead of re-running the real tool merely to recover old evidence.\n")
 	out.WriteString("- If context compaction no longer includes an exact old value, use cycledock_search_session_history before re-querying a real read-only tool just to recover history.\n")
-	out.WriteString("- Use cycledock_report_progress for meaningful execution stages.\n")
 	out.WriteString("- Only an active Discussion may generate Todo/Ongoing work.\n")
 	out.WriteString("- On Ongoing Cards, use cycledock_check_in when you establish a health fact.\n")
-	out.WriteString("- If human input is required, call cycledock_wait_for_human and stop.\n")
 	out.WriteString("- Use cycledock_confirm_card only after verified Todo work. Human Review -> Done is never your action.\n")
 	out.WriteString("- Never output chain-of-thought or hidden reasoning.\n")
 	if extra := strings.TrimSpace(workspaceInstructions); extra != "" {

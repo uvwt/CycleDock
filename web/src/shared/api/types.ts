@@ -51,6 +51,7 @@ export type TimelineEvent = {
     | "progress"
     | "finding"
     | "result"
+    | "message"
     | "checkin"
     | "confirm"
     | "reject"
@@ -58,6 +59,15 @@ export type TimelineEvent = {
   actor_kind: string;
   actor_name: string;
   content: string;
+  message?: {
+    type: "text" | "attachment" | "choice";
+    content?: string;
+    url?: string;
+    alt?: string;
+    images?: string[];
+    widget?: { question: string; options: { value: string; label: string }[] };
+    end_turn: boolean;
+  };
   checkin_status?: string;
   created_at: string;
 };

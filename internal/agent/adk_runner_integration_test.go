@@ -668,8 +668,8 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID: "pair-call-1", Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "cycledock_report_progress",
-					Arguments: `{"stage":"pairing","summary":"PAIR_SUMMARY"}`,
+					Name:      "reply_message",
+					Arguments: `{"type":"text","content":"PAIR_SUMMARY","end_turn":false,"idempotency_key":"pair-summary"}`,
 				},
 			}})
 		case 3:
@@ -684,7 +684,7 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 			callIndex, responseIndex := -1, -1
 			for index, message := range body.Messages {
 				for _, call := range message.ToolCalls {
-					if call.ID == "pair-call-1" && call.Function.Name == "cycledock_report_progress" {
+					if call.ID == "pair-call-1" && call.Function.Name == "reply_message" {
 						callIndex = index
 					}
 				}
@@ -791,19 +791,19 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 		w.Header().Set("Content-Type", "application/json")
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "cycledock_wait_for_human") {
-				t.Errorf("wait_for_human tool missing from first turn")
+			if !requestIncludesTool(body, "reply_message") {
+				t.Errorf("reply_message tool missing from first turn")
 			}
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID:   "wait-call-1",
 				Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "cycledock_wait_for_human",
-					Arguments: `{"stage":"need_target","summary":"Which target should I use?"}`,
+					Name:      "reply_message",
+					Arguments: `{"type":"choice","widget":{"question":"Which target should I use?","options":[{"value":"A","label":"Target A"},{"value":"B","label":"Target B"}]},"end_turn":true,"idempotency_key":"wait-target"}`,
 				},
 			}})
 		case 2:
-			if !strings.Contains(string(rawMessages), "waiting_human") ||
+			if !strings.Contains(string(rawMessages), "Which target should I use?") ||
 				!strings.Contains(string(rawMessages), "Use target B") {
 				t.Errorf("second turn missing wait FunctionResponse or human reply: %s", rawMessages)
 			} else {
@@ -917,6 +917,6 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 		t.Fatalf("second attempt status=%s want completed", secondAttempt.Status)
 	}
 	if !secondTurnSawWaitResponse {
-		t.Fatal("second Turn did not receive persisted wait_for_human FunctionResponse")
+		t.Fatal("second Turn did not receive persisted reply_message FunctionResponse")
 	}
 }

@@ -252,7 +252,7 @@ Phase D 已完成 Context / Artifact / History：
 
 Phase E 已完成 External MCP cutover：
 
-- OAuth MCP `create_turn / claim_attempt / heartbeat_attempt / report_progress / add_finding / check_in / finish_attempt` 全部使用同一 Turn / Attempt Store。
+- OAuth MCP `create_turn / claim_attempt / heartbeat_attempt / reply_message / check_in / finish_attempt` 全部使用同一 Turn / Attempt Store。
 - `get_card / list_cards` 返回 `pending_turns / current_attempt / attempt_history` 与 `current_attempt_status / pending_turn_count`。
 - External OAuth Source 只能写自己拥有的 Attempt；stale / cross-source heartbeat、progress、finding、check-in、finish 均被拒绝。
 - Human reply 与 Schedule 创建的 Turn 可由 External Agent 按 Card Claim；同 Source 网络重试复用当前 Attempt。

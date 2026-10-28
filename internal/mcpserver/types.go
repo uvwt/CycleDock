@@ -114,15 +114,16 @@ type CardView struct {
 }
 
 type EventView struct {
-	ID            string `json:"id"`
-	Sequence      int64  `json:"sequence"`
-	Type          string `json:"type"`
-	AttemptID     string `json:"attempt_id,omitempty"`
-	ActorName     string `json:"actor_name"`
-	ActorKind     string `json:"actor_kind"`
-	Content       string `json:"content"`
-	CheckinStatus string `json:"checkin_status,omitempty"`
-	CreatedAt     string `json:"created_at"`
+	ID            string         `json:"id"`
+	Sequence      int64          `json:"sequence"`
+	Type          string         `json:"type"`
+	AttemptID     string         `json:"attempt_id,omitempty"`
+	ActorName     string         `json:"actor_name"`
+	ActorKind     string         `json:"actor_kind"`
+	Content       string         `json:"content"`
+	Message       map[string]any `json:"message,omitempty"`
+	CheckinStatus string         `json:"checkin_status,omitempty"`
+	CreatedAt     string         `json:"created_at"`
 }
 
 type PendingTurnView struct {

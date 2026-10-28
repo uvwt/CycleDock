@@ -25,7 +25,7 @@ func TestAIConnectGuideUsesCurrentInstanceAndTurnAttemptTools(t *testing.T) {
 		"https://cycle.example/mcp",
 		"https://cycle.example/skills/cycledock/SKILL.md",
 		"list_projects", "list_cards", "create_turn", "claim_attempt", "heartbeat_attempt",
-		"report_progress", "add_finding", "check_in", "finish_attempt", "confirm_card",
+		"reply_message", "check_in", "finish_attempt", "confirm_card",
 		"原生 Remote MCP", "OAuth",
 	} {
 		if !strings.Contains(body, expected) {
@@ -34,6 +34,7 @@ func TestAIConnectGuideUsesCurrentInstanceAndTurnAttemptTools(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"board_id", "add_event", "create_followup", "claim_work", "heartbeat_run", "finish_run",
+		"report_progress", "add_finding",
 		"CycleDock 不运行 AI", "CycleDock 不提供 Scheduler",
 	} {
 		if strings.Contains(body, forbidden) {
