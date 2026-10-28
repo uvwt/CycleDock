@@ -18,6 +18,15 @@ type responsesTool struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
+type responsesTextFormat struct {
+	Type string `json:"type"`
+	*OutputSchema
+}
+
+type responsesText struct {
+	Format responsesTextFormat `json:"format"`
+}
+
 type responsesItem struct {
 	Type      string `json:"type,omitempty"`
 	Role      string `json:"role,omitempty"`
@@ -77,9 +86,13 @@ func (c *Client) completeResponses(
 		Tools        []responsesTool `json:"tools,omitempty"`
 		Store        bool            `json:"store"`
 		Stream       bool            `json:"stream"`
+		Text         *responsesText  `json:"text,omitempty"`
 	}{
 		Model: strings.TrimSpace(config.Model), Instructions: instructions,
 		Input: input, Tools: responseTools, Store: false, Stream: true,
+	}
+	if config.OutputSchema != nil {
+		body.Text = &responsesText{Format: responsesTextFormat{Type: "json_schema", OutputSchema: config.OutputSchema}}
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

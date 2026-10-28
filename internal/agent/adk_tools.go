@@ -75,10 +75,6 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	if runtime.historyService != nil {
 		definitions = append(definitions, historyToolDefinition())
 	}
-	if runtime.context.CardKind == domain.CardKindDiscussion &&
-		strings.TrimSpace(runtime.context.CardTitle) == "" {
-		definitions = append(definitions, discussionMetadataToolDefinition())
-	}
 
 	out := make([]tool.Tool, 0, len(definitions))
 	for _, definition := range definitions {
@@ -236,22 +232,6 @@ func (r attemptToolRuntime) internalHandler(
 			// new Turn in the same Card Session.
 			ctx.Actions().SkipSummarization = true
 			return map[string]any{"ok": true, "status": "waiting_human"}, nil
-		}, nil
-
-	case "cycledock_set_discussion_metadata":
-		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-			if err := r.store.SetDiscussionMetadataForAttempt(
-				ctx,
-				r.context.WorkspaceID,
-				r.context.CardID,
-				r.context.AttemptID,
-				r.context.RunnerSourceID,
-				stringArg(args, "title"),
-				stringArg(args, "description"),
-			); err != nil {
-				return nil, err
-			}
-			return map[string]any{"ok": true}, nil
 		}, nil
 
 	case "cycledock_generate_work":

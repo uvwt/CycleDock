@@ -90,28 +90,3 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		},
 	}
 }
-
-func discussionMetadataToolDefinition() modelclient.ToolDefinition {
-	return modelclient.ToolDefinition{
-		Type: "function",
-		Function: modelclient.ToolDefinitionFunc{
-			Name:        "cycledock_set_discussion_metadata",
-			Description: "Set the generated title and description for a new Discussion whose title is still empty.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"title": map[string]any{
-						"type":        "string",
-						"description": "Concise discussion title derived from the first conversation.",
-					},
-					"description": map[string]any{
-						"type":        "string",
-						"description": "Short durable summary of what the discussion is about.",
-					},
-				},
-				"required":             []string{"title", "description"},
-				"additionalProperties": false,
-			},
-		},
-	}
-}

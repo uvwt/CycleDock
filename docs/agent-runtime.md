@@ -266,3 +266,11 @@ Phase F cleanup 已完成：
 - 首次发布 migration 已重整为单一 `000001_initial.sql`，并通过 fresh `up → down 0 → up`、自定义 `search_path` 和连续 `sqlc generate` 稳定性验证。
 
 项目不提供旧 Runtime 长期兼容；最终发布前只剩 release verification。
+
+## Discussion 标题与摘要
+
+Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题与描述均为空的 active Discussion，使用 Workspace 的模型路由生成结构化标题与描述。生成请求不提供工具，不创建 Turn / Attempt，不写入 ADK Session，也不发布临时模型输出。每次请求最多 20 秒；失败保留空白元数据供后续扫描重试，重启后同样可以恢复。Workspace 尚未配置启用的模型路由时等待配置。
+
+保存使用数据库条件更新：仅当卡片仍为 active Discussion 且标题与描述均为空时写入，避免覆盖用户在生成期间的编辑。多个实例可能重复发起生成，但只有一次保存成功。保存后发送 `card.updated` 通知浏览器刷新。
+
+标题生成使用 `ResponseJsonSchema` 定义必填的 `title` / `description` 字符串并禁止额外字段。模型适配层向 Chat Completions 发送严格的 `response_format.json_schema`，向 Responses 发送严格的 `text.format`；普通对话不附加输出格式。仍在本地拒绝非法 JSON、额外字段、尾随内容及空白必填字段；不支持 JSON Schema 的模型路由会报错，不自动降级为仅提示词约定。

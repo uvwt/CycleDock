@@ -350,57 +350,6 @@ func (s *Store) WaitAttemptForHumanWithPrompt(
 	return tx.Commit(ctx)
 }
 
-func (s *Store) SetDiscussionMetadataForAttempt(
-	ctx context.Context,
-	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
-	title, description string,
-) error {
-	title = strings.TrimSpace(title)
-	description = strings.TrimSpace(description)
-	if title == "" {
-		return fmt.Errorf("%w: discussion title is required", domain.ErrConflict)
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
-	}
-	if err := requireCurrentAttempt(
-		ctx, tx, workspaceID, cardID, attemptID, runnerSourceID,
-		domain.AttemptStatusRunning,
-	); err != nil {
-		return err
-	}
-
-	var kind, state, existingTitle string
-	if err := tx.QueryRow(ctx, `
-		SELECT kind, COALESCE(discussion_state,''), title
-		FROM cards
-		WHERE workspace_id=$1 AND id=$2
-	`, workspaceID, cardID).Scan(&kind, &state, &existingTitle); err != nil {
-		return err
-	}
-	if kind != string(domain.CardKindDiscussion) ||
-		state != string(domain.DiscussionStateActive) {
-		return fmt.Errorf("%w: active discussion required", domain.ErrInvalidTransition)
-	}
-	if strings.TrimSpace(existingTitle) != "" {
-		return tx.Commit(ctx)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE cards
-		SET title=$3, description=$4, updated_at=now()
-		WHERE workspace_id=$1 AND id=$2
-	`, workspaceID, cardID, title, description); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
 func (s *Store) CompleteAttempt(
 	ctx context.Context,
 	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,

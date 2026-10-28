@@ -104,6 +104,14 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	slots := make(chan struct{}, d.maxConcurrent)
 	var workers sync.WaitGroup
 
+	// 标题生成独立于主 Attempt；退出时等待后台任务响应取消。
+	metadataDone := make(chan struct{})
+	go func() {
+		defer close(metadataDone)
+		d.runDiscussionMetadata(ctx)
+	}()
+	defer func() { <-metadataDone }()
+
 	if err := d.maintain(ctx); err != nil {
 		d.logger.Error("Cycle Agent maintenance failed", "error", err)
 	}

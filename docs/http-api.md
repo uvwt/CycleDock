@@ -25,7 +25,7 @@ Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted
 - `GET /api/v1/projects/{projectID}`
 - `PATCH /api/v1/projects/{projectID}`
 - `GET /api/v1/projects/{projectID}/cards`
-- `POST /api/v1/projects/{projectID}/discussions`：创建空白 active Discussion；首轮会话由 Built-in Agent 生成标题与摘要。
+- `POST /api/v1/projects/{projectID}/discussions`：创建空白 active Discussion；首条输入持久化后，后端独立异步生成标题与摘要。
 - `POST /api/v1/projects/{projectID}/todos`：Human 直接创建 Todo；请求只接受 `title + description`，Human Source / Workspace 来自 Web Session，`source_discussion_id` 为空且初始状态固定为 `todo`。
 
 Project 即 Board，不存在独立 Board API。

@@ -80,6 +80,12 @@ func (m *adkRouteModel) GenerateContent(
 			return
 		}
 
+		outputSchema, err := adkOutputSchema(req.Config)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
 		m.mu.Lock()
 		start := m.activeRoute
 		m.modelCalls++
@@ -100,6 +106,8 @@ func (m *adkRouteModel) GenerateContent(
 				}
 				continue
 			}
+
+			config.OutputSchema = outputSchema
 
 			streamed := false
 			if m.live != nil {
@@ -294,6 +302,27 @@ func adkRequestToModelClient(
 		return nil, nil, err
 	}
 	return messages, tools, nil
+}
+
+func adkOutputSchema(config *genai.GenerateContentConfig) (*modelclient.OutputSchema, error) {
+	if config == nil {
+		return nil, nil
+	}
+	// 当前传输使用标准 JSON Schema，不能静默丢弃 Gemini/OpenAPI 格式的 Schema。
+	if config.ResponseSchema != nil {
+		return nil, errors.New("ADK model adapter requires ResponseJsonSchema instead of ResponseSchema")
+	}
+	if config.ResponseJsonSchema == nil {
+		return nil, nil
+	}
+	if config.ResponseMIMEType != "application/json" {
+		return nil, errors.New("ADK response JSON schema requires application/json MIME type")
+	}
+	schema, err := jsonObject(config.ResponseJsonSchema)
+	if err != nil || schema == nil {
+		return nil, errors.New("ADK response JSON schema must be an object")
+	}
+	return &modelclient.OutputSchema{Name: "response", Schema: schema, Strict: true}, nil
 }
 
 func adkToolsToModelClient(config *genai.GenerateContentConfig) ([]modelclient.ToolDefinition, error) {

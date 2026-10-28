@@ -365,8 +365,8 @@ func TestDiscussionLifecycleGeneratesWorkAndPreservesDerivedCards(t *testing.T) 
 	if err != nil || claim.Turn.ID != first.TurnID {
 		t.Fatalf("claim discussion turn: claim=%+v err=%v", claim, err)
 	}
-	if err := s.SetDiscussionMetadataForAttempt(
-		ctx, f.WorkspaceID, discussion.ID, claim.Attempt.ID, f.AgentID,
+	if _, err := s.SaveGeneratedDiscussionMetadata(
+		ctx, f.WorkspaceID, discussion.ID,
 		"Release planning", "Plan the release and decide the follow-up monitoring work.",
 	); err != nil {
 		t.Fatalf("set generated discussion metadata: %v", err)

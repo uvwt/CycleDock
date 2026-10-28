@@ -28,15 +28,28 @@ const (
 )
 
 type Config struct {
-	BaseURL     string
-	Model       string
-	APIKey      string
-	Timeout     time.Duration
-	Temperature float64
-	Transport   Transport
-	Headers     map[string]string
+	BaseURL      string
+	Model        string
+	APIKey       string
+	Timeout      time.Duration
+	Temperature  float64
+	Transport    Transport
+	Headers      map[string]string
+	OutputSchema *OutputSchema
 	// OnTextDelta forwards text to the ephemeral browser stream; never store raw tool traces.
 	OnTextDelta func(string)
+}
+
+// OutputSchema 是模型输出的 JSON Schema 契约，与工具参数 Schema 独立。
+type OutputSchema struct {
+	Name   string         `json:"name"`
+	Schema map[string]any `json:"schema"`
+	Strict bool           `json:"strict"`
+}
+
+type chatResponseFormat struct {
+	Type       string        `json:"type"`
+	JSONSchema *OutputSchema `json:"json_schema"`
 }
 
 type Message struct {
@@ -121,14 +134,18 @@ func (c *Client) Complete(
 	defer cancel()
 
 	body := struct {
-		Model       string           `json:"model"`
-		Messages    []Message        `json:"messages"`
-		Tools       []ToolDefinition `json:"tools,omitempty"`
-		Temperature float64          `json:"temperature,omitempty"`
-		Stream      bool             `json:"stream"`
+		Model          string              `json:"model"`
+		Messages       []Message           `json:"messages"`
+		Tools          []ToolDefinition    `json:"tools,omitempty"`
+		Temperature    float64             `json:"temperature,omitempty"`
+		Stream         bool                `json:"stream"`
+		ResponseFormat *chatResponseFormat `json:"response_format,omitempty"`
 	}{
 		Model: strings.TrimSpace(config.Model), Messages: messages,
 		Tools: tools, Temperature: config.Temperature, Stream: config.OnTextDelta != nil,
+	}
+	if config.OutputSchema != nil {
+		body.ResponseFormat = &chatResponseFormat{Type: "json_schema", JSONSchema: config.OutputSchema}
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
