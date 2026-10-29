@@ -46,6 +46,9 @@ export function CardActions({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: keys.card(card.id) }),
       queryClient.invalidateQueries({ queryKey: keys.cards(card.project_id) }),
+      queryClient.invalidateQueries({
+        queryKey: keys.schedules(card.project_id),
+      }),
     ]);
   };
 
@@ -142,7 +145,7 @@ export function CardActions({
           open={detailsOpen}
           onOpenChange={setDetailsOpen}
           title="任务详情"
-          description="查看任务目标、来源关系，以及持续事项的健康状态和定时日程。"
+          description="查看任务目标、来源关系，以及计划的健康状态和定时日程。"
         >
           <TaskDetailsPanel
             detail={taskDetails.detail}

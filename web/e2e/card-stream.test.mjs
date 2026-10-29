@@ -23,12 +23,13 @@ test("消息提交绑定正式事件 ID，迟到参数不能重新打开气泡",
   assert.equal(live, committed);
 });
 
-test("路由重试只清除未提交预览，保留已提交消息的对应关系", () => {
+test("路由重试保留已显示的正文并关闭旧预览", () => {
   let live = apply(started(), "reply.preview", event({reply_id:"saved",text:"已发送"}));
   live = apply(live, "reply.committed", event({reply_id:"saved",event_id:"persisted"}));
   live = apply(live, "reply.preview", event({reply_id:"draft",text:"未发送"}));
   live = apply(live, "reply.reset", event());
-  assert.deepEqual(live.replies.map((reply) => reply.id), ["saved"]);
+  assert.deepEqual(live.replies.map((reply) => reply.id), ["saved", "draft"]);
+  assert.equal(live.replies[1].failed, true);
 });
 
 test("旧 Attempt 的迟到事件不影响当前回复，终止后不再接受参数", () => {
@@ -47,4 +48,28 @@ test("重连快照恢复多个预览和已提交事件身份", () => {
   ]}));
   assert.equal(live.replies.length,2);
   assert.equal(live.replies[0].eventID,"persisted");
+});
+
+test("取消后开始新执行仍保留已显示的正文，迟到的旧事件不能改写正文", () => {
+  let live = apply(
+    started(),
+    "reply.preview",
+    event({ reply_id: "draft", text: "已经显示的正文" }),
+  );
+  live = apply(live, "attempt.failed", event());
+  live = apply(live, "attempt.started", event({ attempt_id: "next" }));
+  assert.equal(live.previous[0].replies[0].text, "已经显示的正文");
+  assert.equal(
+    apply(
+      live,
+      "reply.preview",
+      event({ reply_id: "draft", text: "迟到内容" }),
+    ),
+    live,
+  );
+  assert.equal(
+    apply(live, "attempt.snapshot", event({ attempt_id: "next" })).previous
+      .length,
+    1,
+  );
 });

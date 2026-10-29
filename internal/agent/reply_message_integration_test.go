@@ -249,10 +249,24 @@ func TestReplyPreviewStreamsBeforeToolCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var previewEventID uuid.UUID
 	for _, event := range timeline {
 		if event.EventType == "message" {
-			t.Fatal("partial preview was persisted before tool execution")
+			var payload struct {
+				PreviewID string `json:"preview_id"`
+				Preview   bool   `json:"preview"`
+			}
+			if err := json.Unmarshal(event.Message, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.PreviewID != previewID || !payload.Preview || event.Content != "你好" {
+				t.Fatalf("persisted preview=%+v payload=%+v", event, payload)
+			}
+			previewEventID = event.ID
 		}
+	}
+	if previewEventID == uuid.Nil {
+		t.Fatal("visible preview missing from refreshed timeline")
 	}
 	release.Do(func() { close(finish) })
 	if err := <-done; err != nil {
@@ -284,7 +298,7 @@ func TestReplyPreviewStreamsBeforeToolCommit(t *testing.T) {
 			}
 		}
 	}
-	if count != 1 || committed == "" {
+	if count != 1 || committed != previewEventID.String() {
 		t.Fatalf("messages=%d committed=%s", count, committed)
 	}
 	appName, userID, sessionID := agentsession.Identity(workspace.ID, card.ID)

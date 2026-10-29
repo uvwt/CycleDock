@@ -30,6 +30,14 @@ Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted
 
 Project 即 Board，不存在独立 Board API。
 
+## Activity / Agent 筛选
+
+- `GET /api/v1/projects/{projectID}/activity/agents`：列出当前 Workspace 已有的 `cycle_agent` 与 `oauth_client` Source，返回 `id + name + kind`。OAuth 客户端名称来自授权时创建的 Source；列表不依赖当前项目是否已有该 Agent 的活动，未执行的客户端也可以被选择。
+- `GET /api/v1/projects/{projectID}/activity?limit=60&source_id={sourceID}`：返回当前项目最近活动，`limit` 范围为 1–100；省略 `source_id` 返回全部来源。按 Source ID 在数据库截取最近记录之前筛选，同名客户端分别处理。
+- 活动返回 `source_id + source_kind + actor_name`。Attempt 使用实际 runner，Event 使用实际作者；未领取 Turn 使用创建来源，不能提前归到 Cycle。没有明确来源的定时 Turn 仅在全部来源中展示。
+- 两个接口都校验当前认证 Workspace 下的 Project。查询参数 `source_id` 仅作筛选，不改变认证身份或租户范围；其他 Workspace 的 Source 不会返回记录。
+
+
 ## Card
 
 - `GET /api/v1/cards/{cardID}`：返回 Card、`current_attempt`、Timeline、`pending_turns`、`attempt_history`、Schedule、Health / Last Check-in。Human Turn 保存稳定 `source_event_id` 指向创建它的 Comment Event；Attempt 返回 `turn_id`、`source_event_id`、`attempt_number`、`reason`、`retry_of_attempt_id`。前端必须按这些稳定 ID 组织 Comment → Turn → Attempt，不得按文字、时间或数组位置猜测。
@@ -44,6 +52,8 @@ Discussion 不能转换为 Todo / Ongoing。Human 直接新建 Todo 与 Discussi
 
 ## Direction / Queue
 
+- `POST /api/v1/cards/{cardID}/turns/{turnID}/steer`：Human 将尚未领取的 Human Turn 转为 interrupt，在同一事务中替代当前 Attempt，通知 Worker 优先领取原 Turn；不新建 Comment/Turn，不修改原输入及幂等键。重复引导仍在排队的 interrupt Turn 返回 204；已领取、已取消或非 Human Turn 返回 409。
+- 排队输入在输入框上方的紧凑列表展示，按稳定 `source_event_id` 从消息气泡中排除；真正领取后恢复正常对话展示。取消后的输入保留在事件账本中，但不再进入 Human Timeline。
 - `POST /api/v1/cards/{cardID}/comments`
 - `POST /api/v1/cards/{cardID}/reply`
 - `POST /api/v1/cards/{cardID}/turns/{turnID}/cancel`
@@ -140,3 +150,6 @@ POST / PUT / PATCH 必须使用 `Content-Type: application/json`。
 - `GET /auth/nexusdock-device/callback`：要求已有 CycleDock Human Session；校验 state 与 Workspace/Human 绑定后兑换 code，并重定向回 Agent Connections。
 
 该连接不是普通 MCP Connection；终端用户不会提交 NexusDock MCP URL、PAT、Bearer Token 或 `tenant_id`。
+
+
+卡片 `timeline` 中的 Message 可能包含 `message.preview_id` 和 `message.preview=true`：表示已持久化、尚未由完整 `reply_message` 工具调用提交的可见正文。刷新及取消/替代后仍返回该正文；正式提交原地更新同一事件，并移除 `preview` 标记。客户端按 `preview_id` 合并 SSE 预览，避免重复气泡；该身份由服务端生成，外部工具不能指定。

@@ -158,7 +158,7 @@ func TestExternalReplyEndTurnCompletesWithoutDuplicateResult(t *testing.T) {
 		t.Fatalf("bubbles=%d legacy result=%d", bubbles, legacy)
 	}
 	// 完成活动只表达状态，不回退显示用户输入或最终回复正文。
-	activities, err := s.ListProjectActivity(ctx, f.WorkspaceID, f.ProjectID, 20)
+	activities, err := s.ListProjectActivity(ctx, f.WorkspaceID, f.ProjectID, 20, uuid.NullUUID{})
 	if err != nil {
 		t.Fatal(err)
 	}

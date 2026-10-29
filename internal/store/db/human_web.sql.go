@@ -131,6 +131,40 @@ func (q *Queries) LatestCheckinForCard(ctx context.Context, arg LatestCheckinFor
 	return i, err
 }
 
+const listActivityAgents = `-- name: ListActivityAgents :many
+SELECT id, name, kind
+FROM sources
+WHERE workspace_id = $1
+  AND kind IN ('cycle_agent', 'oauth_client')
+ORDER BY CASE WHEN kind = 'cycle_agent' THEN 0 ELSE 1 END, name, id
+`
+
+type ListActivityAgentsRow struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Kind string    `json:"kind"`
+}
+
+func (q *Queries) ListActivityAgents(ctx context.Context, workspaceID uuid.UUID) ([]ListActivityAgentsRow, error) {
+	rows, err := q.db.Query(ctx, listActivityAgents, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActivityAgentsRow{}
+	for rows.Next() {
+		var i ListActivityAgentsRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCardSchedules = `-- name: ListCardSchedules :many
 SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at
 FROM card_schedules
@@ -189,6 +223,14 @@ JOIN sources s
  AND s.id = e.actor_source_id
 WHERE e.workspace_id = $1
   AND e.card_id = $2
+  -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
+  AND NOT EXISTS (
+    SELECT 1 FROM card_turns t
+    WHERE t.workspace_id = e.workspace_id
+      AND t.card_id = e.card_id
+      AND t.source_event_id = e.id
+      AND t.cancelled_at IS NOT NULL
+  )
 ORDER BY e.sequence
 `
 
@@ -262,6 +304,8 @@ WITH activity AS (
         e.event_type AS status,
         e.content,
         s.name AS actor_name,
+        s.id::text AS source_id,
+        s.kind AS source_kind,
         e.created_at AS occurred_at
     FROM events e
     JOIN cards c
@@ -270,8 +314,8 @@ WITH activity AS (
     JOIN sources s
       ON s.workspace_id = e.workspace_id
      AND s.id = e.actor_source_id
-    WHERE e.workspace_id = $2
-      AND c.project_id = $3
+    WHERE e.workspace_id = $3
+      AND c.project_id = $4
       AND e.event_type IN ('progress', 'finding', 'result', 'checkin', 'confirm', 'reject', 'status_change')
 
     UNION ALL
@@ -285,6 +329,8 @@ WITH activity AS (
         a.status,
         a.error_summary AS content,
         s.name AS actor_name,
+        s.id::text AS source_id,
+        s.kind AS source_kind,
         COALESCE(a.finished_at, a.started_at, a.created_at) AS occurred_at
     FROM turn_attempts a
     JOIN cards c
@@ -297,8 +343,8 @@ WITH activity AS (
     JOIN sources s
       ON s.workspace_id = a.workspace_id
      AND s.id = a.runner_source_id
-    WHERE a.workspace_id = $2
-      AND c.project_id = $3
+    WHERE a.workspace_id = $3
+      AND c.project_id = $4
 
     UNION ALL
 
@@ -311,6 +357,8 @@ WITH activity AS (
         CASE WHEN t.cancelled_at IS NULL THEN 'queued' ELSE 'cancelled' END AS status,
         COALESCE(NULLIF(t.cancel_reason, ''), t.content) AS content,
         COALESCE(s.name, '') AS actor_name,
+        COALESCE(s.id::text, '') AS source_id,
+        COALESCE(s.kind, '') AS source_kind,
         COALESCE(t.cancelled_at, t.created_at) AS occurred_at
     FROM card_turns t
     JOIN cards c
@@ -322,20 +370,23 @@ WITH activity AS (
     LEFT JOIN turn_attempts a
       ON a.workspace_id = t.workspace_id
      AND a.turn_id = t.id
-    WHERE t.workspace_id = $2
-      AND c.project_id = $3
+    WHERE t.workspace_id = $3
+      AND c.project_id = $4
       AND (a.id IS NULL OR t.cancelled_at IS NOT NULL)
 )
-SELECT id, card_id, card_title, card_kind, activity_type, status, content, actor_name, occurred_at
+SELECT id, card_id, card_title, card_kind, activity_type, status, content, actor_name, source_id, source_kind, occurred_at
 FROM activity
+WHERE ($1::uuid IS NULL
+    OR source_id = $1::uuid::text)
 ORDER BY occurred_at DESC, id DESC
-LIMIT $1::int
+LIMIT $2::int
 `
 
 type ListProjectActivityParams struct {
-	ActivityLimit int32     `json:"activity_limit"`
-	WorkspaceID   uuid.UUID `json:"workspace_id"`
-	ProjectID     uuid.UUID `json:"project_id"`
+	AgentSourceID uuid.NullUUID `json:"agent_source_id"`
+	ActivityLimit int32         `json:"activity_limit"`
+	WorkspaceID   uuid.UUID     `json:"workspace_id"`
+	ProjectID     uuid.UUID     `json:"project_id"`
 }
 
 type ListProjectActivityRow struct {
@@ -347,11 +398,19 @@ type ListProjectActivityRow struct {
 	Status       string             `json:"status"`
 	Content      string             `json:"content"`
 	ActorName    string             `json:"actor_name"`
+	SourceID     string             `json:"source_id"`
+	SourceKind   string             `json:"source_kind"`
 	OccurredAt   pgtype.Timestamptz `json:"occurred_at"`
 }
 
+// 先按来源筛选再截取最近记录，避免低频客户端被其他 Agent 的新活动挤出。
 func (q *Queries) ListProjectActivity(ctx context.Context, arg ListProjectActivityParams) ([]ListProjectActivityRow, error) {
-	rows, err := q.db.Query(ctx, listProjectActivity, arg.ActivityLimit, arg.WorkspaceID, arg.ProjectID)
+	rows, err := q.db.Query(ctx, listProjectActivity,
+		arg.AgentSourceID,
+		arg.ActivityLimit,
+		arg.WorkspaceID,
+		arg.ProjectID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +427,8 @@ func (q *Queries) ListProjectActivity(ctx context.Context, arg ListProjectActivi
 			&i.Status,
 			&i.Content,
 			&i.ActorName,
+			&i.SourceID,
+			&i.SourceKind,
 			&i.OccurredAt,
 		); err != nil {
 			return nil, err

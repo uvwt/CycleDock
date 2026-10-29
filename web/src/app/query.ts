@@ -11,7 +11,9 @@ export const keys = {
   cards: (id: string) => ["cards", id] as const,
   card: (id: string) => ["card", id] as const,
   schedules: (id: string) => ["project-schedules", id] as const,
-  activity: (id: string) => ["project-activity", id] as const,
+  activity: (id: string, sourceID = "") =>
+    ["project-activity", id, sourceID] as const,
+  activityAgents: (id: string) => ["activity-agents", id] as const,
   agent: ["agent-settings"] as const,
   auth: ["model-auth"] as const,
   models: (provider: string, credentialID = "") =>

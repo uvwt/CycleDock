@@ -91,17 +91,9 @@ export default function ChatHome() {
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-6">
               <div className="w-full max-w-3xl">
                 <div className="mb-10 text-center">
-                  <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-muted text-muted-foreground">
-                    <MessageSquareText className="size-6" />
-                  </span>
-                  <h1 className="mt-5 text-2xl font-semibold tracking-tight text-heading sm:text-3xl">
+                  <h1 className="text-2xl font-semibold tracking-tight text-heading sm:text-3xl">
                     {t("今天想推进什么？")}
                   </h1>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {t(
-                      "直接输入第一句话，CycleDock 会创建 Discussion 并开始协作。",
-                    )}
-                  </p>
                 </div>
 
                 <DiscussionStartComposer

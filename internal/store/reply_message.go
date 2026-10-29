@@ -36,10 +36,18 @@ type ChoiceOption struct {
 	Label string `json:"label"`
 }
 
+// replyPayload 的预览身份仅由 Runner 设置，不接受模型或外部 MCP 指定。
+type replyPayload struct {
+	ReplyMessage
+	PreviewID string `json:"preview_id,omitempty"`
+	Preview   bool   `json:"preview,omitempty"`
+}
+
 type PublishReplyParams struct {
 	WorkspaceID, CardID, AttemptID, RunnerSourceID uuid.UUID
 	Message                                        ReplyMessage
 	IdempotencyKey                                 string
+	PreviewID                                      string
 	// 外部 MCP 没有 ADK Runner 善后，最后一条消息同时结算 Attempt。
 	FinishOnEnd bool
 }
@@ -102,7 +110,7 @@ func (m *ReplyMessage) Validate() error {
 	return nil
 }
 
-// PublishReply 与 Attempt 状态变化共用 Card 行锁；一次调用只追加一条 Message。
+// PublishReply 与 Attempt 状态变化共用 Card 行锁；一次调用只提交一条 Message。
 // 选择题在同一事务中进入 waiting_human，避免页面可点而 Attempt 尚未等待。
 func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UUID, bool, error) {
 	if err := p.Message.Validate(); err != nil {
@@ -112,12 +120,17 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 	if p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 {
 		return uuid.Nil, false, fmt.Errorf("%w: idempotency key required", domain.ErrConflict)
 	}
-	payload, err := json.Marshal(p.Message)
+	payload, err := json.Marshal(replyPayload{ReplyMessage: p.Message, PreviewID: p.PreviewID})
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	// 预览身份不改变业务幂等语义；模型路由重试可能为同一回复创建新预览。
+	requestPayload, err := json.Marshal(p.Message)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
 	hash := stableRequestHash("reply_message", p.WorkspaceID.String(), p.CardID.String(),
-		p.AttemptID.String(), p.RunnerSourceID.String(), string(payload))
+		p.AttemptID.String(), p.RunnerSourceID.String(), string(requestPayload))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, false, err
@@ -138,6 +151,14 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 		if oldCard != p.CardID || oldAttempt != p.AttemptID || oldHash != hash {
 			return uuid.Nil, false, domain.ErrIdempotencyMismatch
 		}
+		if p.PreviewID != "" {
+			if _, err := tx.Exec(ctx, `DELETE FROM events WHERE workspace_id=$1 AND card_id=$2
+                AND attempt_id=$3 AND actor_source_id=$4 AND message->>'preview_id'=$5
+                AND id<>$6 AND idempotency_key IS NULL`, p.WorkspaceID, p.CardID, p.AttemptID,
+				p.RunnerSourceID, p.PreviewID, oldID); err != nil {
+				return uuid.Nil, false, err
+			}
+		}
 		return oldID, true, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -147,14 +168,28 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 		p.AttemptID, p.RunnerSourceID, domain.AttemptStatusRunning); err != nil {
 		return uuid.Nil, false, err
 	}
-	id := uuid.New()
-	_, err = tx.Exec(ctx, `INSERT INTO events
-		(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message,idempotency_key,request_hash)
-		VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,$9)`,
-		id, p.WorkspaceID, p.CardID, p.RunnerSourceID, p.AttemptID,
-		p.Message.Content, payload, p.IdempotencyKey, hash)
-	if err != nil {
-		return uuid.Nil, false, mapConstraintError(err)
+	// 正式发送原地接替已持久化预览，气泡 ID、顺序与创建时间保持稳定。
+	id := uuid.Nil
+	if p.PreviewID != "" {
+		err = tx.QueryRow(ctx, `UPDATE events SET content=$6,message=$7,idempotency_key=$8,request_hash=$9
+			WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3 AND actor_source_id=$4
+			  AND message->>'preview_id'=$5 AND idempotency_key IS NULL
+			RETURNING id`, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID,
+			p.PreviewID, p.Message.Content, payload, p.IdempotencyKey, hash).Scan(&id)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, err
+		}
+	}
+	if id == uuid.Nil {
+		id = uuid.New()
+		_, err = tx.Exec(ctx, `INSERT INTO events
+			(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message,idempotency_key,request_hash)
+			VALUES ($1,$2,$3,'message',$4,$5,$6,$7,$8,$9)`,
+			id, p.WorkspaceID, p.CardID, p.RunnerSourceID, p.AttemptID,
+			p.Message.Content, payload, p.IdempotencyKey, hash)
+		if err != nil {
+			return uuid.Nil, false, mapConstraintError(err)
+		}
 	}
 	if p.Message.Type == "choice" {
 		command, err := tx.Exec(ctx, `UPDATE turn_attempts
@@ -189,4 +224,50 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 		return uuid.Nil, false, err
 	}
 	return id, false, nil
+}
+
+type ReplyPreviewParams struct {
+	WorkspaceID, CardID, AttemptID, RunnerSourceID uuid.UUID
+	PreviewID, Content                             string
+}
+
+// SaveReplyPreview 先保存已经可以展示的正文，再允许 SSE 对外发布。
+// 与取消/替代共用 Card 行锁：停止后的迟到片段既不能落库，也不能重新打开气泡。
+func (s *Store) SaveReplyPreview(ctx context.Context, p ReplyPreviewParams) error {
+	if p.PreviewID == "" || len(p.PreviewID) > 512 || p.Content == "" || len(p.Content) > 20000 {
+		return fmt.Errorf("%w: invalid reply preview", domain.ErrConflict)
+	}
+	payload, err := json.Marshal(replyPayload{
+		ReplyMessage: ReplyMessage{Type: "text", Content: p.Content}, PreviewID: p.PreviewID, Preview: true,
+	})
+	if err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return err
+	}
+	if err := requireCurrentAttempt(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, domain.AttemptStatusRunning); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `INSERT INTO events
+		(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message)
+		VALUES ($1,$2,$3,'message',$4,$5,$6,$7)
+		ON CONFLICT (workspace_id,card_id,attempt_id,(message->>'preview_id'))
+		WHERE message ? 'preview_id'
+		DO UPDATE SET content=EXCLUDED.content,message=EXCLUDED.message
+		WHERE events.idempotency_key IS NULL
+		  AND left(EXCLUDED.content,length(events.content))=events.content`,
+		uuid.New(), p.WorkspaceID, p.CardID, p.RunnerSourceID, p.AttemptID, p.Content, payload)
+	if err != nil {
+		return mapConstraintError(err)
+	}
+	if command.RowsAffected() != 1 {
+		return fmt.Errorf("%w: reply preview already sent or rewritten", domain.ErrConflict)
+	}
+	return tx.Commit(ctx)
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  Bot,
   CircleCheck,
   CircleSlash,
   CircleX,
@@ -70,10 +71,24 @@ export default function ActivityPage() {
     refetch: refetchProjects,
   } = useProject();
   const view = searchParams.get("view") || "all";
+  const sourceID = searchParams.get("source_id") || "";
+  const agents = useQuery({
+    queryKey: keys.activityAgents(projectID),
+    queryFn: () => api.activityAgents(projectID),
+    enabled: Boolean(projectID),
+    refetchInterval: 10_000,
+  });
+
+  function setFilter(key: string, value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  }
 
   const activity = useQuery({
-    queryKey: keys.activity(projectID),
-    queryFn: () => api.projectActivity(projectID, 80),
+    queryKey: keys.activity(projectID, sourceID),
+    queryFn: () => api.projectActivity(projectID, 80, sourceID),
     enabled: Boolean(projectID),
     refetchInterval: 10_000,
   });
@@ -104,7 +119,12 @@ export default function ActivityPage() {
   ];
 
   function open(item: ProjectActivity) {
-    const root = item.card_kind === "discussion" ? "/chat/" : "/cards/";
+    const root =
+      item.card_kind === "discussion"
+        ? "/chat/"
+        : item.card_kind === "ongoing"
+          ? "/plans/"
+          : "/cards/";
     navigate(`${root}${projectID}/${item.card_id}`);
   }
 
@@ -126,10 +146,7 @@ export default function ActivityPage() {
                 key={filter.id}
                 type="button"
                 onClick={() =>
-                  setSearchParams(
-                    filter.id === "all" ? {} : { view: filter.id },
-                    { replace: true },
-                  )
+                  setFilter("view", filter.id === "all" ? "" : filter.id)
                 }
                 className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                   view === filter.id
@@ -144,67 +161,123 @@ export default function ActivityPage() {
         )}
       </header>
 
-      {!projectID ? (
-        <div className="py-20 text-center text-sm text-muted-foreground">
-          {t("还没有项目")}
-        </div>
-      ) : activity.isPending ? (
-        <div className="py-20 grid place-items-center">
-          <Spinner />
-        </div>
-      ) : activity.error ? (
-        <div>
-          <ErrorView error={activity.error} />
-        </div>
-      ) : items.length ? (
-        <div className="overflow-hidden rounded-2xl border border-line bg-surface">
-          {items.map((item) => {
-            const state = presentation(item);
-            const Icon = state.icon;
-            return (
+      <div className="grid items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        {projectID && (
+          <aside
+            aria-label={t("Agent 列表")}
+            className="min-w-0 rounded-2xl border border-line bg-surface p-3"
+          >
+            <h2 className="mb-3 px-2 text-xs font-medium text-muted-foreground">
+              Agent
+            </h2>
+            <div className="flex gap-1 overflow-x-auto lg:block lg:space-y-1">
               <button
-                key={`${item.activity_type}-${item.id}`}
                 type="button"
-                onClick={() => open(item)}
-                className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
+                aria-pressed={!sourceID}
+                onClick={() => setFilter("source_id", "")}
+                className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-sm lg:w-full ${!sourceID ? "bg-muted text-heading" : "text-muted-foreground hover:bg-canvas"}`}
               >
-                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground">
-                  <Icon
-                    className={`size-[18px] ${state.spin ? "animate-spin" : ""}`}
-                  />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="truncate text-sm font-semibold text-heading">
-                      {item.card_title || t("未命名工作")}
-                    </span>
-                    <span className="text-xs text-faint">{t(state.label)}</span>
-                  </span>
-                  {item.content && (
-                    <span className="mt-1 line-clamp-2 block text-[13px] leading-5 text-muted-foreground">
-                      {item.content}
-                    </span>
-                  )}
-                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
-                    {item.actor_name && <span>{item.actor_name}</span>}
-                    <span>{localTime(item.occurred_at)}</span>
-                  </span>
-                </span>
+                <Activity className="size-4 shrink-0" />
+                {t("全部来源")}
               </button>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="py-20 text-center">
-          <Activity className="mx-auto size-9 text-placeholder" />
-          <p className="mt-4 text-sm font-medium text-foreground">
-            {view === "all" ? t("这个项目还没有活动") : t("这个筛选下没有活动")}
-          </p>
-          <p className="mt-1 text-[13px] text-faint">
-            {t("Agent 执行状态和重要活动会出现在这里。")}
-          </p>
-        </div>
-      )}
+              {(agents.data || []).map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  aria-pressed={sourceID === agent.id}
+                  onClick={() => setFilter("source_id", agent.id)}
+                  className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-sm lg:w-full ${sourceID === agent.id ? "bg-muted text-heading" : "text-muted-foreground hover:bg-canvas"}`}
+                >
+                  <Bot className="size-4 shrink-0" />
+                  <span className="truncate">
+                    {agent.kind === "cycle_agent" ? "Cycle" : agent.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {agents.isPending && <Spinner />}
+            {agents.error && (
+              <ErrorView
+                error={agents.error}
+                onRetry={() => void agents.refetch()}
+              />
+            )}
+          </aside>
+        )}
+        <section className="min-w-0" aria-label={t("活动列表")}>
+          {!projectID ? (
+            <div className="py-20 text-center text-sm text-muted-foreground">
+              {t("还没有项目")}
+            </div>
+          ) : activity.isPending ? (
+            <div className="py-20 grid place-items-center">
+              <Spinner />
+            </div>
+          ) : activity.error ? (
+            <div>
+              <ErrorView error={activity.error} />
+            </div>
+          ) : items.length ? (
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+              {items.map((item) => {
+                const state = presentation(item);
+                const Icon = state.icon;
+                return (
+                  <button
+                    key={`${item.activity_type}-${item.id}`}
+                    type="button"
+                    onClick={() => open(item)}
+                    className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
+                  >
+                    <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground">
+                      <Icon
+                        className={`size-[18px] ${state.spin ? "animate-spin" : ""}`}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="truncate text-sm font-semibold text-heading">
+                          {item.card_title || t("未命名工作")}
+                        </span>
+                        <span className="text-xs text-faint">
+                          {t(state.label)}
+                        </span>
+                      </span>
+                      {item.content && (
+                        <span className="mt-1 line-clamp-2 block text-[13px] leading-5 text-muted-foreground">
+                          {item.content}
+                        </span>
+                      )}
+                      <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
+                        {item.actor_name && (
+                          <span>
+                            {item.source_kind === "cycle_agent"
+                              ? "Cycle"
+                              : item.actor_name}
+                          </span>
+                        )}
+                        <span>{localTime(item.occurred_at)}</span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-20 text-center">
+              <Activity className="mx-auto size-9 text-placeholder" />
+              <p className="mt-4 text-sm font-medium text-foreground">
+                {view === "all" && !sourceID
+                  ? t("这个项目还没有活动")
+                  : t("这个筛选下没有活动")}
+              </p>
+              <p className="mt-1 text-[13px] text-faint">
+                {t("Agent 执行状态和重要活动会出现在这里。")}
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   );
 }

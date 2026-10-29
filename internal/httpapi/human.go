@@ -26,6 +26,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/projects/{projectID}/cards", api.listProjectCards)
 	r.Get("/projects/{projectID}/schedules", api.listProjectSchedules)
 	r.Get("/projects/{projectID}/activity", api.listProjectActivity)
+	r.Get("/projects/{projectID}/activity/agents", api.listProjectActivityAgents)
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
 	r.Post("/projects/{projectID}/todos", api.createTodo)
 
@@ -40,6 +41,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
 	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
+	r.Post("/cards/{cardID}/turns/{turnID}/steer", api.steerPendingTurn)
+	r.Patch("/cards/{cardID}/turns/{turnID}", api.editPendingTurn)
 	r.Post("/cards/{cardID}/attempts/{attemptID}/retry", api.retryAttempt)
 	r.Post("/cards/{cardID}/attempts/{attemptID}/cancel", api.cancelAttempt)
 
@@ -164,16 +167,24 @@ type projectScheduleResponse struct {
 	LastAttemptFinishedAt *time.Time `json:"last_attempt_finished_at,omitempty"`
 }
 
+type activityAgentResponse struct {
+	ID   string            `json:"id"`
+	Name string            `json:"name"`
+	Kind domain.SourceKind `json:"kind"`
+}
+
 type projectActivityResponse struct {
-	ID           string    `json:"id"`
-	CardID       string    `json:"card_id"`
-	CardTitle    string    `json:"card_title"`
-	CardKind     string    `json:"card_kind"`
-	ActivityType string    `json:"activity_type"`
-	Status       string    `json:"status"`
-	Content      string    `json:"content"`
-	ActorName    string    `json:"actor_name,omitempty"`
-	OccurredAt   time.Time `json:"occurred_at"`
+	ID           string            `json:"id"`
+	CardID       string            `json:"card_id"`
+	CardTitle    string            `json:"card_title"`
+	CardKind     string            `json:"card_kind"`
+	ActivityType string            `json:"activity_type"`
+	Status       string            `json:"status"`
+	Content      string            `json:"content"`
+	ActorName    string            `json:"actor_name,omitempty"`
+	SourceID     string            `json:"source_id,omitempty"`
+	SourceKind   domain.SourceKind `json:"source_kind,omitempty"`
+	OccurredAt   time.Time         `json:"occurred_at"`
 }
 
 type cardDetailResponse struct {
@@ -360,8 +371,17 @@ func (api *API) listProjectActivity(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = int32(value)
 	}
+	var sourceID uuid.NullUUID
+	if raw := strings.TrimSpace(r.URL.Query().Get("source_id")); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_source_id", "source_id must be a non-zero UUID")
+			return
+		}
+		sourceID = uuid.NullUUID{UUID: id, Valid: true}
+	}
 	identity := identityFromRequest(r)
-	rows, err := api.store.ListProjectActivity(r.Context(), identity.WorkspaceID, projectID, limit)
+	rows, err := api.store.ListProjectActivity(r.Context(), identity.WorkspaceID, projectID, limit, sourceID)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -372,6 +392,27 @@ func (api *API) listProjectActivity(w http.ResponseWriter, r *http.Request) {
 			ID: row.ID.String(), CardID: row.CardID.String(), CardTitle: row.CardTitle,
 			CardKind: row.CardKind, ActivityType: row.ActivityType, Status: row.Status,
 			Content: row.Content, ActorName: row.ActorName, OccurredAt: row.OccurredAt.Time,
+			SourceID: row.SourceID, SourceKind: domain.SourceKind(row.SourceKind),
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) listProjectActivityAgents(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	rows, err := api.store.ListProjectActivityAgents(r.Context(), identity.WorkspaceID, projectID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	response := make([]activityAgentResponse, 0, len(rows))
+	for _, row := range rows {
+		response = append(response, activityAgentResponse{
+			ID: row.ID.String(), Name: row.Name, Kind: domain.SourceKind(row.Kind),
 		})
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -741,6 +782,51 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
+}
+
+func (api *API) editPendingTurn(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	turnID, ok := parseUUIDParam(w, r, "turnID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Content string `json:"content"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.Content = strings.TrimSpace(request.Content)
+	if request.Content == "" {
+		writeError(w, http.StatusBadRequest, "invalid_content", "content is required")
+		return
+	}
+	identity := identityFromRequest(r)
+	if err := api.store.EditPendingTurn(r.Context(), identity.WorkspaceID, cardID, turnID, identity.SourceID, request.Content); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (api *API) steerPendingTurn(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	turnID, ok := parseUUIDParam(w, r, "turnID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if err := api.store.SteerPendingTurn(r.Context(), identity.WorkspaceID, cardID, turnID, identity.SourceID, time.Now().UTC()); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *API) cancelPendingTurn(w http.ResponseWriter, r *http.Request) {

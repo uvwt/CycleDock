@@ -20,14 +20,17 @@ export function Shell({ children }: { children: ReactNode }) {
   const [listVisibility, setListVisibility] = useState({
     "/chat": true,
     "/board": true,
+    "/plans": true,
   });
   const listSection = location.pathname.startsWith("/chat")
     ? "/chat"
     : location.pathname.startsWith("/cards/")
       ? "/board"
-      : null;
+      : /^\/plans\/[^/]+\/[^/]+\/?$/.test(location.pathname)
+        ? "/plans"
+        : null;
   const listVisible = listSection ? listVisibility[listSection] : true;
-  const focusedConversation = /^\/(?:chat|cards)\/[^/]+\/[^/]+\/?$/.test(
+  const focusedConversation = /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(
     location.pathname,
   );
 
@@ -82,7 +85,7 @@ export function Shell({ children }: { children: ReactNode }) {
   function selectPrimary(event: MouseEvent<HTMLAnchorElement>, path: string) {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
       return;
-    if (path !== "/chat" && path !== "/board") return;
+    if (path !== "/chat" && path !== "/board" && path !== "/plans") return;
 
     // 再次点击当前入口只切换列表，保留正在查看的会话和草稿。
     if (path === listSection) {

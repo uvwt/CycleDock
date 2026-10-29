@@ -7,17 +7,22 @@ import { keys, queryClient } from "../../app/query";
 import type { Card, TodoState, OngoingState } from "../../shared/api/types";
 import { Menu, MenuItem } from "../../shared/ui/components";
 
-const todoOptions: { value: TodoState; label: string }[] = [
-  { value: "todo", label: "待办" },
-  { value: "working", label: "进行中" },
-  { value: "review", label: "待审核" },
-  { value: "done", label: "已完成" },
-];
+const todoOptions: { value: TodoState; label: string; dotClassName: string }[] =
+  [
+    { value: "todo", label: "待办", dotClassName: "bg-slate-400" },
+    { value: "working", label: "进行中", dotClassName: "bg-sky-500" },
+    { value: "review", label: "待审核", dotClassName: "bg-amber-500" },
+    { value: "done", label: "已完成", dotClassName: "bg-emerald-500" },
+  ];
 
-const ongoingOptions: { value: OngoingState; label: string }[] = [
-  { value: "active", label: "运行中" },
-  { value: "paused", label: "已暂停" },
-  { value: "archived", label: "已归档" },
+const ongoingOptions: {
+  value: OngoingState;
+  label: string;
+  dotClassName: string;
+}[] = [
+  { value: "active", label: "运行中", dotClassName: "bg-emerald-500" },
+  { value: "paused", label: "已暂停", dotClassName: "bg-amber-500" },
+  { value: "archived", label: "已归档", dotClassName: "bg-slate-400" },
 ];
 
 export function CardStatusSwitch({ card }: { card: Card }) {
@@ -25,6 +30,7 @@ export function CardStatusSwitch({ card }: { card: Card }) {
   const isTodo = card.kind === "todo";
   const current = isTodo ? card.todo_state : card.ongoing_state;
   const options = isTodo ? todoOptions : ongoingOptions;
+  const selected = options.find((option) => option.value === current);
 
   const update = useMutation({
     mutationFn: (state: string) =>
@@ -36,6 +42,9 @@ export function CardStatusSwitch({ card }: { card: Card }) {
         queryClient.invalidateQueries({ queryKey: keys.card(card.id) }),
         queryClient.invalidateQueries({
           queryKey: keys.cards(card.project_id),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: keys.schedules(card.project_id),
         }),
       ]);
     },
@@ -56,14 +65,10 @@ export function CardStatusSwitch({ card }: { card: Card }) {
           className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-canvas px-2.5 text-xs font-medium text-foreground hover:border-line-strong hover:bg-muted data-[state=open]:border-line-strong data-[state=open]:bg-muted"
         >
           <span
-            className={`size-1.5 rounded-full ${current === "done" || current === "active" ? "bg-emerald-500" : current === "review" ? "bg-warning-muted0" : current === "working" ? "bg-sky-500" : "bg-faint"}`}
+            aria-hidden
+            className={`size-1.5 shrink-0 rounded-full ${selected?.dotClassName || "bg-slate-400"}`}
           />
-          <span>
-            {t(
-              options.find((option) => option.value === current)?.label ||
-                "待办",
-            )}
-          </span>
+          <span>{t(selected?.label || "待办")}</span>
           <ChevronDown className="size-3 text-faint" />
         </button>
       }
@@ -79,6 +84,10 @@ export function CardStatusSwitch({ card }: { card: Card }) {
             disabled={disabled}
             onSelect={() => update.mutate(option.value)}
           >
+            <span
+              aria-hidden
+              className={`size-1.5 shrink-0 rounded-full ${option.dotClassName}`}
+            />
             <span className="flex-1">{t(option.label)}</span>
             {option.value === current && <Check className="size-3.5" />}
           </MenuItem>

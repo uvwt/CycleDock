@@ -4,6 +4,7 @@ Run: MOCK_PORT=4190 node e2e/mock-server.mjs
      python e2e/smoke.py http://127.0.0.1:4190
 This fixture is not a substitute for PostgreSQL integration testing.
 """
+import copy
 import re
 import sys
 import unittest
@@ -37,12 +38,12 @@ class CycleDockSmoke(unittest.TestCase):
 
     def switch_project(self, name):
         self.page.get_by_role("button", name="选择项目").first.click()
-        picker = self.page.get_by_role("dialog", name="选择项目")
+        picker = self.page.get_by_role("menu")
         picker.wait_for()
-        picker.get_by_role("button", name=name, exact=True).click()
+        picker.get_by_role("menuitem", name=name, exact=True).click()
 
     def open_card_menu(self):
-        self.page.locator("main header").get_by_role("button", name="更多操作").click()
+        self.page.get_by_role("button", name="更多操作").click()
         menu = self.page.get_by_role("menu")
         menu.wait_for()
         return menu
@@ -323,11 +324,179 @@ class CycleDockSmoke(unittest.TestCase):
             "已定位 Docker 容器的错误记录。"
         ).wait_for(timeout=8000)
 
+    def test_composer_uses_one_stop_or_send_button(self):
+        original = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
+        state = {"stopped": False}
+        comments = []
+        def detail(route):
+            payload = copy.deepcopy(original)
+            if state["stopped"]:
+                payload["current_attempt"] = None
+            route.fulfill(json=payload)
+        def stop(route):
+            state["stopped"] = True
+            route.fulfill(status=204)
+        self.page.route("**/api/v1/cards/todo-1", detail)
+        self.page.route("**/attempts/attempt-running/cancel", stop)
+        self.page.on("request", lambda request: comments.append(request) if request.method == "POST" and request.url.endswith("/comments") else None)
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        composer = self.page.locator("main form")
+        composer.get_by_role("button", name="中止", exact=True).wait_for()
+        self.page.get_by_role("button", name="暂不开启", exact=True).click()
+        self.assertEqual(composer.get_by_role("button").count(), 1)
+        text = composer.get_by_role("textbox")
+        text.fill("后续要求")
+        self.assertEqual(composer.get_by_role("button", name="中止", exact=True).count(), 0)
+        self.assertTrue(composer.get_by_role("button", name="发送", exact=True).is_enabled())
+        text.fill("")
+        with self.page.expect_request(lambda request: request.url.endswith("/attempts/attempt-running/cancel")):
+            composer.get_by_role("button", name="中止", exact=True).click()
+        composer.get_by_role("button", name="发送", exact=True).wait_for()
+        self.assertEqual(composer.get_by_role("button").count(), 1)
+        self.assertEqual(comments, [], "stop must not submit a message")
+        self.assertTrue(composer.get_by_role("button", name="发送", exact=True).is_disabled())
+
+    def test_running_bubble_follows_sent_assistant_messages(self):
+        self.page.route("**/api/v1/cards/todo-1/stream", lambda route: route.fulfill(
+            status=200, content_type="text/event-stream", body=": waiting\n\n"
+        ))
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        running = self.page.locator('[data-execution-id="attempt-running"]')
+        running.wait_for()
+        self.page.locator('[data-queued-turn="turn-queued"]').wait_for()
+        reply = self.page.locator("#event-event-10")
+        queue = self.page.get_by_role("region", name="待执行队列")
+        reply_box = reply.bounding_box()
+        running_box = running.bounding_box()
+        queue_box = queue.bounding_box()
+        self.assertLessEqual(reply_box["y"] + reply_box["height"], running_box["y"])
+        self.assertLessEqual(running_box["y"] + running_box["height"], queue_box["y"])
+        self.assertEqual(self.page.get_by_role("status", name="正在执行").count(), 1)
+
+    def mock_queue_transition(self):
+        state = {"mode": "pending"}
+        original = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
+
+        def card_detail(route):
+            detail = copy.deepcopy(original)
+            if state["mode"] != "pending":
+                detail["pending_turns"] = []
+            if state["mode"] == "cancelled":
+                detail["timeline"] = [event for event in detail["timeline"] if event["id"] != "event-7"]
+            if state["mode"] == "claimed":
+                detail["current_attempt"].update({
+                    "id": "attempt-steered", "turn_id": "turn-queued",
+                    "source_event_id": "event-7", "status": "running",
+                })
+            route.fulfill(json=detail)
+
+        self.page.route("**/api/v1/cards/todo-1", card_detail)
+        return state
+
+    def test_queued_input_uses_compact_rows_and_steers_original_turn(self):
+        state = self.mock_queue_transition()
+        def steer(route):
+            state["mode"] = "claimed"
+            route.fulfill(status=204)
+        self.page.route("**/turns/turn-queued/steer", steer)
+        comments = []
+        self.page.on("request", lambda request: comments.append(request) if request.method == "POST" and request.url.endswith("/comments") else None)
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        row = self.page.locator('[data-queued-turn="turn-queued"]')
+        row.wait_for()
+        self.page.get_by_role("button", name="暂不开启", exact=True).click()
+        timeline = self.page.get_by_role("log", name="统一消息时间线")
+        self.assertEqual(timeline.get_by_text("顺便检查磁盘空间。", exact=True).count(), 0)
+        self.assertEqual(self.page.locator("#event-event-7").count(), 0)
+        self.assertEqual(row.locator("article").count(), 0)
+        row_box = row.bounding_box()
+        composer_box = self.page.locator("main form").bounding_box()
+        self.assertLessEqual(row_box["y"] + row_box["height"], composer_box["y"] + 2)
+        row.get_by_role("button", name="编辑内容").click()
+        editor = self.page.get_by_role("dialog", name="编辑内容")
+        self.assertEqual(editor.get_by_role("textbox", name="排队输入").input_value(), "顺便检查磁盘空间。")
+        self.page.keyboard.press("Escape")
+        with self.page.expect_request(lambda request: request.url.endswith("/turns/turn-queued/steer")):
+            row.get_by_role("button", name="引导", exact=True).click()
+        row.wait_for(state="detached")
+        timeline.get_by_text("顺便检查磁盘空间。", exact=True).wait_for()
+        self.assertEqual(self.page.locator("#event-event-7").count(), 1)
+        self.assertEqual(comments, [], "steer must reuse the existing Turn")
+
+    def test_queued_input_edit_saves_original_item_and_keeps_failed_draft(self):
+        original = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
+        state = {"content": "顺便检查磁盘空间。", "attempts": 0}
+        def detail(route):
+            payload = copy.deepcopy(original)
+            payload["pending_turns"][0]["content"] = state["content"]
+            for event in payload["timeline"]:
+                if event["id"] == "event-7":
+                    event["content"] = state["content"]
+            route.fulfill(json=payload)
+        def edit(route):
+            self.assertEqual(route.request.method, "PATCH")
+            state["attempts"] += 1
+            if state["attempts"] == 1:
+                route.fulfill(status=409, json={"error": {"message": "模拟保存失败"}})
+            else:
+                state["content"] = route.request.post_data_json["content"]
+                route.fulfill(status=204)
+        self.page.route("**/api/v1/cards/todo-1", detail)
+        self.page.route("**/api/v1/cards/todo-1/turns/turn-queued", edit)
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        row = self.page.locator('[data-queued-turn="turn-queued"]')
+        row.wait_for()
+        self.page.get_by_role("button", name="暂不开启", exact=True).click()
+        row.get_by_role("button", name="编辑内容").click()
+        editor = self.page.get_by_role("dialog", name="编辑内容")
+        content = editor.get_by_role("textbox", name="排队输入")
+        content.fill("   ")
+        self.assertTrue(editor.get_by_role("button", name="保存", exact=True).is_disabled())
+        content.fill("更新后的排队要求")
+        editor.get_by_role("button", name="保存", exact=True).click()
+        editor.get_by_role("alert").get_by_text("模拟保存失败", exact=True).wait_for()
+        self.assertEqual(content.input_value(), "更新后的排队要求")
+        editor.get_by_role("button", name="保存", exact=True).click()
+        editor.wait_for(state="hidden")
+        row.get_by_role("button", name="更新后的排队要求", exact=True).wait_for()
+        self.assertEqual(self.page.locator("#event-event-7").count(), 0)
+        self.page.reload()
+        row.get_by_role("button", name="更新后的排队要求", exact=True).wait_for()
+        row.get_by_role("button", name="编辑内容").click()
+        editor.get_by_role("textbox", name="排队输入").fill("不保存的草稿")
+        editor.get_by_role("button", name="取消", exact=True).click()
+        row.get_by_role("button", name="更新后的排队要求", exact=True).wait_for()
+        self.assertEqual(state["attempts"], 2)
+
+    def test_mobile_queue_delete_preserves_failed_row_and_removes_cancelled_bubble(self):
+        self.page.set_viewport_size({"width": 375, "height": 812})
+        state = self.mock_queue_transition()
+        def cancel(route):
+            if state.get("failed"):
+                state["mode"] = "cancelled"
+                route.fulfill(status=204)
+            else:
+                state["failed"] = True
+                route.fulfill(status=409, json={"error": {"message": "模拟取消失败"}})
+        self.page.route("**/turns/turn-queued/cancel", cancel)
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        row = self.page.locator('[data-queued-turn="turn-queued"]')
+        row.wait_for()
+        self.page.get_by_role("button", name="暂不开启", exact=True).click()
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
+        row.get_by_role("button", name="取消排队").click()
+        self.page.get_by_text("模拟取消失败", exact=True).wait_for()
+        row.get_by_role("button", name="取消排队").click()
+        row.wait_for(state="detached")
+        self.assertEqual(self.page.locator("#event-event-7").count(), 0)
+        self.page.reload()
+        self.page.get_by_role("button", name="更多操作").wait_for()
+        self.assertEqual(self.page.locator('[data-queued-turn="turn-queued"]').count(), 0)
+        self.assertEqual(self.page.locator("#event-event-7").count(), 0)
+
     def test_todo_results_preserve_event_order_without_duplicate_body(self):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.page.get_by_role(
-            "heading", name="检查 RN 服务器异常日志", exact=True
-        ).wait_for()
+        self.page.get_by_role("log", name="统一消息时间线").wait_for()
 
         # 会话保留 Human A -> Human B -> Result A 的持久事件顺序，
         # 不将迟到结果移到较早输入之后；最终 Markdown 正文只能出现一次。
@@ -355,13 +524,12 @@ class CycleDockSmoke(unittest.TestCase):
         todo = sidebar.get_by_role("button", name=re.compile(r"^待办"))
         review = sidebar.get_by_role("button", name=re.compile(r"^待审核"))
         done = sidebar.get_by_role("button", name=re.compile(r"^已完成"))
-        ongoing = sidebar.get_by_role("button", name=re.compile(r"^持续事项"))
+        self.assertEqual(sidebar.get_by_role("button", name=re.compile(r"^持续事项")).count(), 0)
 
         self.assertEqual(working.get_attribute("aria-expanded"), "true")
         self.assertEqual(todo.get_attribute("aria-expanded"), "false")
         self.assertEqual(review.get_attribute("aria-expanded"), "false")
         self.assertEqual(done.get_attribute("aria-expanded"), "false")
-        self.assertEqual(ongoing.get_attribute("aria-expanded"), "false")
 
         active_task = sidebar.get_by_role(
             "button", name=re.compile("检查 RN 服务器异常日志")
@@ -369,31 +537,84 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(active_task.get_attribute("aria-current"), "page")
 
         actions = self.page.get_by_role("button", name="更多操作")
-        header = actions.locator("xpath=ancestor::header[1]")
         actions_box = actions.bounding_box()
-        header_box = header.bounding_box()
         self.assertIsNotNone(actions_box)
-        self.assertIsNotNone(header_box)
-        self.assertLess(
-            (header_box["x"] + header_box["width"])
-            - (actions_box["x"] + actions_box["width"]),
-            32,
-        )
-
-        ongoing.click()
+        self.assertLess(1280 - (actions_box["x"] + actions_box["width"]), 32)
+        todo.click()
         self.assertEqual(working.get_attribute("aria-expanded"), "false")
-        self.assertEqual(ongoing.get_attribute("aria-expanded"), "true")
-        sidebar.get_by_role(
-            "button", name=re.compile("每天检查服务器健康")
-        ).click()
-        self.page.wait_for_url("**/cards/demo-project/ongoing-1")
-        next_sidebar = self.page.locator('aside[aria-label="工作列表"]')
-        self.assertEqual(
-            next_sidebar.get_by_role(
-                "button", name=re.compile(r"^持续事项")
-            ).get_attribute("aria-expanded"),
-            "true",
-        )
+        self.assertEqual(todo.get_attribute("aria-expanded"), "true")
+
+    def test_plans_own_ongoing_work_and_detail_navigation(self):
+        self.page.goto(BASE + "/board/demo-project")
+        self.page.locator('a[href="/plans/demo-project"]').first.wait_for()
+        self.assertEqual(self.page.get_by_role("button", name=re.compile("每天检查服务器健康")).count(), 0)
+        self.page.get_by_role("link", name="计划", exact=True).first.click()
+        self.page.wait_for_url("**/plans/demo-project")
+        self.page.get_by_role("button", name=re.compile("每天检查服务器健康")).click()
+        self.page.wait_for_url("**/plans/demo-project/ongoing-1")
+        sidebar = self.page.locator('aside[aria-label="计划列表"]')
+        sidebar.wait_for()
+        self.assertEqual(sidebar.get_by_role("button", name=re.compile("每天检查服务器健康")).get_attribute("aria-current"), "page")
+        self.assertEqual(self.page.locator('aside[aria-label="工作列表"]').count(), 0)
+        self.page.get_by_role("link", name="计划", exact=True).first.click()
+        self.assertFalse(sidebar.is_visible())
+        self.page.get_by_role("link", name="计划", exact=True).first.click()
+        sidebar.wait_for()
+        self.switch_project("产品发布")
+        self.page.wait_for_url("**/plans/demo-project-b")
+        self.page.get_by_text("这个项目还没有计划", exact=True).wait_for()
+
+    def test_plans_include_unscheduled_work_and_filter_by_lifecycle(self):
+        self.page.route("**/api/v1/projects/demo-project/schedules", lambda route: route.fulfill(json=[]))
+        self.page.goto(BASE + "/plans/demo-project")
+        self.page.get_by_text("未设置自动执行时间", exact=True).wait_for()
+        self.page.get_by_role("button", name="已暂停", exact=True).click()
+        self.page.get_by_text("这个筛选下没有计划", exact=True).wait_for()
+        self.page.get_by_role("button", name="运行中", exact=True).click()
+        self.page.get_by_role("button", name=re.compile("每天检查服务器健康")).wait_for()
+        self.page.goto(BASE + "/cards/demo-project/ongoing-1")
+        self.page.wait_for_url("**/plans/demo-project/ongoing-1")
+
+    def test_activity_agents_filter_server_results_and_preserve_status(self):
+        self.page.goto(BASE + "/activity/demo-project")
+        agents = self.page.get_by_role("complementary", name="Agent 列表")
+        agents.get_by_role("button", name="Cycle", exact=True).wait_for()
+        agents.get_by_role("button", name="Claude Code", exact=True).wait_for()
+        activity = self.page.get_by_role("region", name="活动列表")
+        activity.get_by_text("Cycle 正在检查日志", exact=True).wait_for()
+        with self.page.expect_request(lambda request:
+            "/activity?" in request.url and "source_id=22222222" in request.url
+        ):
+            agents.get_by_role("button", name="Codex", exact=True).click()
+        activity.get_by_text("Codex 已完成巡检", exact=True).wait_for()
+        self.assertEqual(activity.get_by_text("Cycle 正在检查日志", exact=True).count(), 0)
+        self.page.get_by_role("button", name="已完成", exact=True).click()
+        self.assertIn("source_id=22222222", self.page.url)
+        self.page.reload()
+        activity.get_by_text("Codex 已完成巡检", exact=True).wait_for()
+        self.assertEqual(agents.get_by_role("button", name="Codex", exact=True).get_attribute("aria-pressed"), "true")
+        agents.get_by_role("button", name="Claude Code", exact=True).click()
+        self.assertIn("view=completed", self.page.url)
+        self.page.get_by_text("这个筛选下没有活动", exact=True).wait_for()
+        agents.get_by_role("button", name="全部来源", exact=True).click()
+        activity.get_by_text("Codex 已完成巡检", exact=True).wait_for()
+        self.assertNotIn("source_id=", self.page.url)
+        self.switch_project("产品发布")
+        self.page.wait_for_url("**/activity/demo-project-b")
+        self.page.get_by_text("这个项目还没有活动", exact=True).wait_for()
+
+    def test_mobile_activity_agent_filter_and_plan_navigation(self):
+        self.page.set_viewport_size({"width": 375, "height": 812})
+        self.page.goto(BASE + "/activity/demo-project")
+        agents = self.page.get_by_role("complementary", name="Agent 列表")
+        agents.get_by_role("button", name="Codex", exact=True).click()
+        activity = self.page.get_by_role("region", name="活动列表")
+        activity.get_by_text("Codex 已完成巡检", exact=True).wait_for()
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
+        activity.get_by_role("button", name=re.compile("每天检查服务器健康")).click()
+        self.page.wait_for_url("**/plans/demo-project/ongoing-1")
+        self.page.get_by_role("button", name="打开计划列表").click()
+        self.page.get_by_role("dialog", name="计划列表").wait_for()
 
     def test_project_switch_keeps_work_and_chat_scopes_isolated(self):
         self.page.goto(BASE + "/board/demo-project")
@@ -449,11 +670,11 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.unroute("**/api/v1/cards/todo-1", fail_card_patch)
 
     def test_ongoing_health_schedule_and_source_are_preserved(self):
-        self.page.goto(BASE + "/board/demo-project")
+        self.page.goto(BASE + "/plans/demo-project")
         self.page.get_by_role(
             "button", name=re.compile("每天检查服务器健康")
         ).first.click()
-        self.page.wait_for_url("**/cards/demo-project/ongoing-1")
+        self.page.wait_for_url("**/plans/demo-project/ongoing-1")
         details = self.open_task_details()
         details.get_by_text("健康状态：healthy").wait_for()
         details.get_by_text("每天 09:00", exact=True).wait_for()

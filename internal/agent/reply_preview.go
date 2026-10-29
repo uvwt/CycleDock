@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 // 只读取顶层 content 字符串；其他参数必须完整跳过，不能把嵌套内容或原始 JSON 展示给用户。
@@ -154,30 +156,40 @@ func previewToolCalls(generation string, modelCall int, emit func(*model.LLMResp
 	}
 }
 
-// 一个 invocation 内按 Runner 事件顺序转发，不参与工具执行或 Session 持久化。
+// 只持久化可见正文，不把不完整工具参数或内部推理写入 ADK Session。
 type replyEventPublisher struct {
+	store             *store.Store
+	context           store.AgentCardContext
+	replies           *replyState
+	texts             map[string]string
 	hub               *realtime.Hub
 	cardID, attemptID uuid.UUID
 	generation        string
 	previewIDs        map[string]string
 }
 
-func (p *replyEventPublisher) publish(event *session.Event) {
-	if p.hub == nil || event == nil || event.Content == nil {
-		return
+func (p *replyEventPublisher) publish(ctx context.Context, event *session.Event) error {
+	if event == nil || event.Content == nil {
+		return nil
 	}
 	if event.Partial {
 		if stage, ok := event.CustomMetadata[modelStageKey].(string); ok {
-			p.hub.Publish(p.cardID, realtime.Event{Type: "attempt.stage", AttemptID: p.attemptID.String(), Stage: stage})
+			p.emit(p.cardID, realtime.Event{Type: "attempt.stage", AttemptID: p.attemptID.String(), Stage: stage})
 		}
 		generation, ok := event.CustomMetadata[replyGenerationKey].(string)
 		if !ok || generation == "" {
-			return
+			return nil
 		}
 		if p.generation != generation {
 			p.generation = generation
 			p.previewIDs = make(map[string]string)
-			p.hub.Publish(p.cardID, realtime.Event{Type: "reply.reset", AttemptID: p.attemptID.String()})
+			p.texts = make(map[string]string)
+			if p.replies != nil {
+				p.replies.mu.Lock()
+				p.replies.previewIDs = make(map[string]string)
+				p.replies.mu.Unlock()
+			}
+			p.emit(p.cardID, realtime.Event{Type: "reply.reset", AttemptID: p.attemptID.String()})
 		}
 		order, _ := event.CustomMetadata[replyOrderKey].(int)
 		for _, part := range event.Content.Parts {
@@ -193,11 +205,29 @@ func (p *replyEventPublisher) publish(event *session.Event) {
 				if arg == nil || arg.JsonPath != "$.content" || arg.StringValue == "" {
 					continue
 				}
+				p.texts[id] += arg.StringValue
+				if p.store != nil {
+					if err := p.store.SaveReplyPreview(ctx, store.ReplyPreviewParams{
+						WorkspaceID: p.context.WorkspaceID, CardID: p.cardID,
+						AttemptID: p.attemptID, RunnerSourceID: p.context.RunnerSourceID,
+						PreviewID: id, Content: p.texts[id],
+					}); err != nil {
+						return err
+					}
+				}
 				p.previewIDs[call.ID] = id
-				p.hub.Publish(p.cardID, realtime.Event{Type: "reply.delta", AttemptID: p.attemptID.String(), ReplyID: id, Text: arg.StringValue, Order: order})
+				if p.replies != nil {
+					p.replies.mu.Lock()
+					if p.replies.previewIDs == nil {
+						p.replies.previewIDs = make(map[string]string)
+					}
+					p.replies.previewIDs[call.ID] = id
+					p.replies.mu.Unlock()
+				}
+				p.emit(p.cardID, realtime.Event{Type: "reply.delta", AttemptID: p.attemptID.String(), ReplyID: id, Text: arg.StringValue, Order: order})
 			}
 		}
-		return
+		return nil
 	}
 	// 工具成功响应由 ADK 转发后再发布提交关联，包含 end_turn 后被拒绝的同批工具响应。
 	for _, part := range event.Content.Parts {
@@ -216,6 +246,13 @@ func (p *replyEventPublisher) publish(event *session.Event) {
 				update.EventID = eventID.String()
 			}
 		}
-		p.hub.Publish(p.cardID, update)
+		p.emit(p.cardID, update)
+	}
+	return nil
+}
+
+func (p *replyEventPublisher) emit(cardID uuid.UUID, event realtime.Event) {
+	if p.hub != nil {
+		p.hub.Publish(cardID, event)
 	}
 }
