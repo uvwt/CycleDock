@@ -4,17 +4,22 @@ package realtime
 
 import (
 	"encoding/json"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
 )
 
 type Event struct {
-	Type      string `json:"-"`
-	AttemptID string `json:"attempt_id,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Stage     string `json:"stage,omitempty"`
-	StartedAt string `json:"started_at,omitempty"`
+	Type      string         `json:"-"`
+	AttemptID string         `json:"attempt_id,omitempty"`
+	Text      string         `json:"text,omitempty"`
+	Stage     string         `json:"stage,omitempty"`
+	StartedAt string         `json:"started_at,omitempty"`
+	Order     int            `json:"order,omitempty"`
+	ReplyID   string         `json:"reply_id,omitempty"`
+	EventID   string         `json:"event_id,omitempty"`
+	Replies   []ReplyPreview `json:"replies,omitempty"`
 }
 
 type Subscriber struct {
@@ -22,9 +27,17 @@ type Subscriber struct {
 	Close  func()
 }
 
+type ReplyPreview struct {
+	Order   int    `json:"order"`
+	ID      string `json:"id"`
+	Text    string `json:"text"`
+	EventID string `json:"event_id,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
+}
+
 type liveState struct {
 	attemptID string
-	text      string
+	replies   []ReplyPreview
 	stage     string
 	startedAt string
 }
@@ -57,9 +70,9 @@ func (h *Hub) Subscribe(cardID uuid.UUID) (Subscriber, *Event) {
 	var snapshot *Event
 	if st, ok := h.live[cardID]; ok {
 		snapshot = &Event{
-			Type:      "attempt.text.snapshot",
+			Type:      "attempt.snapshot",
 			AttemptID: st.attemptID,
-			Text:      st.text,
+			Replies:   append([]ReplyPreview(nil), st.replies...),
 			Stage:     st.stage,
 			StartedAt: st.startedAt,
 		}
@@ -93,30 +106,76 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			startedAt: event.StartedAt,
 			stage:     "正在执行",
 		}
-	case "attempt.text.delta":
-		st, active := h.live[cardID]
-		if !active || st.attemptID != event.AttemptID {
-			// Every Attempt must publish attempt.started first. A stale Attempt
-			// can never resurrect itself after a newer Attempt becomes current.
-			return
-		}
-		if len(st.text)+len(event.Text) <= maxLiveBytes {
-			st.text += event.Text
-		}
-		h.live[cardID] = st
-	case "attempt.text.reset":
+	case "reply.delta", "reply.preview", "reply.committed", "reply.discarded", "reply.reset":
 		st, active := h.live[cardID]
 		if !active || st.attemptID != event.AttemptID {
 			return
 		}
-		st.text = ""
+		if event.Type == "reply.reset" {
+			remaining := make([]ReplyPreview, 0, len(st.replies))
+			for _, reply := range st.replies {
+				if reply.EventID != "" {
+					remaining = append(remaining, reply)
+				}
+			}
+			st.replies = remaining
+		} else {
+			if event.ReplyID == "" || len(event.ReplyID) > 512 {
+				return
+			}
+			index := -1
+			total := 0
+			for i, reply := range st.replies {
+				if reply.ID == event.ReplyID {
+					index = i
+				} else {
+					total += len(reply.Text)
+				}
+			}
+			if event.Type == "reply.delta" {
+				if index >= 0 {
+					event.Text = st.replies[index].Text + event.Text
+				}
+				// 浏览器始终接收完整快照，重连和重复通知不会重复拼接正文。
+				event.Type = "reply.preview"
+			}
+			if event.Type == "reply.preview" {
+				if total+len(event.Text) > maxLiveBytes {
+					return
+				}
+				if index < 0 {
+					if len(st.replies) >= 128 {
+						return
+					}
+					st.replies = append(st.replies, ReplyPreview{ID: event.ReplyID})
+					index = len(st.replies) - 1
+				}
+				// 已提交或已拒绝的调用不能被迟到参数重新打开。
+				if st.replies[index].EventID != "" || st.replies[index].Failed {
+					return
+				}
+				st.replies[index].Text = event.Text
+				st.replies[index].Order = event.Order
+				sort.SliceStable(st.replies, func(i, j int) bool { return st.replies[i].Order < st.replies[j].Order })
+			} else {
+				if index < 0 {
+					return
+				}
+				if event.Type == "reply.committed" {
+					st.replies[index].EventID = event.EventID
+				} else {
+					st.replies[index].Failed = true
+				}
+			}
+		}
 		h.live[cardID] = st
 	case "attempt.stage":
-		st := h.live[cardID]
-		if st.attemptID == event.AttemptID {
-			st.stage = event.Stage
-			h.live[cardID] = st
+		st, active := h.live[cardID]
+		if !active || st.attemptID != event.AttemptID {
+			return
 		}
+		st.stage = event.Stage
+		h.live[cardID] = st
 	case "attempt.finished", "attempt.failed":
 		// A stale Attempt terminal event cannot delete or clear a newer Attempt.
 		if st, ok := h.live[cardID]; ok {

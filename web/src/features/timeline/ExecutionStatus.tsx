@@ -223,10 +223,20 @@ export function ExecutionStatus({
   attempts,
   ...actions
 }: { attempts: ExecutionAttempt[] } & ExecutionActions) {
-  if (!attempts.length) return null;
+  const visibleAttempts = attempts.filter(
+    (attempt) =>
+      !(
+        attempt.kind === "current" &&
+        attempt.value.status === "running" &&
+        actions.live?.attemptID === attempt.value.id &&
+        (actions.live.finished ||
+          actions.live.replies.some((reply) => !reply.failed))
+      ),
+  );
+  if (!visibleAttempts.length) return null;
   return (
     <div className="space-y-3" aria-label="Agent 执行消息">
-      {attempts.map((attempt) => {
+      {visibleAttempts.map((attempt) => {
         const id = attempt.value.id;
         return (
           <AgentAttempt

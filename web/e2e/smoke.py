@@ -246,7 +246,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
-        self.page.get_by_text("正在执行", exact=True).first.wait_for()
+        self.page.get_by_role("status", name="正在执行").first.wait_for()
         self.page.get_by_text("分析错误日志", exact=True).wait_for()
         self.page.get_by_role("button", name="取消排队").wait_for()
         self.page.get_by_role("button", name="重试", exact=True).wait_for()

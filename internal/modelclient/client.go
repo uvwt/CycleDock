@@ -38,6 +38,8 @@ type Config struct {
 	OutputSchema *OutputSchema
 	// OnTextDelta forwards text to the ephemeral browser stream; never store raw tool traces.
 	OnTextDelta func(string)
+	// OnToolCall 接收当前调用的累计参数快照；回调只用于临时预览，不提前执行工具。
+	OnToolCall func(ToolCall)
 }
 
 // OutputSchema 是模型输出的 JSON Schema 契约，与工具参数 Schema 独立。
@@ -61,6 +63,7 @@ type Message struct {
 }
 
 type ToolCall struct {
+	Index    int          `json:"-"`
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
 	Function ToolFunction `json:"function"`
@@ -142,7 +145,7 @@ func (c *Client) Complete(
 		ResponseFormat *chatResponseFormat `json:"response_format,omitempty"`
 	}{
 		Model: strings.TrimSpace(config.Model), Messages: messages,
-		Tools: tools, Temperature: config.Temperature, Stream: config.OnTextDelta != nil,
+		Tools: tools, Temperature: config.Temperature, Stream: config.OnTextDelta != nil || config.OnToolCall != nil,
 	}
 	if config.OutputSchema != nil {
 		body.ResponseFormat = &chatResponseFormat{Type: "json_schema", JSONSchema: config.OutputSchema}
@@ -158,7 +161,7 @@ func (c *Client) Complete(
 		return Completion{}, fmt.Errorf("create model request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	if config.OnTextDelta != nil {
+	if config.OnTextDelta != nil || config.OnToolCall != nil {
 		request.Header.Set("Accept", "text/event-stream")
 	} else {
 		request.Header.Set("Accept", "application/json")
@@ -173,8 +176,10 @@ func (c *Client) Complete(
 	}
 	defer response.Body.Close()
 
-	if config.OnTextDelta != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
-		return readChatStream(response.Body, config.OnTextDelta)
+	if (config.OnTextDelta != nil || config.OnToolCall != nil) &&
+		response.StatusCode >= 200 && response.StatusCode < 300 &&
+		strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		return readChatStream(response.Body, config.OnTextDelta, config.OnToolCall)
 	}
 	responseBody, err := readBounded(response.Body, response.ContentLength, maxResponseBytes)
 	if err != nil {

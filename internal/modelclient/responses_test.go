@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -163,5 +164,28 @@ func TestListModelsSupportsSubscriptionCatalogShapes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResponsesToolInputDeltasUseCallIDAndKeepCallsSeparate(t *testing.T) {
+	data := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"id":"item-a","call_id":"call-a","type":"function_call","name":"reply_message","arguments":""}}`,
+		`data: {"type":"response.output_item.added","output_index":2,"item":{"id":"item-b","call_id":"call-b","type":"function_call","name":"reply_message","arguments":""}}`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"item-b","delta":"{\"content\":\"second"}`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"item-a","delta":"{\"content\":\"first"}`,
+		`data: {"type":"response.output_item.done","output_index":1,"item":{"id":"item-a","call_id":"call-a","type":"function_call","name":"reply_message","arguments":"{\"content\":\"first\"}"}}`,
+		`data: {"type":"response.output_item.done","output_index":2,"item":{"id":"item-b","call_id":"call-b","type":"function_call","name":"reply_message","arguments":"{\"content\":\"second\"}"}}`,
+		`data: {"type":"response.completed","response":{"output":[]}}`,
+	}, "\n")
+	var updates []ToolCall
+	completion, err := readResponsesStream(&http.Response{Body: io.NopCloser(strings.NewReader(data))}, nil, func(call ToolCall) { updates = append(updates, call) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 4 || updates[0].ID != "call-b" || updates[0].Index != 2 || updates[1].ID != "call-a" || updates[1].Function.Arguments != `{"content":"first` {
+		t.Fatalf("updates=%+v", updates)
+	}
+	if len(completion.ToolCalls) != 2 || completion.ToolCalls[0].ID != "call-a" {
+		t.Fatalf("completion=%+v", completion)
 	}
 }

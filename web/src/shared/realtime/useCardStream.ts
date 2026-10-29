@@ -1,12 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { keys } from "../../app/query";
-export type LiveAttempt = {
-  attemptID: string;
-  text: string;
-  stage: string;
-  startedAt?: string;
-};
+import {
+  applyCardStreamEvent,
+  type CardStreamEvent,
+  type LiveAttempt,
+} from "./cardStreamState";
+export type { LiveAttempt } from "./cardStreamState";
 export type StreamState = {
   connected: boolean;
   live: LiveAttempt | null;
@@ -25,7 +25,8 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
     () => document.visibilityState === "visible",
     () => true,
   );
-  const [state, setState] = useState<StreamState>({
+  const [state, setState] = useState<StreamState & { cardID: string }>({
+    cardID,
     connected: false,
     live: null,
   });
@@ -45,115 +46,53 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
     const sync = () => {
       void refresh();
     };
-    const parse = (event: Event) => {
-      try {
-        return JSON.parse((event as MessageEvent).data) as {
-          attempt_id?: string;
-          text?: string;
-          stage?: string;
-          started_at?: string;
-          message?: string;
-        };
-      } catch {
-        return null;
-      }
-    };
-    const onStarted = (e: Event) => {
-      const v = parse(e);
-      if (!v?.attempt_id || !active) return;
-      setState((s) => ({
-        ...s,
-        live: {
-          attemptID: v.attempt_id!,
-          text: "",
-          stage: "正在执行",
-          startedAt: v.started_at,
-        },
-      }));
-      sync();
-    };
-    const onStage = (e: Event) => {
-      const v = parse(e);
-      if (!active || !v) return;
-      setState((s) => ({
-        ...s,
-        live:
-          s.live && (!v.attempt_id || s.live.attemptID === v.attempt_id)
-            ? { ...s.live, stage: v.stage || s.live.stage }
-            : s.live,
-      }));
-      sync();
-    };
-    const onDelta = (e: Event) => {
-      const v = parse(e);
-      if (!active || !v?.attempt_id) return;
-      const attemptID = v.attempt_id;
-      const delta = v.text || "";
-      setState((s) => ({
-        ...s,
-        live:
-          s.live && s.live.attemptID !== attemptID
-            ? s.live
-            : s.live
-              ? { ...s.live, text: s.live.text + delta }
-              : {
-                  attemptID,
-                  text: delta,
-                  stage: "正在生成回复",
-                  startedAt: v.started_at,
-                },
-      }));
-    };
-    const onReset = (e: Event) => {
-      const v = parse(e);
-      if (!active || !v?.attempt_id) return;
-      setState((s) => ({
-        ...s,
-        live:
-          s.live && s.live.attemptID === v.attempt_id
-            ? { ...s.live, text: "" }
-            : s.live,
-      }));
-      sync();
-    };
-    const onSnapshot = (e: Event) => {
-      const v = parse(e);
-      if (!active || !v?.attempt_id) return;
-      setState((s) => ({
-        ...s,
-        live: {
-          attemptID: v.attempt_id!,
-          text: v.text || "",
-          stage: v.stage || "正在执行",
-          startedAt: v.started_at,
-        },
-      }));
-    };
-    const onFinal = (event: Event) => {
-      const attemptID = parse(event)?.attempt_id;
+    const onEvent = (event: Event) => {
       if (!active) return;
-      // 等持久 Timeline 更新完再撤掉临时输出，避免最终回复闪烁消失。
-      void refresh().finally(() => {
-        if (active)
-          setState((s) => ({
-            ...s,
-            live: !attemptID || s.live?.attemptID === attemptID ? null : s.live,
-          }));
-      });
+      let payload: CardStreamEvent;
+      try {
+        payload = JSON.parse((event as MessageEvent).data);
+      } catch {
+        return;
+      }
+      setState((current) => ({
+        ...current,
+        cardID,
+        live: applyCardStreamEvent(
+          current.cardID === cardID ? current.live : null,
+          event.type,
+          payload,
+        ),
+      }));
+      if (
+        [
+          "attempt.started",
+          "attempt.finished",
+          "attempt.failed",
+          "reply.committed",
+        ].includes(event.type)
+      )
+        sync();
     };
-    stream.addEventListener("attempt.started", onStarted);
-    stream.addEventListener("attempt.stage", onStage);
-    stream.addEventListener("attempt.text.delta", onDelta);
-    stream.addEventListener("attempt.text.reset", onReset);
-    stream.addEventListener("attempt.text.snapshot", onSnapshot);
-    stream.addEventListener("attempt.finished", onFinal);
-    stream.addEventListener("attempt.failed", onFinal);
+    for (const type of [
+      "attempt.started",
+      "attempt.snapshot",
+      "attempt.stage",
+      "reply.preview",
+      "reply.committed",
+      "reply.discarded",
+      "reply.reset",
+      "attempt.finished",
+      "attempt.failed",
+    ]) {
+      stream.addEventListener(type, onEvent);
+    }
     stream.addEventListener("event.created", sync);
     stream.addEventListener("card.updated", sync);
     stream.onopen = () => {
       if (!active) return;
       setState((s) => ({
         ...s,
+        cardID,
         connected: true,
         lastError: undefined,
         live: null,
@@ -164,6 +103,8 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       if (active)
         setState((s) => ({
           ...s,
+          cardID,
+          live: s.cardID === cardID ? s.live : null,
           connected: false,
           lastError: "实时连接中断，正在重连",
         }));
@@ -173,5 +114,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       stream.close();
     };
   }, [cardID, projectID, query, visible]);
-  return visible ? state : { connected: false, live: null };
+  return visible && state.cardID === cardID
+    ? state
+    : { connected: false, live: null };
 }

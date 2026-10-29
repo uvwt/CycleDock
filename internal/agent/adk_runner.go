@@ -114,28 +114,23 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
-	// 模型原始文本不直接展示；用户气泡唯一来源是持久 reply_message。
+	// 仅预览 reply_message 正文；持久用户消息仍统一由工具事务创建。
 	llm, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
-		nil,
 		cardContext.WorkspaceID,
-		cardContext.CardID,
-		cardContext.AttemptID,
 		settings.Routes,
 	)
 	if err != nil {
 		return err
 	}
+
 	// Compaction uses the same ordered model routes but never publishes its
 	// internal summarization text to the Card's live SSE stream.
 	summaryLLM, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
-		nil,
 		cardContext.WorkspaceID,
-		cardContext.CardID,
-		cardContext.AttemptID,
 		settings.Routes,
 	)
 	if err != nil {
@@ -208,13 +203,14 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	})
 	runCtx = agentsession.WithAttempt(runCtx, cardContext.AttemptID)
 	userMessage := genai.NewContentFromText(cardContext.TurnContent, genai.RoleUser)
+	previews := replyEventPublisher{hub: r.live, cardID: cardContext.CardID, attemptID: cardContext.AttemptID}
 	var finalText string
 	for event, eventErr := range adkRunner.Run(
 		runCtx,
 		userID,
 		sessionID,
 		userMessage,
-		agent.RunConfig{},
+		agent.RunConfig{StreamingMode: agent.StreamingModeSSE},
 	) {
 		if eventErr != nil {
 			select {
@@ -226,6 +222,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 			}
 			return fmt.Errorf("ADK invocation failed: %w", eventErr)
 		}
+		previews.publish(event)
 		if event == nil || event.Partial || event.Content == nil ||
 			event.Content.Role != genai.RoleModel || event.Actions.Compaction != nil {
 			continue

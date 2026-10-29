@@ -37,14 +37,14 @@ const result = {
   attempt_id: attempt.id,
   sequence: 2,
 };
-function render(events, execution = attempt) {
+function render(events, execution = attempt, live = null) {
   const current = ["queued", "running", "waiting_human"].includes(
     execution.status,
   );
   return renderToStaticMarkup(
     createElement(ConversationView, {
       events,
-      live: null,
+      live,
       cardKind: "discussion",
       pendingTurns: [],
       currentAttempt: current ? execution : null,
@@ -229,4 +229,34 @@ test("完成状态和耗时位于消息组的 Agent 名称右侧", () => {
   assert.match(header, /0:12/);
   assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
   assert.deepEqual(groupStarts(html), [true, false]);
+});
+
+test("正文流式输出时只展示正文，隐藏呼吸圆点和重复占位", () => {
+  const html = render([comment], { ...attempt, status: "running" }, {
+    attemptID: attempt.id, stage: "正在执行", replies: [{ id: "preview", order: 0, text: "正在生成的正文" }],
+  });
+  assert.equal((html.match(/正在生成的正文/g) || []).length, 1);
+  assert.doesNotMatch(html, /aria-label="正在执行"|live-dot/);
+  assert.match(html, /Cycle/);
+});
+
+test("持久消息接替同一预览，不重复展示正文或残留呼吸圆点", () => {
+  const html = render([comment, result], attempt, {
+    attemptID: attempt.id, stage: "正在执行", finished: true,
+    replies: [{ id: "preview", order: 0, text: "已生成卡片", eventID: result.id }],
+  });
+  assert.equal((html.match(/已生成卡片/g) || []).length, 1);
+  assert.doesNotMatch(html, /aria-label="正在执行"/);
+  assert.match(html, /执行完成/);
+  assert.doesNotMatch(html, /message-enter/);
+});
+
+test("失败的临时回复明确标记未发送", () => {
+  const html = render([comment], { ...attempt, status: "failed", error_summary: "连接中断" }, {
+    attemptID: attempt.id, stage: "正在执行", finished: true,
+    replies: [{ id: "preview", order: 0, text: "未完成的正文", failed: true }],
+  });
+  assert.match(html, /未完成的正文/);
+  assert.match(html, /消息未发送/);
+  assert.doesNotMatch(html, /aria-label="正在执行"/);
 });

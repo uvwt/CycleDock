@@ -6,6 +6,7 @@ import type {
   PendingTurn,
   TimelineEvent,
 } from "../../shared/api/types";
+import type { LiveReply } from "../../shared/realtime/cardStreamState";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import {
   ExecutionStatus,
@@ -13,7 +14,7 @@ import {
   StandaloneExecution,
 } from "./ExecutionStatus";
 import { RichText } from "./RichText";
-import { RunningDots } from "./RunningDots";
+import { usePacedTimeline } from "./usePacedTimeline";
 import {
   groupExecutionAttempts,
   orderTimelineEvents,
@@ -75,6 +76,7 @@ function EventRow({
   attempts,
   completedAttempts,
   showSender,
+  preview,
   live,
   ...actions
 }: {
@@ -82,6 +84,7 @@ function EventRow({
   attempts: ExecutionAttempt[];
   completedAttempts: Attempt[];
   showSender: boolean;
+  preview?: LiveReply;
   live: LiveAttempt | null;
 } & ExecutionActions) {
   const { t } = useTranslation();
@@ -142,6 +145,9 @@ function EventRow({
                   ? "Cycle"
                   : event.actor_name || "Cycle"}
               </span>
+              {preview && !live?.finished && (
+                <RunDuration startedAt={live?.startedAt} active />
+              )}
               {completedAttempts.map((completedAttempt) => (
                 <span
                   key={completedAttempt.id}
@@ -211,6 +217,9 @@ function EventRow({
                 <RichText content={message?.content || event.content} />
               )
             )}
+            {preview?.failed && (
+              <p className="mt-1 text-xs text-rose-700">{t("消息未发送")}</p>
+            )}
             {message?.type === "attachment" && message.url && (
               <a
                 href={message.url}
@@ -253,35 +262,6 @@ function EventRow({
   );
 }
 
-function LiveMessage({ live }: { live: LiveAttempt }) {
-  return (
-    <div className="flex gap-3">
-      <span
-        aria-hidden
-        className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
-      >
-        <Bot className="size-4" />
-      </span>
-      <div className="min-w-0 max-w-[78%]">
-        <p className="mb-1.5 flex items-center gap-3 text-xs font-semibold text-slate-500">
-          Cycle
-          <RunDuration startedAt={live.startedAt} active />
-        </p>
-        <div className="w-fit max-w-full rounded-2xl bg-slate-100 px-3.5 py-2.5">
-          <p className="mb-1.5 flex items-center gap-3 text-xs text-slate-500">
-            {!live.stage || live.stage === "正在执行" ? (
-              <RunningDots />
-            ) : (
-              live.stage
-            )}
-          </p>
-          {live.text ? <RichText content={live.text} /> : <RunningDots />}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function ConversationView({
   events,
   live,
@@ -304,54 +284,109 @@ export function ConversationView({
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
 
-  const sortedEvents = useMemo(() => orderTimelineEvents(events), [events]);
+  const orderedEvents = useMemo(() => orderTimelineEvents(events), [events]);
+  // 预览转正式消息后仍保留原 key；SSE 重连或下一轮开始也不能重建已显示的气泡。
+  const [previewKeys, setPreviewKeys] = useState(
+    () => new Map<string, string>(),
+  );
+  const newBindings = (live?.replies || []).filter(
+    (reply) => reply.eventID && !previewKeys.has(reply.eventID),
+  );
+  if (newBindings.length > 0) {
+    const nextKeys = new Map(previewKeys);
+    for (const reply of newBindings) nextKeys.set(reply.eventID!, reply.id);
+    setPreviewKeys(nextKeys);
+  }
+  const revealThrough = orderedEvents.reduce(
+    (sequence, event) =>
+      previewKeys.has(event.id) ? Math.max(sequence, event.sequence) : sequence,
+    0,
+  );
+  const { visibleEvents: sortedEvents, historyThrough } = usePacedTimeline(
+    orderedEvents,
+    revealThrough,
+  );
+  const pendingReplies = (live?.replies || []).filter(
+    (reply) =>
+      !reply.eventID ||
+      !orderedEvents.some((event) => event.id === reply.eventID),
+  );
+  const sender = orderedEvents.findLast(
+    (event) =>
+      event.attempt_id === live?.attemptID && event.actor_kind !== "human",
+  );
+  const rows = [
+    ...sortedEvents.map((event) => ({
+      event,
+      preview: undefined as LiveReply | undefined,
+      key: previewKeys.get(event.id) || event.id,
+    })),
+    ...pendingReplies.map((preview, index) => ({
+      key: preview.id,
+      preview,
+      event: {
+        id: preview.eventID || preview.id,
+        sequence: (orderedEvents.at(-1)?.sequence || 0) + index + 1,
+        attempt_id: live!.attemptID,
+        type: "message" as const,
+        actor_kind: sender?.actor_kind || "cycle_agent",
+        actor_name: sender?.actor_name || "Cycle",
+        content: preview.text,
+        created_at: sender?.created_at || live?.startedAt || "",
+      },
+    })),
+  ];
+  const displayEvents = rows.map((row) => row.event);
+  const displayLive = live ? { ...live, replies: pendingReplies } : null;
   const { byEvent, standalone, completedByResult } = useMemo(
     () =>
       groupExecutionAttempts(
-        sortedEvents,
+        orderedEvents,
         pendingTurns,
         currentAttempt,
         attemptHistory,
       ),
-    [attemptHistory, currentAttempt, sortedEvents, pendingTurns],
+    [attemptHistory, currentAttempt, orderedEvents, pendingTurns],
   );
 
-  const { groupStarts, completedByHeader } = useMemo(() => {
-    const groupStarts = new Set<string>();
-    const completedByHeader = new Map<string, Attempt[]>();
-    let headerID = "";
-    for (const [index, event] of sortedEvents.entries()) {
-      const previous = sortedEvents[index - 1];
-      const interval = previous
-        ? Date.parse(event.created_at) - Date.parse(previous.created_at)
-        : NaN;
-      // 完成信息归到消息组首，避免在连续回复中重复展示发送者。
-      const continuesGroup =
-        !!previous &&
-        !systemTypes.has(previous.type) &&
-        !systemTypes.has(event.type) &&
-        !byEvent.get(previous.id)?.some((attempt) => attempt.question) &&
-        previous.actor_kind === event.actor_kind &&
-        previous.actor_name === event.actor_name &&
-        interval >= 0 &&
-        interval <= FIVE_MINUTES_MS;
-      if (!continuesGroup) {
-        headerID = event.id;
-        groupStarts.add(headerID);
-      }
-      const completed = completedByResult.get(event.id);
-      if (completed) {
-        const attempts = completedByHeader.get(headerID) || [];
-        attempts.push(completed);
-        completedByHeader.set(headerID, attempts);
-      }
+  const groupStarts = new Set<string>();
+  const completedByHeader = new Map<string, Attempt[]>();
+  let headerID = "";
+  for (const [index, event] of displayEvents.entries()) {
+    const previous = displayEvents[index - 1];
+    const interval = previous
+      ? Date.parse(event.created_at) - Date.parse(previous.created_at)
+      : NaN;
+    // 完成信息归到消息组首，避免在连续回复中重复展示发送者。
+    const continuesGroup =
+      !!previous &&
+      !systemTypes.has(previous.type) &&
+      !systemTypes.has(event.type) &&
+      !byEvent.get(previous.id)?.some((attempt) => attempt.question) &&
+      (!(
+        previewKeys.has(event.id) ||
+        (live && event.attempt_id === live.attemptID)
+      ) ||
+        previous.attempt_id === event.attempt_id) &&
+      previous.actor_kind === event.actor_kind &&
+      previous.actor_name === event.actor_name &&
+      interval >= 0 &&
+      interval <= FIVE_MINUTES_MS;
+    if (!continuesGroup) {
+      headerID = event.id;
+      groupStarts.add(headerID);
     }
-    return { groupStarts, completedByHeader };
-  }, [sortedEvents, byEvent, completedByResult]);
+    const completed = completedByResult.get(event.id);
+    if (completed) {
+      const attempts = completedByHeader.get(headerID) || [];
+      attempts.push(completed);
+      completedByHeader.set(headerID, attempts);
+    }
+  }
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
-  }, [events, live, pendingTurns, currentAttempt, attemptHistory]);
+  }, [displayEvents, live, pendingTurns, currentAttempt, attemptHistory]);
 
   function onScroll() {
     const element = list.current;
@@ -385,8 +420,8 @@ export function ConversationView({
           </div>
         )}
 
-        {sortedEvents.map((event, index) => {
-          const previous = sortedEvents[index - 1];
+        {rows.map(({ event, preview, key }, index) => {
+          const previous = displayEvents[index - 1];
           const showTime =
             !!previous &&
             new Date(event.created_at).getTime() -
@@ -395,18 +430,17 @@ export function ConversationView({
           const continuesGroup = !groupStarts.has(event.id);
           return (
             <div
-              key={event.id}
-              className={
-                index === 0 ? undefined : continuesGroup ? "mt-[5px]" : "mt-5"
-              }
+              key={key}
+              className={`${!preview && !previewKeys.has(event.id) && event.sequence > historyThrough ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-[5px]" : "mt-5"}`}
             >
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
                 event={event}
+                preview={preview}
                 showSender={!continuesGroup}
                 attempts={byEvent.get(event.id) || []}
                 completedAttempts={completedByHeader.get(event.id) || []}
-                live={live}
+                live={displayLive}
                 {...actions}
               />
             </div>
@@ -417,14 +451,9 @@ export function ConversationView({
           <div className="mt-5">
             <StandaloneExecution
               attempts={standalone}
-              live={live}
+              live={displayLive}
               {...actions}
             />
-          </div>
-        )}
-        {live?.text && (
-          <div className="mt-5">
-            <LiveMessage live={live} />
           </div>
         )}
         <div ref={bottom} className="h-1" />
