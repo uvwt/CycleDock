@@ -1,3 +1,4 @@
+import { ComposerInput } from "../../shared/ui/ComposerInput";
 import { ArrowUp, ListPlus, Sparkles, Square, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -47,46 +48,28 @@ export function ConversationComposer({
       ? t("回复 Agent，继续执行…")
       : t("发送消息，继续推进任务…");
 
+  const disabled = sendPending || !comment.trim() || blocked;
+
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        onSubmit();
+        if (!disabled) onSubmit();
       }}
-      className={`relative border bg-white transition-all focus-within:border-slate-300 ${expanded ? "rounded-2xl border-slate-200 p-2 shadow-sm" : "flex items-center rounded-full border-slate-200 py-1 pr-1 pl-4 shadow-sm"}`}
+      className={`relative border bg-surface transition-all focus-within:border-line-strong ${expanded ? "rounded-2xl border-line p-2 shadow-sm" : "flex items-center rounded-full border-line py-1 pr-1 pl-4 shadow-sm"}`}
     >
+      <ComposerInput
+        value={comment}
+        onChange={setComment}
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        placeholder={placeholder}
+        readOnly={blocked}
+        keepExpanded={hasCurrent}
+        className="pr-12"
+      />
       {expanded ? (
         <>
-          <textarea
-            autoFocus
-            aria-label={placeholder}
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            readOnly={blocked}
-            placeholder={placeholder}
-            rows={3}
-            className="max-h-40 min-h-20 w-full resize-none bg-transparent px-2 pt-2 pr-12 pb-1 text-sm outline-none"
-            onBlur={(event) => {
-              const next = event.relatedTarget as Node | null;
-              if (
-                !comment.trim() &&
-                !hasCurrent &&
-                !event.currentTarget.form?.contains(next)
-              ) {
-                setExpanded(false);
-              }
-            }}
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
-                event.preventDefault();
-                onSubmit();
-              }
-            }}
-          />
           {canGenerate && (
             <button
               type="button"
@@ -108,22 +91,19 @@ export function ConversationComposer({
                   onChange={(event) =>
                     setSubmitMode(event.target.value as "enqueue" | "interrupt")
                   }
-                  className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-600"
+                  className="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-secondary"
                 >
                   <option value="enqueue">{t("加入队列")}</option>
                   <option value="interrupt">{t("立即转向")}</option>
                 </select>
               )}
               {waiting && (
-                <span className="text-xs text-amber-600">
+                <span className="text-xs text-warning">
                   {t("等待人工回复")}
                 </span>
               )}
               {!streamConnected && (
-                <span
-                  title={streamError}
-                  className="text-[11px] text-slate-400"
-                >
+                <span title={streamError} className="text-[11px] text-faint">
                   {t("正在连接实时通道…")}
                 </span>
               )}
@@ -134,7 +114,7 @@ export function ConversationComposer({
                   aria-label={t("取消执行")}
                   onClick={onCancel}
                   disabled={cancelPending}
-                  className="grid size-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+                  className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-40"
                 >
                   <Square className="size-3" />
                 </button>
@@ -156,8 +136,8 @@ export function ConversationComposer({
                     ? t("立即转向")
                     : t("发送")
               }
-              disabled={sendPending || !comment.trim() || blocked}
-              className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full text-white transition disabled:opacity-30 ${waiting ? "px-3" : "w-9"} ${submitMode === "interrupt" && !waiting ? "bg-rose-600 hover:bg-rose-700" : "bg-slate-900 hover:bg-slate-700"}`}
+              disabled={disabled}
+              className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full transition disabled:opacity-30 ${waiting ? "px-3" : "w-9"} ${submitMode === "interrupt" && !waiting ? "bg-rose-600 text-white hover:bg-rose-700" : "bg-action text-action-foreground hover:bg-action-hover"}`}
             >
               {submitMode === "interrupt" && !waiting ? (
                 <Zap className="size-4" />
@@ -174,15 +154,6 @@ export function ConversationComposer({
         </>
       ) : (
         <>
-          <input
-            aria-label={placeholder}
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            onFocus={() => setExpanded(true)}
-            readOnly={blocked}
-            placeholder={placeholder}
-            className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none"
-          />
           {canGenerate && (
             <button
               type="button"
@@ -199,8 +170,8 @@ export function ConversationComposer({
             type="submit"
             title={t(waiting ? "回复并继续" : "发送")}
             aria-label={t(waiting ? "回复并继续" : "发送")}
-            disabled={sendPending || !comment.trim() || blocked}
-            className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:opacity-30 ${waiting ? "px-3" : "w-9"}`}
+            disabled={disabled}
+            className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30 ${waiting ? "px-3" : "w-9"}`}
           >
             {waiting ? (
               <ListPlus className="size-4" />

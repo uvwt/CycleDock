@@ -44,7 +44,7 @@ export function DiscussionSidebar({
       header={
         <>
           <div className="flex items-center justify-between gap-3 px-1">
-            <span className="text-xs font-semibold text-slate-500">
+            <span className="text-xs font-semibold text-muted-foreground">
               {t("讨论")}
             </span>
             <button
@@ -52,19 +52,19 @@ export function DiscussionSidebar({
               title={t("新建讨论")}
               aria-label={t("新建讨论")}
               onClick={onCreate}
-              className="grid size-8 shrink-0 place-items-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-900 disabled:opacity-40"
+              className="grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-surface hover:text-heading disabled:opacity-40"
             >
               <Plus className="size-4" />
             </button>
           </div>
           <label className="relative block">
             <span className="sr-only">{t("搜索讨论…")}</span>
-            <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-slate-400" />
+            <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-faint" />
             <input
               value={term}
               onChange={(event) => setTerm(event.target.value)}
               placeholder={t("搜索讨论…")}
-              className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 pl-9 text-sm outline-none focus:border-slate-400"
+              className="w-full rounded-xl border border-line bg-surface py-2 pr-3 pl-9 text-sm outline-none focus:border-focus"
             />
           </label>
         </>
@@ -95,7 +95,7 @@ export function DiscussionSidebar({
           ))}
         </div>
       ) : (
-        <div className="px-4 py-10 text-center text-sm text-slate-400">
+        <div className="px-4 py-10 text-center text-sm text-faint">
           {term ? t("没有匹配的讨论") : t("还没有讨论")}
         </div>
       )}

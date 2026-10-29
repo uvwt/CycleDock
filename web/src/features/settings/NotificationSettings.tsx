@@ -36,7 +36,7 @@ export function NotificationSettings() {
   return (
     <Field label={t("浏览器通知")}>
       <div className="space-y-2">
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-muted-foreground">
           {t("切到后台或离开当前卡片后，卡片有更新时通知。网页需保持打开。")}
         </p>
         <Button
@@ -48,12 +48,12 @@ export function NotificationSettings() {
           {t(enabled ? "关闭通知" : "开启通知")}
         </Button>
         {!supported && (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-muted-foreground">
             {t("当前环境不支持浏览器通知，请使用 HTTPS 或本机浏览器。")}
           </p>
         )}
         {supported && permission === "denied" && (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-muted-foreground">
             {t("通知权限已被阻止，请在浏览器的网站设置中允许通知。")}
           </p>
         )}

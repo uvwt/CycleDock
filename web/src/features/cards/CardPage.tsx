@@ -210,7 +210,7 @@ function CardPageContent() {
 
   if (detail.isPending) {
     return (
-      <main className="grid h-dvh place-items-center bg-white">
+      <main className="grid h-dvh place-items-center bg-surface">
         <Spinner text={t("正在加载会话…")} />
       </main>
     );
@@ -218,7 +218,7 @@ function CardPageContent() {
 
   if (detail.error || !detail.data || !card) {
     return (
-      <main className="h-dvh bg-white">
+      <main className="h-dvh bg-surface">
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
             error={detail.error}
@@ -251,18 +251,18 @@ function CardPageContent() {
   const contextSidebar = isDiscussion ? discussionSidebar : workSidebar;
 
   return (
-    <main className="h-dvh min-h-0 bg-white">
+    <main className="h-dvh min-h-0 bg-surface">
       <div
         className={`grid h-full min-h-0 grid-cols-1 ${listVisible ? "lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]" : ""}`}
       >
         <div
-          className={`${listVisible ? "hidden lg:block" : "hidden"} min-h-0 border-r border-slate-200`}
+          className={`${listVisible ? "hidden lg:block" : "hidden"} min-h-0 border-r border-line`}
         >
           {contextSidebar}
         </div>
 
-        <section className="flex min-h-0 min-w-0 flex-col bg-white">
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-100 px-3 sm:px-4">
+        <section className="flex min-h-0 min-w-0 flex-col bg-surface">
+          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-divider px-3 sm:px-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <button
                 type="button"
@@ -271,7 +271,7 @@ function CardPageContent() {
                   isDiscussion ? t("打开讨论列表") : t("打开工作列表")
                 }
                 onClick={() => setContextSidebarOpen(true)}
-                className="grid size-9 shrink-0 place-items-center rounded-xl text-slate-500 hover:bg-slate-100 lg:hidden"
+                className="grid size-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-muted lg:hidden"
               >
                 <PanelLeft className="size-5" />
               </button>
@@ -291,11 +291,11 @@ function CardPageContent() {
               </div>
               <div className="flex min-w-0 items-center gap-2">
                 <div className="min-w-0">
-                  <h1 className="truncate text-sm font-semibold text-slate-900 sm:text-base">
+                  <h1 className="truncate text-sm font-semibold text-heading sm:text-base">
                     {card.title || t("新讨论")}
                   </h1>
                   {isDiscussion && (
-                    <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                    <p className="mt-0.5 truncate text-[11px] text-faint">
                       Discussion · {card.discussion_state}
                     </p>
                   )}
@@ -332,15 +332,15 @@ function CardPageContent() {
             onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
           />
 
-          <div className="shrink-0 bg-white px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pt-3">
+          <div className="shrink-0 bg-surface px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pt-3">
             <div className="mx-auto max-w-3xl">
               {blocked && (
-                <p className="mb-2 text-center text-xs text-slate-400">
+                <p className="mb-2 text-center text-xs text-faint">
                   {t("此讨论已归档，不能继续发送消息")}
                 </p>
               )}
               {detail.data.pending_turns.length > 0 && (
-                <p className="mb-1.5 text-center text-[11px] text-slate-400">
+                <p className="mb-1.5 text-center text-[11px] text-faint">
                   {t("另有待处理")} {detail.data.pending_turns.length}
                 </p>
               )}

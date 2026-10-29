@@ -53,7 +53,9 @@ export function Shell({ children }: { children: ReactNode }) {
       icon: CalendarClock,
     },
     {
-      to: projectID ? `/activity/${encodeURIComponent(projectID)}` : "/activity",
+      to: projectID
+        ? `/activity/${encodeURIComponent(projectID)}`
+        : "/activity",
       activePath: "/activity",
       label: t("活动"),
       icon: Activity,
@@ -137,14 +139,14 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 md:flex">
-      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-white py-3 md:flex">
+    <div className="min-h-screen bg-canvas text-strong md:flex">
+      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line bg-surface py-3 md:flex">
         <button
           type="button"
           onClick={() => navigate("/chat")}
           title="CycleDock"
           aria-label="CycleDock"
-          className="grid size-10 place-items-center rounded-xl transition hover:bg-slate-50"
+          className="grid size-10 place-items-center rounded-xl transition hover:bg-canvas"
         >
           {logo}
         </button>
@@ -166,8 +168,8 @@ export function Shell({ children }: { children: ReactNode }) {
               className={({ isActive }) =>
                 `grid size-10 place-items-center rounded-xl transition ${
                   primaryActive(item.activePath, isActive)
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-400 hover:bg-slate-50 hover:text-slate-800"
+                    ? "bg-muted text-heading"
+                    : "text-faint hover:bg-canvas hover:text-strong"
                 }`
               }
             >
@@ -193,8 +195,8 @@ export function Shell({ children }: { children: ReactNode }) {
             className={({ isActive }) =>
               `grid size-10 place-items-center rounded-xl transition ${
                 isActive
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-400 hover:bg-slate-50 hover:text-slate-800"
+                  ? "bg-muted text-heading"
+                  : "text-faint hover:bg-canvas hover:text-strong"
               }`
             }
           >
@@ -205,7 +207,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <div className="min-w-0 flex-1">
         {!focusedConversation && (
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-3 backdrop-blur md:hidden">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface/95 px-3 backdrop-blur md:hidden">
             <button
               type="button"
               onClick={() => navigate("/chat")}
@@ -225,8 +227,8 @@ export function Shell({ children }: { children: ReactNode }) {
                   className={({ isActive }) =>
                     `grid size-9 place-items-center rounded-xl transition ${
                       primaryActive(item.activePath, isActive)
-                        ? "bg-slate-100 text-slate-900"
-                        : "text-slate-400"
+                        ? "bg-muted text-heading"
+                        : "text-faint"
                     }`
                   }
                 >
@@ -248,7 +250,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 aria-label={t("设置")}
                 className={({ isActive }) =>
                   `grid size-9 place-items-center rounded-xl transition ${
-                    isActive ? "bg-slate-100 text-slate-900" : "text-slate-400"
+                    isActive ? "bg-muted text-heading" : "text-faint"
                   }`
                 }
               >

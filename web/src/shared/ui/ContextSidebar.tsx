@@ -13,11 +13,11 @@ export function ContextSidebar({
 }) {
   return (
     <aside
-      className={`flex h-full min-h-0 w-full flex-col bg-slate-50/80 ${className}`}
+      className={`flex h-full min-h-0 w-full flex-col bg-canvas/80 ${className}`}
       aria-label={ariaLabel}
     >
       {header ? (
-        <div className="space-y-3 border-b border-slate-200 p-3">{header}</div>
+        <div className="space-y-3 border-b border-line p-3">{header}</div>
       ) : null}
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-2">
         {children}
@@ -46,9 +46,7 @@ export function ContextSidebarItem({
   return (
     <div
       className={`group relative flex w-full items-center rounded-xl transition ${
-        active
-          ? "bg-white shadow-sm ring-1 ring-slate-200"
-          : "hover:bg-white/80"
+        active ? "bg-surface shadow-sm ring-1 ring-line" : "hover:bg-surface/80"
       }`}
     >
       <button
@@ -60,16 +58,14 @@ export function ContextSidebarItem({
         <div className="flex items-start gap-2.5">
           {icon ? <div className="mt-0.5 shrink-0">{icon}</div> : null}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-slate-800">
-              {title}
-            </p>
+            <p className="truncate text-sm font-medium text-strong">{title}</p>
             {description ? (
-              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+              <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
                 {description}
               </p>
             ) : null}
             {meta ? (
-              <p className="mt-1.5 text-[11px] text-slate-400">{meta}</p>
+              <p className="mt-1.5 text-[11px] text-faint">{meta}</p>
             ) : null}
           </div>
         </div>

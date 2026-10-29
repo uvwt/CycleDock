@@ -95,7 +95,7 @@ export function CardActions({
             type="button"
             title="更多操作"
             aria-label="更多操作"
-            className="grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700"
+            className="grid size-8 place-items-center rounded-lg text-faint transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
           >
             <MoreHorizontal className="size-[18px]" />
           </button>

@@ -35,7 +35,7 @@ export function LoginPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "登录失败"),
   });
   return (
-    <main className="grid min-h-screen bg-slate-50 lg:grid-cols-[1fr_1fr]">
+    <main className="grid min-h-screen bg-canvas lg:grid-cols-[1fr_1fr]">
       <section className="hidden flex-col justify-between bg-slate-900 p-12 text-white lg:flex">
         <Link to="/chat" className="flex items-center gap-3 text-xl font-bold">
           <img src="/cycledock-logo.png" alt="" className="size-10 shrink-0" />
@@ -59,10 +59,12 @@ export function LoginPage() {
       </section>
       <section className="flex items-center justify-center px-6 py-16">
         <div className="w-full max-w-sm space-y-6">
-          <h2 className="text-3xl font-semibold text-slate-900">
+          <h2 className="text-3xl font-semibold text-heading">
             {t("登录 CycleDock")}
           </h2>
-          <p className="text-sm text-slate-500">{t("继续进入你的工作空间")}</p>
+          <p className="text-sm text-muted-foreground">
+            {t("继续进入你的工作空间")}
+          </p>
           {methods.isPending && <Spinner />}
           {methods.error && <ErrorView error={methods.error} />}
           {methods.data?.providers.map((p) => (
@@ -74,7 +76,7 @@ export function LoginPage() {
                 "return_to=" +
                 encodeURIComponent(safeReturn)
               }
-              className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white font-medium hover:border-sky-400"
+              className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-line bg-surface font-medium hover:border-sky-400"
             >
               {t("使用")} {p.name} {t("登录")} <ArrowRight className="size-4" />
             </a>
@@ -107,7 +109,7 @@ export function LoginPage() {
               </Button>
             </form>
           )}
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-faint">
             {t(
               "Hosted 使用 NexusDock 统一认证；Self-hosted 可使用管理员密码。",
             )}

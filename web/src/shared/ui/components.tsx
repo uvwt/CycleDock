@@ -3,6 +3,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { X, LoaderCircle, AlertCircle } from "lucide-react";
 import type {
   ButtonHTMLAttributes,
+  SelectHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
   TextareaHTMLAttributes,
@@ -10,14 +11,16 @@ import type {
 
 const variants = {
   primary: "bg-sky-700 text-white hover:bg-sky-800 border-sky-700",
-  secondary: "bg-white text-slate-700 hover:bg-slate-50 border-slate-200",
-  ghost: "bg-transparent text-slate-600 hover:bg-slate-100 border-transparent",
-  danger: "bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200",
+  secondary: "bg-surface text-foreground hover:bg-canvas border-line",
+  ghost: "bg-transparent text-secondary hover:bg-muted border-transparent",
+  danger:
+    "bg-danger-muted text-danger hover:bg-danger-hover border-danger-line",
 };
 export function Button({
   variant = "secondary",
   className = "",
   children,
+  type = "button",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: keyof typeof variants;
@@ -25,25 +28,32 @@ export function Button({
   return (
     <button
       {...props}
+      type={type}
       className={`inline-flex min-h-8.5 items-center justify-center gap-2 rounded-lg border px-3 text-[13px] font-medium transition-colors disabled:opacity-40 ${variants[variant]} ${className}`}
     >
       {children}
     </button>
   );
 }
+const controlClass =
+  "w-full rounded-lg border border-line bg-surface px-3 py-2 text-[13px] leading-5 outline-none focus:border-focus disabled:opacity-40 aria-invalid:border-danger";
+
+export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select {...props} className={`${controlClass} ${props.className ?? ""}`} />
+  );
+}
+
 export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
-    <input
-      {...props}
-      className={`w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400 ${props.className ?? ""}`}
-    />
+    <input {...props} className={`${controlClass} ${props.className ?? ""}`} />
   );
 }
 export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
-      className={`w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400 ${props.className ?? ""}`}
+      className={`${controlClass} resize-y ${props.className ?? ""}`}
     />
   );
 }
@@ -51,18 +61,27 @@ export function Field({
   label,
   children,
   hint,
+  error,
 }: {
   label: string;
   children: ReactNode;
   hint?: string;
+  error?: string;
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="block text-xs font-semibold text-slate-600">
+      <span className="block text-xs font-semibold text-secondary">
         {label}
       </span>
       {children}
-      {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+      {error && (
+        <span role="alert" className="block text-xs text-danger">
+          {error}
+        </span>
+      )}
+      {hint && (
+        <span className="block text-xs text-muted-foreground">{hint}</span>
+      )}
     </label>
   );
 }
@@ -70,7 +89,7 @@ export function Spinner({ text = "加载中…" }: { text?: string }) {
   return (
     <span
       role="status"
-      className="inline-flex items-center gap-2 text-sm text-slate-500"
+      className="inline-flex items-center gap-2 text-sm text-muted-foreground"
     >
       <LoaderCircle className="size-4 animate-spin" />
       {text}
@@ -87,7 +106,7 @@ export function ErrorView({
   return (
     <div
       role="alert"
-      className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+      className="rounded-xl border border-danger-line bg-danger-muted p-4 text-sm text-danger"
     >
       <AlertCircle className="mb-2 size-5" />
       {error instanceof Error ? error.message : "操作未成功，请稍后重试"}
@@ -118,14 +137,14 @@ export function Sheet({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
         <Dialog.Content
           aria-describedby={undefined}
-          className={`fixed inset-y-0 z-50 flex w-[min(94vw,440px)] flex-col bg-white shadow-xl ${side === "right" ? "right-0" : "left-0"}`}
+          className={`fixed inset-y-0 z-50 flex w-[min(94vw,440px)] flex-col bg-surface shadow-xl ${side === "right" ? "right-0" : "left-0"}`}
         >
-          <header className="flex min-h-17 items-center justify-between border-b border-slate-100 px-5 py-4">
+          <header className="flex min-h-17 items-center justify-between border-b border-divider px-5 py-4">
             <Dialog.Title className="text-base font-semibold">
               {title}
             </Dialog.Title>
             <Dialog.Close
-              className="rounded-lg p-2 hover:bg-slate-100"
+              className="rounded-lg p-2 hover:bg-muted"
               aria-label="关闭"
             >
               <X className="size-5" />
@@ -159,7 +178,7 @@ export function Menu({
           side={side}
           sideOffset={6}
           collisionPadding={12}
-          className="z-50 min-w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg outline-none"
+          className="z-50 min-w-44 rounded-xl border border-line bg-surface p-1.5 shadow-lg outline-none"
         >
           {children}
         </DropdownMenu.Content>
@@ -184,8 +203,8 @@ export function MenuItem({
       onSelect={onSelect}
       className={`flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 ${
         danger
-          ? "text-rose-700 focus:bg-rose-50"
-          : "text-slate-700 focus:bg-slate-100"
+          ? "text-danger focus:bg-danger-muted"
+          : "text-foreground focus:bg-muted"
       }`}
     >
       {children}
@@ -193,7 +212,7 @@ export function MenuItem({
   );
 }
 export function MenuSeparator() {
-  return <DropdownMenu.Separator className="my-1 h-px bg-slate-100" />;
+  return <DropdownMenu.Separator className="my-1 h-px bg-muted" />;
 }
 export function Modal({
   open,
@@ -212,23 +231,21 @@ export function Modal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/30" />
-        <Dialog.Content
-          className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-5 shadow-xl outline-none sm:p-6"
-        >
+        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-line bg-surface p-5 shadow-xl outline-none sm:p-6">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <Dialog.Title className="text-base font-semibold text-slate-900">
+              <Dialog.Title className="text-base font-semibold text-heading">
                 {title}
               </Dialog.Title>
               {description && (
-                <Dialog.Description className="mt-1 text-[13px] leading-5 text-slate-500">
+                <Dialog.Description className="mt-1 text-[13px] leading-5 text-muted-foreground">
                   {description}
                 </Dialog.Description>
               )}
             </div>
             <Dialog.Close
               aria-label="关闭"
-              className="-mt-1 -mr-1 grid size-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              className="-mt-1 -mr-1 grid size-8 shrink-0 place-items-center rounded-lg text-faint hover:bg-muted hover:text-foreground"
             >
               <X className="size-4" />
             </Dialog.Close>
@@ -284,11 +301,13 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
       <div className="mb-5">
-        <h2 className="text-[15px] font-semibold text-slate-900">{title}</h2>
+        <h2 className="text-[15px] font-semibold text-heading">{title}</h2>
         {description && (
-          <p className="mt-1 text-[13px] leading-5 text-slate-500">{description}</p>
+          <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
+            {description}
+          </p>
         )}
       </div>
       {children}

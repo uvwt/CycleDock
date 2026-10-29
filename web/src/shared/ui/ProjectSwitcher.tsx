@@ -38,19 +38,17 @@ export function ProjectSwitcher({
           disabled={!projects.length && !onCreate}
           className={
             compact
-              ? "grid size-10 place-items-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40"
-              : "flex min-h-10 w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 text-left text-sm text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40"
+              ? "grid size-10 place-items-center rounded-xl text-faint transition hover:bg-canvas hover:text-strong disabled:opacity-40"
+              : "flex min-h-10 w-full items-center gap-2.5 rounded-xl border border-line bg-surface px-3 text-left text-sm text-foreground shadow-sm transition hover:border-line-strong hover:bg-canvas disabled:opacity-40"
           }
         >
-          <FolderKanban
-            className={compact ? "size-5" : "size-4 text-slate-400"}
-          />
+          <FolderKanban className={compact ? "size-5" : "size-4 text-faint"} />
           {!compact && (
             <>
               <span className="min-w-0 flex-1 truncate font-medium">
                 {current?.name || t("选择项目")}
               </span>
-              <ChevronDown className="size-4 shrink-0 text-slate-400" />
+              <ChevronDown className="size-4 shrink-0 text-faint" />
             </>
           )}
         </button>
@@ -66,7 +64,7 @@ export function ProjectSwitcher({
         />
         <Dialog.Content
           aria-describedby={undefined}
-          className={`fixed z-[70] rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_80px_rgba(15,23,42,0.22)] outline-none ${
+          className={`fixed z-[70] rounded-2xl border border-line bg-surface p-2 shadow-[0_24px_80px_rgba(15,23,42,0.22)] outline-none ${
             compact
               ? "top-1/2 left-1/2 w-[min(92vw,360px)] -translate-x-1/2 -translate-y-1/2 md:top-auto md:bottom-3 md:left-[4.5rem] md:w-[280px] md:translate-x-0 md:translate-y-0"
               : "top-1/2 left-1/2 w-[min(92vw,360px)] -translate-x-1/2 -translate-y-1/2"
@@ -74,16 +72,16 @@ export function ProjectSwitcher({
         >
           <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5">
             <div>
-              <Dialog.Title className="text-sm font-semibold text-slate-900">
+              <Dialog.Title className="text-sm font-semibold text-heading">
                 {t("选择项目")}
               </Dialog.Title>
-              <p className="mt-0.5 text-xs text-slate-400">
+              <p className="mt-0.5 text-xs text-faint">
                 {current?.name || t("还没有项目")}
               </p>
             </div>
             <Dialog.Close
               aria-label={t("关闭")}
-              className="grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              className="grid size-8 place-items-center rounded-lg text-faint transition hover:bg-muted hover:text-foreground"
             >
               <X className="size-4" />
             </Dialog.Close>
@@ -91,7 +89,7 @@ export function ProjectSwitcher({
 
           <div className="max-h-[min(50dvh,360px)] overflow-y-auto py-1.5">
             {!projects.length && (
-              <div className="px-2.5 py-6 text-center text-sm text-slate-400">
+              <div className="px-2.5 py-6 text-center text-sm text-faint">
                 {t("还没有项目")}
               </div>
             )}
@@ -104,11 +102,11 @@ export function ProjectSwitcher({
                     onClick={() => onChange(project.id)}
                     className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm transition ${
                       selected
-                        ? "bg-slate-100 text-slate-900"
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                        ? "bg-muted text-heading"
+                        : "text-secondary hover:bg-canvas hover:text-heading"
                     }`}
                   >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-500">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
                       <FolderKanban className="size-4" />
                     </span>
                     <span className="min-w-0 flex-1 truncate font-medium">
@@ -125,16 +123,16 @@ export function ProjectSwitcher({
 
           {(onCreate || onManage) && (
             <>
-              <div className="mx-1 h-px bg-slate-100" />
+              <div className="mx-1 h-px bg-muted" />
               <div className="space-y-0.5 py-1.5">
                 {onCreate && (
                   <Dialog.Close asChild>
                     <button
                       type="button"
                       onClick={onCreate}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-secondary transition hover:bg-canvas hover:text-heading"
                     >
-                      <FolderPlus className="size-4 text-slate-400" />
+                      <FolderPlus className="size-4 text-faint" />
                       {t("新建项目")}
                     </button>
                   </Dialog.Close>
@@ -144,9 +142,9 @@ export function ProjectSwitcher({
                     <button
                       type="button"
                       onClick={onManage}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-secondary transition hover:bg-canvas hover:text-heading"
                     >
-                      <Settings2 className="size-4 text-slate-400" />
+                      <Settings2 className="size-4 text-faint" />
                       {t("项目设置")}
                     </button>
                   </Dialog.Close>

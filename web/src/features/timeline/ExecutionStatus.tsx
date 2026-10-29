@@ -40,7 +40,7 @@ export function RunDuration({
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   return (
     <span
-      className="shrink-0 text-[11px] tabular-nums text-slate-400"
+      className="shrink-0 text-[11px] tabular-nums text-faint"
       title="本次 Agent 执行时长"
     >
       {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
@@ -93,13 +93,15 @@ function AgentAttempt({
         <article className="flex gap-3" data-attempt-question={id}>
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary"
           >
             <Bot className="size-4" />
           </span>
           <div className="min-w-0 max-w-[78%]">
-            <p className="mb-1.5 text-xs font-semibold text-slate-500">Cycle</p>
-            <div className="w-fit max-w-full rounded-2xl bg-slate-100 px-3.5 py-2.5">
+            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">
+              Cycle
+            </p>
+            <div className="w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5">
               <RichText content={attempt.question} />
             </div>
           </div>
@@ -109,14 +111,14 @@ function AgentAttempt({
         className={
           status === "running"
             ? "flex min-w-0 gap-3"
-            : "ml-12 min-w-0 border-l-2 border-slate-200 py-1 pl-3"
+            : "ml-12 min-w-0 border-l-2 border-line py-1 pl-3"
         }
         data-execution-id={id}
       >
         {status === "running" && (
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary"
           >
             <Bot className="size-4" />
           </span>
@@ -127,14 +129,16 @@ function AgentAttempt({
               <p
                 className={`text-xs font-medium ${
                   failed
-                    ? "text-rose-700"
+                    ? "text-danger"
                     : status === "running"
                       ? "text-sky-700"
-                      : "text-slate-600"
+                      : "text-secondary"
                 }`}
               >
                 {status === "running" ? (
-                  <span className="font-semibold text-slate-500">Cycle</span>
+                  <span className="font-semibold text-muted-foreground">
+                    Cycle
+                  </span>
                 ) : (
                   t(
                     humanReplied
@@ -158,17 +162,17 @@ function AgentAttempt({
                 </span>
               </p>
               {status === "running" ? (
-                <div className="mt-1.5 w-fit max-w-full rounded-2xl bg-slate-100 px-3.5 py-2.5 text-slate-500">
+                <div className="mt-1.5 w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5 text-muted-foreground">
                   <RunningDots />
                   {summary && (
-                    <div className="mt-1 text-sm leading-6 text-slate-600">
+                    <div className="mt-1 text-sm leading-6 text-secondary">
                       <RichText content={summary} />
                     </div>
                   )}
                 </div>
               ) : (
                 summary && (
-                  <div className="mt-1 text-sm leading-6 text-slate-600">
+                  <div className="mt-1 text-sm leading-6 text-secondary">
                     <RichText content={summary} />
                   </div>
                 )
@@ -179,7 +183,7 @@ function AgentAttempt({
                 type="button"
                 disabled={cancelingTurnID === pending.id}
                 onClick={() => onCancelTurn(pending.id)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-white disabled:opacity-40"
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-surface disabled:opacity-40"
               >
                 {cancelingTurnID === pending.id ? (
                   <LoaderCircle className="size-3 animate-spin" />
@@ -258,7 +262,7 @@ export function StandaloneExecution({
   if (!attempts.length) return null;
   return (
     <section className="space-y-3">
-      <p className="text-center text-[11px] text-slate-400">
+      <p className="text-center text-[11px] text-faint">
         {t("系统触发 / 未关联历史")}
       </p>
       <ExecutionStatus attempts={attempts} {...actions} />

@@ -93,15 +93,15 @@ export default function PlanPage() {
           <p className="text-xs font-semibold tracking-widest text-sky-700">
             {project?.name || t("当前项目")}
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-heading">
             {t("计划")}
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted-foreground">
             {t("查看这个项目接下来会自动触发的持续工作。")}
           </p>
         </div>
         {projectID && (
-          <div className="flex rounded-xl border border-slate-200 bg-white p-1">
+          <div className="flex rounded-xl border border-line bg-surface p-1">
             {filters.map((filter) => (
               <button
                 key={filter.id}
@@ -114,8 +114,8 @@ export default function PlanPage() {
                 }
                 className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                   view === filter.id
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-500 hover:text-slate-800"
+                    ? "bg-muted text-heading"
+                    : "text-muted-foreground hover:text-strong"
                 }`}
               >
                 {filter.label}
@@ -126,7 +126,7 @@ export default function PlanPage() {
       </header>
 
       {!projectID ? (
-        <div className="mt-20 text-center text-sm text-slate-500">
+        <div className="mt-20 text-center text-sm text-muted-foreground">
           {t("还没有项目")}
         </div>
       ) : schedules.isPending ? (
@@ -138,7 +138,7 @@ export default function PlanPage() {
           <ErrorView error={schedules.error} />
         </div>
       ) : items.length ? (
-        <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="mt-8 overflow-hidden rounded-2xl border border-line bg-surface">
           {items.map((item) => {
             const active = item.enabled && item.ongoing_state === "active";
             return (
@@ -146,13 +146,11 @@ export default function PlanPage() {
                 key={item.id}
                 type="button"
                 onClick={() => navigate(`/cards/${projectID}/${item.card_id}`)}
-                className="flex w-full items-start gap-4 border-b border-slate-100 px-5 py-4 text-left transition last:border-b-0 hover:bg-slate-50"
+                className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
               >
                 <span
                   className={`mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl ${
-                    active
-                      ? "bg-slate-100 text-slate-700"
-                      : "bg-slate-50 text-slate-400"
+                    active ? "bg-muted text-foreground" : "bg-canvas text-faint"
                   }`}
                 >
                   {active ? (
@@ -162,14 +160,14 @@ export default function PlanPage() {
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-slate-900">
+                  <span className="block truncate text-sm font-semibold text-heading">
                     {item.card_title || t("未命名持续事项")}
                   </span>
-                  <span className="mt-1 block text-[13px] text-slate-500">
+                  <span className="mt-1 block text-[13px] text-muted-foreground">
                     {active ? scheduleText(item) : t(inactiveLabel(item))} ·{" "}
                     {item.timezone}
                   </span>
-                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
                     {active && (
                       <span>
                         <Clock3 className="mr-1 inline size-3.5" />
@@ -194,11 +192,11 @@ export default function PlanPage() {
         </div>
       ) : (
         <div className="mt-20 text-center">
-          <CalendarClock className="mx-auto size-9 text-slate-300" />
-          <p className="mt-4 text-sm font-medium text-slate-700">
+          <CalendarClock className="mx-auto size-9 text-placeholder" />
+          <p className="mt-4 text-sm font-medium text-foreground">
             {view === "all" ? t("这个项目还没有计划") : t("这个筛选下没有计划")}
           </p>
-          <p className="mt-1 text-[13px] text-slate-400">
+          <p className="mt-1 text-[13px] text-faint">
             {t("计划来自持续事项中的日程设置。")}
           </p>
         </div>

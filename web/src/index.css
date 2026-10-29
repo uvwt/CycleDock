@@ -1,49 +1,91 @@
 @import "tailwindcss";
 
-/*
- * Tailwind utilities use CSS variables for grayscale colors.
- * Reassign those variables for dark mode so all components, including dialogs,
- * maintain contrast without individual ad-hoc style overrides.
- */
+/* 主题只切换语义颜色；white 与 Tailwind 基础调色板不随主题改变。 */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-canvas: var(--canvas);
+  --color-muted: var(--muted);
+  --color-divider: var(--divider);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-focus: var(--focus);
+  --color-placeholder: var(--placeholder);
+  --color-faint: var(--faint);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary: var(--secondary);
+  --color-foreground: var(--foreground);
+  --color-strong: var(--strong);
+  --color-heading: var(--heading);
+  --color-action: var(--action);
+  --color-action-hover: var(--action-hover);
+  --color-action-foreground: var(--action-foreground);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-danger-muted: var(--danger-muted);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-line: var(--danger-line);
+  --color-warning-muted: var(--warning-muted);
+  --color-warning-line: var(--warning-line);
+}
+
+:root {
+  --surface: #fff;
+  --canvas: #f8fafc;
+  --muted: #f1f5f9;
+  --divider: #f1f5f9;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --focus: #94a3b8;
+  --placeholder: #cbd5e1;
+  --faint: #94a3b8;
+  --secondary: #475569;
+  --foreground: #334155;
+  --strong: #1e293b;
+  --heading: #0f172a;
+  --action: #0f172a;
+  --action-hover: #334155;
+  --action-foreground: #fff;
+  --danger: #be123c;
+  --warning: #b45309;
+  --danger-muted: #fff1f2;
+  --danger-hover: #ffe4e6;
+  --danger-line: #fecdd3;
+  --warning-muted: #fffbeb;
+  --warning-line: #fde68a;
+  --muted-foreground: #64748b;
+  --code-background: #172234;
+  --inline-code-background: #f1f5f9;
+  --link: #0369a1;
+}
+
 html[data-theme="dark"] {
-  --color-white: #15202e;
-  --color-slate-50: #101826;
-  --color-slate-100: #1e2b3b;
-  --color-slate-200: #334358;
-  --color-slate-300: #526176;
-  --color-slate-400: #95a3b9;
-  --color-slate-500: #a6b5ca;
-  --color-slate-600: #c8d4e3;
-  --color-slate-700: #dde6f1;
-  --color-slate-800: #e8eef6;
-  --color-slate-900: #f7f9fc;
-  --color-rose-50: #321e2c;
-  --color-rose-100: #472634;
-  --color-rose-200: #713747;
-  --color-amber-50: #332c1e;
-  --color-amber-200: #68552c;
-  color: #e8eef6;
-  background: #101826;
-}
-/* Action buttons keep white text while dark surfaces remain dark. */
-html[data-theme="dark"] .bg-sky-700.text-white {
-  color: #fff;
-}
-html[data-theme="dark"] .bg-slate-900.text-white {
-  color: #101826;
-}
-html[data-theme="dark"] .prose-chat pre {
-  background: #0b1320;
-}
-html[data-theme="dark"] .prose-chat code:not(pre code) {
-  background: #28394d;
-  border-color: #34455a;
-}
-html[data-theme="dark"] .prose-chat a {
-  color: #7dd3fc;
-}
-html[data-theme="dark"] .bg-white\/95 {
-  background-color: rgb(21 32 46 / 95%);
+  --surface: #15202e;
+  --canvas: #101826;
+  --muted: #1e2b3b;
+  --divider: #1e2b3b;
+  --line: #334358;
+  --line-strong: #526176;
+  --focus: #95a3b9;
+  --placeholder: #526176;
+  --faint: #95a3b9;
+  --secondary: #c8d4e3;
+  --foreground: #dde6f1;
+  --strong: #e8eef6;
+  --heading: #f7f9fc;
+  --action: #f7f9fc;
+  --action-hover: #dde6f1;
+  --action-foreground: #101826;
+  --danger: #fda4af;
+  --warning: #fbbf24;
+  --danger-muted: #321e2c;
+  --danger-hover: #472634;
+  --danger-line: #713747;
+  --warning-muted: #332c1e;
+  --warning-line: #68552c;
+  --muted-foreground: #a6b5ca;
+  --code-background: #0b1320;
+  --inline-code-background: #28394d;
+  --link: #7dd3fc;
 }
 :root {
   font-family:
@@ -54,8 +96,8 @@ html[data-theme="dark"] .bg-white\/95 {
     "PingFang SC",
     "Microsoft YaHei",
     sans-serif;
-  color: #243247;
-  background: #f8fafc;
+  color: var(--foreground);
+  background: var(--canvas);
   font-synthesis: none;
 }
 html,
@@ -77,11 +119,12 @@ button:disabled {
   cursor: not-allowed;
 }
 :focus-visible {
-  outline: none;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: var(--line-strong) transparent;
 }
 .prose-chat {
   line-height: 1.68;
@@ -105,7 +148,7 @@ button:disabled {
   padding-left: 1.4rem;
 }
 .prose-chat pre {
-  background: #172234;
+  background: var(--code-background);
   color: #f1f5f9;
   padding: 1rem;
   overflow-x: auto;
@@ -113,19 +156,19 @@ button:disabled {
   margin: 0.75rem 0;
 }
 .prose-chat code:not(pre code) {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--inline-code-background);
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0 0.25rem;
 }
 .prose-chat a {
-  color: #0369a1;
+  color: var(--link);
   text-decoration: underline;
 }
 .prose-chat blockquote {
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid var(--line-strong);
   padding-left: 1rem;
-  color: #64748b;
+  color: var(--muted-foreground);
 }
 .prose-chat h1,
 .prose-chat h2,
@@ -141,7 +184,7 @@ button:disabled {
 }
 .prose-chat td,
 .prose-chat th {
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--line-strong);
   padding: 0.35rem 0.6rem;
 }
 @keyframes message-enter {

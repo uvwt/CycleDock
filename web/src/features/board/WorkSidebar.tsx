@@ -27,7 +27,7 @@ function groupForCard(card?: Card): WorkGroup | "" {
 }
 
 function groupIcon(group: WorkGroup, active: boolean) {
-  const className = `size-4 ${active ? "text-sky-700" : "text-slate-400"}`;
+  const className = `size-4 ${active ? "text-sky-700" : "text-faint"}`;
   switch (group) {
     case "todo":
       return <Circle className={className} />;
@@ -110,7 +110,7 @@ export function WorkSidebar({
       ariaLabel={t("工作列表")}
       className={className}
       header={
-        <div className="px-1 text-xs font-semibold text-slate-500">
+        <div className="px-1 text-xs font-semibold text-muted-foreground">
           {t("工作")}
         </div>
       }
@@ -132,19 +132,19 @@ export function WorkSidebar({
                 }
                 className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition ${
                   containsActive
-                    ? "text-slate-900"
-                    : "text-slate-600 hover:bg-white/70"
+                    ? "text-heading"
+                    : "text-secondary hover:bg-surface/70"
                 }`}
               >
                 {isExpanded ? (
-                  <ChevronDown className="size-4 shrink-0 text-slate-400" />
+                  <ChevronDown className="size-4 shrink-0 text-faint" />
                 ) : (
-                  <ChevronRight className="size-4 shrink-0 text-slate-400" />
+                  <ChevronRight className="size-4 shrink-0 text-faint" />
                 )}
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold">
                   {labelFor(group)}
                 </span>
-                <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-400 ring-1 ring-slate-200">
+                <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] text-faint ring-1 ring-line">
                   {groupCards.length}
                 </span>
               </button>
@@ -171,7 +171,7 @@ export function WorkSidebar({
                       );
                     })
                   ) : (
-                    <div className="px-3 py-5 text-center text-xs text-slate-400">
+                    <div className="px-3 py-5 text-center text-xs text-faint">
                       {t("该状态暂无任务")}
                     </div>
                   )}

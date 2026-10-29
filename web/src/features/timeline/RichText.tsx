@@ -8,7 +8,7 @@ export function RichText({ content }: { content: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   return (
-    <div className="prose-chat text-sm text-slate-700">
+    <div className="prose-chat text-sm text-foreground">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -27,7 +27,11 @@ export function RichText({ content }: { content: string }) {
                 }}
                 className="absolute top-2 right-2 z-10 rounded-lg bg-slate-700/80 p-1.5 text-white hover:bg-slate-600"
               >
-                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {copied ? (
+                  <Check className="size-3.5" />
+                ) : (
+                  <Copy className="size-3.5" />
+                )}
               </button>
               <pre>{children}</pre>
             </div>

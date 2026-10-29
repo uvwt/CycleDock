@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { ComposerInput } from "../../shared/ui/ComposerInput";
+import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -52,7 +53,6 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     Boolean(initial.content || initial.pendingCardID),
   );
   const [sending, setSending] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (pending) return;
@@ -117,7 +117,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   return (
     <div>
       {pending && (
-        <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+        <div className="mb-2 rounded-xl bg-warning-muted px-3 py-2 text-xs leading-5 text-warning">
           {t(
             "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card，不会重复创建讨论。",
           )}
@@ -129,50 +129,28 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
           event.preventDefault();
           void (pending ? retry() : createAndSend());
         }}
-        className={`mx-auto border bg-white transition-all focus-within:border-slate-300 ${
+        className={`mx-auto border bg-surface transition-all focus-within:border-line-strong ${
           expanded
-            ? "rounded-2xl border-slate-200 p-2 shadow-sm"
-            : "flex items-center rounded-full border-slate-200 py-1 pr-1 pl-4 shadow-sm"
+            ? "rounded-2xl border-line p-2 shadow-sm"
+            : "flex items-center rounded-full border-line py-1 pr-1 pl-4 shadow-sm"
         }`}
       >
-        {expanded ? (
-          <textarea
-            ref={textarea}
-            autoFocus
-            aria-label={placeholder}
-            value={value}
-            readOnly={Boolean(pending)}
-            onChange={(event) => setContent(event.target.value)}
-            onBlur={() => {
-              if (!content.trim() && !pending) setExpanded(false);
-            }}
-            placeholder={placeholder}
-            rows={3}
-            className="max-h-44 min-h-20 w-full resize-none bg-transparent px-2 py-2 text-sm outline-none read-only:text-slate-600"
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
-                event.preventDefault();
-                void (pending ? retry() : createAndSend());
-              }
-            }}
-          />
-        ) : (
-          <input
-            aria-label={placeholder}
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            onFocus={() => setExpanded(true)}
-            placeholder={placeholder}
-            className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none"
-          />
-        )}
+        <ComposerInput
+          value={value}
+          onChange={setContent}
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          placeholder={placeholder}
+          readOnly={Boolean(pending)}
+          keepExpanded={Boolean(pending)}
+        />
 
         <div
-          className={expanded ? "flex items-center justify-end gap-2 px-1 pb-1" : "shrink-0"}
+          className={
+            expanded
+              ? "flex items-center justify-end gap-2 px-1 pb-1"
+              : "shrink-0"
+          }
         >
           {pending?.pendingCardID && expanded && (
             <button
@@ -181,7 +159,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
               onClick={() =>
                 navigate(`/chat/${projectID}/${pending.pendingCardID}`)
               }
-              className="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100"
+              className="rounded-lg px-2.5 py-2 text-xs font-medium text-muted-foreground hover:bg-muted"
             >
               {t("打开讨论")}
             </button>
@@ -191,7 +169,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
             title={pending ? t("重试发送") : t("发送")}
             aria-label={pending ? t("重试发送") : t("发送")}
             disabled={sending || (!pending && !content.trim())}
-            className="grid size-9 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-slate-700 disabled:opacity-30"
+            className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
           >
             {sending ? (
               <LoaderCircle className="size-4 animate-spin" />

@@ -23,6 +23,7 @@ import {
   ErrorView,
   Field,
   Section,
+  Select,
   Spinner,
   TextInput,
 } from "../../shared/ui/components";
@@ -32,9 +33,6 @@ const names: Record<Provider, string> = {
   grok: "Grok Subscription",
   openai_compatible: "OpenAI-compatible API",
 };
-
-const selectClass =
-  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400";
 
 function newRoute(): ModelRoute {
   return {
@@ -101,7 +99,7 @@ function RouteEditor({
       ...route,
       provider_type: provider,
       credential_id:
-        provider === "openai_compatible" ? "" : nextAccounts[0]?.id ?? "",
+        provider === "openai_compatible" ? "" : (nextAccounts[0]?.id ?? ""),
       provider_base_url:
         provider === "openai_compatible" ? route.provider_base_url : "",
       api_key_env: provider === "openai_compatible" ? route.api_key_env : "",
@@ -110,16 +108,16 @@ function RouteEditor({
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="rounded-xl border border-line bg-surface p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold">优先级 {index + 1}</p>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             当前 Route 失败后自动尝试下一条。
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="mr-2 flex items-center gap-2 text-xs text-slate-600">
+          <label className="mr-2 flex items-center gap-2 text-xs text-secondary">
             <input
               type="checkbox"
               className="size-4 accent-sky-700"
@@ -158,21 +156,19 @@ function RouteEditor({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Provider">
-          <select
-            className={selectClass}
+          <Select
             value={route.provider_type}
             onChange={(event) => setProvider(event.target.value as Provider)}
           >
             <option value="openai_compatible">{names.openai_compatible}</option>
             <option value="chatgpt">{names.chatgpt}</option>
             <option value="grok">{names.grok}</option>
-          </select>
+          </Select>
         </Field>
 
         {subscription && (
           <Field label="账号">
-            <select
-              className={selectClass}
+            <Select
               value={route.credential_id}
               onChange={(event) =>
                 onChange({
@@ -188,7 +184,7 @@ function RouteEditor({
                   {account.display_label}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         )}
 
@@ -220,8 +216,7 @@ function RouteEditor({
 
         <Field label="模型">
           {subscription && !!catalog.data?.length ? (
-            <select
-              className={selectClass}
+            <Select
               value={route.model}
               onChange={(event) =>
                 onChange({ ...route, model: event.target.value })
@@ -233,7 +228,7 @@ function RouteEditor({
                   {model.name}
                 </option>
               ))}
-            </select>
+            </Select>
           ) : (
             <TextInput
               disabled={subscription && !route.credential_id}
@@ -250,7 +245,7 @@ function RouteEditor({
       </div>
 
       {catalog.isError && (
-        <p className="mt-2 text-xs text-amber-600">
+        <p className="mt-2 text-xs text-warning">
           无法获取模型目录，可手动输入模型 ID。
         </p>
       )}
@@ -402,12 +397,12 @@ export function ModelsSettings() {
             return (
               <div
                 key={provider}
-                className="rounded-xl border border-slate-200 bg-white p-4"
+                className="rounded-xl border border-line bg-surface p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold">{names[provider]}</p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="mt-1 text-xs text-muted-foreground">
                       {accounts.length
                         ? "已连接 " + accounts.length + " 个账号"
                         : status?.available
@@ -415,7 +410,7 @@ export function ModelsSettings() {
                           : "当前部署未开放"}
                     </p>
                     {status?.warning && (
-                      <p className="mt-2 text-xs text-amber-700">
+                      <p className="mt-2 text-xs text-warning">
                         Hosted DEV 临时登录测试模式；正式使用仍需要批准的 OAuth
                         Client ID。
                       </p>
@@ -442,13 +437,13 @@ export function ModelsSettings() {
                     return (
                       <div
                         key={account.id}
-                        className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2"
+                        className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">
                             {account.display_label}
                           </p>
-                          <p className="text-[11px] text-slate-500">
+                          <p className="text-[11px] text-muted-foreground">
                             {inUse ? "已被模型 Route 使用" : "可用于模型 Route"}
                           </p>
                         </div>
@@ -475,7 +470,7 @@ export function ModelsSettings() {
                 </div>
 
                 {provider === "chatgpt" && authorizationURL && (
-                  <div className="mt-4 space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                  <div className="mt-4 space-y-3 rounded-lg border border-warning-line bg-warning-muted p-3 text-xs">
                     <p>
                       仅限 DEV：完成 OpenAI 登录后，把最终 localhost callback
                       URL 粘贴到这里。
@@ -540,7 +535,7 @@ export function ModelsSettings() {
       >
         <div className="space-y-3">
           {draft.routes.length === 0 && (
-            <div className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500">
+            <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted-foreground">
               还没有模型 Route。添加第一条后即可配置 Cycle Agent。
             </div>
           )}
