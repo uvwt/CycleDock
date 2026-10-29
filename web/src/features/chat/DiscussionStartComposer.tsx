@@ -49,9 +49,6 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   const [pending, setPending] = useState<SavedDraft | null>(
     initial.pendingCardID ? initial : null,
   );
-  const [expanded, setExpanded] = useState(
-    Boolean(initial.content || initial.pendingCardID),
-  );
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
@@ -64,7 +61,6 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     writeDraft(projectID);
     setPending(null);
     setContent("");
-    setExpanded(false);
     await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
     navigate(`/chat/${projectID}/${cardID}`);
   }
@@ -129,37 +125,24 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
           event.preventDefault();
           void (pending ? retry() : createAndSend());
         }}
-        className={`mx-auto border bg-surface transition-all focus-within:border-line-strong ${
-          expanded
-            ? "rounded-2xl border-line p-2 shadow-sm"
-            : "flex items-center rounded-full border-line py-1 pr-1 pl-4 shadow-sm"
-        }`}
+        className="mx-auto flex items-end rounded-2xl border border-line bg-surface py-1.5 pr-1.5 pl-3 shadow-sm transition-[border-color,box-shadow] focus-within:border-line-strong"
       >
         <ComposerInput
           value={value}
           onChange={setContent}
-          expanded={expanded}
-          onExpandedChange={setExpanded}
           placeholder={placeholder}
           readOnly={Boolean(pending)}
-          keepExpanded={Boolean(pending)}
         />
 
-        <div
-          className={
-            expanded
-              ? "flex items-center justify-end gap-2 px-1 pb-1"
-              : "shrink-0"
-          }
-        >
-          {pending?.pendingCardID && expanded && (
+        <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
+          {pending?.pendingCardID && (
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() =>
                 navigate(`/chat/${projectID}/${pending.pendingCardID}`)
               }
-              className="rounded-lg px-2.5 py-2 text-xs font-medium text-muted-foreground hover:bg-muted"
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
             >
               {t("打开讨论")}
             </button>
@@ -169,7 +152,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
             title={pending ? t("重试发送") : t("发送")}
             aria-label={pending ? t("重试发送") : t("发送")}
             disabled={sending || (!pending && !content.trim())}
-            className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
           >
             {sending ? (
               <LoaderCircle className="size-4 animate-spin" />

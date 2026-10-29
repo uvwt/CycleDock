@@ -203,7 +203,13 @@ const en = {
   DISCUSSIONS: "DISCUSSIONS",
   "查看执行状态，跟踪长期工作。": "Track tasks, progress and ongoing work.",
   新建项目: "New project",
+  "创建一个新的项目看板来组织任务与 Agent 会话。":
+    "Create a new project board to organize tasks and Agent sessions.",
+  输入项目名称: "Enter project name",
+  描述该项目的工作范围或目标: "Describe the project scope or goals",
   新建待办: "New to-do",
+  "添加一个待办任务到当前项目看板中。": "Add a to-do task to this board.",
+  取消: "Cancel",
   待办标题: "To-do title",
   待办描述: "To-do description",
   "要完成什么？": "What needs to be done?",

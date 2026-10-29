@@ -17,9 +17,9 @@ export function ContextSidebar({
       aria-label={ariaLabel}
     >
       {header ? (
-        <div className="space-y-3 border-b border-line p-3">{header}</div>
+        <div className="space-y-2 border-b border-line p-2.5">{header}</div>
       ) : null}
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {children}
       </div>
     </aside>
@@ -45,33 +45,37 @@ export function ContextSidebarItem({
 }) {
   return (
     <div
-      className={`group relative flex w-full items-center rounded-xl transition ${
-        active ? "bg-surface shadow-sm ring-1 ring-line" : "hover:bg-surface/80"
+      className={`group relative flex w-full items-center rounded-lg transition ${
+        active
+          ? "bg-surface text-foreground shadow-sm ring-1 ring-line"
+          : "text-secondary-foreground hover:bg-surface/80 hover:text-foreground"
       }`}
     >
       <button
         type="button"
         onClick={onClick}
         aria-current={active ? "page" : undefined}
-        className={`min-w-0 flex-1 rounded-xl px-3 py-3 text-left ${actions ? "pr-12" : ""}`}
+        className={`min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left ${actions ? "pr-10" : ""}`}
       >
-        <div className="flex items-start gap-2.5">
+        <div className="flex items-start gap-2">
           {icon ? <div className="mt-0.5 shrink-0">{icon}</div> : null}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-strong">{title}</p>
+            <p className="truncate text-sm font-normal text-foreground leading-5">
+              {title}
+            </p>
             {description ? (
-              <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+              <p className="mt-0.5 line-clamp-2 text-xs font-normal leading-normal text-muted-foreground">
                 {description}
               </p>
             ) : null}
             {meta ? (
-              <p className="mt-1.5 text-[11px] text-faint">{meta}</p>
+              <p className="mt-0.5 text-[11px] font-normal text-faint">{meta}</p>
             ) : null}
           </div>
         </div>
       </button>
       {actions ? (
-        <div className="absolute top-1/2 right-2 -translate-y-1/2 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 [@media(hover:hover)]:opacity-0">
+        <div className="absolute top-1/2 right-1.5 -translate-y-1/2 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 [@media(hover:hover)]:opacity-0">
           {actions}
         </div>
       ) : null}

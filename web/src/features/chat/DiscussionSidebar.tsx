@@ -8,6 +8,11 @@ import {
   ContextSidebar,
   ContextSidebarItem,
 } from "../../shared/ui/ContextSidebar";
+import {
+  Button,
+  HintTooltip,
+  TextInput,
+} from "../../shared/ui/components";
 
 export function DiscussionSidebar({
   discussions,
@@ -44,34 +49,35 @@ export function DiscussionSidebar({
       header={
         <>
           <div className="flex items-center justify-between gap-3 px-1">
-            <span className="text-xs font-semibold text-muted-foreground">
+            <span className="text-xs font-medium text-muted-foreground">
               {t("讨论")}
             </span>
-            <button
-              type="button"
-              title={t("新建讨论")}
-              aria-label={t("新建讨论")}
-              onClick={onCreate}
-              className="grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground transition hover:bg-surface hover:text-heading disabled:opacity-40"
-            >
-              <Plus className="size-4" />
-            </button>
+            <HintTooltip content={t("新建讨论")}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={t("新建讨论")}
+                onClick={onCreate}
+              >
+                <Plus className="size-4" />
+              </Button>
+            </HintTooltip>
           </div>
           <label className="relative block">
             <span className="sr-only">{t("搜索讨论…")}</span>
             <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-faint" />
-            <input
+            <TextInput
               value={term}
               onChange={(event) => setTerm(event.target.value)}
               placeholder={t("搜索讨论…")}
-              className="w-full rounded-xl border border-line bg-surface py-2 pr-3 pl-9 text-sm outline-none focus:border-focus"
+              className="pl-9"
             />
           </label>
         </>
       }
     >
       {filtered.length ? (
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           {filtered.map((card) => (
             <ContextSidebarItem
               key={card.id}

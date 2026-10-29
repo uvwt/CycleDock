@@ -5,6 +5,7 @@ import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import type { ExecutionAttempt } from "./execution";
 import { RichText } from "./RichText";
 import { RunningDots } from "./RunningDots";
+import { Button, HintTooltip } from "../../shared/ui/components";
 
 const attemptLabels: Record<string, string> = {
   queued: "等待执行",
@@ -26,6 +27,7 @@ export function RunDuration({
   finishedAt?: string;
   active: boolean;
 }) {
+  const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active || !startedAt) return;
@@ -39,12 +41,11 @@ export function RunDuration({
   if (!Number.isFinite(end)) return null;
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   return (
-    <span
-      className="shrink-0 text-[11px] tabular-nums text-faint"
-      title="本次 Agent 执行时长"
-    >
-      {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-    </span>
+    <HintTooltip content={t("本次 Agent 执行时长")}>
+      <span className="shrink-0 cursor-default text-[11px] tabular-nums text-faint">
+        {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+      </span>
+    </HintTooltip>
   );
 }
 
@@ -179,11 +180,12 @@ function AgentAttempt({
               )}
             </div>
             {pending && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 disabled={cancelingTurnID === pending.id}
                 onClick={() => onCancelTurn(pending.id)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-surface disabled:opacity-40"
+                className="text-muted-foreground"
               >
                 {cancelingTurnID === pending.id ? (
                   <LoaderCircle className="size-3 animate-spin" />
@@ -191,14 +193,15 @@ function AgentAttempt({
                   <X className="size-3" />
                 )}
                 {t("取消排队")}
-              </button>
+              </Button>
             )}
             {history?.can_retry && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 disabled={retryingAttemptID === history.id}
                 onClick={() => onRetryAttempt(history.id)}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+                className="text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/40"
               >
                 {retryingAttemptID === history.id ? (
                   <LoaderCircle className="size-3 animate-spin" />
@@ -206,7 +209,7 @@ function AgentAttempt({
                   <RotateCcw className="size-3" />
                 )}
                 {t("重试")}
-              </button>
+              </Button>
             )}
           </div>
         </div>

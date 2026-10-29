@@ -113,7 +113,7 @@ function EventRow({
           </span>
         </div>
         {attempts.length > 0 && (
-          <div className="mt-5">
+          <div className="mt-3">
             <ExecutionStatus attempts={attempts} live={live} {...actions} />
           </div>
         )}
@@ -127,19 +127,19 @@ function EventRow({
         id={"event-" + event.id}
         data-sequence={event.sequence}
         data-message-group-start={showSender}
-        className={`flex gap-3 ${human ? "justify-end" : "justify-start"} ${!human && !showSender ? "pl-12" : ""}`}
+        className={`flex gap-3.5 ${human ? "justify-end" : "justify-start"} ${!human && !showSender ? "pl-[46px]" : ""}`}
       >
         {showSender && !human && (
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
+            className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
           >
             <Bot className="size-4" />
           </span>
         )}
         <div className="min-w-0 max-w-[78%]">
           {showSender && !human && (
-            <p className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-muted-foreground">
+            <p className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-semibold text-muted-foreground">
               <span>
                 {event.actor_name === "Cycle Agent"
                   ? "Cycle"
@@ -171,7 +171,7 @@ function EventRow({
             </p>
           )}
           <div
-            className={`w-fit max-w-full rounded-2xl px-3.5 py-2.5 ${human ? "ml-auto bg-sky-50" : "bg-muted"}`}
+            className={`w-fit max-w-full rounded-2xl px-4 py-2.5 ${human ? "ml-auto bg-sky-50" : "bg-muted"}`}
           >
             {(event.type === "finding" || event.type === "result") && (
               <p
@@ -183,7 +183,7 @@ function EventRow({
             {message?.type === "choice" && message.widget ? (
               <div className="space-y-3">
                 {message.content && <RichText content={message.content} />}
-                <p className="text-sm font-medium text-heading">
+                <p className="text-base font-medium text-heading">
                   {message.widget.question}
                 </p>
                 <div className="flex flex-col gap-2">
@@ -254,7 +254,7 @@ function EventRow({
         </div>
       </article>
       {attempts.length > 0 && (
-        <div className="mt-5">
+        <div className="mt-3">
           <ExecutionStatus attempts={attempts} live={live} {...actions} />
         </div>
       )}
@@ -401,7 +401,7 @@ export function ConversationView({
     <div
       ref={list}
       onScroll={onScroll}
-      className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-4 py-7 sm:px-6"
+      className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-4 pt-3.5 pb-1 sm:px-6"
       role="log"
       aria-label={t("统一消息时间线")}
     >
@@ -431,7 +431,7 @@ export function ConversationView({
           return (
             <div
               key={key}
-              className={`${!preview && !previewKeys.has(event.id) && event.sequence > historyThrough ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-[5px]" : "mt-5"}`}
+              className={`${!preview && !previewKeys.has(event.id) && event.sequence > historyThrough ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-1.5" : "mt-3.5"}`}
             >
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
@@ -448,7 +448,7 @@ export function ConversationView({
         })}
 
         {standalone.length > 0 && (
-          <div className="mt-5">
+          <div className="mt-3">
             <StandaloneExecution
               attempts={standalone}
               live={displayLive}
@@ -456,7 +456,7 @@ export function ConversationView({
             />
           </div>
         )}
-        <div ref={bottom} className="h-1" />
+        <div ref={bottom} className="h-3 shrink-0" />
       </div>
 
       {showLatest && (

@@ -14,6 +14,7 @@ import {
   ContextSidebar,
   ContextSidebarItem,
 } from "../../shared/ui/ContextSidebar";
+import { Badge } from "../../shared/ui/components";
 
 type WorkGroup = TodoState | "ongoing";
 
@@ -110,7 +111,7 @@ export function WorkSidebar({
       ariaLabel={t("工作列表")}
       className={className}
       header={
-        <div className="px-1 text-xs font-semibold text-muted-foreground">
+        <div className="px-1 text-xs font-medium text-muted-foreground">
           {t("工作")}
         </div>
       }
@@ -141,12 +142,15 @@ export function WorkSidebar({
                 ) : (
                   <ChevronRight className="size-4 shrink-0 text-faint" />
                 )}
-                <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                <span className="min-w-0 flex-1 truncate text-sm font-normal">
                   {labelFor(group)}
                 </span>
-                <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] text-faint ring-1 ring-line">
+                <Badge
+                  variant="secondary"
+                  className="px-1.5 py-0 text-[11px] font-normal text-faint"
+                >
                   {groupCards.length}
-                </span>
+                </Badge>
               </button>
 
               {isExpanded ? (

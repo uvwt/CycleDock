@@ -20,6 +20,7 @@ import type {
 import { keys, queryClient } from "../../app/query";
 import {
   Button,
+  Checkbox,
   ErrorView,
   Field,
   Section,
@@ -117,13 +118,11 @@ function RouteEditor({
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="mr-2 flex items-center gap-2 text-xs text-secondary-foreground">
-            <input
-              type="checkbox"
-              className="size-4 accent-sky-700"
+          <label className="mr-2 flex cursor-pointer items-center gap-2 text-xs text-secondary-foreground">
+            <Checkbox
               checked={route.enabled}
-              onChange={(event) =>
-                onChange({ ...route, enabled: event.target.checked })
+              onCheckedChange={(checked) =>
+                onChange({ ...route, enabled: Boolean(checked) })
               }
             />
             启用

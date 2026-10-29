@@ -1,4 +1,4 @@
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { mcpFormSchema, type MCPFormValues } from "./mcp-form";
 import { useState } from "react";
@@ -10,6 +10,7 @@ import type { MCPConnection, MCPInput } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
 import {
   Button,
+  Checkbox,
   ConfirmDialog,
   ErrorView,
   Field,
@@ -224,6 +225,7 @@ function MCPForm({
     register,
     handleSubmit,
     setValue,
+    control,
     formState: { errors },
   } = useForm<MCPFormValues>({
     resolver: zodResolver(mcpFormSchema),
@@ -236,6 +238,8 @@ function MCPForm({
       clear_bearer_token: false,
     },
   });
+  const clearBearerToken = useWatch({ control, name: "clear_bearer_token" });
+  const enabled = useWatch({ control, name: "enabled" });
   const configured = "token_configured" in initial && initial.token_configured;
   return (
     <>
@@ -275,12 +279,14 @@ function MCPForm({
           {configured && (
             <div className="space-y-2 text-xs text-muted-foreground">
               <p>已保存 Token。留空不会覆盖；填写新值将替换。</p>
-              <label className="flex items-center gap-2 text-secondary-foreground">
-                <input
-                  type="checkbox"
-                  {...register("clear_bearer_token", {
-                    onChange: () => setValue("bearer_token", ""),
-                  })}
+              <label className="flex cursor-pointer items-center gap-2 text-secondary-foreground">
+                <Checkbox
+                  checked={clearBearerToken}
+                  onCheckedChange={(checked) => {
+                    const next = Boolean(checked);
+                    setValue("clear_bearer_token", next);
+                    if (next) setValue("bearer_token", "");
+                  }}
                 />
                 清除已保存的 Token（改为匿名连接）
               </label>
@@ -295,11 +301,12 @@ function MCPForm({
               aria-invalid={!!errors.timeout_ms}
             />
           </Field>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4 accent-sky-700"
-              {...register("enabled")}
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox
+              checked={enabled}
+              onCheckedChange={(checked) =>
+                setValue("enabled", Boolean(checked))
+              }
             />
             启用服务
           </label>

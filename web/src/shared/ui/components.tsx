@@ -33,10 +33,41 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "./tooltip";
 
 export { Input as TextInput } from "./input";
 export { Textarea as TextArea } from "./textarea";
 export { NativeSelect as Select } from "./native-select";
+export { Checkbox } from "./checkbox";
+export { Badge } from "./badge";
+export {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "./tooltip";
+
+export function HintTooltip({
+  content,
+  children,
+  side = "top",
+}: {
+  content: ReactNode;
+  children: React.ReactElement;
+  side?: "top" | "right" | "bottom" | "left";
+}) {
+  if (!content) return children;
+  return (
+    <UITooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side}>{content}</TooltipContent>
+    </UITooltip>
+  );
+}
 
 // 页面保留现有业务命名，底层样式和交互统一由 shadcn/ui 组件负责。
 const buttonVariants = {

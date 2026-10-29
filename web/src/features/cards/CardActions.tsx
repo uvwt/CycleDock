@@ -91,14 +91,15 @@ export function CardActions({
         side={menuSide}
         align={menuSide === "right" ? "start" : "end"}
         trigger={
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             title="更多操作"
             aria-label="更多操作"
-            className="grid size-8 place-items-center rounded-lg text-faint transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+            className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
           >
-            <MoreHorizontal className="size-[18px]" />
-          </button>
+            <MoreHorizontal className="size-4" />
+          </Button>
         }
       >
         {taskDetails && card.kind !== "discussion" && (

@@ -187,12 +187,15 @@ button:disabled {
   overflow-x: auto;
   border-radius: 12px;
   margin: 0.75rem 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
 }
 .prose-chat code:not(pre code) {
   background: var(--inline-code-background);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 0 0.25rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.9em;
 }
 .prose-chat a {
   color: var(--link);

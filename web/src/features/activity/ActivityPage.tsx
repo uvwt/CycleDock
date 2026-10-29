@@ -64,7 +64,6 @@ export default function ActivityPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
-    project,
     projectID,
     isPending: projectsPending,
     error: projectsError,
@@ -110,13 +109,10 @@ export default function ActivityPage() {
   }
 
   return (
-    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-5xl px-5 py-8 md:min-h-dvh md:px-8">
-      <header className="flex flex-wrap items-end justify-between gap-4">
+    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-[1600px] space-y-7 px-5 py-8 md:min-h-dvh md:px-8">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold tracking-widest text-sky-700">
-            {project?.name || t("当前项目")}
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-heading">
+          <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("活动")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -149,19 +145,19 @@ export default function ActivityPage() {
       </header>
 
       {!projectID ? (
-        <div className="mt-20 text-center text-sm text-muted-foreground">
+        <div className="py-20 text-center text-sm text-muted-foreground">
           {t("还没有项目")}
         </div>
       ) : activity.isPending ? (
-        <div className="mt-20 grid place-items-center">
+        <div className="py-20 grid place-items-center">
           <Spinner />
         </div>
       ) : activity.error ? (
-        <div className="mt-8">
+        <div>
           <ErrorView error={activity.error} />
         </div>
       ) : items.length ? (
-        <div className="mt-8 overflow-hidden rounded-2xl border border-line bg-surface">
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface">
           {items.map((item) => {
             const state = presentation(item);
             const Icon = state.icon;
@@ -199,7 +195,7 @@ export default function ActivityPage() {
           })}
         </div>
       ) : (
-        <div className="mt-20 text-center">
+        <div className="py-20 text-center">
           <Activity className="mx-auto size-9 text-placeholder" />
           <p className="mt-4 text-sm font-medium text-foreground">
             {view === "all" ? t("这个项目还没有活动") : t("这个筛选下没有活动")}

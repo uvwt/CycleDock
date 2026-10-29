@@ -29,6 +29,7 @@ import type {
 import {
   Button,
   Field,
+  HintTooltip,
   Section,
   Select,
   TextInput,
@@ -189,15 +190,16 @@ function ScheduleEditor({
                   >
                     {schedule.enabled ? "暂停" : "启用"}
                   </Button>
-                  <Button
-                    variant="danger"
-                    title="删除日程"
-                    aria-label="删除日程"
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate(schedule.id)}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  <HintTooltip content="删除日程">
+                    <Button
+                      variant="danger"
+                      aria-label="删除日程"
+                      disabled={remove.isPending}
+                      onClick={() => remove.mutate(schedule.id)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </HintTooltip>
                 </div>
               </div>
             </div>

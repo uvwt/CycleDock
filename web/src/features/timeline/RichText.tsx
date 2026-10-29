@@ -4,11 +4,17 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 
-export function RichText({ content }: { content: string }) {
+export function RichText({
+  content,
+  className = "text-base",
+}: {
+  content: string;
+  className?: string;
+}) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   return (
-    <div className="prose-chat text-sm text-foreground">
+    <div className={`prose-chat text-foreground ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

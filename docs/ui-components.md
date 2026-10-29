@@ -5,11 +5,11 @@
 ## 目录与使用
 
 - `web/components.json`：shadcn CLI 配置；Vite 与 TypeScript 的 `@/` 均指向 `web/src/`。
-- `web/src/shared/ui/`：Button、Input、Textarea、Label、NativeSelect、Dialog、AlertDialog、Sheet、DropdownMenu 的源码。
+- `web/src/shared/ui/`：Button、Input、Textarea、Label、NativeSelect、Checkbox、Tooltip、Badge、Dialog、AlertDialog、Sheet、DropdownMenu 的源码。
 - `web/src/shared/lib/utils.ts`：官方常用的 `clsx` + `tailwind-merge` 类名合并函数。
-- `web/src/shared/ui/components.tsx`：CycleDock 业务组合入口，保留页面使用的按钮命名、表单标签、通用错误和确认框；不重复实现基础组件。
+- `web/src/shared/ui/components.tsx`：CycleDock 业务组合入口，保留页面使用的按钮命名、表单标签、通用错误、确认框与 Tooltip 便捷包装；不重复实现基础组件。
 
-通用样式修改在对应组件或主题变量中完成。业务页面只组合内容与请求行为，不再单独编写弹窗定位、遮罩、关闭按钮或菜单键盘交互。项目选择器仍有适配导航栏的位置规则，外壳复用 Dialog。
+通用样式修改在对应组件或主题变量中完成。业务页面只组合内容与请求行为，不再单独编写弹窗定位、遮罩、关闭按钮或菜单键盘交互。项目选择器使用 DropdownMenu 实现，侧栏模式自动贴靠右下侧展开，无需硬编码定位与全屏遮罩。
 
 NativeSelect 保留 HTML select 与 option 的值契约，可直接注册到 React Hook Form。不要为了换外观引入另一套表单状态。
 
@@ -31,6 +31,6 @@ ConfirmDialog 使用 AlertDialog。默认焦点在取消按钮，点击遮罩不
 
 官方文档：[Vite 安装](https://ui.shadcn.com/docs/installation/vite)、[Dialog](https://ui.shadcn.com/docs/components/radix/dialog)、[AlertDialog](https://ui.shadcn.com/docs/components/radix/alert-dialog)。
 
-本次源码来源为 `https://ui.shadcn.com/r/styles/new-york-v4/{组件名}.json`，组件名为 button、input、textarea、label、native-select、dialog、alert-dialog、sheet、dropdown-menu。上游 MIT 许可保留在 `web/SHADCN_LICENSE`。
+本次源码来源为 `https://ui.shadcn.com/r/styles/new-york-v4/{组件名}.json`，组件名为 button、input、textarea、label、native-select、checkbox、tooltip、badge、dialog、alert-dialog、sheet、dropdown-menu。上游 MIT 许可保留在 `web/SHADCN_LICENSE`。
 
 以后按需通过 shadcn CLI 添加组件；更新现有组件时审查差异并保留上述项目适配，不直接批量覆盖。验证包含构建、Lint、Node 测试，以及 `web/e2e/smoke.py` 的桌面、移动端与主题交互回归。
