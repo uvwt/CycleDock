@@ -289,6 +289,9 @@ Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题�
 
 同一次 Built-in Agent Attempt 可以通过 `reply_message` 产生多条面向用户的 Message 气泡；最终答复不再生成 Result 或 Attempt 结果摘要。选择消息与 `waiting_human` 状态在同一事务中保存，人工回复后问题仍保留。Agent 消息不会创建新的业务 Turn。
 
-前端按事件 `sequence` 展示人工消息与持久 Message 气泡。执行状态挂在该 Attempt 最近的事件后；成功且已有最终 Message 时，完成状态和耗时附在消息下。模型自由文本不自动成为气泡，正常结束且未调用回复工具时才补发最终 Message。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
+前端按事件 `sequence` 展示人工消息与持久 Message 气泡。等待回复、取消、替代和完成状态与耗时显示在对应消息组的名称旁。模型自由文本不自动成为气泡，正常结束且未调用回复工具时才补发最终 Message。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
 
 已有执行若仅在 `progress_summary` 中保存了提问，前端会在等待回复或人工已回复时补充展示问题气泡。同一 Attempt 已有相同正文的 Agent 消息时不重复展示；其他 Attempt 或 Human 的同文消息不会隐藏该问题。该展示回退不写入虚构的持久事件。
+
+
+`reply_message` 流式生成时，只提取面向用户的顶层 `content` 正文，先写 PostgreSQL Message 快照再推送 SSE。快照的 `message.preview_id` 用于稳定关联，`message.preview=true` 表示工具尚未提交。完整工具调用在同一事务中原地更新该 Message 并写入幂等键；气泡 ID、sequence、创建时间保持不变。取消、替代或进程重启不会删除已保存正文，刷新直接从产品 Timeline 恢复。预览不是已执行的工具响应，不写入 ADK Session。所有片段保存与取消、替代共用 Card 行锁并校验当前 Attempt / Runner，迟到片段不得继续修改正文。

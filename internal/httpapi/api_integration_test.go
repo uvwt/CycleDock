@@ -228,6 +228,41 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 		t.Fatalf("reply did not continue as next turn: claim=%+v err=%v", continued, err)
 	}
 
+	queuedResponse := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+card.ID+"/comments",
+		map[string]any{"content": "Steer this queued input", "dispatch_mode": "enqueue"}, cookie,
+		map[string]string{"Idempotency-Key": "steered-input"})
+	if queuedResponse.Code != http.StatusCreated {
+		t.Fatalf("queue input: %d %s", queuedResponse.Code, queuedResponse.Body.String())
+	}
+	var queuedInput commentResultResponse
+	decodeRecorder(t, queuedResponse, &queuedInput)
+	editPath := "/api/v1/cards/" + card.ID + "/turns/" + queuedInput.TurnID
+	edited := doJSON(t, handler, http.MethodPatch, editPath, map[string]any{"content": "Edited queued input"}, cookie, nil)
+	if edited.Code != http.StatusNoContent {
+		t.Fatalf("edit queued input: %d %s", edited.Code, edited.Body.String())
+	}
+	emptyEdit := doJSON(t, handler, http.MethodPatch, editPath, map[string]any{"content": "  "}, cookie, nil)
+	if emptyEdit.Code != http.StatusBadRequest {
+		t.Fatalf("empty queued input accepted: %d %s", emptyEdit.Code, emptyEdit.Body.String())
+	}
+	steerPath := "/api/v1/cards/" + card.ID + "/turns/" + queuedInput.TurnID + "/steer"
+	steered := doJSON(t, handler, http.MethodPost, steerPath, map[string]any{}, cookie, nil)
+	if steered.Code != http.StatusNoContent {
+		t.Fatalf("steer input: %d %s", steered.Code, steered.Body.String())
+	}
+	steeredClaim, err := dataStore.ClaimNextTurnAttempt(context.Background(), workspaceID, agent.ID, time.Now().UTC(), time.Minute)
+	if err != nil || steeredClaim.Turn.ID.String() != queuedInput.TurnID || steeredClaim.Turn.Content != "Edited queued input" {
+		t.Fatalf("steered HTTP input not claimed: %+v err=%v", steeredClaim, err)
+	}
+	staleEdit := doJSON(t, handler, http.MethodPatch, editPath, map[string]any{"content": "Too late"}, cookie, nil)
+	if staleEdit.Code != http.StatusConflict {
+		t.Fatalf("claimed input was editable: %d %s", staleEdit.Code, staleEdit.Body.String())
+	}
+	staleSteer := doJSON(t, handler, http.MethodPost, steerPath, map[string]any{}, cookie, nil)
+	if staleSteer.Code != http.StatusConflict {
+		t.Fatalf("stale steer accepted: %d %s", staleSteer.Code, staleSteer.Body.String())
+	}
+
 	ongoing, err := dataStore.CreateOngoingCard(
 		context.Background(), workspaceID, uuid.MustParse(project.ID), humanSourceID,
 		"Daily health", "Check the service.", uuid.NullUUID{},
@@ -293,6 +328,45 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if !sawScheduledQueue {
 		t.Fatalf("scheduled turn missing from project activity: %+v", activityItems)
 	}
+	activityAgents := doJSON(t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/activity/agents", nil, cookie, nil)
+	if activityAgents.Code != http.StatusOK {
+		t.Fatalf("list activity agents: %d %s", activityAgents.Code, activityAgents.Body.String())
+	}
+	var agentItems []activityAgentResponse
+	decodeRecorder(t, activityAgents, &agentItems)
+	var sawCycle bool
+	for _, item := range agentItems {
+		sawCycle = sawCycle || item.ID == agent.ID.String()
+		if item.Kind == domain.SourceKindHuman {
+			t.Fatalf("human source in agent list: %+v", item)
+		}
+	}
+	if !sawCycle {
+		t.Fatalf("Cycle source missing from activity agents: %+v", agentItems)
+	}
+	filteredActivity := doJSON(t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/activity?source_id="+agent.ID.String(), nil, cookie, nil)
+	if filteredActivity.Code != http.StatusOK {
+		t.Fatalf("filter activity: %d %s", filteredActivity.Code, filteredActivity.Body.String())
+	}
+	var filteredItems []projectActivityResponse
+	decodeRecorder(t, filteredActivity, &filteredItems)
+	if len(filteredItems) == 0 {
+		t.Fatal("Cycle activity was not returned")
+	}
+	for _, item := range filteredItems {
+		if item.SourceID != agent.ID.String() || item.SourceKind != domain.SourceKindCycleAgent {
+			t.Fatalf("wrong activity source: %+v", item)
+		}
+	}
+	for _, invalidSource := range []string{"not-a-uuid", uuid.Nil.String()} {
+		response := doJSON(t, handler, http.MethodGet,
+			"/api/v1/projects/"+project.ID+"/activity?source_id="+invalidSource, nil, cookie, nil)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid source accepted: %d %s", response.Code, response.Body.String())
+		}
+	}
 	badActivityLimit := doJSON(
 		t, handler, http.MethodGet,
 		"/api/v1/projects/"+project.ID+"/activity?limit=101",
@@ -321,6 +395,11 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	crossProjectAgents := doJSON(t, handler, http.MethodGet,
+		"/api/v1/projects/"+otherProject.ID.String()+"/activity/agents", nil, cookie, nil)
+	if crossProjectAgents.Code != http.StatusNotFound {
+		t.Fatalf("cross-workspace activity agents: %d %s", crossProjectAgents.Code, crossProjectAgents.Body.String())
 	}
 	crossProjectCreate := doJSON(
 		t, handler, http.MethodPost,

@@ -46,7 +46,7 @@ func TestHubScopesSubscribersAndRestoresSnapshot(t *testing.T) {
 	}
 }
 
-func TestHubResetClearsOnlyCurrentRunText(t *testing.T) {
+func TestHubResetClosesCurrentPreviewWithoutRemovingText(t *testing.T) {
 	hub := NewHub()
 	card := uuid.New()
 	hub.Publish(card, Event{Type: "attempt.started", AttemptID: "current"})
@@ -58,7 +58,7 @@ func TestHubResetClearsOnlyCurrentRunText(t *testing.T) {
 	}
 	hub.Publish(card, Event{Type: "reply.reset", AttemptID: "current"})
 	_, afterReset := hub.Subscribe(card)
-	if afterReset == nil || len(afterReset.Replies) != 0 || afterReset.AttemptID != "current" {
+	if afterReset == nil || len(afterReset.Replies) != 1 || !afterReset.Replies[0].Failed || afterReset.AttemptID != "current" {
 		t.Fatalf("current reset snapshot=%+v", afterReset)
 	}
 }
@@ -78,7 +78,7 @@ func TestReplyPreviewsRestoreInCallOrderAndSurviveCommit(t *testing.T) {
 	hub.Publish(card, Event{Type: "reply.reset", AttemptID: "a"})
 	restored, after := hub.Subscribe(card)
 	defer restored.Close()
-	if len(after.Replies) != 1 || after.Replies[0].EventID != "persisted" {
+	if len(after.Replies) != 2 || after.Replies[0].EventID != "persisted" || !after.Replies[1].Failed {
 		t.Fatalf("after reset=%+v", after)
 	}
 	hub.Publish(card, Event{Type: "reply.preview", AttemptID: "a", ReplyID: "first", Text: "late"})

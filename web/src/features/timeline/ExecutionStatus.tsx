@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Bot, LoaderCircle, RotateCcw, X } from "lucide-react";
+import { Bot, LoaderCircle, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { Attempt } from "../../shared/api/types";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import type { ExecutionAttempt } from "./execution";
 import { RichText } from "./RichText";
@@ -49,44 +50,124 @@ export function RunDuration({
   );
 }
 
+/** 正文上方共用的执行元信息，不用错误块替代已输出的内容。 */
+export function AttemptMetadata({
+  attempt,
+  retryingAttemptID,
+  onRetryAttempt,
+}: {
+  attempt: Attempt;
+  retryingAttemptID?: string;
+  onRetryAttempt: (attemptID: string) => void;
+}) {
+  const { t } = useTranslation();
+  const humanReplied =
+    attempt.status === "superseded" &&
+    attempt.error_summary === "superseded by human reply";
+  return (
+    <span
+      data-execution-id={attempt.id}
+      className="inline-flex items-center gap-2 text-[11px] font-normal text-faint"
+    >
+      {t(
+        humanReplied
+          ? "已收到回复"
+          : attemptLabels[attempt.status] || attempt.status,
+      )}
+      <RunDuration
+        startedAt={attempt.started_at}
+        finishedAt={attempt.finished_at}
+        active={attempt.status === "running"}
+      />
+      {attempt.retry_of_attempt_id || attempt.reason === "retry"
+        ? " · " + t("重试")
+        : ""}
+      {attempt.can_retry && (
+        <button
+          type="button"
+          disabled={retryingAttemptID === attempt.id}
+          onClick={() => onRetryAttempt(attempt.id)}
+          className="inline-flex items-center gap-1 text-sky-700"
+        >
+          {retryingAttemptID === attempt.id ? (
+            <LoaderCircle className="size-3 animate-spin" />
+          ) : (
+            <RotateCcw className="size-3" />
+          )}
+          {t("重试")}
+        </button>
+      )}
+    </span>
+  );
+}
+
 function AgentAttempt({
   attempt,
   live,
-  cancelingTurnID,
   retryingAttemptID,
-  onCancelTurn,
   onRetryAttempt,
 }: {
   attempt: ExecutionAttempt;
   live?: LiveAttempt | null;
-  cancelingTurnID?: string;
   retryingAttemptID?: string;
-  onCancelTurn: (turnID: string) => void;
   onRetryAttempt: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
-  const pending = attempt.kind === "pending" ? attempt.value : null;
   const current = attempt.kind === "current" ? attempt.value : null;
   const history = attempt.kind === "history" ? attempt.value : null;
   const execution = current || history;
-  const id = pending?.id || execution?.id || "";
-  const status = pending ? "queued" : execution?.status || "queued";
+  const id = execution?.id || "";
+  const status = execution?.status || "queued";
   const sameLiveAttempt = Boolean(current && live?.attemptID === current.id);
-  const humanReplied =
-    status === "superseded" &&
-    execution?.error_summary === "superseded by human reply";
   // 问题和回复由时间线承载，状态行只展示执行中的进度及失败原因。
   const summary =
     status === "running"
       ? execution?.progress_summary || execution?.current_stage || ""
-      : status === "failed" || status === "expired" || status === "cancelled"
+      : status === "failed" || status === "expired"
         ? execution?.error_summary || ""
         : "";
-  const failed =
-    status === "failed" || status === "expired" || status === "cancelled";
+  const failed = status === "failed" || status === "expired";
   const retried = Boolean(
     execution?.retry_of_attempt_id || execution?.reason === "retry",
   );
+
+  if (
+    ["cancelled", "superseded", "waiting_human"].includes(status) &&
+    execution
+  ) {
+    return (
+      <article
+        className="flex min-w-0 gap-3.5"
+        data-attempt-question={attempt.question ? id : undefined}
+      >
+        <span
+          aria-hidden
+          className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
+        >
+          <Bot className="size-4" />
+        </span>
+        <div className="min-w-0 max-w-[78%]">
+          <p className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-semibold text-muted-foreground">
+            <span>Cycle</span>
+            <AttemptMetadata
+              attempt={execution}
+              retryingAttemptID={retryingAttemptID}
+              onRetryAttempt={onRetryAttempt}
+            />
+          </p>
+          <div className="w-fit max-w-full rounded-2xl bg-muted px-4 py-2.5">
+            {attempt.question ? (
+              <RichText content={attempt.question} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {t("暂无已保存的正文")}
+              </p>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <>
@@ -141,15 +222,8 @@ function AgentAttempt({
                     Cycle
                   </span>
                 ) : (
-                  t(
-                    humanReplied
-                      ? "已收到回复"
-                      : attemptLabels[status] || status,
-                  )
+                  t(attemptLabels[status] || status)
                 )}
-                {pending?.dispatch_mode === "interrupt"
-                  ? " · " + t("立即转向")
-                  : ""}
                 {retried ? " · " + t("重试") : ""}
                 <span className="ml-2 inline-flex">
                   <RunDuration
@@ -179,22 +253,6 @@ function AgentAttempt({
                 )
               )}
             </div>
-            {pending && (
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={cancelingTurnID === pending.id}
-                onClick={() => onCancelTurn(pending.id)}
-                className="text-muted-foreground"
-              >
-                {cancelingTurnID === pending.id ? (
-                  <LoaderCircle className="size-3 animate-spin" />
-                ) : (
-                  <X className="size-3" />
-                )}
-                {t("取消排队")}
-              </Button>
-            )}
             {history?.can_retry && (
               <Button
                 variant="ghost"
@@ -220,9 +278,7 @@ function AgentAttempt({
 
 type ExecutionActions = {
   live?: LiveAttempt | null;
-  cancelingTurnID?: string;
   retryingAttemptID?: string;
-  onCancelTurn: (turnID: string) => void;
   onRetryAttempt: (attemptID: string) => void;
 };
 

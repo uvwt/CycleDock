@@ -78,6 +78,7 @@ function Authenticated() {
             <Route path="/board/:projectID" element={<BoardPage />} />
             <Route path="/plans" element={<PlanPage />} />
             <Route path="/plans/:projectID" element={<PlanPage />} />
+            <Route path="/plans/:projectID/:cardID" element={<CardPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/activity/:projectID" element={<ActivityPage />} />
             <Route path="/cards/:projectID/:cardID" element={<CardPage />} />

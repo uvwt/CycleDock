@@ -67,6 +67,8 @@ export type TimelineEvent = {
     images?: string[];
     widget?: { question: string; options: { value: string; label: string }[] };
     end_turn: boolean;
+    preview_id?: string;
+    preview?: boolean;
   };
   checkin_status?: string;
   created_at: string;
@@ -116,6 +118,11 @@ export type ProjectSchedule = Schedule & {
   last_attempt_status?: string;
   last_attempt_finished_at?: string;
 };
+export type ActivityAgent = {
+  id: string;
+  name: string;
+  kind: "cycle_agent" | "oauth_client";
+};
 export type ProjectActivity = {
   id: string;
   card_id: string;
@@ -125,6 +132,8 @@ export type ProjectActivity = {
   status: string;
   content: string;
   actor_name?: string;
+  source_id?: string;
+  source_kind?: "human" | "cycle_agent" | "oauth_client";
   occurred_at: string;
 };
 export type CardDetail = {

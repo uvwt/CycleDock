@@ -12,6 +12,7 @@ export type LiveAttempt = {
   stage: string;
   startedAt?: string;
   finished?: boolean;
+  previous?: { attemptID: string; replies: LiveReply[]; startedAt?: string }[];
 };
 
 export type CardStreamEvent = {
@@ -39,7 +40,19 @@ export function applyCardStreamEvent(
 ): LiveAttempt | null {
   if (!event.attempt_id) return live;
   if (type === "attempt.started" || type === "attempt.snapshot") {
+    // 下一次执行可以接替运行状态，但不能撤回用户已经看见的正文。
+    const previous = [...(live?.previous || [])];
+    if (live && live.attemptID !== event.attempt_id) {
+      const replies = live.replies.filter((reply) => !reply.eventID);
+      if (replies.length)
+        previous.push({
+          attemptID: live.attemptID,
+          startedAt: live.startedAt,
+          replies: replies.map((reply) => ({ ...reply, failed: true })),
+        });
+    }
     return {
+      previous,
       attemptID: event.attempt_id,
       replies: (event.replies || []).map((reply) => ({
         id: reply.id,
@@ -94,7 +107,9 @@ export function applyCardStreamEvent(
     case "reply.reset":
       return {
         ...live,
-        replies: live.replies.filter((reply) => reply.eventID),
+        replies: live.replies.map((reply) =>
+          reply.eventID ? reply : { ...reply, failed: true },
+        ),
       };
     case "attempt.finished":
     case "attempt.failed":

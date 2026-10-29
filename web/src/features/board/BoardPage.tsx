@@ -12,12 +12,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  Activity,
-  FolderPlus,
-  ListPlus,
-  Clock3,
-} from "lucide-react";
+import { ListPlus, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -214,7 +209,7 @@ export default function BoardPage() {
             {t("工作")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("查看执行状态，跟踪长期工作。")}
+            {t("查看任务执行状态，跟踪待办进度。")}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -224,10 +219,6 @@ export default function BoardPage() {
               {t("新建待办")}
             </Button>
           )}
-          <Button onClick={() => setCreating(true)}>
-            <FolderPlus className="size-4" />
-            {t("新建项目")}
-          </Button>
         </div>
       </header>
       {projectsPending && <Spinner />}
@@ -256,42 +247,6 @@ export default function BoardPage() {
                   ))}
                 </div>
               </DndContext>
-              <section className="space-y-3">
-                <h2 className="flex items-center gap-2 font-semibold">
-                  <Activity className="size-5 text-sky-700" />
-                  {t("持续事项")}{" "}
-                  <span className="text-sm text-faint">
-                    {cards.data?.filter((c) => c.kind === "ongoing").length}
-                  </span>
-                </h2>
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                  {cards.data
-                    ?.filter((c) => c.kind === "ongoing")
-                    .map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => open(c)}
-                        className="rounded-2xl border border-line bg-surface p-5 text-left hover:border-sky-300"
-                      >
-                        <div className="flex justify-between gap-3">
-                          <span className="font-semibold">{c.title}</span>
-                          <span className="text-xs text-faint">
-                            {c.health || "unknown"}
-                          </span>
-                        </div>
-                        <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
-                          {c.description}
-                        </p>
-                        <p className="mt-4 text-xs text-sky-700">
-                          {c.ongoing_state}
-                        </p>
-                      </button>
-                    ))}
-                  {!cards.data?.some((c) => c.kind === "ongoing") && (
-                    <p className="text-sm text-faint">{t("暂无持续事项")}</p>
-                  )}
-                </div>
-              </section>
             </>
           )}
         </>

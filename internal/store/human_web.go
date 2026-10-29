@@ -84,6 +84,7 @@ func (s *Store) ListProjectActivity(
 	ctx context.Context,
 	workspaceID, projectID uuid.UUID,
 	limit int32,
+	sourceID uuid.NullUUID,
 ) ([]db.ListProjectActivityRow, error) {
 	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
 		return nil, err
@@ -95,7 +96,18 @@ func (s *Store) ListProjectActivity(
 		WorkspaceID:   workspaceID,
 		ProjectID:     projectID,
 		ActivityLimit: limit,
+		AgentSourceID: sourceID,
 	})
+}
+
+func (s *Store) ListProjectActivityAgents(
+	ctx context.Context,
+	workspaceID, projectID uuid.UUID,
+) ([]db.ListActivityAgentsRow, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	return s.queries.ListActivityAgents(ctx, workspaceID)
 }
 
 func (s *Store) UpdateCardText(

@@ -403,6 +403,91 @@ http
           Object.assign(project, await body(req));
           return data(res, project);
         }
+        const activityAgents = [
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            name: "Cycle Agent",
+            kind: "cycle_agent",
+          },
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            name: "Codex",
+            kind: "oauth_client",
+          },
+          {
+            id: "33333333-3333-4333-8333-333333333333",
+            name: "Claude Code",
+            kind: "oauth_client",
+          },
+        ];
+        const agentsPath = route.match(
+          /^\/projects\/([^/]+)\/activity\/agents$/,
+        );
+        if (agentsPath && req.method === "GET")
+          return data(res, activityAgents);
+        const activityPath = route.match(/^\/projects\/([^/]+)\/activity$/);
+        if (activityPath && req.method === "GET") {
+          const sourceID = url.searchParams.get("source_id");
+          const items =
+            activityPath[1] === project.id
+              ? [
+                  {
+                    id: "activity-cycle",
+                    card_id: "todo-1",
+                    card_title: "检查 RN 服务器异常日志",
+                    card_kind: "todo",
+                    activity_type: "attempt",
+                    status: "running",
+                    content: "Cycle 正在检查日志",
+                    source_id: activityAgents[0].id,
+                    source_kind: "cycle_agent",
+                    actor_name: "Cycle Agent",
+                    occurred_at: now(),
+                  },
+                  {
+                    id: "activity-codex",
+                    card_id: "ongoing-1",
+                    card_title: "每天检查服务器健康",
+                    card_kind: "ongoing",
+                    activity_type: "event",
+                    status: "checkin",
+                    content: "Codex 已完成巡检",
+                    source_id: activityAgents[1].id,
+                    source_kind: "oauth_client",
+                    actor_name: "Codex",
+                    occurred_at: hoursAgo(1),
+                  },
+                ]
+              : [];
+          return data(
+            res,
+            items
+              .filter((item) => !sourceID || item.source_id === sourceID)
+              .slice(0, Number(url.searchParams.get("limit") || 60)),
+          );
+        }
+        const projectSchedules = route.match(
+          /^\/projects\/([^/]+)\/schedules$/,
+        );
+        if (projectSchedules && req.method === "GET") {
+          return data(
+            res,
+            cards
+              .filter(
+                (card) =>
+                  card.project_id === projectSchedules[1] &&
+                  card.kind === "ongoing",
+              )
+              .flatMap((card) =>
+                details(card.id).schedules.map((schedule) => ({
+                  ...schedule,
+                  card_id: card.id,
+                  card_title: card.title,
+                  ongoing_state: card.ongoing_state,
+                })),
+              ),
+          );
+        }
         const projectCards = route.match(/^\/projects\/([^/]+)\/cards$/);
         if (projectCards && req.method === "GET") {
           return data(

@@ -14,8 +14,8 @@ import {
   ConfirmDialog,
   ErrorView,
   Field,
+  Modal,
   Section,
-  Sheet,
   Spinner,
   TextInput,
 } from "../../shared/ui/components";
@@ -189,7 +189,7 @@ export function MCPSettings() {
           ))}
         </div>
       )}
-      <Sheet
+      <Modal
         open={open}
         onOpenChange={setOpen}
         title={picked ? "编辑 MCP 服务" : "添加 MCP 服务"}
@@ -200,9 +200,10 @@ export function MCPSettings() {
           onSave={(v) => save.mutate(v)}
           onTest={(v) => test.mutate(v)}
           onDelete={picked ? () => remove.mutate() : undefined}
+          onClose={() => setOpen(false)}
           busy={save.isPending || test.isPending || remove.isPending}
         />
-      </Sheet>
+      </Modal>
     </Section>
   );
 }
@@ -211,12 +212,14 @@ function MCPForm({
   onSave,
   onTest,
   onDelete,
+  onClose,
   busy,
 }: {
   initial: MCPInput | MCPConnection;
   onSave: (v: MCPInput) => void;
   onTest: (v: MCPInput) => void;
   onDelete?: () => void;
+  onClose?: () => void;
   busy: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -310,21 +313,35 @@ function MCPForm({
             />
             启用服务
           </label>
-          <div className="flex flex-wrap gap-2">
-            <Button type="submit" variant="primary" disabled={busy}>
-              保存连接
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={handleSubmit((value) => {
-                if (!busy) onTest(value);
-              })}
-            >
-              <TestTube2 className="size-4" />
-              测试
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <div className="flex flex-wrap gap-2">
+              <Button type="submit" variant="primary" disabled={busy}>
+                保存连接
+              </Button>
+              <Button
+                type="button"
+                disabled={busy}
+                onClick={handleSubmit((value) => {
+                  if (!busy) onTest(value);
+                })}
+              >
+                <TestTube2 className="size-4" />
+                测试
+              </Button>
+              {onClose && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={onClose}
+                >
+                  取消
+                </Button>
+              )}
+            </div>
             {onDelete && (
               <Button
+                type="button"
                 variant="danger"
                 disabled={busy}
                 onClick={() => setConfirmDelete(true)}

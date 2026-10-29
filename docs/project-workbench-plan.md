@@ -140,7 +140,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 整个应用不再常驻全局顶栏，也不恢复旧的 64px 图标主导航 + 第二块聊天侧栏。桌面左侧仅一块导航区域，顶部为 Discussion / Work 模式切换，底部为项目切换与用户/Workspace/设置菜单。移动端使用单个导航抽屉。
 - 讨论模式：左侧是当前 Project 的 Discussion 搜索与列表；主区是独立聊天首页或 Discussion 详情。新讨论首条消息继续复用具备幂等重试与草稿保护的创建组件；关联 Todo/Ongoing 仅作为轻量入口按需展开，不常驻额外「派生工作」横条。
 - Discussion 的信息入口与 Todo / Ongoing 统一：会话标题右侧一个信息图标，点击在按钮下方展示**不占页面布局宽度的紧凑浮层**，点击外部或 Esc 关闭，不使用独立右侧固定栏或原右侧抽屉。讨论摘要在浮层显示，不重复标题、不显示维护规则说明；归档/删除收进 `···` 操作菜单，保留删除确认及服务端权限校验。任务浮层中来源 Discussion 链接用更小的次要文字（11px）呈现，避免抢占主体视觉。
-- 工作模式：左侧改成全部工作 / 待审核 / 持续事项等工作视图；主区为四列 Todo + Ongoing 看板或任务详情。**不常驻 Discussion 列表**。Todo/Ongoing 详情改为单栏会话：标题旁使用紧凑状态切换器（Todo: 待办 / 进行中 / 待审核 / 已完成；Ongoing: 运行中 / 已暂停 / 已归档），状态操作仍通过原后端和 Human-only Done 权限约束。原右侧整列信息面板取消，在标题栏右侧使用 `!` 信息按钮打开锚定浮层显示目标、来源及显式编辑；Ongoing 日程和 Check-in 管理功能留在同一浮层，不能因为去掉侧栏而丢失。移动端同样优先轻量浮层，不再为任务占用固定信息列。
+- 工作模式：左侧按待办状态组织工作视图；主区为四列 Todo 看板或任务详情。Ongoing 统一由「计划」入口承载。**不常驻 Discussion 列表**。Todo/Ongoing 详情改为单栏会话：标题旁使用紧凑状态切换器（Todo: 待办 / 进行中 / 待审核 / 已完成；Ongoing: 运行中 / 已暂停 / 已归档），状态操作仍通过原后端和 Human-only Done 权限约束。原右侧整列信息面板取消，在标题栏右侧使用 `!` 信息按钮打开锚定浮层显示目标、来源及显式编辑；Ongoing 日程和 Check-in 管理功能留在同一浮层，不能因为去掉侧栏而丢失。移动端同样优先轻量浮层，不再为任务占用固定信息列。
 - 会话中 Human 评论始终为右侧独立气泡；关联的 Run / Trigger 的排队、运行、失败、重试和结果作为左侧带 Agent 头像的独立消息卡片展现，不塞进 Human 气泡。视觉上以来源 Human 消息为轮次锚点：例如用户连续发送 A、B，A 正在执行而 B 入队，则展示应为 `A → A 的 Agent 状态/结果 → B → B 的 Agent 状态/结果`，而不是 `A → B → Agent A → Agent B`；底层 Event/Trigger/Run 的真实发生顺序不改写。执行时长属于单个正在运行的 Run，放在其对应 Agent 消息头的右侧（使用该 Run 的 `started_at`），不能放在整个 Card 的标题旁；SSE 临时输出与最终 Result 必须合并到相同 Run 的消息位置，避免重复呈现。
 - 视觉基线统一为克制的白 / 灰中性色 + CycleDock 蓝青品牌色：页面主标题约 22–24px、区块标题 15–16px、正文 13–14px、导航与表单控件优先 12–13px、辅助信息约 12px，避免同屏出现明显失衡的大字和微字；卡片和输入框以 8–12px 圆角为主，表单下拉框保持约 13px 字号与紧凑高度，弹层使用紧凑阴影，避免大面积 pill、过度圆角和玻璃拟态。品牌入口、登录页和浏览器 favicon 统一使用 CycleDock 三色几何 C Logo。移动端根布局必须保持 viewport 宽度，横向滚动仅允许发生在明确的局部容器（如看板列、设置标签）。
 - Board 可直接创建独立 Todo；Discussion 生成的工作保留来源 Discussion 的深链接。两种模式分别做适合自身的交互，但无信息孤岛。
@@ -167,7 +167,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 ## 10. 2026-10-22 Work 详情二级列表修订
 
 - Discussion 与 Work 详情统一采用同一套 Context Sidebar 基础骨架：项目选择、侧栏容器、滚动区、选中态列表项共用；Discussion 保持扁平会话列表，Work 保持独立的业务分组，不做“万能侧栏”。
-- Work 列表分为待办、进行中、待审核、已完成、持续事项五组。进入 Todo/Ongoing 详情时默认只展开当前任务所在组，其余组保持折叠；用户手动展开另一组时使用单组手风琴行为。
+- Work 列表分为待办、进行中、待审核、已完成四组。进入 Todo 详情时默认只展开当前任务所在组，其余组保持折叠；用户手动展开另一组时使用单组手风琴行为。Ongoing 详情使用独立的计划列表。
 - 切换 Work 列表中的任务后继续使用独立 Card URL，新的当前任务自动高亮，其所在分组自动成为默认展开组。Project 切换返回对应 Work 看板，不跨 Project 保留旧任务。
 - 桌面端 Work 列表与 Discussion 列表使用相同宽度和边界；移动端都用左侧 Sheet，不额外挤占会话主区。
 - 标题栏信息图标从标题/状态组中移出，固定在最右侧；标题与状态区域可收缩，信息入口位置不再随标题长度漂移。
@@ -188,8 +188,8 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 > 本节覆盖第 9 节中“一级入口只保留 Chat 与 Work 两个图标”的约定；第 11 节的全局 Project Context 与唯一 ProjectSwitcher 继续有效。
 
 - 当前 Project 下的一级入口固定为 **Chat / Work / Plan / Activity**。四者只是同一 Project 数据的不同 View，不增加 Conversation、Activity、ScheduledTask 等新领域实体。
-- **Plan** 直接聚合现有 Ongoing Card + CardSchedule，回答“接下来哪些事情会自动发生”。第一版仅展示启停状态、日/周/月规则、时区、下一次触发、最近触发与最近运行，点击回到对应 Ongoing Card；不要求日历视图，也不建立第二套计划状态机。
-- **Activity** 直接聚合现有 Event / Trigger / AgentRun，回答“Agent 正在做什么、最近发生了什么”。只展示有产品意义的排队、运行、等待、完成、失败和 durable Event；raw model message、tool call、tool arguments、raw tool result 与 chain-of-thought 不进入产品活动流。
+- **Plan** 是 Ongoing Card 的统一前端入口，按事项展示目标、运行状态、健康状态及其 CardSchedule（日/周/月规则、时区、下一次触发与最近运行）。未配置日程的事项同样展示，按运行中 / 已暂停 / 已归档筛选。点击进入 `/plans/:projectID/:cardID` 会话详情，保留日程、Check-in、来源和状态操作；旧 `/cards` 链接自动跳转。工作看板与工作列表不再展示 Ongoing，也不建立第二套计划状态机。
+- **Activity** 直接聚合现有 Event / Turn / Attempt，回答“Agent 正在做什么、最近发生了什么”。只展示有产品意义的排队、运行、等待、完成、失败和 durable Event；raw model message、tool call、tool arguments、raw tool result 与 chain-of-thought 不进入产品活动流。 页面增加 Agent 来源列表，展示 Cycle 和 OAuth 授权客户端名称，按稳定 Source ID 与执行状态组合筛选；来源筛选在后端截取最近活动之前执行，选择保存在 URL 中。桌面使用左侧列表，移动端使用横向列表。
 - Project 切换继续复用应用级 Project Context：在 Plan 中切换项目仍停留 Plan，在 Activity 中切换项目仍停留 Activity；失效 Project ID 按第 11 节规则回退。
 - Plan / Activity 列表点击后进入现有 Card 详情，不复制任务详情、运行操作或状态机。Schedule 编辑仍在 Ongoing Card 中完成，Activity 不增加修改 Run / Trigger 的第二套写接口。
 
@@ -202,3 +202,9 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - “任务详情”使用现有 `Modal / Section / Button / Field` 组件展示目标、来源 Discussion；Ongoing 继续展示 Health、最近 Check-in 和 Schedule，并保留日程新增 / 编辑 / 启停 / 删除能力。
 - 状态切换仍由标题旁的 `CardStatusSwitch` 独立承担；任务详情不复制 Todo / Ongoing 状态机。
 - 浏览器 smoke 必须按当前 Radix Menu 的 `button + menuitem` 可访问语义测试，不能继续依赖已删除的原生 `details/summary` 或旧“任务信息”按钮。
+
+## 排队输入展示
+
+未领取的 Turn 统一收进输入框上方的紧凑队列，不展示为用户气泡或独立 Agent 排队消息。列表使用单行截断内容，提供引导、取消和查看完整内容；不提供任意拖动重排，以保持普通输入 FIFO。引导通过原 Turn 的 interrupt 语义优先执行，开始执行后原输入回到正常对话；取消后从列表与 Human Timeline 隐藏，底层事件证据保留。
+
+当前 running Attempt 的状态气泡固定在已展示消息之后、输入框上方的排队列表之前。即使上一轮助理回复晚于下一轮输入到达，也不得让运行提示插到已发送回复上方；持久消息仍按事件 sequence 展示。

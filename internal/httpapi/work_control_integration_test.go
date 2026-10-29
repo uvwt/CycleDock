@@ -155,6 +155,13 @@ func TestHumanTurnAttemptControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 		t.Fatalf("attempt-linked progress missing from timeline: %+v", detail.Timeline)
 	}
 
+	if err := dataStore.SaveReplyPreview(context.Background(), store.ReplyPreviewParams{
+		WorkspaceID: workspaceID, CardID: uuid.MustParse(card.ID), AttemptID: claim.Attempt.ID,
+		RunnerSourceID: settings.SourceID, PreviewID: "http-preview", Content: "刷新后仍应可见的半篇正文",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	cancelAttempt := doJSON(
 		t, handler, http.MethodPost,
 		"/api/v1/cards/"+card.ID+"/attempts/"+claim.Attempt.ID.String()+"/cancel",
@@ -168,6 +175,15 @@ func TestHumanTurnAttemptControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	decodeRecorder(t, detailRecorder, &detail)
 	if detail.CurrentAttempt != nil || len(detail.AttemptHistory) == 0 {
 		t.Fatalf("cancelled attempt view current=%+v history=%+v", detail.CurrentAttempt, detail.AttemptHistory)
+	}
+	var sawPreview bool
+	for _, event := range detail.Timeline {
+		if event.Content == "刷新后仍应可见的半篇正文" {
+			sawPreview = event.AttemptID == claim.Attempt.ID.String() && event.Type == "message"
+		}
+	}
+	if !sawPreview {
+		t.Fatal("cancelled preview missing from fresh GET card response")
 	}
 	cancelled := detail.AttemptHistory[0]
 	if cancelled.ID != claim.Attempt.ID.String() ||

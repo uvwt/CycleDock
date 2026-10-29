@@ -98,6 +98,8 @@ WITH activity AS (
         e.event_type AS status,
         e.content,
         s.name AS actor_name,
+        s.id::text AS source_id,
+        s.kind AS source_kind,
         e.created_at AS occurred_at
     FROM events e
     JOIN cards c
@@ -121,6 +123,8 @@ WITH activity AS (
         a.status,
         a.error_summary AS content,
         s.name AS actor_name,
+        s.id::text AS source_id,
+        s.kind AS source_kind,
         COALESCE(a.finished_at, a.started_at, a.created_at) AS occurred_at
     FROM turn_attempts a
     JOIN cards c
@@ -147,6 +151,8 @@ WITH activity AS (
         CASE WHEN t.cancelled_at IS NULL THEN 'queued' ELSE 'cancelled' END AS status,
         COALESCE(NULLIF(t.cancel_reason, ''), t.content) AS content,
         COALESCE(s.name, '') AS actor_name,
+        COALESCE(s.id::text, '') AS source_id,
+        COALESCE(s.kind, '') AS source_kind,
         COALESCE(t.cancelled_at, t.created_at) AS occurred_at
     FROM card_turns t
     JOIN cards c
@@ -164,8 +170,18 @@ WITH activity AS (
 )
 SELECT *
 FROM activity
+-- 先按来源筛选再截取最近记录，避免低频客户端被其他 Agent 的新活动挤出。
+WHERE (sqlc.narg(agent_source_id)::uuid IS NULL
+    OR source_id = sqlc.narg(agent_source_id)::uuid::text)
 ORDER BY occurred_at DESC, id DESC
 LIMIT sqlc.arg(activity_limit)::int;
+
+-- name: ListActivityAgents :many
+SELECT id, name, kind
+FROM sources
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND kind IN ('cycle_agent', 'oauth_client')
+ORDER BY CASE WHEN kind = 'cycle_agent' THEN 0 ELSE 1 END, name, id;
 
 -- name: UpdateCardText :one
 UPDATE cards
@@ -210,6 +226,14 @@ JOIN sources s
  AND s.id = e.actor_source_id
 WHERE e.workspace_id = sqlc.arg(workspace_id)
   AND e.card_id = sqlc.arg(card_id)
+  -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
+  AND NOT EXISTS (
+    SELECT 1 FROM card_turns t
+    WHERE t.workspace_id = e.workspace_id
+      AND t.card_id = e.card_id
+      AND t.source_event_id = e.id
+      AND t.cancelled_at IS NOT NULL
+  )
 ORDER BY e.sequence;
 
 -- name: UpdateCardSchedule :execrows

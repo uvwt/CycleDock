@@ -117,7 +117,9 @@ func TestModelFailoverReplacesDraftWithoutExposingRawText(t *testing.T) {
 			t.Fatal(err)
 		}
 		if response.Partial {
-			publisher.publish(&session.Event{LLMResponse: *response})
+			if err := publisher.publish(context.Background(), &session.Event{LLMResponse: *response}); err != nil {
+				t.Fatal(err)
+			}
 			continue
 		}
 		responses++
@@ -140,7 +142,7 @@ func TestModelFailoverReplacesDraftWithoutExposingRawText(t *testing.T) {
 	}
 	restored, snapshot := hub.Subscribe(card)
 	defer restored.Close()
-	if len(ids) != 2 || ids[0] == ids[1] || len(snapshot.Replies) != 1 || snapshot.Replies[0].Text != "backup reply" {
+	if len(ids) != 2 || ids[0] == ids[1] || len(snapshot.Replies) != 2 || snapshot.Replies[1].Text != "backup reply" || !snapshot.Replies[0].Failed {
 		t.Fatalf("ids=%v snapshot=%+v", ids, snapshot)
 	}
 }

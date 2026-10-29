@@ -5,8 +5,14 @@ import { useTranslation } from "react-i18next";
 import { useProject } from "../../app/project-context";
 import { keys } from "../../app/query";
 import { api } from "../../shared/api/client";
-import type { ProjectSchedule } from "../../shared/api/types";
+import type { ProjectSchedule, OngoingState } from "../../shared/api/types";
 import { ErrorView, Spinner } from "../../shared/ui/components";
+
+const planStateLabels: Record<OngoingState, string> = {
+  active: "运行中",
+  paused: "已暂停",
+  archived: "已归档",
+};
 
 const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -32,12 +38,6 @@ function localTime(value?: string) {
   });
 }
 
-function inactiveLabel(item: ProjectSchedule) {
-  if (item.ongoing_state === "archived") return "已归档";
-  if (item.ongoing_state === "paused") return "事项已暂停";
-  return "计划已暂停";
-}
-
 export default function PlanPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -50,6 +50,11 @@ export default function PlanPage() {
   } = useProject();
   const view = searchParams.get("view") || "all";
 
+  const cards = useQuery({
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
+    enabled: Boolean(projectID),
+  });
   const schedules = useQuery({
     queryKey: keys.schedules(projectID),
     queryFn: () => api.projectSchedules(projectID),
@@ -72,17 +77,19 @@ export default function PlanPage() {
     );
   }
 
-  const items = (schedules.data || []).filter((item) => {
-    const active = item.enabled && item.ongoing_state === "active";
-    if (view === "enabled") return active;
-    if (view === "paused") return !active;
-    return true;
-  });
-
+  // 计划按持续事项聚合，尚未配置日程的事项也必须能进入会话。
+  const items = (cards.data || [])
+    .filter(
+      (card) =>
+        card.kind === "ongoing" &&
+        (view === "all" || card.ongoing_state === view),
+    )
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   const filters = [
     { id: "all", label: t("全部计划") },
-    { id: "enabled", label: t("已启用") },
+    { id: "active", label: t("运行中") },
     { id: "paused", label: t("已暂停") },
+    { id: "archived", label: t("已归档") },
   ];
 
   return (
@@ -93,7 +100,7 @@ export default function PlanPage() {
             {t("计划")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("查看这个项目接下来会自动触发的持续工作。")}
+            {t("管理长期工作，查看执行结果与自动执行日程。")}
           </p>
         </div>
         {projectID && (
@@ -125,30 +132,29 @@ export default function PlanPage() {
         <div className="py-20 text-center text-sm text-muted-foreground">
           {t("还没有项目")}
         </div>
-      ) : schedules.isPending ? (
+      ) : cards.isPending || schedules.isPending ? (
         <div className="py-20 grid place-items-center">
           <Spinner />
         </div>
-      ) : schedules.error ? (
+      ) : cards.error || schedules.error ? (
         <div>
-          <ErrorView error={schedules.error} />
+          <ErrorView error={cards.error || schedules.error} />
         </div>
       ) : items.length ? (
         <div className="overflow-hidden rounded-2xl border border-line bg-surface">
-          {items.map((item) => {
-            const active = item.enabled && item.ongoing_state === "active";
+          {items.map((card) => {
+            const active = card.ongoing_state === "active";
+            const cardSchedules = (schedules.data || []).filter(
+              (item) => item.card_id === card.id,
+            );
             return (
               <button
-                key={item.id}
+                key={card.id}
                 type="button"
-                onClick={() => navigate(`/cards/${projectID}/${item.card_id}`)}
+                onClick={() => navigate(`/plans/${projectID}/${card.id}`)}
                 className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
               >
-                <span
-                  className={`mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl ${
-                    active ? "bg-muted text-foreground" : "bg-canvas text-faint"
-                  }`}
-                >
+                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-foreground">
                   {active ? (
                     <CalendarClock className="size-[18px]" />
                   ) : (
@@ -156,31 +162,52 @@ export default function PlanPage() {
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-heading">
-                    {item.card_title || t("未命名持续事项")}
+                  <span className="flex items-center justify-between gap-3">
+                    <span className="truncate text-sm font-semibold text-heading">
+                      {card.title || t("未命名计划")}
+                    </span>
+                    <span className="shrink-0 text-xs text-faint">
+                      {card.ongoing_state &&
+                        t(planStateLabels[card.ongoing_state])}
+                    </span>
                   </span>
                   <span className="mt-1 block text-[13px] text-muted-foreground">
-                    {active ? scheduleText(item) : t(inactiveLabel(item))} ·{" "}
-                    {item.timezone}
+                    {card.description}
                   </span>
-                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
-                    {active && (
-                      <span>
-                        <Clock3 className="mr-1 inline size-3.5" />
-                        {t("下次")} {localTime(item.next_trigger_at)}
-                      </span>
-                    )}
-                    {item.last_triggered_at && (
-                      <span>
-                        {t("上次")} {localTime(item.last_triggered_at)}
-                      </span>
-                    )}
-                    {item.last_attempt_status && (
-                      <span>
-                        {t("最近运行")} · {item.last_attempt_status}
-                      </span>
-                    )}
+                  <span className="mt-1.5 block text-xs text-faint">
+                    {t("健康状态")} · {card.health || "unknown"}
                   </span>
+                  {cardSchedules.length ? (
+                    cardSchedules.map((item) => (
+                      <span
+                        key={item.id}
+                        className="mt-2 block text-xs text-faint"
+                      >
+                        {scheduleText(item)} · {item.timezone}
+                        {!item.enabled && <> · {t("日程已停用")}</>}
+                        {active && item.enabled && (
+                          <span className="ml-3">
+                            <Clock3 className="mr-1 inline size-3.5" />
+                            {t("下次")} {localTime(item.next_trigger_at)}
+                          </span>
+                        )}
+                        {item.last_triggered_at && (
+                          <span className="ml-3">
+                            {t("上次")} {localTime(item.last_triggered_at)}
+                          </span>
+                        )}
+                        {item.last_attempt_status && (
+                          <span className="ml-3">
+                            {t("最近运行")} · {item.last_attempt_status}
+                          </span>
+                        )}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="mt-2 block text-xs text-faint">
+                      {t("未设置自动执行时间")}
+                    </span>
+                  )}
                 </span>
               </button>
             );
@@ -193,7 +220,7 @@ export default function PlanPage() {
             {view === "all" ? t("这个项目还没有计划") : t("这个筛选下没有计划")}
           </p>
           <p className="mt-1 text-[13px] text-faint">
-            {t("计划来自持续事项中的日程设置。")}
+            {t("从讨论中生成长期工作，在详情中配置自动执行时间。")}
           </p>
         </div>
       )}

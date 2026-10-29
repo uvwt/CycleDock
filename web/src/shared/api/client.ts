@@ -12,6 +12,7 @@ import type {
   NexusConnection,
   Project,
   ProjectActivity,
+  ActivityAgent,
   ProjectSchedule,
   Provider,
   Schedule,
@@ -96,9 +97,11 @@ export const api = {
   cards: (project: string) => request<Card[]>(`/projects/${project}/cards`),
   projectSchedules: (project: string) =>
     request<ProjectSchedule[]>(`/projects/${project}/schedules`),
-  projectActivity: (project: string, limit = 60) =>
+  activityAgents: (project: string) =>
+    request<ActivityAgent[]>(`/projects/${project}/activity/agents`),
+  projectActivity: (project: string, limit = 60, sourceID = "") =>
     request<ProjectActivity[]>(
-      `/projects/${project}/activity?limit=${encodeURIComponent(String(limit))}`,
+      `/projects/${project}/activity?limit=${encodeURIComponent(String(limit))}${sourceID ? `&source_id=${encodeURIComponent(sourceID)}` : ""}`,
     ),
   createDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/discussions`, "POST", {}),
@@ -140,6 +143,10 @@ export const api = {
     ),
   cancelAttempt: (id: string, attemptID: string) =>
     request<void>(`/cards/${id}/attempts/${attemptID}/cancel`, "POST", {}),
+  editTurn: (id: string, turnID: string, content: string) =>
+    request<void>(`/cards/${id}/turns/${turnID}`, "PATCH", { content }),
+  steerTurn: (id: string, turnID: string) =>
+    request<void>(`/cards/${id}/turns/${turnID}/steer`, "POST", {}),
   cancelTurn: (id: string, turnID: string) =>
     request<void>(`/cards/${id}/turns/${turnID}/cancel`, "POST", {}),
   retryAttempt: (id: string, attemptID: string) =>

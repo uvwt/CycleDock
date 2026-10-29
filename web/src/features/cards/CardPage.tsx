@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -11,8 +11,10 @@ import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import { ConversationView } from "../timeline/ConversationView";
 import { CardActions } from "./CardActions";
 import { CardStatusSwitch } from "./CardStatusSwitch";
+import { PendingTurnQueue } from "./PendingTurnQueue";
 import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
+import { PlanSidebar } from "../plans/PlanSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
@@ -28,6 +30,7 @@ function CardPageContent() {
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const listVisible = useContextSidebarVisible();
   const { projects, projectID: activeProjectID, setProjectID } = useProject();
 
@@ -54,6 +57,7 @@ function CardPageContent() {
   );
 
   const isDiscussion = card?.kind === "discussion";
+  const isOngoing = card?.kind === "ongoing";
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
   );
@@ -65,10 +69,8 @@ function CardPageContent() {
 
   const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
   const [comment, setComment] = useState("");
-  const [submitMode, setSubmitMode] = useState<"enqueue" | "interrupt">(
-    "enqueue",
-  );
   const [cancelingTurnID, setCancelingTurnID] = useState("");
+  const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
 
   useEffect(() => {
@@ -78,14 +80,18 @@ function CardPageContent() {
   }, [activeProjectID, actualProjectID, setProjectID]);
 
   useEffect(() => {
-    if (!card || !projectID || projectID === card.project_id) return;
+    if (!card) return;
     const path =
-      (card.kind === "discussion" ? "/chat/" : "/cards/") +
+      (card.kind === "discussion"
+        ? "/chat/"
+        : card.kind === "ongoing"
+          ? "/plans/"
+          : "/cards/") +
       card.project_id +
       "/" +
       card.id;
-    navigate(path, { replace: true });
-  }, [card, navigate, projectID]);
+    if (location.pathname !== path) navigate(path, { replace: true });
+  }, [card, navigate, location.pathname]);
 
   const sync = async () => {
     await Promise.all([
@@ -99,7 +105,7 @@ function CardPageContent() {
   };
 
   const send = useMutation({
-    mutationFn: (mode: "enqueue" | "interrupt" | "reply") => {
+    mutationFn: (mode: "enqueue" | "reply") => {
       if (mode === "reply") {
         if (!current || current.status !== "waiting_human") {
           return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
@@ -110,7 +116,6 @@ function CardPageContent() {
     },
     onSuccess: async () => {
       setComment("");
-      setSubmitMode("enqueue");
       await sync();
     },
     onError: (error) =>
@@ -144,6 +149,15 @@ function CardPageContent() {
     onSettled: () => setCancelingTurnID(""),
   });
 
+  const steerTurn = useMutation({
+    mutationFn: (turnID: string) => api.steerTurn(cardID, turnID),
+    onMutate: (turnID) => setSteeringTurnID(turnID),
+    onSuccess: sync,
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("引导失败")),
+    onSettled: () => setSteeringTurnID(""),
+  });
+
   const retryAttempt = useMutation({
     mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
     onMutate: (attemptID) => setRetryingAttemptID(attemptID),
@@ -155,14 +169,14 @@ function CardPageContent() {
 
   function submit() {
     if (!comment.trim() || blocked || send.isPending) return;
-    send.mutate(waiting ? "reply" : submitMode);
+    send.mutate(waiting ? "reply" : "enqueue");
   }
 
   function back() {
     navigate(
       isDiscussion
         ? "/chat?project=" + encodeURIComponent(actualProjectID)
-        : "/board/" + actualProjectID,
+        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
     );
   }
 
@@ -178,7 +192,9 @@ function CardPageContent() {
 
   function openWork(item: Card) {
     setContextSidebarOpen(false);
-    navigate(`/cards/${item.project_id}/${item.id}`);
+    navigate(
+      `/${item.kind === "ongoing" ? "plans" : "cards"}/${item.project_id}/${item.id}`,
+    );
   }
 
   function switchProject(nextProjectID: string) {
@@ -187,7 +203,7 @@ function CardPageContent() {
     navigate(
       isDiscussion
         ? `/chat?project=${encodeURIComponent(nextProjectID)}`
-        : `/board/${encodeURIComponent(nextProjectID)}`,
+        : `/${isOngoing ? "plans" : "board"}/${encodeURIComponent(nextProjectID)}`,
     );
   }
 
@@ -223,7 +239,7 @@ function CardPageContent() {
     ) : null;
 
   const workSidebar =
-    !isDiscussion && actualProjectID ? (
+    !isDiscussion && !isOngoing && actualProjectID ? (
       <WorkSidebar
         cards={projectCards.data || []}
         activeCardID={cardID}
@@ -231,7 +247,17 @@ function CardPageContent() {
       />
     ) : null;
 
-  const contextSidebar = isDiscussion ? discussionSidebar : workSidebar;
+  const contextSidebar = isDiscussion ? (
+    discussionSidebar
+  ) : isOngoing ? (
+    <PlanSidebar
+      cards={projectCards.data || []}
+      activeCardID={cardID}
+      onSelect={openWork}
+    />
+  ) : (
+    workSidebar
+  );
 
   return (
     <main className="h-dvh min-h-0 bg-surface">
@@ -262,9 +288,19 @@ function CardPageContent() {
           <div className="absolute top-3 left-3 z-10 flex items-center gap-2 lg:hidden">
             <button
               type="button"
-              title={isDiscussion ? t("打开讨论列表") : t("打开工作列表")}
+              title={
+                isDiscussion
+                  ? t("打开讨论列表")
+                  : isOngoing
+                    ? t("打开计划列表")
+                    : t("打开工作列表")
+              }
               aria-label={
-                isDiscussion ? t("打开讨论列表") : t("打开工作列表")
+                isDiscussion
+                  ? t("打开讨论列表")
+                  : isOngoing
+                    ? t("打开计划列表")
+                    : t("打开工作列表")
               }
               onClick={() => setContextSidebarOpen(true)}
               className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur hover:bg-muted"
@@ -296,9 +332,7 @@ function CardPageContent() {
             waitingAttemptID={waiting ? current?.id : undefined}
             choicePending={choose.isPending}
             onChoose={(choice) => choose.mutate(choice)}
-            cancelingTurnID={cancelingTurnID}
             retryingAttemptID={retryingAttemptID}
-            onCancelTurn={(turnID) => cancelTurn.mutate(turnID)}
             onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
           />
 
@@ -309,19 +343,23 @@ function CardPageContent() {
                   {t("此讨论已归档，不能继续发送消息")}
                 </p>
               )}
-              {detail.data.pending_turns.length > 0 && (
-                <p className="mb-1.5 text-center text-[11px] text-faint">
-                  {t("另有待处理")} {detail.data.pending_turns.length}
-                </p>
-              )}
+              <PendingTurnQueue
+                turns={detail.data.pending_turns}
+                cancelingTurnID={cancelingTurnID}
+                steeringTurnID={steeringTurnID}
+                onCancel={(turnID) => cancelTurn.mutate(turnID)}
+                onSteer={(turnID) => steerTurn.mutate(turnID)}
+                onEdit={async (turnID, content) => {
+                  await api.editTurn(cardID, turnID, content);
+                  await sync();
+                }}
+              />
               <ConversationComposer
                 comment={comment}
                 setComment={setComment}
                 blocked={blocked}
                 waiting={waiting}
                 hasCurrent={hasCurrent}
-                submitMode={submitMode}
-                setSubmitMode={setSubmitMode}
                 sendPending={send.isPending}
                 streamConnected={stream.connected}
                 streamError={stream.lastError}
@@ -339,7 +377,13 @@ function CardPageContent() {
           open={contextSidebarOpen}
           onOpenChange={setContextSidebarOpen}
           side="left"
-          title={isDiscussion ? t("讨论列表") : t("工作列表")}
+          title={
+            isDiscussion
+              ? t("讨论列表")
+              : isOngoing
+                ? t("计划列表")
+                : t("工作列表")
+          }
         >
           <div className="-m-5 h-[calc(100dvh-4.25rem)]">{contextSidebar}</div>
         </Sheet>

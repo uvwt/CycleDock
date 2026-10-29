@@ -95,7 +95,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
         cardID,
         connected: true,
         lastError: undefined,
-        live: null,
+        live: s.cardID === cardID ? s.live : null,
       }));
       sync();
     };

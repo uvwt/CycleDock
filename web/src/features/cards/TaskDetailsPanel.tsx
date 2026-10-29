@@ -75,7 +75,7 @@ export function TaskDetailsPanel({
 
       {card.kind === "ongoing" && (
         <>
-          <Section title="持续事项">
+          <Section title="计划">
             <p className="text-sm text-secondary-foreground">
               健康状态：{detail.health || "unknown"}
             </p>

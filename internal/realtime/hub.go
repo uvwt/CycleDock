@@ -112,13 +112,12 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			return
 		}
 		if event.Type == "reply.reset" {
-			remaining := make([]ReplyPreview, 0, len(st.replies))
-			for _, reply := range st.replies {
-				if reply.EventID != "" {
-					remaining = append(remaining, reply)
+			// 路由重试关闭旧预览，但不能撤回已经显示且持久化的正文。
+			for i := range st.replies {
+				if st.replies[i].EventID == "" {
+					st.replies[i].Failed = true
 				}
 			}
-			st.replies = remaining
 		} else {
 			if event.ReplyID == "" || len(event.ReplyID) > 512 {
 				return

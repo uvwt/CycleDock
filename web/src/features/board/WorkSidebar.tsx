@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Activity,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -16,13 +15,12 @@ import {
 } from "../../shared/ui/ContextSidebar";
 import { Badge } from "../../shared/ui/components";
 
-type WorkGroup = TodoState | "ongoing";
+type WorkGroup = TodoState;
 
 const todoGroups: TodoState[] = ["todo", "working", "review", "done"];
 
 function groupForCard(card?: Card): WorkGroup | "" {
   if (!card) return "";
-  if (card.kind === "ongoing") return "ongoing";
   if (card.kind === "todo" && card.todo_state) return card.todo_state;
   return "";
 }
@@ -38,8 +36,6 @@ function groupIcon(group: WorkGroup, active: boolean) {
       return <ClipboardCheck className={className} />;
     case "done":
       return <CheckCircle2 className={className} />;
-    case "ongoing":
-      return <Activity className={className} />;
   }
 }
 
@@ -58,7 +54,7 @@ export function WorkSidebar({
   const workCards = useMemo(
     () =>
       cards
-        .filter((card) => card.kind === "todo" || card.kind === "ongoing")
+        .filter((card) => card.kind === "todo")
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
     [cards],
   );
@@ -79,14 +75,9 @@ export function WorkSidebar({
 
   const groups = useMemo(
     () =>
-      [...todoGroups, "ongoing" as const].map((group) => ({
+      todoGroups.map((group) => ({
         group,
-        cards:
-          group === "ongoing"
-            ? workCards.filter((card) => card.kind === "ongoing")
-            : workCards.filter(
-                (card) => card.kind === "todo" && card.todo_state === group,
-              ),
+        cards: workCards.filter((card) => card.todo_state === group),
       })),
     [workCards],
   );
@@ -101,8 +92,6 @@ export function WorkSidebar({
         return t("待审核");
       case "done":
         return t("已完成");
-      case "ongoing":
-        return t("持续事项");
     }
   };
 
@@ -166,11 +155,7 @@ export function WorkSidebar({
                           icon={groupIcon(group, active)}
                           title={card.title || t("未命名任务")}
                           description={card.description}
-                          meta={
-                            card.kind === "ongoing"
-                              ? card.health || card.ongoing_state
-                              : card.current_attempt_status || undefined
-                          }
+                          meta={card.current_attempt_status || undefined}
                         />
                       );
                     })

@@ -44,8 +44,9 @@ type attemptToolRuntime struct {
 }
 
 type replyState struct {
-	mu    sync.Mutex
-	ended bool
+	mu         sync.Mutex
+	ended      bool
+	previewIDs map[string]string
 }
 
 type attemptToolFatal struct {
@@ -181,6 +182,7 @@ func (r attemptToolRuntime) internalHandler(
 				WorkspaceID: r.context.WorkspaceID, CardID: r.context.CardID,
 				AttemptID: r.context.AttemptID, RunnerSourceID: r.context.RunnerSourceID,
 				Message: input.ReplyMessage, IdempotencyKey: input.IdempotencyKey,
+				PreviewID: r.replies.previewIDs[ctx.FunctionCallID()],
 			})
 			if err != nil {
 				return nil, err

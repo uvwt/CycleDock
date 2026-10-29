@@ -575,6 +575,143 @@ type AttemptLeaseRecoveryResult struct {
 	RecoveryAttempts int
 }
 
+// EditPendingTurn 只修改尚未被领取的人工输入，并同步其原 Comment Event。
+// 创建请求的幂等凭据保持不变，发送重试不能覆盖编辑或制造新的输入。
+func (s *Store) EditPendingTurn(
+	ctx context.Context,
+	workspaceID, cardID, turnID, humanSourceID uuid.UUID,
+	content string,
+) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return fmt.Errorf("%w: turn content is required", domain.ErrConflict)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
+	if err := requireHumanSource(ctx, tx, workspaceID, humanSourceID); err != nil {
+		return err
+	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
+	var eventID uuid.NullUUID
+	var source domain.TurnSource
+	var cancelledAt pgtype.Timestamptz
+	var attempted bool
+	err = tx.QueryRow(ctx, `
+		SELECT t.source_event_id, t.source, t.cancelled_at, EXISTS (
+			SELECT 1 FROM turn_attempts a
+			WHERE a.workspace_id=t.workspace_id AND a.turn_id=t.id
+		)
+		FROM card_turns t
+		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id=$3
+		FOR UPDATE
+	`, workspaceID, cardID, turnID).Scan(&eventID, &source, &cancelledAt, &attempted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if source != domain.TurnSourceHuman || cancelledAt.Valid || attempted {
+		return fmt.Errorf("%w: only pending human turns can be edited", domain.ErrConflict)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns SET content=$4 WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+	`, workspaceID, cardID, turnID, content); err != nil {
+		return err
+	}
+	if eventID.Valid {
+		if _, err := tx.Exec(ctx, `
+			UPDATE events SET content=$4 WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+		`, workspaceID, cardID, eventID.UUID, content); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// SteerPendingTurn 将已有排队输入转为 interrupt，保留原 Turn/Event 和幂等键。
+// 与 Claim 共用 Card 行锁：已经被领取的输入不能再中断后续执行。
+func (s *Store) SteerPendingTurn(
+	ctx context.Context,
+	workspaceID, cardID, turnID, humanSourceID uuid.UUID,
+	now time.Time,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
+	if err := requireHumanSource(ctx, tx, workspaceID, humanSourceID); err != nil {
+		return err
+	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
+
+	var source domain.TurnSource
+	var mode domain.DispatchMode
+	var cancelledAt pgtype.Timestamptz
+	var attempted bool
+	err = tx.QueryRow(ctx, `
+		SELECT t.source, t.dispatch_mode, t.cancelled_at, EXISTS (
+			SELECT 1 FROM turn_attempts a
+			WHERE a.workspace_id=t.workspace_id AND a.turn_id=t.id
+		)
+		FROM card_turns t
+		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id=$3
+		FOR UPDATE
+	`, workspaceID, cardID, turnID).Scan(&source, &mode, &cancelledAt, &attempted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if source != domain.TurnSourceHuman || cancelledAt.Valid || attempted {
+		return fmt.Errorf("%w: only pending human turns can be steered", domain.ErrConflict)
+	}
+	if mode == domain.DispatchModeInterrupt {
+		return tx.Commit(ctx)
+	}
+	// 新选择的引导成为唯一优先输入，其他未领取输入继续按原 FIFO 排队。
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns t SET dispatch_mode='enqueue'
+		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id<>$3
+		  AND t.dispatch_mode='interrupt' AND t.cancelled_at IS NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM turn_attempts a
+			WHERE a.workspace_id=t.workspace_id AND a.turn_id=t.id
+		  )
+	`, workspaceID, cardID, turnID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns SET dispatch_mode='interrupt'
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+	`, workspaceID, cardID, turnID); err != nil {
+		return err
+	}
+	if err := supersedeAttemptForHumanTurn(ctx, tx, workspaceID, cardID, domain.DispatchModeInterrupt, now.UTC()); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notifyWorkReady()
+	return nil
+}
+
 func (s *Store) CancelPendingTurn(
 	ctx context.Context,
 	workspaceID, cardID, turnID, humanSourceID uuid.UUID,

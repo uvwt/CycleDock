@@ -114,7 +114,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
-	// 仅预览 reply_message 正文；持久用户消息仍统一由工具事务创建。
+	// 流式正文先保存为 Message 快照；完整工具调用在同一气泡上提交。
 	llm, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
@@ -203,7 +203,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	})
 	runCtx = agentsession.WithAttempt(runCtx, cardContext.AttemptID)
 	userMessage := genai.NewContentFromText(cardContext.TurnContent, genai.RoleUser)
-	previews := replyEventPublisher{hub: r.live, cardID: cardContext.CardID, attemptID: cardContext.AttemptID}
+	previews := replyEventPublisher{hub: r.live, cardID: cardContext.CardID, attemptID: cardContext.AttemptID,
+		store: r.store, context: cardContext, replies: replies,
+	}
 	var finalText string
 	for event, eventErr := range adkRunner.Run(
 		runCtx,
@@ -222,7 +224,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 			}
 			return fmt.Errorf("ADK invocation failed: %w", eventErr)
 		}
-		previews.publish(event)
+		if err := previews.publish(runCtx, event); err != nil {
+			return fmt.Errorf("persist reply preview: %w", err)
+		}
 		if event == nil || event.Partial || event.Content == nil ||
 			event.Content.Role != genai.RoleModel || event.Actions.Compaction != nil {
 			continue
