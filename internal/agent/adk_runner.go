@@ -11,9 +11,11 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/platform"
 	adkrunner "google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/session/compaction"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentsession"
@@ -98,6 +100,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	defer mcpSessions.Close()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
+	replies := &replyState{}
 	toolRuntime := attemptToolRuntime{
 		store:           r.store,
 		context:         cardContext,
@@ -105,15 +108,17 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		artifactService: r.artifactService,
 		historyService:  historyService,
 		fatal:           &attemptToolFatal{},
+		replies:         replies,
 	}
 	tools, err := buildADKTools(toolRuntime)
 	if err != nil {
 		return err
 	}
+	// 模型原始文本不直接展示；用户气泡唯一来源是持久 reply_message。
 	llm, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
-		r.live,
+		nil,
 		cardContext.WorkspaceID,
 		cardContext.CardID,
 		cardContext.AttemptID,
@@ -156,6 +161,18 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 			return instructions, nil
 		},
 		Tools: tools,
+		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
+			func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
+				replies.mu.Lock()
+				defer replies.mu.Unlock()
+				if replies.ended {
+					// 同一批中结束消息后的工具也要返回响应，但不得再产生副作用。
+					ctx.Actions().SkipSummarization = true
+					return map[string]any{"error": "turn already ended"}, nil
+				}
+				return nil, nil
+			},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("create ADK agent: %w", err)
@@ -182,6 +199,13 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return fmt.Errorf("create ADK runner: %w", err)
 	}
 
+	// 工具可能发送消息、结束 Turn 或产生副作用，必须按模型给出的顺序执行。
+	// 使用 ADK 官方执行器，避免默认并发让结束消息抢先关闭前面的回复。
+	runCtx = platform.WithTaskRunner(runCtx, func(ctx context.Context, tasks []func(context.Context)) {
+		for _, task := range tasks {
+			task(ctx)
+		}
+	})
 	runCtx = agentsession.WithAttempt(runCtx, cardContext.AttemptID)
 	userMessage := genai.NewContentFromText(cardContext.TurnContent, genai.RoleUser)
 	var finalText string
@@ -206,27 +230,8 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 			event.Content.Role != genai.RoleModel || event.Actions.Compaction != nil {
 			continue
 		}
-		text := textFromADKContent(event.Content)
-		if text == "" {
-			continue
-		}
 		if event.IsFinalResponse() {
-			finalText = text
-			continue
-		}
-		// 每条完整的过程回复独立落库；工具和思考内容不投影到产品消息。
-		if _, _, err := r.store.AddAttemptEvent(runCtx, store.AttemptEventParams{
-			WorkspaceID: cardContext.WorkspaceID, CardID: cardContext.CardID,
-			AttemptID: cardContext.AttemptID, RunnerSourceID: cardContext.RunnerSourceID,
-			Type: domain.EventTypeComment, Content: text,
-			IdempotencyKey: "model:" + cardContext.AttemptID.String() + ":" + event.ID,
-		}); err != nil {
-			return fmt.Errorf("save agent message: %w", err)
-		}
-		if r.live != nil {
-			r.live.Publish(cardContext.CardID, realtime.Event{
-				Type: "attempt.text.reset", AttemptID: cardContext.AttemptID.String(),
-			})
+			finalText = textFromADKContent(event.Content)
 		}
 	}
 	if toolErr := toolRuntime.fatal.get(); toolErr != nil {
@@ -249,13 +254,27 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	case domain.AttemptStatusWaitingHuman:
 		return nil
 	case domain.AttemptStatusRunning:
+		// 未调用结束工具的旧式模型输出走同一个持久消息通道兜底，
+		// 不能回到旧 result 气泡和临时流文本两套并行机制。
+		replies.mu.Lock()
+		ended := replies.ended
+		replies.mu.Unlock()
+		if !ended && finalText != "" {
+			if _, _, err := r.store.PublishReply(runCtx, store.PublishReplyParams{
+				WorkspaceID: cardContext.WorkspaceID, CardID: cardContext.CardID,
+				AttemptID: cardContext.AttemptID, RunnerSourceID: cardContext.RunnerSourceID,
+				Message:        store.ReplyMessage{Type: "text", Content: finalText, EndTurn: true},
+				IdempotencyKey: "runner-final-" + cardContext.AttemptID.String(),
+			}); err != nil {
+				return err
+			}
+		}
 		if err := r.store.CompleteAttempt(
 			runCtx,
 			cardContext.WorkspaceID,
 			cardContext.CardID,
 			cardContext.AttemptID,
 			cardContext.RunnerSourceID,
-			finalText,
 			time.Now().UTC(),
 		); err != nil {
 			return err
@@ -376,6 +395,14 @@ func (r *Runner) heartbeatAttempt(
 			if err == nil {
 				continue
 			}
+			// choice 消息会在数据库事务内先切换 waiting_human，然后 ADK
+			// 才写回 FunctionResponse。该正常状态转换不能被 heartbeat 误判成失败。
+			if errors.Is(err, domain.ErrAttemptNotCurrent) {
+				attempt, lookupErr := r.store.GetAttempt(ctx, card.WorkspaceID, card.AttemptID)
+				if lookupErr == nil && attempt.Status == domain.AttemptStatusWaitingHuman {
+					return
+				}
+			}
 			select {
 			case errCh <- fmt.Errorf("attempt heartbeat failed: %w", err):
 			default:
@@ -396,15 +423,13 @@ func buildADKInstructions(
 	out.WriteString("This Card is a persistent Agent Session. Prior user messages, model responses, tool calls, and tool responses from this Card can be present in the Session history. Use them when they answer the current follow-up. Do not repeat a read-only tool call merely because it happened in an earlier Turn. Re-query when the user asks for current/fresh state, when the old result may be stale, or when a write action must actually be performed.\n\n")
 	out.WriteString("Rules:\n")
 	out.WriteString("- Treat the current Project/Card business metadata below as authoritative.\n")
-	out.WriteString("- Use cycledock_add_finding only for distilled durable business facts; the Session already preserves ordinary tool evidence.\n")
+	out.WriteString("- All user-visible content must use reply_message. Each call creates exactly one separate bubble; you may call it several times per Turn. Do not put replies in plain assistant text.\n")
+	out.WriteString("- Send progress as reply_message(type=text,end_turn=false); finish with end_turn=true. A choice reply must include widget.question and widget.options and end_turn=true, which waits for human input. Use a unique idempotency_key for each bubble.\n")
 	out.WriteString("- If an earlier FunctionResponse contains artifact_ref, use cycledock_read_artifact to inspect that historical payload instead of re-running the real tool merely to recover old evidence.\n")
 	out.WriteString("- If context compaction no longer includes an exact old value, use cycledock_search_session_history before re-querying a real read-only tool just to recover history.\n")
-	out.WriteString("- Use cycledock_report_progress for meaningful execution stages.\n")
 	out.WriteString("- Only an active Discussion may generate Todo/Ongoing work.\n")
 	out.WriteString("- On Ongoing Cards, use cycledock_check_in when you establish a health fact.\n")
-	out.WriteString("- If human input is required, call cycledock_wait_for_human and stop.\n")
 	out.WriteString("- Use cycledock_confirm_card only after verified Todo work. Human Review -> Done is never your action.\n")
-	out.WriteString("- Ordinary response text is user-visible and saved as separate timeline messages, including text before tool calls. Use it for concise updates, not internal reasoning.\n")
 	out.WriteString("- Never output chain-of-thought or hidden reasoning.\n")
 	if extra := strings.TrimSpace(workspaceInstructions); extra != "" {
 		out.WriteString("\nWorkspace Agent instructions:\n")

@@ -222,6 +222,6 @@ Session event 绝不能把 access token、refresh token、Cookie、API key、bea
 
 - `card_turns / turn_attempts` 是唯一执行调度模型。
 - `agent_sessions / agent_session_events / agent_artifacts` 保存持久 Agent Session、原始 Event 与大结果 Artifact。
-- `events` 只保存产品 Timeline 事实；旧 Run 外键已删除。Attempt 产生的 Progress/Finding/Check-in/Result 使用 nullable `attempt_id` 关联当前 Attempt，UI 可由 `attempt_id → turn_attempts.turn_id → card_turns.source_event_id` 稳定组织因果轮次，同时 `sequence` 始终保留真实审计顺序。
+- `events` 只保存产品 Timeline 事实；旧 Run 外键已删除。Attempt 产生的 Message/Check-in 等事件使用 nullable `attempt_id` 关联当前 Attempt，UI 可由 `attempt_id → turn_attempts.turn_id → card_turns.source_event_id` 稳定组织因果轮次，同时 `sequence` 始终保留真实审计顺序。
 - 不保留旧 DEV Runtime 数据迁移或兼容表。
 - final baseline 已验证 fresh `up → down 0 → up`、自定义 PostgreSQL `search_path` 与稳定 `sqlc generate`。

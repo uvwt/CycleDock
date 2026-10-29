@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
@@ -106,7 +107,11 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 		t.Fatalf("claim next turn: %v", err)
 	}
 	answer := strings.Repeat("检查完成", 60)
-	if err := dataStore.CompleteAttempt(ctx, workspaceID, card.ID, second.Attempt.ID, runner.ID, answer, time.Now()); err != nil {
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: second.Attempt.ID,
+		RunnerSourceID: runner.ID, Message: store.ReplyMessage{Type: "text", Content: answer, EndTurn: true},
+		IdempotencyKey: "notification-final", FinishOnEnd: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	updates, err := api.cardUpdates(ctx, workspaceID)
@@ -119,6 +124,37 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}
 	if update.EventSequence == "0" || update.AttemptStatus != "completed" {
 		t.Fatalf("model reply identity/status missing: %+v", update)
+	}
+	if _, err := dataStore.CreateHumanTurn(ctx, workspaceID, card.ID, sourceID, "请提供报告并确认", uuid.NewString(), domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	third, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, runner.ID, time.Now(), time.Minute)
+	if err != nil || third == nil {
+		t.Fatalf("claim message previews: %v", err)
+	}
+	for _, message := range []store.ReplyMessage{
+		{Type: "attachment", URL: "https://example.com/report.pdf", Alt: "检查报告"},
+		{Type: "choice", EndTurn: true, Widget: &store.ChoiceWidget{Question: "继续执行吗？", Options: []store.ChoiceOption{
+			{Value: "yes", Label: "继续"}, {Value: "no", Label: "停止"},
+		}}},
+	} {
+		if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+			WorkspaceID: workspaceID, CardID: card.ID, AttemptID: third.Attempt.ID,
+			RunnerSourceID: runner.ID, Message: message, IdempotencyKey: uuid.NewString(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		updates, err := api.cardUpdates(ctx, workspaceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := message.Alt
+		if message.Widget != nil {
+			want = message.Widget.Question
+		}
+		if updates[0].MessagePreview != want {
+			t.Fatalf("%s notification preview=%q want=%q", message.Type, updates[0].MessagePreview, want)
+		}
 	}
 }
 

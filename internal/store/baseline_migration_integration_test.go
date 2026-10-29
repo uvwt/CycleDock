@@ -56,6 +56,18 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 		t.Fatalf("events.attempt_id count=%d want 1", attemptColumnCount)
 	}
 
+	var resultColumnCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.columns
+		WHERE table_schema='public' AND table_name='turn_attempts'
+		  AND column_name='result_summary'
+	`).Scan(&resultColumnCount); err != nil {
+		t.Fatal(err)
+	}
+	if resultColumnCount != 0 {
+		t.Fatal("turn_attempts still stores a duplicate reply summary")
+	}
+
 	var migrationVersion int64
 	if err := s.pool.QueryRow(ctx, `
 		SELECT version_id
@@ -66,7 +78,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	`).Scan(&migrationVersion); err != nil {
 		t.Fatal(err)
 	}
-	if migrationVersion != 1 {
-		t.Fatalf("migration version=%d want 1", migrationVersion)
+	if migrationVersion != 4 {
+		t.Fatalf("migration version=%d want 4", migrationVersion)
 	}
 }

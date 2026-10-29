@@ -116,8 +116,7 @@ External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式�
 
 - `claim_attempt`
 - `heartbeat_attempt`
-- `report_progress`
-- `add_finding`
+- `reply_message`
 - `check_in`
 - `finish_attempt`
 
@@ -132,17 +131,17 @@ External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式�
 
 `heartbeat_attempt` 只延长 running Attempt lease，不写 Timeline。
 
-`report_progress` 更新 `current_stage / progress_summary` 并续 lease；只有 `event_content` 非空时才生成 durable Progress Event。
+`reply_message` 每调用一次生成独立用户消息气泡；`end_turn=true` 的文字/附件结束 Attempt，选择卡会原子进入 `waiting_human`，详情见 `docs/reply-message.md`。
 
-`add_finding`、`check_in` 与 completed Result 是长期 Card 事实。Raw tool output、临时日志、tool args、chain-of-thought 不应写入产品 Timeline。
+`check_in` 仍记录 Ongoing 结构化健康事实；`confirm_card` 仍负责 Todo 审核。原始工具调用和 chain-of-thought 不写入产品 Timeline。
 
 `finish_attempt` 支持：
 
-- `completed`：写 durable Result，并将 Attempt 置为 completed。
+- `completed`：只将 Attempt 置为 completed，不接收结果正文、不生成气泡；用户回复应使用 `reply_message`。
 - `failed`：保存 failure summary，并将 Attempt 置为 failed。
 - `waiting_human`：保存 stage / summary，释放 lease，等待 Human reply。
 
-同一 Source 对相同 completed / failed / waiting_human 结果进行网络重试是幂等的。
+同一 Source 重试 completed 状态结算，或重试相同 failed / waiting_human 信息，均为幂等操作。
 
 superseded / expired / cancelled Attempt，或另一个 Source 拥有的 Attempt，后续写入都会返回 `ATTEMPT_NOT_CURRENT`。
 
@@ -174,15 +173,14 @@ Agent 对 Todo 使用 `move_card` 只能进入 `todo / working`。Agent 不允�
 - `generate_work`。
 - `add_comment`。
 - `create_turn`。
-- meaningful `report_progress` Event。
-- `add_finding`。
+- 每条 `reply_message` 的 Message Event。
 - `check_in`。
 - `confirm_card`。
 
 Attempt lifecycle 本身按 Attempt ID + owner + terminal value 提供幂等：
 
 - 重复 `claim_attempt`：同 owner 复用 current Attempt。
-- 重复 `finish_attempt(completed)`：相同 Result 复用终态，不重复写 Result Event。
+- 重复 `finish_attempt(completed)`：复用 completed 终态，不写 Timeline Event。
 - 重复 `finish_attempt(failed)`：相同 summary 复用终态。
 - 重复 `finish_attempt(waiting_human)`：相同 stage / summary 复用 waiting 状态。
 

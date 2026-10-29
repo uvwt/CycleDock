@@ -98,16 +98,32 @@ function CardPageContent() {
   };
 
   const send = useMutation({
-    mutationFn: (mode: "enqueue" | "interrupt" | "reply") =>
-      mode === "reply"
-        ? api.reply(cardID, comment.trim())
-        : api.send(cardID, comment.trim(), mode),
+    mutationFn: (mode: "enqueue" | "interrupt" | "reply") => {
+      if (mode === "reply") {
+        if (!current || current.status !== "waiting_human") {
+          return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
+        }
+        return api.reply(cardID, comment.trim(), current.id);
+      }
+      return api.send(cardID, comment.trim(), mode);
+    },
     onSuccess: async () => {
       setComment("");
       setSubmitMode("enqueue");
       setComposerExpanded(false);
       await sync();
     },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("发送失败")),
+  });
+
+  const choose = useMutation({
+    mutationFn: (choice: {
+      value: string;
+      attemptID: string;
+      messageID: string;
+    }) => api.reply(cardID, choice.value, choice.attemptID, choice.messageID),
+    onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
   });
@@ -297,6 +313,9 @@ function CardPageContent() {
             pendingTurns={detail.data.pending_turns}
             currentAttempt={detail.data.current_attempt}
             attemptHistory={detail.data.attempt_history}
+            waitingAttemptID={waiting ? current?.id : undefined}
+            choicePending={choose.isPending}
+            onChoose={(choice) => choose.mutate(choice)}
             cancelingTurnID={cancelingTurnID}
             retryingAttemptID={retryingAttemptID}
             onCancelTurn={(turnID) => cancelTurn.mutate(turnID)}

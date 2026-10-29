@@ -119,7 +119,7 @@ WITH activity AS (
         c.kind AS card_kind,
         'attempt'::text AS activity_type,
         a.status,
-        COALESCE(NULLIF(a.error_summary, ''), NULLIF(a.result_summary, ''), NULLIF(a.progress_summary, ''), NULLIF(a.current_stage, ''), t.content) AS content,
+        a.error_summary AS content,
         s.name AS actor_name,
         COALESCE(a.finished_at, a.started_at, a.created_at) AS occurred_at
     FROM turn_attempts a

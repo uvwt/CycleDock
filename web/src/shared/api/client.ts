@@ -131,11 +131,11 @@ export const api = {
       { content, dispatch_mode },
       idempotencyKey || true,
     ),
-  reply: (id: string, content: string) =>
+  reply: (id: string, content: string, attemptID: string, messageID?: string) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
       "POST",
-      { content },
+      { content, attempt_id: attemptID, message_id: messageID },
       true,
     ),
   cancelAttempt: (id: string, attemptID: string) =>

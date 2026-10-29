@@ -87,7 +87,7 @@ Model credential、ordered routes、failover 与普通 MCP/NexusDock 继续通�
 
 External MCP Agent cutover 已完成：
 
-- MCP Server v0.4 使用 `create_turn / claim_attempt / heartbeat_attempt / report_progress / add_finding / check_in / finish_attempt`。
+- MCP Server v0.4 使用 `create_turn / claim_attempt / heartbeat_attempt / reply_message / check_in / finish_attempt`。
 - External OAuth Source 与 Built-in Agent 共用 `card_turns / turn_attempts`、Card 锁、ownership 与 stale-write guard。
 - `get_card / list_cards` 已切到 `pending_turns / current_attempt / attempt_history`。
 - Card-scoped Claim 保证外部客户端不会因为 Workspace FIFO 抢到别的 Card；同 Source 网络重试复用当前 Attempt。

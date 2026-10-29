@@ -31,7 +31,9 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
  COALESCE(e.sequence::text, '0'), COALESCE(e.preview, ''), COALESCE(a.status, '')
  FROM cards c
  LEFT JOIN LATERAL (
-   SELECT sequence, left(btrim(content), 181) AS preview FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
+   SELECT sequence, left(COALESCE(NULLIF(btrim(content), ''), message->'widget'->>'question',
+     NULLIF(message->>'alt', ''), message->>'url', ''), 181) AS preview
+   FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
    ORDER BY sequence DESC LIMIT 1
  ) e ON true
  LEFT JOIN LATERAL (

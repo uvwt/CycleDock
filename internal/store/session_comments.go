@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +20,9 @@ type SubmitSessionCommentParams struct {
 	Content        string
 	IdempotencyKey string
 	DispatchMode   domain.DispatchMode
+	// 回复绑定正在回答的执行；选择按钮还须绑定具体消息，防止旧页面误答。
+	ReplyToAttemptID uuid.UUID
+	ChoiceMessageID  uuid.UUID
 }
 
 type SubmitSessionCommentResult struct {
@@ -38,6 +42,9 @@ func (s *Store) ReplySessionAndContinue(
 	ctx context.Context,
 	p SubmitSessionCommentParams,
 ) (SubmitSessionCommentResult, error) {
+	if p.ReplyToAttemptID == uuid.Nil {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: reply attempt is required", domain.ErrConflict)
+	}
 	p.DispatchMode = domain.DispatchModeEnqueue
 	return s.submitSessionComment(ctx, p, true)
 }
@@ -68,6 +75,10 @@ func (s *Store) submitSessionComment(
 		string(p.DispatchMode),
 		p.Content,
 	)
+
+	if requireWaitingHuman {
+		requestHash = stableRequestHash(requestHash, "reply", p.ReplyToAttemptID.String(), p.ChoiceMessageID.String())
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -107,17 +118,49 @@ func (s *Store) submitSessionComment(
 	if requireWaitingHuman {
 		var status string
 		err := tx.QueryRow(ctx, `
-			SELECT status
-			FROM turn_attempts
-			WHERE workspace_id=$1 AND card_id=$2
-			  AND status IN ('queued','running','waiting_human')
+			SELECT status FROM turn_attempts
+			WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 			FOR UPDATE
-		`, p.WorkspaceID, p.CardID).Scan(&status)
-		if errors.Is(err, pgx.ErrNoRows) || status != string(domain.AttemptStatusWaitingHuman) {
-			return SubmitSessionCommentResult{}, fmt.Errorf("%w: card is not waiting for human", domain.ErrConflict)
+		`, p.WorkspaceID, p.CardID, p.ReplyToAttemptID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SubmitSessionCommentResult{}, domain.ErrAttemptNotCurrent
 		}
 		if err != nil {
 			return SubmitSessionCommentResult{}, err
+		}
+		if status != string(domain.AttemptStatusWaitingHuman) {
+			return SubmitSessionCommentResult{}, domain.ErrAttemptNotCurrent
+		}
+		if p.ChoiceMessageID != uuid.Nil {
+			// 与创建下一轮共用 Card 行锁，旧页面的选择不能回答新的等待问题。
+			var payload []byte
+			err := tx.QueryRow(ctx, `
+				SELECT message FROM events
+				WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+				  AND id=$4 AND event_type='message'
+			`, p.WorkspaceID, p.CardID, p.ReplyToAttemptID, p.ChoiceMessageID).Scan(&payload)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return SubmitSessionCommentResult{}, fmt.Errorf("%w: choice message does not match attempt", domain.ErrConflict)
+			}
+			if err != nil {
+				return SubmitSessionCommentResult{}, err
+			}
+			var message ReplyMessage
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return SubmitSessionCommentResult{}, err
+			}
+			validOption := false
+			if message.Type == "choice" && message.Widget != nil {
+				for _, option := range message.Widget.Options {
+					if option.Value == p.Content {
+						validOption = true
+						break
+					}
+				}
+			}
+			if !validOption {
+				return SubmitSessionCommentResult{}, fmt.Errorf("%w: invalid choice option", domain.ErrConflict)
+			}
 		}
 	}
 

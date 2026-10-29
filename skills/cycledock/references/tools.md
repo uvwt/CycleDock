@@ -39,11 +39,8 @@ Card-scoped atomic claim. Starts the oldest pending Turn for that Card. Retry by
 ### heartbeat_attempt
 Extends the lease of a running Attempt owned by this Source. No Timeline Event is written.
 
-### report_progress
-Updates stage/progress summary and refreshes the Attempt lease. Optional `event_content` is for meaningful durable progress only; if supplied, `idempotency_key` is required.
-
-### add_finding
-Writes a durable Finding through the owned current Attempt. Requires `idempotency_key`.
+### reply_message
+Publishes one user-visible bubble for the owned Attempt. Required: `attempt_id`, `type` (`text`, `attachment`, `choice`), `idempotency_key`, and `end_turn`. Text requires `content`; attachment uses HTTPS `url` with optional `alt`; text/attachment may include `images` (HTTPS URLs); choice requires `widget.question` and 2–8 `widget.options` of `{value,label}`, plus `end_turn=true`. Every call is a distinct durable bubble. A terminal text or attachment ends the Attempt; terminal choice enters `waiting_human` and resumes after Human reply.
 
 ### check_in
 Writes healthy / warning / critical for an Ongoing Card through the owned current Attempt. Requires `idempotency_key`.
@@ -51,7 +48,7 @@ Writes healthy / warning / critical for an Ongoing Card through the owned curren
 ### finish_attempt
 Outcomes:
 
-- `completed`: durable Result.
+- `completed`: status-only completion. No result field or Timeline bubble; send user-visible content with `reply_message`.
 - `failed`: failure summary.
 - `waiting_human`: stage + summary, then stop and wait.
 

@@ -25,7 +25,6 @@ type SessionAttemptView struct {
 	CanRetry         bool
 	CurrentStage     string
 	ProgressSummary  string
-	ResultSummary    string
 	ErrorSummary     string
 	CreatedAt        time.Time
 	StartedAt        *time.Time
@@ -62,7 +61,7 @@ func (s *Store) GetAttemptView(
 				)
 			),
 			a.current_stage, a.progress_summary,
-			a.result_summary, a.error_summary, a.created_at, a.started_at, a.finished_at
+			a.error_summary, a.created_at, a.started_at, a.finished_at
 		FROM turn_attempts a
 		JOIN card_turns t
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
@@ -71,7 +70,7 @@ func (s *Store) GetAttemptView(
 		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
-		&out.ResultSummary, &out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
+		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionAttemptView{}, domain.ErrNotFound
@@ -96,7 +95,7 @@ func (s *Store) CurrentAttemptView(
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			false,
 			a.current_stage, a.progress_summary,
-			a.result_summary, a.error_summary, a.created_at, a.started_at, a.finished_at
+			a.error_summary, a.created_at, a.started_at, a.finished_at
 		FROM turn_attempts a
 		JOIN card_turns t
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
@@ -108,7 +107,7 @@ func (s *Store) CurrentAttemptView(
 		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
-		&out.ResultSummary, &out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
+		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -180,7 +179,7 @@ func (s *Store) ListRecentAttempts(
 				)
 			),
 			a.current_stage, a.progress_summary,
-			a.result_summary, a.error_summary, a.created_at, a.started_at, a.finished_at
+			a.error_summary, a.created_at, a.started_at, a.finished_at
 		FROM turn_attempts a
 		JOIN card_turns t
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
@@ -202,7 +201,7 @@ func (s *Store) ListRecentAttempts(
 			&item.ID, &item.TurnID, &item.SourceEventID, &item.Sequence, &item.Source, &item.Content,
 			&item.AttemptNumber, &item.Reason, &item.RetryOfAttemptID, &item.Status, &item.CanRetry,
 			&item.CurrentStage,
-			&item.ProgressSummary, &item.ResultSummary, &item.ErrorSummary,
+			&item.ProgressSummary, &item.ErrorSummary,
 			&item.CreatedAt, &startedAt, &finishedAt,
 		); err != nil {
 			return nil, err

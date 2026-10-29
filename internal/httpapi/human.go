@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -102,7 +103,6 @@ type attemptResponse struct {
 	Status           string     `json:"status"`
 	CurrentStage     string     `json:"current_stage,omitempty"`
 	ProgressSummary  string     `json:"progress_summary,omitempty"`
-	ResultSummary    string     `json:"result_summary,omitempty"`
 	ErrorSummary     string     `json:"error_summary,omitempty"`
 	CanRetry         bool       `json:"can_retry,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
@@ -111,15 +111,16 @@ type attemptResponse struct {
 }
 
 type eventResponse struct {
-	ID            string    `json:"id"`
-	Sequence      int64     `json:"sequence"`
-	Type          string    `json:"type"`
-	AttemptID     string    `json:"attempt_id,omitempty"`
-	Content       string    `json:"content"`
-	CheckinStatus string    `json:"checkin_status,omitempty"`
-	ActorName     string    `json:"actor_name"`
-	ActorKind     string    `json:"actor_kind"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string          `json:"id"`
+	Sequence      int64           `json:"sequence"`
+	Type          string          `json:"type"`
+	AttemptID     string          `json:"attempt_id,omitempty"`
+	Content       string          `json:"content"`
+	CheckinStatus string          `json:"checkin_status,omitempty"`
+	Message       json.RawMessage `json:"message,omitempty"`
+	ActorName     string          `json:"actor_name"`
+	ActorKind     string          `json:"actor_kind"`
+	CreatedAt     time.Time       `json:"created_at"`
 }
 
 type pendingTurnResponse struct {
@@ -696,7 +697,9 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content string `json:"content"`
+		Content   string `json:"content"`
+		AttemptID string `json:"attempt_id"`
+		MessageID string `json:"message_id,omitempty"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -712,11 +715,26 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	attemptID, err := uuid.Parse(request.AttemptID)
+	if err != nil || attemptID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "invalid_attempt_id", "reply attempt_id is required")
+		return
+	}
+	var messageID uuid.UUID
+	if request.MessageID != "" {
+		messageID, err = uuid.Parse(request.MessageID)
+		if err != nil || messageID == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_message_id", "invalid choice message_id")
+			return
+		}
+	}
+
 	identity := identityFromRequest(r)
 	result, err := api.store.ReplySessionAndContinue(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID: identity.SourceID,
 		Content:        request.Content, IdempotencyKey: idempotencyKey,
+		ReplyToAttemptID: attemptID, ChoiceMessageID: messageID,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -998,7 +1016,6 @@ func attemptToResponse(item store.SessionAttemptView) attemptResponse {
 		Status:          string(item.Status),
 		CurrentStage:    item.CurrentStage,
 		ProgressSummary: item.ProgressSummary,
-		ResultSummary:   item.ResultSummary,
 		ErrorSummary:    item.ErrorSummary,
 		CanRetry:        item.CanRetry,
 		CreatedAt:       item.CreatedAt,
@@ -1032,6 +1049,9 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		}
 		if row.CheckinStatus.Valid {
 			item.CheckinStatus = row.CheckinStatus.String
+		}
+		if row.EventType == "message" && len(row.Message) > 0 {
+			item.Message = json.RawMessage(row.Message)
 		}
 		if row.AttemptID.Valid {
 			item.AttemptID = row.AttemptID.UUID.String()

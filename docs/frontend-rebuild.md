@@ -51,7 +51,7 @@
 - 传输：原生 EventSource，同源 HttpOnly Cookie；每个 Card 的只读 SSE 订阅基于后端鉴权范围。
 - 短暂文本增量只存在于 Attempt 的实时流中；最终有意义的 Result/Finding/Progress/Comment 进入产品 `events`。其中 Attempt 产生的 durable Event 保存 nullable `attempt_id` 作为因果关联，不把它当作另一套执行状态。ADK Session Events 另行持久化模型消息、tool call 与 FunctionResponse 作为连续 Agent 上下文，但不保存 chain-of-thought 或 secret，也不把原始工具事件直接当作产品 Timeline 气泡。
 - SSE 合约：`attempt.started`、`attempt.stage`、`attempt.text.delta`、`attempt.text.reset`、`attempt.text.snapshot`、`event.created`、`attempt.finished`、`attempt.failed`；执行标识统一为 `attempt_id`。
-- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。同一 Attempt 的流式正文与最终持久 Result 占用同一 Agent 回复位置：运行中显示 SSE 增量，Result 到达后由持久事件接管，不能再额外保留一份 `result_summary` 正文。
+- Event / Card 最新持久状态的权威来源是 REST；流事件只负责低延迟和暂态 UI。重连时重新同步，避免丢消息/重复渲染。Agent 回复只展示持久 Message 气泡；Attempt 不保存结果摘要，SSE 只通知刷新和执行状态变化。
 - 加载中提供轻量动态点或 Spinner 和真实阶段。运行耗时从 `started_at` 至 `finished_at` / 当前服务端时间计算；Queued 不计为运行时间。
 - 单次 SSE 网络中断不能取消后台 Attempt，失败/等待人工/取消必须准确表达。
 - OpenAI-compatible Transport 也要支持增量输出；不能只对 ChatGPT/Grok 实现。

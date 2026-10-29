@@ -252,7 +252,7 @@ Phase D 已完成 Context / Artifact / History：
 
 Phase E 已完成 External MCP cutover：
 
-- OAuth MCP `create_turn / claim_attempt / heartbeat_attempt / report_progress / add_finding / check_in / finish_attempt` 全部使用同一 Turn / Attempt Store。
+- OAuth MCP `create_turn / claim_attempt / heartbeat_attempt / reply_message / check_in / finish_attempt` 全部使用同一 Turn / Attempt Store。
 - `get_card / list_cards` 返回 `pending_turns / current_attempt / attempt_history` 与 `current_attempt_status / pending_turn_count`。
 - External OAuth Source 只能写自己拥有的 Attempt；stale / cross-source heartbeat、progress、finding、check-in、finish 均被拒绝。
 - Human reply 与 Schedule 创建的 Turn 可由 External Agent 按 Card Claim；同 Source 网络重试复用当前 Attempt。
@@ -287,8 +287,8 @@ Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题�
 
 ## 产品消息时间线
 
-同一次 Built-in Agent Attempt 可以产生多条面向用户的消息。工具调用前的完整普通文本作为 Agent `comment` 事件保存；最终答复仍保存为 `result`。`cycledock_wait_for_human` 的问题摘要与等待状态在同一事务中保存为 Agent `comment`，人工回复后问题仍保留。Agent 评论不会创建新的业务 Turn。
+同一次 Built-in Agent Attempt 可以通过 `reply_message` 产生多条面向用户的 Message 气泡；最终答复不再生成 Result 或 Attempt 结果摘要。选择消息与 `waiting_human` 状态在同一事务中保存，人工回复后问题仍保留。Agent 消息不会创建新的业务 Turn。
 
-前端按事件 `sequence` 展示人工消息、Agent 过程回复、提问及最终结果。执行状态挂在该 Attempt 最近的事件后；成功且已有结果时，完成状态和耗时附在结果下。流式文本仅代表正在生成的一条消息，每条完整消息持久化后清空临时文本，后续回复独立展示。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
+前端按事件 `sequence` 展示人工消息与持久 Message 气泡。执行状态挂在该 Attempt 最近的事件后；成功且已有最终 Message 时，完成状态和耗时附在消息下。模型自由文本不自动成为气泡，正常结束且未调用回复工具时才补发最终 Message。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
 
 已有执行若仅在 `progress_summary` 中保存了提问，前端会在等待回复或人工已回复时补充展示问题气泡。同一 Attempt 已有相同正文的 Agent 消息时不重复展示；其他 Attempt 或 Human 的同文消息不会隐藏该问题。该展示回退不写入虚构的持久事件。

@@ -49,6 +49,8 @@ function render(events, execution = attempt) {
       pendingTurns: [],
       currentAttempt: current ? execution : null,
       attemptHistory: current ? [] : [execution],
+      waitingAttemptID: current ? execution.id : undefined,
+      onChoose() {},
       onCancelTurn() {},
       onRetryAttempt() {},
     }),
@@ -141,4 +143,23 @@ test("同文但来自其他执行的消息不能隐藏当前提问", () => {
     progress_summary: "请选择部署目标",
   });
   assert.equal((html.match(/请选择部署目标/g) || []).length, 2);
+});
+
+
+test("最终 Message 展示完成耗时，过程消息不重复附加状态", () => {
+  const progress = { ...result, id: "progress-message", type: "message", content: "检查中", message: { type: "text", content: "检查中", end_turn: false } };
+  const final = { ...result, type: "message", sequence: 3, message: { type: "text", content: result.content, end_turn: true } };
+  const html = render([comment, progress, final]);
+  assert.match(html, /检查中/);
+  assert.match(html, /已生成卡片/);
+  assert.match(html, /0:12/);
+  assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
+});
+
+test("选择 Message 与等待摘要同文时只显示一次问题", () => {
+  const choice = { ...result, type: "message", content: "", message: { type: "choice", end_turn: true, widget: { question: "请选择部署目标", options: [{ value: "a", label: "目标 A" }, { value: "b", label: "目标 B" }] } } };
+  const html = render([comment, choice], { ...attempt, status: "waiting_human", progress_summary: "请选择部署目标" });
+  assert.equal((html.match(/请选择部署目标/g) || []).length, 1);
+  assert.match(html, /目标 A/);
+  assert.match(html, /目标 B/);
 });

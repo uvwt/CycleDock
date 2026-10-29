@@ -130,9 +130,9 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	}); !errors.Is(err, domain.ErrAttemptNotCurrent) {
 		t.Fatalf("other source progress error=%v", err)
 	}
-	if err := s.CompleteAttemptOwned(
+	if err := s.CompleteAttempt(
 		ctx, f.WorkspaceID, f.CardID, winner.claim.Attempt.ID, other,
-		"stolen", time.Now().UTC(),
+		time.Now().UTC(),
 	); !errors.Is(err, domain.ErrAttemptNotCurrent) {
 		t.Fatalf("other source complete error=%v", err)
 	}
@@ -158,23 +158,17 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 		t.Fatalf("progress replay id=%s reused=%v err=%v", replayedProgressID, reusedProgress, err)
 	}
 
-	if err := s.CompleteAttemptOwned(
+	if err := s.CompleteAttempt(
 		ctx, f.WorkspaceID, f.CardID, winner.claim.Attempt.ID, winner.source,
-		"external completed", time.Now().UTC(),
+		time.Now().UTC(),
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteAttemptOwned(
+	if err := s.CompleteAttempt(
 		ctx, f.WorkspaceID, f.CardID, winner.claim.Attempt.ID, winner.source,
-		"external completed", time.Now().UTC(),
+		time.Now().UTC(),
 	); err != nil {
 		t.Fatalf("completed retry: %v", err)
-	}
-	if err := s.CompleteAttemptOwned(
-		ctx, f.WorkspaceID, f.CardID, winner.claim.Attempt.ID, winner.source,
-		"changed completion", time.Now().UTC(),
-	); !errors.Is(err, domain.ErrAttemptNotCurrent) {
-		t.Fatalf("changed completed retry error=%v", err)
 	}
 
 	var resultCount int
@@ -182,12 +176,12 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 		SELECT count(*)
 		FROM events
 		WHERE workspace_id=$1 AND card_id=$2
-		  AND event_type='result' AND content='external completed'
+		  AND event_type='result'
 	`, f.WorkspaceID, f.CardID).Scan(&resultCount); err != nil {
 		t.Fatal(err)
 	}
-	if resultCount != 1 {
-		t.Fatalf("result event count=%d want 1", resultCount)
+	if resultCount != 0 {
+		t.Fatalf("result event count=%d want 0", resultCount)
 	}
 
 	otherClaim, err := s.ClaimCardTurnAttempt(
@@ -246,7 +240,7 @@ func TestExternalOAuthClaimsHumanReplyAndScheduleTurns(t *testing.T) {
 	reply, err := s.ReplySessionAndContinue(ctx, SubmitSessionCommentParams{
 		WorkspaceID: todo.WorkspaceID, CardID: todo.CardID,
 		AuthorSourceID: todo.HumanID, Content: "use target B",
-		IdempotencyKey: "external-human-reply",
+		IdempotencyKey: "external-human-reply", ReplyToAttemptID: first.Attempt.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +262,9 @@ func TestExternalOAuthClaimsHumanReplyAndScheduleTurns(t *testing.T) {
 	if continued.Turn.ID != reply.TurnID || continued.Turn.Source != domain.TurnSourceHuman {
 		t.Fatalf("external claim reply=%+v reply=%+v", continued, reply)
 	}
-	if err := s.CompleteAttemptOwned(
+	if err := s.CompleteAttempt(
 		ctx, todo.WorkspaceID, todo.CardID, continued.Attempt.ID, external.ID,
-		"reply processed", time.Now().UTC(),
+		time.Now().UTC(),
 	); err != nil {
 		t.Fatal(err)
 	}

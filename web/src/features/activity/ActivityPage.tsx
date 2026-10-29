@@ -206,7 +206,7 @@ export default function ActivityPage() {
             {view === "all" ? t("这个项目还没有活动") : t("这个筛选下没有活动")}
           </p>
           <p className="mt-1 text-[13px] text-slate-400">
-            {t("Agent 运行、结果和重要进展会出现在这里。")}
+            {t("Agent 执行状态和重要活动会出现在这里。")}
           </p>
         </div>
       )}

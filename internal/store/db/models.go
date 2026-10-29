@@ -122,6 +122,7 @@ type Event struct {
 	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
 	RequestHash    pgtype.Text        `json:"request_hash"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Message        []byte             `json:"message"`
 }
 
 type HumanAccount struct {
@@ -257,7 +258,6 @@ type TurnAttempt struct {
 	Status           string             `json:"status"`
 	CurrentStage     string             `json:"current_stage"`
 	ProgressSummary  string             `json:"progress_summary"`
-	ResultSummary    string             `json:"result_summary"`
 	ErrorSummary     string             `json:"error_summary"`
 	StartedAt        pgtype.Timestamptz `json:"started_at"`
 	HeartbeatAt      pgtype.Timestamptz `json:"heartbeat_at"`

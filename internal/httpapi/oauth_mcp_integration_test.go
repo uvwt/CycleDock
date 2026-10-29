@@ -222,11 +222,12 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 		"list_projects": false, "list_cards": false, "get_card": false,
 		"create_discussion": false, "generate_work": false, "update_card": false, "move_card": false,
 		"add_comment": false, "create_turn": false, "claim_attempt": false,
-		"heartbeat_attempt": false, "report_progress": false, "add_finding": false,
+		"heartbeat_attempt": false, "reply_message": false,
 		"check_in": false, "finish_attempt": false, "confirm_card": false,
 	}
 	legacyTools := map[string]bool{
 		"create_followup": true, "claim_work": true, "heartbeat_run": true, "finish_run": true,
+		"report_progress": true, "add_finding": true,
 	}
 	for _, tool := range tools.Tools {
 		if _, ok := requiredTools[tool.Name]; ok {
@@ -299,19 +300,20 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if heartbeat.Attempt.ID != claimed.Attempt.ID || heartbeat.Attempt.Status != "running" {
 		t.Fatalf("heartbeat_attempt output: %+v", heartbeat)
 	}
-	progress := callMCPTool[mcpserver.ProgressOutput](t, ctx, clientSession, "report_progress", map[string]any{
-		"attempt_id": claimed.Attempt.ID, "stage": "verify", "summary": "protocol path verified",
-		"event_content": "OAuth and Streamable HTTP session verified", "idempotency_key": "mcp-e2e-progress",
+	progress := callMCPTool[mcpserver.EventOutput](t, ctx, clientSession, "reply_message", map[string]any{
+		"attempt_id": claimed.Attempt.ID, "type": "text", "content": "OAuth and Streamable HTTP session verified",
+		"end_turn": false, "idempotency_key": "mcp-e2e-progress",
 	})
 	if progress.EventID == "" {
-		t.Fatalf("report_progress output: %+v", progress)
+		t.Fatalf("reply_message progress output: %+v", progress)
 	}
-	finished := callMCPTool[mcpserver.FinishAttemptOutput](t, ctx, clientSession, "finish_attempt", map[string]any{
-		"attempt_id": claimed.Attempt.ID, "outcome": "completed",
-		"result": "Official MCP SDK E2E completed",
+	finished := callMCPTool[mcpserver.EventOutput](t, ctx, clientSession, "reply_message", map[string]any{
+		"attempt_id": claimed.Attempt.ID, "type": "text",
+		"content": "Official MCP SDK E2E completed", "end_turn": true,
+		"idempotency_key": "mcp-e2e-final",
 	})
-	if finished.Attempt.Status != "completed" {
-		t.Fatalf("finish_attempt output: %+v", finished)
+	if finished.EventID == "" {
+		t.Fatalf("final reply_message output: %+v", finished)
 	}
 	cardDetail := callMCPTool[mcpserver.GetCardOutput](t, ctx, clientSession, "get_card", map[string]any{
 		"card_id": created.Card.ID, "event_limit": 50,
@@ -333,7 +335,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	}
 	var sawResult bool
 	for _, event := range cardDetail.Timeline {
-		if event.Type == "result" && strings.Contains(event.Content, "Official MCP SDK") {
+		if event.Type == "message" && strings.Contains(event.Content, "Official MCP SDK") {
 			if event.AttemptID != claimed.Attempt.ID {
 				t.Fatalf("result attempt_id=%q want=%q", event.AttemptID, claimed.Attempt.ID)
 			}
@@ -342,6 +344,30 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	}
 	if !sawResult {
 		t.Fatalf("completed result missing from durable timeline: %+v", cardDetail.Timeline)
+	}
+
+	// 无可见回复时可单独结算状态；重试不生成 Result 或额外气泡。
+	callMCPTool[mcpserver.TurnOutput](t, ctx, clientSession, "create_turn", map[string]any{
+		"card_id": created.Card.ID, "content": "Status-only completion", "idempotency_key": "status-only-turn",
+	})
+	statusClaim := callMCPTool[mcpserver.AttemptOutput](t, ctx, clientSession, "claim_attempt", map[string]any{
+		"card_id": created.Card.ID,
+	})
+	for i := 0; i < 2; i++ {
+		statusFinished := callMCPTool[mcpserver.FinishAttemptOutput](t, ctx, clientSession, "finish_attempt", map[string]any{
+			"attempt_id": statusClaim.Attempt.ID, "outcome": "completed",
+		})
+		if statusFinished.Attempt.Status != "completed" {
+			t.Fatalf("status-only completion: %+v", statusFinished)
+		}
+	}
+	afterStatus := callMCPTool[mcpserver.GetCardOutput](t, ctx, clientSession, "get_card", map[string]any{
+		"card_id": created.Card.ID, "event_limit": 50,
+	})
+	for _, event := range afterStatus.Timeline {
+		if event.AttemptID == statusClaim.Attempt.ID {
+			t.Fatalf("status-only completion created a bubble: %+v", event)
+		}
 	}
 
 	otherWorkspace, err := dataStore.CreateWorkspace(ctx, "Other MCP Workspace")

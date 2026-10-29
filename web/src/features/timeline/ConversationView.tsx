@@ -40,6 +40,13 @@ type ExecutionActions = {
   retryingAttemptID?: string;
   onCancelTurn: (turnID: string) => void;
   onRetryAttempt: (attemptID: string) => void;
+  onChoose: (choice: {
+    value: string;
+    attemptID: string;
+    messageID: string;
+  }) => void;
+  choicePending?: boolean;
+  waitingAttemptID?: string;
 };
 
 function TimeSeparator({ value }: { value: string }) {
@@ -76,6 +83,7 @@ function EventRow({
   const { t } = useTranslation();
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
+  const message = event.type === "message" ? event.message : undefined;
   if (system) {
     return (
       <>
@@ -131,12 +139,76 @@ function EventRow({
           )}
           <div
             className={
-              human
-                ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3"
-                : undefined
+              human ? "rounded-xl rounded-br-sm bg-sky-50 px-4 py-3" : undefined
             }
           >
-            <RichText content={event.content} />
+            {message?.type === "choice" && message.widget ? (
+              <div className="space-y-3">
+                {message.content && <RichText content={message.content} />}
+                <p className="text-sm font-medium text-slate-900">
+                  {message.widget.question}
+                </p>
+                <div className="flex flex-col gap-2">
+                  {message.widget.options.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={
+                        !event.attempt_id ||
+                        actions.choicePending ||
+                        actions.waitingAttemptID !== event.attempt_id
+                      }
+                      onClick={() => {
+                        if (event.attempt_id) {
+                          actions.onChoose({
+                            value: option.value,
+                            attemptID: event.attempt_id,
+                            messageID: event.id,
+                          });
+                        }
+                      }}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-default disabled:opacity-50"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              (message?.content || event.content) && (
+                <RichText content={message?.content || event.content} />
+              )
+            )}
+            {message?.type === "attachment" && message.url && (
+              <a
+                href={message.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 block break-all text-sm text-sky-700 underline underline-offset-2"
+              >
+                {message.alt || message.url}
+              </a>
+            )}
+            {message?.images && message.images.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {message.images.map((src) => (
+                  <a
+                    key={src}
+                    href={src}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      src={src}
+                      alt={message.alt || t("消息图片")}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="max-h-72 w-full rounded-lg object-cover"
+                    />
+                  </a>
+                ))}
+              </div>
+            )}
             {completedAttempt && (
               <p
                 data-execution-id={completedAttempt.id}

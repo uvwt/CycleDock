@@ -78,7 +78,6 @@ type CheckInInput struct {
 type FinishAttemptInput struct {
 	AttemptID string `json:"attempt_id"`
 	Outcome   string `json:"outcome" jsonschema:"completed, failed, or waiting_human"`
-	Result    string `json:"result,omitempty" jsonschema:"Durable final result when completed"`
 	Stage     string `json:"stage,omitempty" jsonschema:"Current stage when waiting_human"`
 	Summary   string `json:"summary,omitempty" jsonschema:"Failure or waiting_human summary"`
 }
@@ -114,15 +113,16 @@ type CardView struct {
 }
 
 type EventView struct {
-	ID            string `json:"id"`
-	Sequence      int64  `json:"sequence"`
-	Type          string `json:"type"`
-	AttemptID     string `json:"attempt_id,omitempty"`
-	ActorName     string `json:"actor_name"`
-	ActorKind     string `json:"actor_kind"`
-	Content       string `json:"content"`
-	CheckinStatus string `json:"checkin_status,omitempty"`
-	CreatedAt     string `json:"created_at"`
+	ID            string         `json:"id"`
+	Sequence      int64          `json:"sequence"`
+	Type          string         `json:"type"`
+	AttemptID     string         `json:"attempt_id,omitempty"`
+	ActorName     string         `json:"actor_name"`
+	ActorKind     string         `json:"actor_kind"`
+	Content       string         `json:"content"`
+	Message       map[string]any `json:"message,omitempty"`
+	CheckinStatus string         `json:"checkin_status,omitempty"`
+	CreatedAt     string         `json:"created_at"`
 }
 
 type PendingTurnView struct {
@@ -146,7 +146,6 @@ type AttemptView struct {
 	Status           string `json:"status"`
 	CurrentStage     string `json:"current_stage,omitempty"`
 	ProgressSummary  string `json:"progress_summary,omitempty"`
-	ResultSummary    string `json:"result_summary,omitempty"`
 	ErrorSummary     string `json:"error_summary,omitempty"`
 	StartedAt        string `json:"started_at,omitempty"`
 	FinishedAt       string `json:"finished_at,omitempty"`

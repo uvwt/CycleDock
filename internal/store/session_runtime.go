@@ -370,15 +370,13 @@ func (s *Store) WaitAttemptForHumanWithPrompt(
 	return tx.Commit(ctx)
 }
 
+// CompleteAttempt 只结算执行状态；用户回复由 Message 独立保存，重试不追加气泡。
 func (s *Store) CompleteAttempt(
 	ctx context.Context,
 	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
-	result string,
 	now time.Time,
 ) error {
-	result = strings.TrimSpace(result)
 	now = now.UTC()
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -387,33 +385,40 @@ func (s *Store) CompleteAttempt(
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
 		return err
 	}
-	if err := requireCurrentAttempt(
-		ctx, tx, workspaceID, cardID, attemptID, runnerSourceID,
-		domain.AttemptStatusRunning,
-	); err != nil {
+
+	var actualRunner uuid.UUID
+	var status domain.AttemptStatus
+	err = tx.QueryRow(ctx, `
+		SELECT runner_source_id, status
+		FROM turn_attempts
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+		FOR UPDATE
+	`, workspaceID, cardID, attemptID).Scan(&actualRunner, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrAttemptNotCurrent
+	}
+	if err != nil {
 		return err
 	}
-	if result != "" {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO events (
-				id, workspace_id, card_id, event_type, actor_source_id, attempt_id, content
-			)
-			VALUES ($1,$2,$3,'result',$4,$5,$6)
-		`, uuid.New(), workspaceID, cardID, runnerSourceID, attemptID, result); err != nil {
-			return err
-		}
+	if actualRunner != runnerSourceID {
+		return domain.ErrAttemptNotCurrent
+	}
+	if status == domain.AttemptStatusCompleted {
+		return tx.Commit(ctx)
+	}
+	if status != domain.AttemptStatusRunning {
+		return domain.ErrAttemptNotCurrent
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
 		SET status='completed',
-		    result_summary=$5,
 		    heartbeat_at=NULL,
 		    lease_expires_at=NULL,
-		    finished_at=$6,
-		    updated_at=$6
+		    finished_at=$5,
+		    updated_at=$5
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		  AND runner_source_id=$4 AND status='running'
-	`, workspaceID, cardID, attemptID, runnerSourceID, result, now)
+	`, workspaceID, cardID, attemptID, runnerSourceID, now)
 	if err != nil {
 		return err
 	}

@@ -63,7 +63,7 @@ func (api *API) handleError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, domain.ErrIdempotencyMismatch):
 		writeError(w, http.StatusConflict, "idempotency_mismatch", "idempotency key was reused with different content")
-	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRunNotCurrent):
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, domain.ErrRunNotCurrent), errors.Is(err, domain.ErrAttemptNotCurrent):
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrHumanRequired):
 		writeError(w, http.StatusForbidden, "human_required", "this action requires a human")

@@ -180,18 +180,38 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if current.Attempt.ID == initialClaim.Attempt.ID || current.Attempt.RunnerSourceID != agent.ID {
 		t.Fatalf("interrupt claim=%+v initial=%+v", current, initialClaim)
 	}
-	if err := dataStore.WaitAttemptForHuman(
-		context.Background(), workspaceID, runCardID, current.Attempt.ID, time.Now().UTC(),
-	); err != nil {
-		t.Fatalf("wait for human: %v", err)
+	choiceID, _, err := dataStore.PublishReply(context.Background(), store.PublishReplyParams{
+		WorkspaceID: workspaceID, CardID: runCardID, AttemptID: current.Attempt.ID,
+		RunnerSourceID: agent.ID, IdempotencyKey: "http-choice",
+		Message: store.ReplyMessage{Type: "choice", EndTurn: true, Widget: &store.ChoiceWidget{
+			Question: "Which target?", Options: []store.ChoiceOption{{Value: "A", Label: "Target A"}, {Value: "B", Label: "Target B"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("publish choice: %v", err)
 	}
-
+	for _, invalid := range []struct {
+		body   map[string]any
+		status int
+	}{
+		{map[string]any{"content": "B"}, http.StatusBadRequest},
+		{map[string]any{"content": "B", "attempt_id": initialClaim.Attempt.ID, "message_id": choiceID}, http.StatusConflict},
+		{map[string]any{"content": "invalid", "attempt_id": current.Attempt.ID, "message_id": choiceID}, http.StatusConflict},
+		{map[string]any{"content": "B", "attempt_id": current.Attempt.ID, "message_id": uuid.New()}, http.StatusConflict},
+	} {
+		recorder := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/reply", invalid.body,
+			cookie, map[string]string{"Idempotency-Key": uuid.NewString()})
+		if recorder.Code != invalid.status {
+			t.Fatalf("invalid reply status=%d want=%d body=%s", recorder.Code, invalid.status, recorder.Body.String())
+		}
+	}
 	reply := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+runCard.ID+"/reply", map[string]any{
-		"content": "Use target B",
+		"content": "B", "attempt_id": current.Attempt.ID, "message_id": choiceID,
 	}, cookie, map[string]string{"Idempotency-Key": "attempt-reply"})
 	if reply.Code != http.StatusCreated {
 		t.Fatalf("reply and continue: %d %s", reply.Code, reply.Body.String())
 	}
+
 	var replyResult commentResultResponse
 	decodeRecorder(t, reply, &replyResult)
 	if replyResult.EventID == "" || replyResult.TurnID == "" {

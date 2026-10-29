@@ -181,12 +181,11 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 	var messages []string
 	for _, event := range timeline {
 		if event.AttemptID.Valid && event.AttemptID.UUID == firstClaim.Attempt.ID &&
-			(event.EventType == "comment" || event.EventType == "result") {
+			event.EventType == "message" {
 			messages = append(messages, event.Content)
 		}
 	}
-	if len(messages) != 2 || messages[0] != "I will inspect the inventory." ||
-		messages[1] != "The nginx container uses nginx:1.25." {
+	if len(messages) != 1 || messages[0] != "The nginx container uses nginx:1.25." {
 		t.Fatalf("agent timeline messages=%v", messages)
 	}
 
@@ -684,8 +683,8 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID: "pair-call-1", Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "cycledock_report_progress",
-					Arguments: `{"stage":"pairing","summary":"PAIR_SUMMARY"}`,
+					Name:      "reply_message",
+					Arguments: `{"type":"text","content":"PAIR_SUMMARY","end_turn":false,"idempotency_key":"pair-summary"}`,
 				},
 			}})
 		case 3:
@@ -700,7 +699,7 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 			callIndex, responseIndex := -1, -1
 			for index, message := range body.Messages {
 				for _, call := range message.ToolCalls {
-					if call.ID == "pair-call-1" && call.Function.Name == "cycledock_report_progress" {
+					if call.ID == "pair-call-1" && call.Function.Name == "reply_message" {
 						callIndex = index
 					}
 				}
@@ -807,19 +806,19 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 		w.Header().Set("Content-Type", "application/json")
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "cycledock_wait_for_human") {
-				t.Errorf("wait_for_human tool missing from first turn")
+			if !requestIncludesTool(body, "reply_message") {
+				t.Errorf("reply_message tool missing from first turn")
 			}
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID:   "wait-call-1",
 				Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "cycledock_wait_for_human",
-					Arguments: `{"stage":"need_target","summary":"Which target should I use?"}`,
+					Name:      "reply_message",
+					Arguments: `{"type":"choice","widget":{"question":"Which target should I use?","options":[{"value":"A","label":"Target A"},{"value":"B","label":"Target B"}]},"end_turn":true,"idempotency_key":"wait-target"}`,
 				},
 			}})
 		case 2:
-			if !strings.Contains(string(rawMessages), "waiting_human") ||
+			if !strings.Contains(string(rawMessages), "Which target should I use?") ||
 				!strings.Contains(string(rawMessages), "Use target B") {
 				t.Errorf("second turn missing wait FunctionResponse or human reply: %s", rawMessages)
 			} else {
@@ -897,9 +896,14 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	}
 	var prompts int
 	for _, event := range timeline {
-		if event.EventType == "comment" && event.Content == "Which target should I use?" &&
-			event.AttemptID.Valid && event.AttemptID.UUID == firstClaim.Attempt.ID {
-			prompts++
+		if event.EventType == "message" && event.AttemptID.Valid && event.AttemptID.UUID == firstClaim.Attempt.ID {
+			var message store.ReplyMessage
+			if err := json.Unmarshal(event.Message, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.Widget != nil && message.Widget.Question == "Which target should I use?" {
+				prompts++
+			}
 		}
 	}
 	if prompts != 1 {
@@ -915,6 +919,7 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	reply, err := dataStore.ReplySessionAndContinue(ctx, store.SubmitSessionCommentParams{
 		WorkspaceID: workspace.ID, CardID: card.ID, AuthorSourceID: human.ID,
 		Content: "Use target B", IdempotencyKey: "wait-reply",
+		ReplyToAttemptID: firstClaim.Attempt.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -947,6 +952,6 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 		t.Fatalf("second attempt status=%s want completed", secondAttempt.Status)
 	}
 	if !secondTurnSawWaitResponse {
-		t.Fatal("second Turn did not receive persisted wait_for_human FunctionResponse")
+		t.Fatal("second Turn did not receive persisted reply_message FunctionResponse")
 	}
 }

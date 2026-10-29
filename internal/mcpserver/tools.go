@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -26,8 +27,7 @@ func registerTools(server *mcp.Server, dataStore *store.Store) {
 	mcp.AddTool(server, &mcp.Tool{Name: "create_turn", Description: "Create a durable queued Turn on a Card. It never interrupts the current Attempt and is idempotent by source/key."}, createTurnHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "claim_attempt", Description: "Atomically claim/start the oldest pending Turn for this Card. Repeated claim by the same OAuth Source reuses its current Attempt."}, claimAttemptHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "heartbeat_attempt", Description: "Extend the lease of a running Attempt owned by this OAuth Source. Heartbeat never writes Timeline."}, heartbeatAttemptHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "report_progress", Description: "Update current stage/progress and refresh the Attempt lease. event_content should only be set for meaningful durable progress."}, reportProgressHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "add_finding", Description: "Record a durable finding for the current Attempt. Findings remain Card facts across later Turns."}, addFindingHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "reply_message", Description: "Publish one separate user-visible message bubble for the authenticated Attempt; may be called multiple times. end_turn finishes the Attempt or, with choice, waits for a human."}, replyMessageHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "check_in", Description: "Record healthy, warning, or critical status for an Ongoing Card through the current Attempt."}, checkInHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "finish_attempt", Description: "Finish the authenticated Source's current Attempt as completed or failed, or enter waiting_human."}, finishAttemptHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "confirm_card", Description: "Confirm a Working Todo after verification. When required confirmations are reached, CycleDock moves it to Review; only a human can move Review to Done."}, confirmCardHandler(dataStore))
@@ -438,12 +438,9 @@ func finishAttemptHandler(dataStore *store.Store) mcp.ToolHandlerFor[FinishAttem
 		now := time.Now().UTC()
 		switch input.Outcome {
 		case "completed":
-			if strings.TrimSpace(input.Result) == "" {
-				return nil, FinishAttemptOutput{}, errors.New("INVALID_REQUEST: completed requires result")
-			}
-			err = dataStore.CompleteAttemptOwned(
+			err = dataStore.CompleteAttempt(
 				ctx, actor.WorkspaceID, attempt.CardID, attemptID, actor.SourceID,
-				input.Result, now,
+				now,
 			)
 		case "failed":
 			if strings.TrimSpace(input.Summary) == "" {
@@ -553,6 +550,11 @@ func recentEventView(event db.ListRecentCardTimelineRow) EventView {
 	if event.CheckinStatus.Valid {
 		view.CheckinStatus = event.CheckinStatus.String
 	}
+	if event.EventType == "message" && len(event.Message) > 0 {
+		if err := json.Unmarshal(event.Message, &view.Message); err != nil {
+			view.Message = nil
+		}
+	}
 	if event.AttemptID.Valid {
 		view.AttemptID = event.AttemptID.UUID.String()
 	}
@@ -576,7 +578,7 @@ func attemptView(item store.SessionAttemptView, cardID uuid.UUID) AttemptView {
 		ID: item.ID.String(), CardID: cardID.String(), TurnID: item.TurnID.String(),
 		AttemptNumber: item.AttemptNumber, Reason: string(item.Reason), Status: string(item.Status),
 		CurrentStage: item.CurrentStage, ProgressSummary: item.ProgressSummary,
-		ResultSummary: item.ResultSummary, ErrorSummary: item.ErrorSummary,
+		ErrorSummary: item.ErrorSummary,
 	}
 	if item.SourceEventID.Valid {
 		view.SourceEventID = item.SourceEventID.UUID.String()

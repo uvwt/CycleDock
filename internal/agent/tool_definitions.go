@@ -33,25 +33,24 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
-				Name:        "cycledock_report_progress",
-				Description: "Update the current Attempt stage/progress and refresh its lease. Add event_content only when the progress itself is a durable Card fact.",
+				Name:        "reply_message",
+				Description: "Publish exactly one user-visible message bubble. Call multiple times to send multiple bubbles. Set end_turn=true for your last message. Use choice and end_turn=true to wait for the human; do not send a second final answer.",
 				Parameters: object(map[string]any{
-					"stage":           stringField("Short execution stage."),
-					"summary":         stringField("Concise current progress."),
-					"event_content":   stringField("Optional durable progress Timeline fact."),
-					"idempotency_key": stringField("Required when event_content is set; reuse only for the same logical write."),
-				}, "stage", "summary"),
-			},
-		},
-		{
-			Type: "function",
-			Function: modelclient.ToolDefinitionFunc{
-				Name:        "cycledock_add_finding",
-				Description: "Persist a verified finding that future Turns should inherit. Never store raw tool output.",
-				Parameters: object(map[string]any{
-					"content":         stringField("Distilled durable finding."),
-					"idempotency_key": stringField("Stable key for this logical finding."),
-				}, "content", "idempotency_key"),
+					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
+					"content": stringField("Markdown content. Required for text."),
+					"url":     stringField("HTTPS attachment URL, for attachment."),
+					"alt":     stringField("Attachment description."),
+					"images":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 8},
+					"widget": map[string]any{"type": "object", "properties": map[string]any{
+						"question": stringField("Question shown to the human."),
+						"options": map[string]any{"type": "array", "items": object(map[string]any{
+							"value": stringField("Value submitted as the human reply."),
+							"label": stringField("Visible option label."),
+						}, "value", "label"), "minItems": 2, "maxItems": 8},
+					}, "required": []string{"question", "options"}, "additionalProperties": false},
+					"end_turn":        map[string]any{"type": "boolean", "description": "Finish this Turn; choice waits for human."},
+					"idempotency_key": stringField("Unique stable key for this bubble."),
+				}, "type", "idempotency_key"),
 			},
 		},
 		{
@@ -64,17 +63,6 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 					"content":         stringField("Evidence-based health summary."),
 					"idempotency_key": stringField("Stable key for this logical check-in."),
 				}, "status", "content", "idempotency_key"),
-			},
-		},
-		{
-			Type: "function",
-			Function: modelclient.ToolDefinitionFunc{
-				Name:        "cycledock_wait_for_human",
-				Description: "Stop the current Attempt in waiting_human when human input is required. Do not continue working after this call.",
-				Parameters: object(map[string]any{
-					"stage":   stringField("Stage blocked on human input."),
-					"summary": stringField("Exactly what input or decision is needed."),
-				}, "stage", "summary"),
 			},
 		},
 		{

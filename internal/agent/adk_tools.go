@@ -40,6 +40,12 @@ type attemptToolRuntime struct {
 	artifactService artifact.Service
 	historyService  *agentsession.PostgresService
 	fatal           *attemptToolFatal
+	replies         *replyState
+}
+
+type replyState struct {
+	mu    sync.Mutex
+	ended bool
 }
 
 type attemptToolFatal struct {
@@ -152,40 +158,37 @@ func (r attemptToolRuntime) internalHandler(
 	name string,
 ) (func(adkagent.Context, map[string]any) (map[string]any, error), error) {
 	switch name {
-	case "cycledock_report_progress":
+	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-			eventID, reused, err := r.store.ReportAttemptProgress(ctx, store.AttemptProgressParams{
-				WorkspaceID:    r.context.WorkspaceID,
-				CardID:         r.context.CardID,
-				AttemptID:      r.context.AttemptID,
-				RunnerSourceID: r.context.RunnerSourceID,
-				Stage:          stringArg(args, "stage"),
-				Summary:        stringArg(args, "summary"),
-				EventContent:   stringArg(args, "event_content"),
-				IdempotencyKey: stringArg(args, "idempotency_key"),
-				LeaseDuration:  store.DefaultClaimLease,
+			// 回复状态同时由 Runner 的工具边界检查读取。
+			r.replies.mu.Lock()
+			defer r.replies.mu.Unlock()
+			if r.replies.ended {
+				return nil, fmt.Errorf("reply_message: turn already ended")
+			}
+			raw, err := json.Marshal(args)
+			if err != nil {
+				return nil, err
+			}
+			var input struct {
+				store.ReplyMessage
+				IdempotencyKey string `json:"idempotency_key"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return nil, err
+			}
+			eventID, reused, err := r.store.PublishReply(ctx, store.PublishReplyParams{
+				WorkspaceID: r.context.WorkspaceID, CardID: r.context.CardID,
+				AttemptID: r.context.AttemptID, RunnerSourceID: r.context.RunnerSourceID,
+				Message: input.ReplyMessage, IdempotencyKey: input.IdempotencyKey,
 			})
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{
-				"ok": true, "event_id": eventID.String(), "reused": reused,
-			}, nil
-		}, nil
-
-	case "cycledock_add_finding":
-		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-			eventID, reused, err := r.store.AddAttemptEvent(ctx, store.AttemptEventParams{
-				WorkspaceID:    r.context.WorkspaceID,
-				CardID:         r.context.CardID,
-				AttemptID:      r.context.AttemptID,
-				RunnerSourceID: r.context.RunnerSourceID,
-				Type:           domain.EventTypeFinding,
-				Content:        stringArg(args, "content"),
-				IdempotencyKey: stringArg(args, "idempotency_key"),
-			})
-			if err != nil {
-				return nil, err
+			if input.EndTurn {
+				r.replies.ended = true
+				// 先保存 ADK FunctionResponse，然后停止循环；Runner 负责正常结算。
+				ctx.Actions().SkipSummarization = true
 			}
 			return map[string]any{
 				"ok": true, "event_id": eventID.String(), "reused": reused,
@@ -211,27 +214,6 @@ func (r attemptToolRuntime) internalHandler(
 			return map[string]any{
 				"ok": true, "event_id": eventID.String(), "reused": reused,
 			}, nil
-		}, nil
-
-	case "cycledock_wait_for_human":
-		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-			if err := r.store.WaitAttemptForHumanWithPrompt(
-				ctx,
-				r.context.WorkspaceID,
-				r.context.CardID,
-				r.context.AttemptID,
-				r.context.RunnerSourceID,
-				stringArg(args, "stage"),
-				stringArg(args, "summary"),
-				time.Now().UTC(),
-			); err != nil {
-				return nil, err
-			}
-			// ADK persists this FunctionResponse, then ends the current LLM loop
-			// without asking the model to summarize it. The next human reply is a
-			// new Turn in the same Card Session.
-			ctx.Actions().SkipSummarization = true
-			return map[string]any{"ok": true, "status": "waiting_human"}, nil
 		}, nil
 
 	case "cycledock_generate_work":

@@ -32,7 +32,10 @@ export function groupExecutionAttempts(
   for (const event of events) {
     if (event.attempt_id) lastEventByAttempt.set(event.attempt_id, event.id);
     if (
-      event.type === "result" &&
+      (event.type === "result" ||
+        (event.type === "message" &&
+          event.message?.end_turn &&
+          event.message.type !== "choice")) &&
       event.actor_kind !== "human" &&
       event.attempt_id
     ) {
@@ -73,14 +76,15 @@ export function groupExecutionAttempts(
           (event) =>
             event.attempt_id === execution.id &&
             event.actor_kind !== "human" &&
-            ["comment", "finding", "result"].includes(event.type) &&
-            event.content?.trim() === question,
+            ["comment", "finding", "result", "message"].includes(event.type) &&
+            (event.message?.widget?.question || event.content)?.trim() ===
+              question,
         )
       ) {
         attempt.question = question;
       }
     }
-    // 仅在同次执行的结果已可见时合并完成状态；无结果、失败和重试历史仍保留。
+    // 完成状态附在最终消息下；保留旧 Result 的读取，失败和重试历史仍独立展示。
     const resultID = resultEventByAttempt.get(attempt.value.id);
     if (
       attempt.kind !== "pending" &&
