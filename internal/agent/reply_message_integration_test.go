@@ -3,16 +3,21 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/adk/v2/session"
 
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -149,5 +154,165 @@ func TestADKReplyBatchPreservesOrderAndStopsAfterEndTurn(t *testing.T) {
 	})
 	if err != nil || reply.TurnID == uuid.Nil {
 		t.Fatalf("reply and continue=%+v err=%v", reply, err)
+	}
+}
+
+func TestReplyPreviewStreamsBeforeToolCommit(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	finish := make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(finish) })
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || !body.Stream {
+			t.Errorf("stream request=%+v err=%v", body, err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		packet := func(args string, first bool) {
+			call := map[string]any{"index": 0, "function": map[string]string{"arguments": args}}
+			if first {
+				call["id"] = "preview-call"
+				call["function"].(map[string]string)["name"] = "reply_message"
+			}
+			raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{call}}}}})
+			fmt.Fprintf(w, "data: %s\n\n", raw)
+			w.(http.Flusher).Flush()
+		}
+		fmt.Fprintln(w, `data: {"choices":[{"delta":{"content":"PRIVATE MODEL TEXT"}}]}`)
+		packet(`{"type":"text","content":"你好`, true)
+		select {
+		case <-finish:
+		case <-request.Context().Done():
+			return
+		}
+		packet(`，世界","end_turn":true,"idempotency_key":"preview-reply"}`, false)
+		fmt.Fprintln(w, "data: [DONE]")
+	}))
+	defer modelHTTP.Close()
+	// 测试中途失败也要先释放正在等待的模型服务，再关闭 HTTP server。
+	defer release.Do(func() { close(finish) })
+	workspace, err := dataStore.CreateWorkspace(ctx, "Preview test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Preview", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Preview", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "preview-model"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = dataStore.CreateHumanTurn(ctx, workspace.ID, card.ID, human.ID, "Reply", "preview-turn", domain.DispatchModeEnqueue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("claim=%+v err=%v", claim, err)
+	}
+	hub := realtime.NewHub()
+	sub, _ := hub.Subscribe(card.ID)
+	defer sub.Close()
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{SessionService: agentsession.NewPostgresService(pool), Live: hub, HeartbeatInterval: 50 * time.Millisecond, LeaseDuration: time.Minute})
+	done := make(chan error, 1)
+	go func() { done <- runner.RunAttempt(ctx, *claim) }()
+	var previewID string
+	for previewID == "" {
+		select {
+		case event := <-sub.Events:
+			if event.Type == "reply.preview" {
+				if event.Text != "你好" {
+					t.Fatalf("preview=%+v", event)
+				}
+				previewID = event.ReplyID
+			}
+		case err := <-done:
+			t.Fatalf("runner ended before preview: %v", err)
+		case <-ctx.Done():
+			t.Fatal("no preview before tool finished")
+		}
+	}
+	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range timeline {
+		if event.EventType == "message" {
+			t.Fatal("partial preview was persisted before tool execution")
+		}
+	}
+	release.Do(func() { close(finish) })
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var committed string
+	for len(sub.Events) > 0 {
+		event := <-sub.Events
+		if strings.Contains(event.Text, "PRIVATE") {
+			t.Fatal("raw model text leaked")
+		}
+		if event.Type == "reply.committed" {
+			if event.ReplyID != previewID {
+				t.Fatalf("commit lost preview identity: %+v", event)
+			}
+			committed = event.EventID
+		}
+	}
+	timeline, err = dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	for _, event := range timeline {
+		if event.EventType == "message" {
+			count++
+			if event.ID.String() != committed || event.Content != "你好，世界" {
+				t.Fatalf("committed=%s event=%+v", committed, event)
+			}
+		}
+	}
+	if count != 1 || committed == "" {
+		t.Fatalf("messages=%d committed=%s", count, committed)
+	}
+	appName, userID, sessionID := agentsession.Identity(workspace.ID, card.ID)
+	stored, err := runner.sessionService.Get(ctx, &session.GetRequest{AppName: appName, UserID: userID, SessionID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, responses := 0, 0
+	for event := range stored.Session.Events().All() {
+		if event.Partial {
+			t.Fatal("ADK partial event was persisted")
+		}
+		if event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part.FunctionCall != nil && part.FunctionCall.Name == "reply_message" {
+				calls++
+				if len(part.FunctionCall.PartialArgs) > 0 || part.FunctionCall.Args["content"] != "你好，世界" {
+					t.Fatalf("incomplete persisted call=%+v", part.FunctionCall)
+				}
+			}
+			if part.FunctionResponse != nil && part.FunctionResponse.Name == "reply_message" {
+				responses++
+			}
+		}
+	}
+	if calls != 1 || responses != 1 {
+		t.Fatalf("ADK calls=%d responses=%d", calls, responses)
 	}
 }

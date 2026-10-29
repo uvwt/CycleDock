@@ -14,7 +14,7 @@ import (
 // Without this guard the Runner would permanently write partial output as a Result.
 func TestIncompleteChatStreamCannotComplete(t *testing.T) {
 	data := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
-	got, err := readChatStream(strings.NewReader(data), func(string) {})
+	got, err := readChatStream(strings.NewReader(data), func(string) {}, nil)
 	if err == nil || !strings.Contains(err.Error(), "before [DONE]") {
 		t.Fatalf("truncated completion must fail: %+v err=%v", got, err)
 	}

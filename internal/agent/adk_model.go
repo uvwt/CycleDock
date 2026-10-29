@@ -16,21 +16,17 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
-	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 // adkRouteModel adapts CycleDock's production model transports and ordered
 // credential routes to ADK's model.LLM interface. ADK owns the conversation and
-// tool loop; CycleDock keeps credential refresh, route failover and live-text
-// semantics.
+// tool loop; CycleDock keeps credential refresh, route failover and converts
+// provider argument deltas into ADK partial responses.
 type adkRouteModel struct {
 	client      *modelclient.Client
 	modelAuth   *modelauth.Service
-	live        *realtime.Hub
 	workspaceID uuid.UUID
-	cardID      uuid.UUID
-	attemptID   uuid.UUID
 	routes      []db.WorkspaceModelRoute
 
 	mu          sync.Mutex
@@ -41,8 +37,7 @@ type adkRouteModel struct {
 func newADKRouteModel(
 	client *modelclient.Client,
 	auth *modelauth.Service,
-	live *realtime.Hub,
-	workspaceID, cardID, attemptID uuid.UUID,
+	workspaceID uuid.UUID,
 	routes []db.WorkspaceModelRoute,
 ) (model.LLM, error) {
 	if client == nil {
@@ -58,9 +53,9 @@ func newADKRouteModel(
 		return nil, errors.New("built-in agent has no enabled model route")
 	}
 	return &adkRouteModel{
-		client: client, modelAuth: auth, live: live,
-		workspaceID: workspaceID, cardID: cardID, attemptID: attemptID,
-		routes: enabled,
+		client: client, modelAuth: auth,
+		workspaceID: workspaceID,
+		routes:      enabled,
 	}, nil
 }
 
@@ -101,33 +96,41 @@ func (m *adkRouteModel) GenerateContent(
 					return
 				}
 				lastErr = err
-				if i+1 < len(m.routes) {
-					m.publishFailover(false)
+				if i+1 < len(m.routes) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
+					return
 				}
 				continue
 			}
 
 			config.OutputSchema = outputSchema
 
-			streamed := false
-			if m.live != nil {
-				// 新一轮模型回复从独立消息开始，不串接上一条工具前的说明。
-				m.live.Publish(m.cardID, realtime.Event{
-					Type: "attempt.text.reset", AttemptID: m.attemptID.String(),
-				})
-				m.publishStage("正在生成回复")
-				config.OnTextDelta = func(text string) {
-					streamed = true
-					m.live.Publish(m.cardID, realtime.Event{
-						Type: "attempt.text.delta", AttemptID: m.attemptID.String(), Text: text,
-					})
+			requestCtx, cancel := context.WithCancel(ctx)
+			stopped := false
+			emit := func(response *model.LLMResponse) bool {
+				if stopped {
+					return false
 				}
+				if !yield(response, nil) {
+					stopped = true
+					cancel()
+					return false
+				}
+				return true
 			}
-			// Keep provider streaming when a browser is attached, but only yield the
-			// final response to ADK. Partial text is ephemeral UI state and must not
-			// become durable Session events.
-			_ = stream
-			completion, err := m.client.Complete(ctx, config, messages, tools)
+			if stream {
+				generation := uuid.NewString()
+				// 批次开始和参数增量均经 ADK Partial 事件转发，模型适配器不接触 SSE Hub。
+				if !emit(replyGenerationResponse(generation)) {
+					cancel()
+					return
+				}
+				config.OnToolCall = previewToolCalls(generation, modelCall, emit)
+			}
+			completion, err := m.client.Complete(requestCtx, config, messages, tools)
+			cancel()
+			if stopped {
+				return
+			}
 			if err == nil {
 				if len(completion.ToolCalls) > 0 && modelCall > maxRunToolRounds {
 					yield(nil, errRunawayToolLoop)
@@ -149,8 +152,8 @@ func (m *adkRouteModel) GenerateContent(
 				return
 			}
 			lastErr = err
-			if i+1 < len(m.routes) {
-				m.publishFailover(streamed)
+			if i+1 < len(m.routes) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
+				return
 			}
 		}
 
@@ -198,27 +201,6 @@ func (m *adkRouteModel) routeConfig(
 	default:
 		return modelclient.Config{}, fmt.Errorf("unsupported model provider %q", route.ProviderType)
 	}
-}
-
-func (m *adkRouteModel) publishFailover(resetText bool) {
-	if m.live == nil {
-		return
-	}
-	if resetText {
-		m.live.Publish(m.cardID, realtime.Event{
-			Type: "attempt.text.reset", AttemptID: m.attemptID.String(),
-		})
-	}
-	m.publishStage("当前模型不可用，正在切换备用模型")
-}
-
-func (m *adkRouteModel) publishStage(stage string) {
-	if m.live == nil {
-		return
-	}
-	m.live.Publish(m.cardID, realtime.Event{
-		Type: "attempt.stage", AttemptID: m.attemptID.String(), Stage: stage,
-	})
 }
 
 func adkRequestToModelClient(

@@ -28,7 +28,7 @@ type chatStreamDelta struct {
 
 // Chat Completions tool call arguments arrive in fragments, indexed by call.
 // We assemble them only inside the current Run; raw fragments are never durable.
-func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) {
+func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(ToolCall)) (Completion, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), int(maxResponseBytes))
 	var bytesRead int64
@@ -66,7 +66,7 @@ func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) 
 			for _, part := range choice.Delta.ToolCalls {
 				call := calls[part.Index]
 				if call == nil {
-					call = &ToolCall{Type: "function"}
+					call = &ToolCall{Type: "function", Index: part.Index}
 					calls[part.Index] = call
 				}
 				if part.ID != "" {
@@ -77,6 +77,9 @@ func readChatStream(reader io.Reader, onDelta func(string)) (Completion, error) 
 				}
 				call.Function.Name += part.Function.Name
 				call.Function.Arguments += part.Function.Arguments
+				if onToolCall != nil {
+					onToolCall(*call)
+				}
 			}
 		}
 	}

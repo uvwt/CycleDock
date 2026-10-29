@@ -271,8 +271,6 @@ const en = {
   取消排队: "Cancel queued work",
   重试: "Retry",
   "系统触发 / 未关联历史": "System-triggered / unlinked history",
-  "Agent 正在处理当前工作": "Agent is handling the current work",
-  "Agent 当前空闲": "Agent is idle",
   另有待处理: "queued",
   "新讨论发送失败，草稿已保留":
     "Failed to send the new discussion. Draft saved.",

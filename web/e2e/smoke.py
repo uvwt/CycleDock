@@ -246,7 +246,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
-        self.page.get_by_text("正在执行", exact=True).first.wait_for()
+        self.page.get_by_role("status", name="正在执行").first.wait_for()
         self.page.get_by_text("分析错误日志", exact=True).wait_for()
         self.page.get_by_role("button", name="取消排队").wait_for()
         self.page.get_by_role("button", name="重试", exact=True).wait_for()
@@ -256,20 +256,20 @@ class CycleDockSmoke(unittest.TestCase):
             "已定位 Docker 容器的错误记录。"
         ).wait_for(timeout=8000)
 
-    def test_todo_results_follow_their_source_turn_without_duplicate_body(self):
+    def test_todo_results_preserve_event_order_without_duplicate_body(self):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         self.page.get_by_role(
             "heading", name="检查 RN 服务器异常日志", exact=True
         ).wait_for()
 
-        # 后端审计序列故意是 Human A -> Human B -> Result A；视觉会话必须按因果轮次
-        # 展示成 Human A -> Result A -> Human B，同时最终 Markdown 正文只能出现一次。
+        # 会话保留 Human A -> Human B -> Result A 的持久事件顺序，
+        # 不将迟到结果移到较早输入之后；最终 Markdown 正文只能出现一次。
         turn_order = self.page.locator(
             "#event-event-9, #event-event-10, #event-event-3"
         ).evaluate_all("nodes => nodes.map(node => node.id)")
         self.assertEqual(
             turn_order,
-            ["event-event-9", "event-event-10", "event-event-3"],
+            ["event-event-9", "event-event-3", "event-event-10"],
         )
         result = self.page.locator("#event-event-10")
         result.locator("strong").get_by_text(

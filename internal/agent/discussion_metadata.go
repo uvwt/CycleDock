@@ -78,7 +78,7 @@ func (r *Runner) generateDiscussionMetadata(ctx context.Context, workspaceID uui
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	// 使用相同的凭据与有序 failover，但不发布生成文本到卡片实时回复。
-	llm, err := newADKRouteModel(r.model, r.modelAuth, nil, workspaceID, input.CardID, uuid.Nil, settings.Routes)
+	llm, err := newADKRouteModel(r.model, r.modelAuth, workspaceID, settings.Routes)
 	if err != nil {
 		return err
 	}

@@ -307,6 +307,7 @@ function CardPageContent() {
           </header>
 
           <ConversationView
+            key={cardID}
             events={detail.data.timeline}
             live={stream.live}
             cardKind={card.kind}
@@ -329,14 +330,9 @@ function CardPageContent() {
                   {t("此讨论已归档，不能继续发送消息")}
                 </p>
               )}
-              {(hasCurrent || detail.data.pending_turns.length > 0) && (
+              {detail.data.pending_turns.length > 0 && (
                 <p className="mb-1.5 text-center text-[11px] text-slate-400">
-                  {hasCurrent
-                    ? t("Agent 正在处理当前工作")
-                    : t("Agent 当前空闲")}
-                  {detail.data.pending_turns.length > 0
-                    ? " · " + t("另有待处理") + " " + detail.data.pending_turns.length
-                    : ""}
+                  {t("另有待处理")} {detail.data.pending_turns.length}
                 </p>
               )}
               <ConversationComposer

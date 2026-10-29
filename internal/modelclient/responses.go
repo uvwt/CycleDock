@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -50,10 +51,12 @@ type responseOutputItem struct {
 }
 
 type responsesEvent struct {
-	Type     string             `json:"type"`
-	Delta    string             `json:"delta"`
-	Item     responseOutputItem `json:"item"`
-	Response struct {
+	Type        string             `json:"type"`
+	OutputIndex int                `json:"output_index"`
+	ItemID      string             `json:"item_id"`
+	Delta       string             `json:"delta"`
+	Item        responseOutputItem `json:"item"`
+	Response    struct {
 		Output []responseOutputItem `json:"output"`
 	} `json:"response"`
 	Error struct {
@@ -131,7 +134,7 @@ func (c *Client) completeResponses(
 		}
 	}
 
-	completion, err := readResponsesStream(response, config.OnTextDelta)
+	completion, err := readResponsesStream(response, config.OnTextDelta, config.OnToolCall)
 	if err != nil {
 		return Completion{}, err
 	}
@@ -171,13 +174,14 @@ func buildResponsesInput(messages []Message) (string, []responsesItem) {
 	return strings.Join(instructions, "\n\n"), input
 }
 
-func readResponsesStream(response *http.Response, onDelta func(string)) (Completion, error) {
+func readResponsesStream(response *http.Response, onDelta func(string), onToolCall func(ToolCall)) (Completion, error) {
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64*1024), int(maxResponseBytes))
 	var total int64
 	var text strings.Builder
 	toolCalls := make([]ToolCall, 0)
 	seenCalls := make(map[string]struct{})
+	streamingCalls := make(map[string]ToolCall)
 	var completedOutput []responseOutputItem
 	completed := false
 
@@ -204,8 +208,29 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 			if onDelta != nil && event.Delta != "" {
 				onDelta(event.Delta)
 			}
+		case "response.output_item.added":
+			if event.Item.Type == "function_call" {
+				streamingCalls[event.Item.ID] = ToolCall{ID: event.Item.CallID, Type: "function", Index: event.OutputIndex,
+					Function: ToolFunction{Name: event.Item.Name, Arguments: event.Item.Arguments}}
+			}
+		case "response.function_call_arguments.delta":
+			if call, ok := streamingCalls[event.ItemID]; ok {
+				call.Function.Arguments += event.Delta
+				streamingCalls[event.ItemID] = call
+				if onToolCall != nil {
+					onToolCall(call)
+				}
+			}
 		case "response.output_item.done":
-			appendResponseToolCall(&toolCalls, seenCalls, event.Item)
+			if event.Item.Type == "function_call" && onToolCall != nil {
+				callID := event.Item.CallID
+				if callID == "" {
+					callID = event.Item.ID
+				}
+				onToolCall(ToolCall{ID: callID, Type: "function", Index: event.OutputIndex, Function: ToolFunction{
+					Name: event.Item.Name, Arguments: event.Item.Arguments}})
+			}
+			appendResponseToolCall(&toolCalls, seenCalls, event.Item, event.OutputIndex)
 		case "response.completed":
 			completedOutput = event.Response.Output
 			completed = true
@@ -224,9 +249,10 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 		return Completion{}, fmt.Errorf("%w: Responses stream ended before response.completed", ErrMalformedResponse)
 	}
 
-	for _, item := range completedOutput {
-		appendResponseToolCall(&toolCalls, seenCalls, item)
+	for index, item := range completedOutput {
+		appendResponseToolCall(&toolCalls, seenCalls, item, index)
 	}
+	sort.SliceStable(toolCalls, func(i, j int) bool { return toolCalls[i].Index < toolCalls[j].Index })
 	if text.Len() == 0 {
 		for _, item := range completedOutput {
 			if item.Type != "message" {
@@ -242,7 +268,7 @@ func readResponsesStream(response *http.Response, onDelta func(string)) (Complet
 	return Completion{Content: strings.TrimSpace(text.String()), ToolCalls: toolCalls}, nil
 }
 
-func appendResponseToolCall(calls *[]ToolCall, seen map[string]struct{}, item responseOutputItem) {
+func appendResponseToolCall(calls *[]ToolCall, seen map[string]struct{}, item responseOutputItem, index int) {
 	if item.Type != "function_call" || strings.TrimSpace(item.Name) == "" {
 		return
 	}
@@ -258,7 +284,7 @@ func appendResponseToolCall(calls *[]ToolCall, seen map[string]struct{}, item re
 	}
 	seen[callID] = struct{}{}
 	*calls = append(*calls, ToolCall{
-		ID: callID, Type: "function",
+		ID: callID, Type: "function", Index: index,
 		Function: ToolFunction{Name: item.Name, Arguments: item.Arguments},
 	})
 }

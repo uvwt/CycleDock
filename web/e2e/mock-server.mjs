@@ -487,17 +487,19 @@ http
                 ),
                 setTimeout(
                   () =>
-                    send("attempt.text.delta", {
+                    send("reply.preview", {
                       attempt_id: "attempt-running",
+                      reply_id: "preview-logs", order: 0,
                       text: "正在读取 RN 服务器日志。",
                     }),
                   1100,
                 ),
                 setTimeout(
                   () =>
-                    send("attempt.text.delta", {
+                    send("reply.preview", {
                       attempt_id: "attempt-running",
-                      text: "\n\n已定位 Docker 容器的错误记录。",
+                      reply_id: "preview-logs", order: 0,
+                      text: "正在读取 RN 服务器日志。\n\n已定位 Docker 容器的错误记录。",
                     }),
                   1600,
                 ),

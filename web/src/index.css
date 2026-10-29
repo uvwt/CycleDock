@@ -91,6 +91,12 @@ button:disabled {
 .prose-chat p {
   margin: 0.48rem 0;
 }
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > :last-child {
+  margin-bottom: 0;
+}
 .prose-chat ul {
   list-style: disc;
   padding-left: 1.4rem;
@@ -138,6 +144,19 @@ button:disabled {
 .prose-chat th {
   border: 1px solid #cbd5e1;
   padding: 0.35rem 0.6rem;
+}
+@keyframes message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.message-enter {
+  animation: message-enter 160ms ease-out;
 }
 @keyframes pulse-dot {
   0%,
