@@ -25,16 +25,17 @@ import {
   TextInput,
 } from "../../shared/ui/components";
 
-export function CardHeaderActions({
-  detail,
-  projectCards,
+export function CardActions({
+  card,
+  taskDetails,
   onDeleted,
+  menuSide = "bottom",
 }: {
-  detail: CardDetail;
-  projectCards: Card[];
+  card: Card;
+  taskDetails?: { detail: CardDetail; projectCards: Card[] };
   onDeleted: () => void;
+  menuSide?: "bottom" | "right";
 }) {
-  const card = detail.card;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -87,6 +88,8 @@ export function CardHeaderActions({
   return (
     <>
       <Menu
+        side={menuSide}
+        align={menuSide === "right" ? "start" : "end"}
         trigger={
           <button
             type="button"
@@ -98,7 +101,7 @@ export function CardHeaderActions({
           </button>
         }
       >
-        {card.kind !== "discussion" && (
+        {taskDetails && card.kind !== "discussion" && (
           <MenuItem onSelect={() => setDetailsOpen(true)}>
             <FileText className="size-4" />
             任务详情
@@ -133,7 +136,7 @@ export function CardHeaderActions({
         )}
       </Menu>
 
-      {card.kind !== "discussion" && (
+      {taskDetails && card.kind !== "discussion" && (
         <Modal
           open={detailsOpen}
           onOpenChange={setDetailsOpen}
@@ -141,8 +144,8 @@ export function CardHeaderActions({
           description="查看任务目标、来源关系，以及持续事项的健康状态和定时日程。"
         >
           <TaskDetailsPanel
-            detail={detail}
-            projectCards={projectCards}
+            detail={taskDetails.detail}
+            projectCards={taskDetails.projectCards}
             onChange={sync}
           />
         </Modal>

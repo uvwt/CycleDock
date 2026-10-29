@@ -9,13 +9,14 @@ import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import { ConversationView } from "../timeline/ConversationView";
-import { CardHeaderActions } from "./CardHeaderActions";
+import { CardActions } from "./CardActions";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
+import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
 
 export default function CardPage() {
@@ -27,6 +28,7 @@ function CardPageContent() {
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
+  const listVisible = useContextSidebarVisible();
   const { projects, projectID: activeProjectID, setProjectID } = useProject();
 
   const detail = useQuery({
@@ -250,8 +252,12 @@ function CardPageContent() {
 
   return (
     <main className="h-dvh min-h-0 bg-white">
-      <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="hidden min-h-0 border-r border-slate-200 lg:block">
+      <div
+        className={`grid h-full min-h-0 grid-cols-1 ${listVisible ? "lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]" : ""}`}
+      >
+        <div
+          className={`${listVisible ? "hidden lg:block" : "hidden"} min-h-0 border-r border-slate-200`}
+        >
           {contextSidebar}
         </div>
 
@@ -298,9 +304,12 @@ function CardPageContent() {
               </div>
             </div>
             <div className="shrink-0">
-              <CardHeaderActions
-                detail={detail.data}
-                projectCards={projectCards.data || []}
+              <CardActions
+                card={card}
+                taskDetails={{
+                  detail: detail.data,
+                  projectCards: projectCards.data || [],
+                }}
                 onDeleted={back}
               />
             </div>

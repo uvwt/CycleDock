@@ -8,12 +8,14 @@ import { keys } from "../../app/query";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
+import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { DiscussionSidebar } from "./DiscussionSidebar";
 import { DiscussionStartComposer } from "./DiscussionStartComposer";
 
 export default function ChatHome() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const listVisible = useContextSidebarVisible();
   const [mobileListOpen, setMobileListOpen] = useState(false);
   const {
     projectID,
@@ -62,8 +64,12 @@ export default function ChatHome() {
   return (
     <main className="h-[calc(100dvh-3.5rem)] min-h-0 bg-white md:h-dvh">
       {projectID ? (
-        <div className="grid h-full min-h-0 md:grid-cols-[280px_minmax(0,1fr)]">
-          <div className="hidden min-h-0 border-r border-slate-200 md:block">
+        <div
+          className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
+        >
+          <div
+            className={`${listVisible ? "hidden md:block" : "hidden"} min-h-0 border-r border-slate-200`}
+          >
             <DiscussionSidebar
               discussions={discussions}
               onSelect={selectDiscussion}

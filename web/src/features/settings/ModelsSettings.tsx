@@ -34,7 +34,7 @@ const names: Record<Provider, string> = {
 };
 
 const selectClass =
-  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500";
+  "w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400";
 
 function newRoute(): ModelRoute {
   return {

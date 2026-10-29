@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
@@ -10,12 +10,23 @@ import {
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
 import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
+import { ContextSidebarVisibility } from "../app/context-sidebar";
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { projects, projectID, setProjectID } = useProject();
+  const [listVisibility, setListVisibility] = useState({
+    "/chat": true,
+    "/board": true,
+  });
+  const listSection = location.pathname.startsWith("/chat")
+    ? "/chat"
+    : location.pathname.startsWith("/cards/")
+      ? "/board"
+      : null;
+  const listVisible = listSection ? listVisibility[listSection] : true;
   const focusedConversation = /^\/(?:chat|cards)\/[^/]+\/[^/]+\/?$/.test(
     location.pathname,
   );
@@ -64,6 +75,20 @@ export function Shell({ children }: { children: ReactNode }) {
       return routerActive || location.pathname.startsWith("/activity");
     }
     return routerActive || location.pathname.startsWith("/chat");
+  }
+
+  function selectPrimary(event: MouseEvent<HTMLAnchorElement>, path: string) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      return;
+    if (path !== "/chat" && path !== "/board") return;
+
+    // 再次点击当前入口只切换列表，保留正在查看的会话和草稿。
+    if (path === listSection) {
+      event.preventDefault();
+      setListVisibility((current) => ({ ...current, [path]: !current[path] }));
+      return;
+    }
+    setListVisibility((current) => ({ ...current, [path]: true }));
   }
 
   function switchProject(nextProjectID: string) {
@@ -134,6 +159,10 @@ export function Shell({ children }: { children: ReactNode }) {
               to={item.to}
               title={item.label}
               aria-label={item.label}
+              aria-expanded={
+                item.activePath === listSection ? listVisible : undefined
+              }
+              onClick={(event) => selectPrimary(event, item.activePath)}
               className={({ isActive }) =>
                 `grid size-10 place-items-center rounded-xl transition ${
                   primaryActive(item.activePath, isActive)
@@ -228,7 +257,9 @@ export function Shell({ children }: { children: ReactNode }) {
             </nav>
           </header>
         )}
-        {children}
+        <ContextSidebarVisibility.Provider value={listVisible}>
+          {children}
+        </ContextSidebarVisibility.Provider>
       </div>
     </div>
   );

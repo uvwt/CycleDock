@@ -53,7 +53,7 @@ export function ConversationComposer({
         event.preventDefault();
         onSubmit();
       }}
-      className={`relative border bg-white transition-all focus-within:border-sky-300 ${expanded ? "rounded-2xl border-slate-200 p-2 shadow-sm" : "flex items-center rounded-full border-slate-200 py-1 pr-1 pl-4 shadow-sm"}`}
+      className={`relative border bg-white transition-all focus-within:border-slate-300 ${expanded ? "rounded-2xl border-slate-200 p-2 shadow-sm" : "flex items-center rounded-full border-slate-200 py-1 pr-1 pl-4 shadow-sm"}`}
     >
       {expanded ? (
         <>

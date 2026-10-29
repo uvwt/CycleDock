@@ -35,7 +35,7 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
+      className={`w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400 ${props.className ?? ""}`}
     />
   );
 }
@@ -43,7 +43,7 @@ export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
-      className={`w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
+      className={`w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-slate-400 ${props.className ?? ""}`}
     />
   );
 }
@@ -143,10 +143,12 @@ export function Menu({
   trigger,
   children,
   align = "end",
+  side = "bottom",
 }: {
   trigger: ReactNode;
   children: ReactNode;
   align?: "start" | "center" | "end";
+  side?: "top" | "right" | "bottom" | "left";
 }) {
   return (
     <DropdownMenu.Root>
@@ -154,6 +156,7 @@ export function Menu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align={align}
+          side={side}
           sideOffset={6}
           collisionPadding={12}
           className="z-50 min-w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg outline-none"
