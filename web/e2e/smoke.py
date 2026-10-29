@@ -85,6 +85,57 @@ class CycleDockSmoke(unittest.TestCase):
             'textarea[aria-label="发送消息，继续推进任务…"]'
         ).wait_for()
 
+    def test_confirmation_uses_safe_focus_and_keeps_failed_delete_open(self):
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.open_card_menu().get_by_role("menuitem", name="删除讨论").click()
+        confirmation = self.page.get_by_role("alertdialog", name="删除这个讨论？")
+        cancel = confirmation.get_by_role("button", name="取消")
+        cancel.wait_for()
+        self.page.wait_for_function("document.activeElement?.textContent === '取消'")
+        self.page.keyboard.press("Tab")
+        self.assertTrue(confirmation.get_by_role("button", name="删除讨论", exact=True).evaluate("node => node === document.activeElement"))
+        self.page.keyboard.press("Tab")
+        self.assertTrue(cancel.evaluate("node => node === document.activeElement"))
+        self.page.mouse.click(5, 5)
+        self.assertTrue(confirmation.is_visible())
+
+        pending_delete = []
+        def hold_delete(route):
+            if route.request.method == "DELETE":
+                pending_delete.append(route)
+            else:
+                route.continue_()
+
+        self.page.route("**/api/v1/cards/discussion-1", hold_delete)
+        confirmation.get_by_role("button", name="删除讨论", exact=True).click()
+        self.page.wait_for_function("document.querySelector('[role=alertdialog]')?.getAttribute('aria-busy') === 'true'")
+        self.page.keyboard.press("Escape")
+        self.assertTrue(confirmation.is_visible())
+        self.assertFalse(cancel.is_enabled())
+        pending_delete[0].fulfill(status=500, content_type="application/json", body='{"error":{"code":"fixture_failure","message":"模拟删除失败"}}')
+        self.page.get_by_text("模拟删除失败", exact=True).wait_for()
+        self.assertTrue(confirmation.is_visible())
+        self.assertTrue(cancel.is_enabled())
+        cancel.click()
+        confirmation.wait_for(state="hidden")
+
+    def test_edit_dialog_scrolls_on_small_screen_and_closes_with_escape(self):
+        self.page.set_viewport_size({"width": 375, "height": 520})
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.open_card_menu().get_by_role("menuitem", name="编辑信息").click()
+        editor = self.page.get_by_role("dialog", name="编辑任务信息")
+        title = editor.get_by_placeholder("任务标题")
+        title.wait_for()
+        self.page.wait_for_function("document.activeElement?.getAttribute('placeholder') === '任务标题'")
+        self.assertGreaterEqual(editor.get_by_placeholder("目标、范围与必要背景").evaluate("node => node.getBoundingClientRect().height"), 100)
+        editor.get_by_role("button", name="保存", exact=True).scroll_into_view_if_needed()
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
+        self.page.keyboard.press("Escape")
+        editor.wait_for(state="hidden")
+        self.page.locator("main header").get_by_role("button", name="更多操作").focus()
+        self.page.keyboard.press("Enter")
+        self.page.get_by_role("menu").wait_for()
+
     def test_composers_preserve_newline_and_ime_confirmation(self):
         for path, placeholder in [
             ("/chat?project=demo-project", "发送消息，开始讨论…"),
@@ -453,7 +504,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertTrue(sent.value.post_data_json["clear_bearer_token"])
         self.assertNotIn("enabled", sent.value.post_data_json)
         form.get_by_role("button", name="删除", exact=True).click()
-        confirmation = self.page.get_by_role("dialog", name="删除 MCP 服务")
+        confirmation = self.page.get_by_role("alertdialog", name="删除 MCP 服务")
         confirmation.get_by_role("button", name="取消").click()
         form.wait_for()
 

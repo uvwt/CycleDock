@@ -93,7 +93,7 @@ function AgentAttempt({
         <article className="flex gap-3" data-attempt-question={id}>
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
           >
             <Bot className="size-4" />
           </span>
@@ -118,7 +118,7 @@ function AgentAttempt({
         {status === "running" && (
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
           >
             <Bot className="size-4" />
           </span>
@@ -132,7 +132,7 @@ function AgentAttempt({
                     ? "text-danger"
                     : status === "running"
                       ? "text-sky-700"
-                      : "text-secondary"
+                      : "text-secondary-foreground"
                 }`}
               >
                 {status === "running" ? (
@@ -165,14 +165,14 @@ function AgentAttempt({
                 <div className="mt-1.5 w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5 text-muted-foreground">
                   <RunningDots />
                   {summary && (
-                    <div className="mt-1 text-sm leading-6 text-secondary">
+                    <div className="mt-1 text-sm leading-6 text-secondary-foreground">
                       <RichText content={summary} />
                     </div>
                   )}
                 </div>
               ) : (
                 summary && (
-                  <div className="mt-1 text-sm leading-6 text-secondary">
+                  <div className="mt-1 text-sm leading-6 text-secondary-foreground">
                     <RichText content={summary} />
                   </div>
                 )

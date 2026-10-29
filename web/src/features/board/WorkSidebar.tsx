@@ -133,7 +133,7 @@ export function WorkSidebar({
                 className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left transition ${
                   containsActive
                     ? "text-heading"
-                    : "text-secondary hover:bg-surface/70"
+                    : "text-secondary-foreground hover:bg-surface/70"
                 }`}
               >
                 {isExpanded ? (

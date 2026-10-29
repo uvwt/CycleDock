@@ -172,7 +172,7 @@ export default function ActivityPage() {
                 onClick={() => open(item)}
                 className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
               >
-                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary">
+                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground">
                   <Icon
                     className={`size-[18px] ${state.spin ? "animate-spin" : ""}`}
                   />

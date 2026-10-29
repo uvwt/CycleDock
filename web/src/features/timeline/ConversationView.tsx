@@ -132,7 +132,7 @@ function EventRow({
         {showSender && !human && (
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary"
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
           >
             <Bot className="size-4" />
           </span>
@@ -473,7 +473,7 @@ export function ConversationView({
               stick.current = true;
               setShowLatest(false);
             }}
-            className="grid size-9 place-items-center rounded-full border border-line bg-surface text-secondary shadow-sm transition hover:bg-canvas"
+            className="grid size-9 place-items-center rounded-full border border-line bg-surface text-secondary-foreground shadow-sm transition hover:bg-canvas"
           >
             <ArrowDown className="size-4" />
           </button>

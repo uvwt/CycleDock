@@ -40,7 +40,7 @@ export function ComposerInput({
       readOnly={readOnly}
       placeholder={placeholder}
       rows={3}
-      className={`max-h-40 min-h-20 w-full resize-none bg-transparent px-2 py-2 text-sm outline-none read-only:text-secondary ${className}`}
+      className={`max-h-40 min-h-20 w-full resize-none bg-transparent px-2 py-2 text-sm outline-none read-only:text-secondary-foreground ${className}`}
       onBlur={(event) => {
         // 在输入框与表单内按钮之间移动焦点时保持展开，避免按钮卸载吞掉点击。
         if (

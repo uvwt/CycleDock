@@ -275,7 +275,7 @@ function MCPForm({
           {configured && (
             <div className="space-y-2 text-xs text-muted-foreground">
               <p>已保存 Token。留空不会覆盖；填写新值将替换。</p>
-              <label className="flex items-center gap-2 text-secondary">
+              <label className="flex items-center gap-2 text-secondary-foreground">
                 <input
                   type="checkbox"
                   {...register("clear_bearer_token", {

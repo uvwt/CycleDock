@@ -1,7 +1,28 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
 
 /* 主题只切换语义颜色；white 与 Tailwind 基础调色板不随主题改变。 */
 @theme inline {
+  --color-background: var(--surface);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--muted);
+  --color-accent-foreground: var(--heading);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--focus);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
   --color-surface: var(--surface);
   --color-canvas: var(--canvas);
   --color-muted: var(--muted);
@@ -13,6 +34,7 @@
   --color-faint: var(--faint);
   --color-muted-foreground: var(--muted-foreground);
   --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
   --color-foreground: var(--foreground);
   --color-strong: var(--strong);
   --color-heading: var(--heading);
@@ -29,6 +51,10 @@
 }
 
 :root {
+  --radius: 0.75rem;
+  --primary: #0369a1;
+  --primary-foreground: #fff;
+  --destructive-foreground: #fff;
   --surface: #fff;
   --canvas: #f8fafc;
   --muted: #f1f5f9;
@@ -38,7 +64,8 @@
   --focus: #94a3b8;
   --placeholder: #cbd5e1;
   --faint: #94a3b8;
-  --secondary: #475569;
+  --secondary: var(--muted);
+  --secondary-foreground: #475569;
   --foreground: #334155;
   --strong: #1e293b;
   --heading: #0f172a;
@@ -59,6 +86,7 @@
 }
 
 html[data-theme="dark"] {
+  --destructive-foreground: #321e2c;
   --surface: #15202e;
   --canvas: #101826;
   --muted: #1e2b3b;
@@ -68,7 +96,7 @@ html[data-theme="dark"] {
   --focus: #95a3b9;
   --placeholder: #526176;
   --faint: #95a3b9;
-  --secondary: #c8d4e3;
+  --secondary-foreground: #c8d4e3;
   --foreground: #dde6f1;
   --strong: #e8eef6;
   --heading: #f7f9fc;
@@ -106,21 +134,26 @@ body,
   min-height: 100%;
   margin: 0;
 }
-button,
-textarea,
-input,
-select {
-  font: inherit;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  button,
+  textarea,
+  input,
+  select {
+    font: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
 }
 button {
   cursor: pointer;
 }
 button:disabled {
   cursor: not-allowed;
-}
-:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 .scrollbar-thin {
   scrollbar-width: thin;

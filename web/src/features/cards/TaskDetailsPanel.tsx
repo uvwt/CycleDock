@@ -56,7 +56,7 @@ export function TaskDetailsPanel({
   return (
     <div className="max-h-[68vh] space-y-4 overflow-y-auto pr-1">
       <Section title="任务目标">
-        <p className="whitespace-pre-wrap text-sm leading-6 text-secondary">
+        <p className="whitespace-pre-wrap text-sm leading-6 text-secondary-foreground">
           {card.description || "暂无描述"}
         </p>
         {source && (
@@ -75,7 +75,7 @@ export function TaskDetailsPanel({
       {card.kind === "ongoing" && (
         <>
           <Section title="持续事项">
-            <p className="text-sm text-secondary">
+            <p className="text-sm text-secondary-foreground">
               健康状态：{detail.health || "unknown"}
             </p>
             {detail.last_checkin && (

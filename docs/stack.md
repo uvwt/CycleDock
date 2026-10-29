@@ -27,7 +27,7 @@
 - React Router
 - TanStack Query
 - Tailwind CSS
-- Radix UI
+- shadcn/ui（源码自持的通用组件，基于 Radix UI；接入约定见 [UI 组件](ui-components.md)）
 - Lucide React
 - dnd-kit
 - React Hook Form

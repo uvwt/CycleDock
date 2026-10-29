@@ -117,7 +117,7 @@ function RouteEditor({
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="mr-2 flex items-center gap-2 text-xs text-secondary">
+          <label className="mr-2 flex items-center gap-2 text-xs text-secondary-foreground">
             <input
               type="checkbox"
               className="size-4 accent-sky-700"

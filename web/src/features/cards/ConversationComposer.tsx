@@ -1,3 +1,4 @@
+import { NativeSelect } from "../../shared/ui/native-select";
 import { ComposerInput } from "../../shared/ui/ComposerInput";
 import { ArrowUp, ListPlus, Sparkles, Square, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -85,17 +86,18 @@ export function ConversationComposer({
           <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 px-1 pb-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {hasCurrent && !waiting && (
-                <select
+                <NativeSelect
+                  size="sm"
                   aria-label={t("任务发送方式")}
                   value={submitMode}
                   onChange={(event) =>
                     setSubmitMode(event.target.value as "enqueue" | "interrupt")
                   }
-                  className="rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-secondary"
+                  className="text-xs text-secondary-foreground"
                 >
                   <option value="enqueue">{t("加入队列")}</option>
                   <option value="interrupt">{t("立即转向")}</option>
-                </select>
+                </NativeSelect>
               )}
               {waiting && (
                 <span className="text-xs text-warning">
