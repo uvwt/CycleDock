@@ -91,6 +91,12 @@ button:disabled {
 .prose-chat p {
   margin: 0.48rem 0;
 }
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > :last-child {
+  margin-bottom: 0;
+}
 .prose-chat ul {
   list-style: disc;
   padding-left: 1.4rem;

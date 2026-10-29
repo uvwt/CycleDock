@@ -163,3 +163,70 @@ test("选择 Message 与等待摘要同文时只显示一次问题", () => {
   assert.match(html, /目标 A/);
   assert.match(html, /目标 B/);
 });
+
+function chatEvent(sequence, actor_kind = "agent", actor_name = "Agent A", minutes = sequence) {
+  return {
+    id: `chat-${sequence}`,
+    sequence,
+    type: "message",
+    actor_kind,
+    actor_name,
+    content: `消息 ${sequence}`,
+    created_at: new Date(Date.UTC(2026, 9, 29, 0, minutes)).toISOString(),
+  };
+}
+
+function groupStarts(html) {
+  return [...html.matchAll(/data-message-group-start="(true|false)"/g)].map(
+    (match) => match[1] === "true",
+  );
+}
+
+test("连续消息只在组首展示发送者，切换后再次出现仍开启新组", () => {
+  const html = render([
+    chatEvent(1), chatEvent(2),
+    chatEvent(3, "human", "小明"), chatEvent(4, "human", "小明"),
+    chatEvent(5), chatEvent(6, "agent", "Agent B"),
+  ]);
+  assert.deepEqual(groupStarts(html), [true, false, true, false, true, true]);
+  assert.equal((html.match(/>Agent A</g) || []).length, 2);
+  assert.doesNotMatch(html, /小明|lucide-user|pr-12/);
+  for (let i = 1; i <= 6; i++) assert.match(html, new RegExp(`消息 ${i}`));
+});
+
+test("同名但不同角色不能合并，五分钟内连续消息合并，超过五分钟重新展示发送者", () => {
+  const html = render([
+    chatEvent(1, "agent", "同名", 0),
+    chatEvent(2, "agent", "同名", 5),
+    chatEvent(3, "agent", "同名", 11),
+    chatEvent(4, "human", "同名", 12),
+  ]);
+  assert.deepEqual(groupStarts(html), [true, false, true, true]);
+});
+
+test("系统事件和未知时间不会把不同轮次合并", () => {
+  const html = render([
+    chatEvent(1),
+    { ...chatEvent(2), type: "status_change" },
+    chatEvent(3),
+    { ...chatEvent(4), created_at: "invalid" },
+    chatEvent(5),
+  ]);
+  assert.deepEqual(groupStarts(html), [true, true, true, true]);
+});
+
+test("完成状态和耗时位于消息组的 Agent 名称右侧", () => {
+  const first = chatEvent(1);
+  const final = {
+    ...chatEvent(2),
+    attempt_id: attempt.id,
+    message: { type: "text", content: "已完成", end_turn: true },
+  };
+  const html = render([first, final]);
+  const header = html.match(/<p[^>]*><span>Agent A<\/span>(.*?)<\/p>/s)?.[1];
+  assert.ok(header, "消息组名称旁应包含完成信息");
+  assert.match(header, /执行完成/);
+  assert.match(header, /0:12/);
+  assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
+  assert.deepEqual(groupStarts(html), [true, false]);
+});

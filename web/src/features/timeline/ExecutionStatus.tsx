@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import type { ExecutionAttempt } from "./execution";
 import { RichText } from "./RichText";
+import { RunningDots } from "./RunningDots";
 
 const attemptLabels: Record<string, string> = {
   queued: "等待执行",
@@ -96,21 +97,31 @@ function AgentAttempt({
           >
             <Bot className="size-4" />
           </span>
-          <div className="min-w-0 max-w-[min(88%,740px)]">
-            <p className="mb-1.5 text-xs font-semibold text-slate-500">
-              Cycle Agent
-            </p>
-            <div className="rounded-xl rounded-tl-sm border border-slate-200/80 bg-slate-50 px-4 py-3">
+          <div className="min-w-0 max-w-[78%]">
+            <p className="mb-1.5 text-xs font-semibold text-slate-500">Cycle</p>
+            <div className="w-fit max-w-full rounded-2xl bg-slate-100 px-3.5 py-2.5">
               <RichText content={attempt.question} />
             </div>
           </div>
         </article>
       )}
       <article
-        className="ml-12 min-w-0 border-l-2 border-slate-200 py-1 pl-3"
+        className={
+          status === "running"
+            ? "flex min-w-0 gap-3"
+            : "ml-12 min-w-0 border-l-2 border-slate-200 py-1 pl-3"
+        }
         data-execution-id={id}
       >
-        <div className="min-w-0">
+        {status === "running" && (
+          <span
+            aria-hidden
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+          >
+            <Bot className="size-4" />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p
@@ -122,8 +133,14 @@ function AgentAttempt({
                       : "text-slate-600"
                 }`}
               >
-                {t(
-                  humanReplied ? "已收到回复" : attemptLabels[status] || status,
+                {status === "running" ? (
+                  <span className="font-semibold text-slate-500">Cycle</span>
+                ) : (
+                  t(
+                    humanReplied
+                      ? "已收到回复"
+                      : attemptLabels[status] || status,
+                  )
                 )}
                 {pending?.dispatch_mode === "interrupt"
                   ? " · " + t("立即转向")
@@ -140,10 +157,21 @@ function AgentAttempt({
                   />
                 </span>
               </p>
-              {summary && (
-                <div className="mt-1 text-sm leading-6 text-slate-600">
-                  <RichText content={summary} />
+              {status === "running" ? (
+                <div className="mt-1.5 w-fit max-w-full rounded-2xl bg-slate-100 px-3.5 py-2.5 text-slate-500">
+                  <RunningDots />
+                  {summary && (
+                    <div className="mt-1 text-sm leading-6 text-slate-600">
+                      <RichText content={summary} />
+                    </div>
+                  )}
                 </div>
+              ) : (
+                summary && (
+                  <div className="mt-1 text-sm leading-6 text-slate-600">
+                    <RichText content={summary} />
+                  </div>
+                )
               )}
             </div>
             {pending && (
