@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   Activity,
@@ -10,12 +10,23 @@ import {
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
 import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
+import { ContextSidebarVisibility } from "../app/context-sidebar";
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { projects, projectID, setProjectID } = useProject();
+  const [listVisibility, setListVisibility] = useState({
+    "/chat": true,
+    "/board": true,
+  });
+  const listSection = location.pathname.startsWith("/chat")
+    ? "/chat"
+    : location.pathname.startsWith("/cards/")
+      ? "/board"
+      : null;
+  const listVisible = listSection ? listVisibility[listSection] : true;
   const focusedConversation = /^\/(?:chat|cards)\/[^/]+\/[^/]+\/?$/.test(
     location.pathname,
   );
@@ -42,7 +53,9 @@ export function Shell({ children }: { children: ReactNode }) {
       icon: CalendarClock,
     },
     {
-      to: projectID ? `/activity/${encodeURIComponent(projectID)}` : "/activity",
+      to: projectID
+        ? `/activity/${encodeURIComponent(projectID)}`
+        : "/activity",
       activePath: "/activity",
       label: t("活动"),
       icon: Activity,
@@ -64,6 +77,20 @@ export function Shell({ children }: { children: ReactNode }) {
       return routerActive || location.pathname.startsWith("/activity");
     }
     return routerActive || location.pathname.startsWith("/chat");
+  }
+
+  function selectPrimary(event: MouseEvent<HTMLAnchorElement>, path: string) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+      return;
+    if (path !== "/chat" && path !== "/board") return;
+
+    // 再次点击当前入口只切换列表，保留正在查看的会话和草稿。
+    if (path === listSection) {
+      event.preventDefault();
+      setListVisibility((current) => ({ ...current, [path]: !current[path] }));
+      return;
+    }
+    setListVisibility((current) => ({ ...current, [path]: true }));
   }
 
   function switchProject(nextProjectID: string) {
@@ -112,14 +139,14 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 md:flex">
-      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-white py-3 md:flex">
+    <div className="min-h-screen bg-canvas text-strong md:flex">
+      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line bg-surface py-3 md:flex">
         <button
           type="button"
           onClick={() => navigate("/chat")}
           title="CycleDock"
           aria-label="CycleDock"
-          className="grid size-10 place-items-center rounded-xl transition hover:bg-slate-50"
+          className="grid size-10 place-items-center rounded-xl transition hover:bg-canvas"
         >
           {logo}
         </button>
@@ -134,11 +161,15 @@ export function Shell({ children }: { children: ReactNode }) {
               to={item.to}
               title={item.label}
               aria-label={item.label}
+              aria-expanded={
+                item.activePath === listSection ? listVisible : undefined
+              }
+              onClick={(event) => selectPrimary(event, item.activePath)}
               className={({ isActive }) =>
                 `grid size-10 place-items-center rounded-xl transition ${
                   primaryActive(item.activePath, isActive)
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-400 hover:bg-slate-50 hover:text-slate-800"
+                    ? "bg-muted text-heading"
+                    : "text-faint hover:bg-canvas hover:text-strong"
                 }`
               }
             >
@@ -164,8 +195,8 @@ export function Shell({ children }: { children: ReactNode }) {
             className={({ isActive }) =>
               `grid size-10 place-items-center rounded-xl transition ${
                 isActive
-                  ? "bg-slate-100 text-slate-900"
-                  : "text-slate-400 hover:bg-slate-50 hover:text-slate-800"
+                  ? "bg-muted text-heading"
+                  : "text-faint hover:bg-canvas hover:text-strong"
               }`
             }
           >
@@ -176,7 +207,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <div className="min-w-0 flex-1">
         {!focusedConversation && (
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-3 backdrop-blur md:hidden">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface/95 px-3 backdrop-blur md:hidden">
             <button
               type="button"
               onClick={() => navigate("/chat")}
@@ -196,8 +227,8 @@ export function Shell({ children }: { children: ReactNode }) {
                   className={({ isActive }) =>
                     `grid size-9 place-items-center rounded-xl transition ${
                       primaryActive(item.activePath, isActive)
-                        ? "bg-slate-100 text-slate-900"
-                        : "text-slate-400"
+                        ? "bg-muted text-heading"
+                        : "text-faint"
                     }`
                   }
                 >
@@ -219,7 +250,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 aria-label={t("设置")}
                 className={({ isActive }) =>
                   `grid size-9 place-items-center rounded-xl transition ${
-                    isActive ? "bg-slate-100 text-slate-900" : "text-slate-400"
+                    isActive ? "bg-muted text-heading" : "text-faint"
                   }`
                 }
               >
@@ -228,7 +259,9 @@ export function Shell({ children }: { children: ReactNode }) {
             </nav>
           </header>
         )}
-        {children}
+        <ContextSidebarVisibility.Provider value={listVisible}>
+          {children}
+        </ContextSidebarVisibility.Provider>
       </div>
     </div>
   );

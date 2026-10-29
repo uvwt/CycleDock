@@ -1,3 +1,11 @@
+import { useForm, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  scheduleFormDefaults,
+  scheduleFormInput,
+  scheduleFormSchema,
+  type ScheduleFormValues,
+} from "./schedule-form";
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
@@ -21,7 +29,9 @@ import type {
 import {
   Button,
   Field,
+  HintTooltip,
   Section,
+  Select,
   TextInput,
 } from "../../shared/ui/components";
 
@@ -47,19 +57,17 @@ export function TaskDetailsPanel({
   return (
     <div className="max-h-[68vh] space-y-4 overflow-y-auto pr-1">
       <Section title="任务目标">
-        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600">
+        <p className="whitespace-pre-wrap text-sm leading-6 text-secondary-foreground">
           {card.description || "暂无描述"}
         </p>
         {source && (
           <button
             type="button"
-            onClick={() =>
-              navigate(`/chat/${source.project_id}/${source.id}`)
-            }
-            className="mt-3 inline-flex max-w-full items-center gap-1.5 text-left text-xs text-slate-500 hover:text-sky-700 hover:underline"
+            onClick={() => navigate(`/chat/${source.project_id}/${source.id}`)}
+            className="mt-3 inline-flex max-w-full items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-sky-700 hover:underline"
           >
-            <Link2 className="size-3.5 shrink-0 text-slate-400" />
-            <span className="shrink-0 text-slate-400">来源 ·</span>
+            <Link2 className="size-3.5 shrink-0 text-faint" />
+            <span className="shrink-0 text-faint">来源 ·</span>
             <span className="truncate">{source.title}</span>
           </button>
         )}
@@ -68,11 +76,11 @@ export function TaskDetailsPanel({
       {card.kind === "ongoing" && (
         <>
           <Section title="持续事项">
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-secondary-foreground">
               健康状态：{detail.health || "unknown"}
             </p>
             {detail.last_checkin && (
-              <p className="mt-2 text-xs leading-5 text-slate-400">
+              <p className="mt-2 text-xs leading-5 text-faint">
                 最近巡检：{detail.last_checkin.content || "已记录"}
               </p>
             )}
@@ -99,52 +107,13 @@ function ScheduleEditor({
   onChange: () => Promise<void>;
 }) {
   const [editingID, setEditingID] = useState<string | "new" | null>(null);
-  const [frequency, setFrequency] =
-    useState<ScheduleInput["frequency"]>("daily");
-  const [weekday, setWeekday] = useState(1);
-  const [monthday, setMonthday] = useState(1);
-  const [time, setTime] = useState("09:00");
-  const [timezone, setTimezone] = useState(
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai",
-  );
   const editing = schedules.find((schedule) => schedule.id === editingID);
 
-  function resetForm(schedule?: Schedule) {
-    setFrequency(schedule?.frequency || "daily");
-    setWeekday(schedule?.day_of_week ?? 1);
-    setMonthday(schedule?.day_of_month ?? 1);
-    setTime(
-      schedule
-        ? `${String(schedule.hour).padStart(2, "0")}:${String(
-            schedule.minute,
-          ).padStart(2, "0")}`
-        : "09:00",
-    );
-    setTimezone(
-      schedule?.timezone ||
-        Intl.DateTimeFormat().resolvedOptions().timeZone ||
-        "Asia/Shanghai",
-    );
-  }
-
-  function scheduleInput(enabled: boolean): ScheduleInput {
-    const [hour, minute] = time.split(":").map(Number);
-    return {
-      frequency,
-      hour,
-      minute,
-      timezone: timezone.trim(),
-      enabled,
-      ...(frequency === "weekly" ? { day_of_week: weekday } : {}),
-      ...(frequency === "monthly" ? { day_of_month: monthday } : {}),
-    };
-  }
-
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (input: ScheduleInput) =>
       editing
-        ? api.updateSchedule(cardID, editing.id, scheduleInput(editing.enabled))
-        : api.createSchedule(cardID, scheduleInput(true)),
+        ? api.updateSchedule(cardID, editing.id, input)
+        : api.createSchedule(cardID, input),
     onSuccess: async () => {
       await onChange();
       setEditingID(null);
@@ -185,21 +154,18 @@ function ScheduleEditor({
   return (
     <Section
       title="定时触发"
-      description="日程只负责创建 Trigger，不会绕过当前运行和排队规则。"
+      description="日程只负责创建新的 Turn，不会绕过当前执行和排队规则。"
     >
       <div className="space-y-2">
         {schedules.length ? (
           schedules.map((schedule) => (
-            <div
-              key={schedule.id}
-              className="rounded-xl bg-slate-50 p-3 text-sm"
-            >
+            <div key={schedule.id} className="rounded-xl bg-canvas p-3 text-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="font-semibold text-slate-700">
+                  <p className="font-semibold text-foreground">
                     {describeSchedule(schedule)}
                   </p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
                     下次 {new Date(schedule.next_trigger_at).toLocaleString()}
                     {" · "}
                     {schedule.timezone}
@@ -211,7 +177,6 @@ function ScheduleEditor({
                     variant="ghost"
                     disabled={save.isPending}
                     onClick={() => {
-                      resetForm(schedule);
                       setEditingID(schedule.id);
                     }}
                   >
@@ -225,46 +190,37 @@ function ScheduleEditor({
                   >
                     {schedule.enabled ? "暂停" : "启用"}
                   </Button>
-                  <Button
-                    variant="danger"
-                    title="删除日程"
-                    aria-label="删除日程"
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate(schedule.id)}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  <HintTooltip content="删除日程">
+                    <Button
+                      variant="danger"
+                      aria-label="删除日程"
+                      disabled={remove.isPending}
+                      onClick={() => remove.mutate(schedule.id)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </HintTooltip>
                 </div>
               </div>
             </div>
           ))
         ) : (
-          <p className="text-sm text-slate-400">暂无定时日程</p>
+          <p className="text-sm text-faint">暂无定时日程</p>
         )}
       </div>
 
       {editingID ? (
         <ScheduleForm
-          frequency={frequency}
-          setFrequency={setFrequency}
-          weekday={weekday}
-          setWeekday={setWeekday}
-          monthday={monthday}
-          setMonthday={setMonthday}
-          time={time}
-          setTime={setTime}
-          timezone={timezone}
-          setTimezone={setTimezone}
-          editing={Boolean(editing)}
+          key={editingID}
+          schedule={editing}
           pending={save.isPending}
-          onSave={() => save.mutate()}
+          onSave={(input) => save.mutate(input)}
           onCancel={() => setEditingID(null)}
         />
       ) : (
         <Button
           className="mt-4"
           onClick={() => {
-            resetForm();
             setEditingID("new");
           }}
         >
@@ -277,113 +233,101 @@ function ScheduleEditor({
 }
 
 function ScheduleForm({
-  frequency,
-  setFrequency,
-  weekday,
-  setWeekday,
-  monthday,
-  setMonthday,
-  time,
-  setTime,
-  timezone,
-  setTimezone,
-  editing,
+  schedule,
   pending,
   onSave,
   onCancel,
 }: {
-  frequency: ScheduleInput["frequency"];
-  setFrequency: (value: ScheduleInput["frequency"]) => void;
-  weekday: number;
-  setWeekday: (value: number) => void;
-  monthday: number;
-  setMonthday: (value: number) => void;
-  time: string;
-  setTime: (value: string) => void;
-  timezone: string;
-  setTimezone: (value: string) => void;
-  editing: boolean;
+  schedule?: Schedule;
   pending: boolean;
-  onSave: () => void;
+  onSave: (input: ScheduleInput) => void;
   onCancel: () => void;
 }) {
+  const {
+    register,
+    control,
+    handleSubmit,
+    formState: { errors },
+  } = useForm<ScheduleFormValues>({
+    resolver: zodResolver(scheduleFormSchema),
+    defaultValues: scheduleFormDefaults(schedule),
+    // 频率切换后移除无关日期，避免隐藏字段阻止提交或泄漏到请求。
+    shouldUnregister: true,
+  });
+  const frequency = useWatch({ control, name: "frequency" });
+
   return (
-    <div className="mt-4 space-y-3 rounded-xl border border-dashed border-slate-200 p-3">
-      <p className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+    <form
+      noValidate
+      onSubmit={handleSubmit((value) => {
+        if (!pending)
+          onSave(scheduleFormInput(value, schedule?.enabled ?? true));
+      })}
+      className="mt-4 space-y-3 rounded-xl border border-dashed border-line p-3"
+    >
+      <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
         <CalendarClock className="size-4" />
-        {editing ? "编辑日程" : "新增日程"}
+        {schedule ? "编辑日程" : "新增日程"}
       </p>
-
-      <label className="block text-xs font-semibold text-slate-600">
-        频率
-        <select
-          aria-label="频率"
-          value={frequency}
-          onChange={(event) =>
-            setFrequency(event.target.value as ScheduleInput["frequency"])
-          }
-          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-normal leading-5"
-        >
-          <option value="daily">每天</option>
-          <option value="weekly">每周</option>
-          <option value="monthly">每月</option>
-        </select>
-      </label>
-
-      {frequency === "weekly" && (
-        <Field label="星期（0=周日）">
+      <fieldset disabled={pending} className="space-y-3">
+        <Field label="频率" error={errors.frequency?.message}>
+          <Select
+            aria-label="频率"
+            {...register("frequency")}
+            aria-invalid={!!errors.frequency}
+          >
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+          </Select>
+        </Field>
+        {frequency === "weekly" && (
+          <Field label="星期（0=周日）" error={errors.weekday?.message}>
+            <TextInput
+              type="number"
+              min={0}
+              max={6}
+              {...register("weekday", { valueAsNumber: true })}
+              aria-invalid={!!errors.weekday}
+            />
+          </Field>
+        )}
+        {frequency === "monthly" && (
+          <Field label="日期（1–28）" error={errors.monthday?.message}>
+            <TextInput
+              type="number"
+              min={1}
+              max={28}
+              {...register("monthday", { valueAsNumber: true })}
+              aria-invalid={!!errors.monthday}
+            />
+          </Field>
+        )}
+        <Field label="时间" error={errors.time?.message}>
           <TextInput
-            type="number"
-            min={0}
-            max={6}
-            value={weekday}
-            onChange={(event) => setWeekday(Number(event.target.value))}
+            type="time"
+            {...register("time")}
+            aria-invalid={!!errors.time}
           />
         </Field>
-      )}
-
-      {frequency === "monthly" && (
-        <Field label="日期（1–28）">
+        <Field label="IANA 时区" error={errors.timezone?.message}>
           <TextInput
-            type="number"
-            min={1}
-            max={28}
-            value={monthday}
-            onChange={(event) => setMonthday(Number(event.target.value))}
+            {...register("timezone")}
+            aria-invalid={!!errors.timezone}
           />
         </Field>
-      )}
-
-      <Field label="时间">
-        <TextInput
-          type="time"
-          value={time}
-          onChange={(event) => setTime(event.target.value)}
-        />
-      </Field>
-
-      <Field label="IANA 时区">
-        <TextInput
-          value={timezone}
-          onChange={(event) => setTimezone(event.target.value)}
-        />
-      </Field>
-
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="primary"
-          disabled={pending || !timezone.trim()}
-          onClick={onSave}
-        >
-          <Save className="size-4" />
-          保存
-        </Button>
-        <Button disabled={pending} onClick={onCancel}>
-          <X className="size-4" />
-          取消
-        </Button>
-      </div>
-    </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" variant="primary" disabled={pending}>
+            <Save className="size-4" />
+            保存
+          </Button>
+          <Button disabled={pending} onClick={onCancel}>
+            <X className="size-4" />
+            取消
+          </Button>
+        </div>
+      </fieldset>
+    </form>
   );
 }
 

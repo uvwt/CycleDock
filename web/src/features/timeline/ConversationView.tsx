@@ -59,7 +59,7 @@ function TimeSeparator({ value }: { value: string }) {
     <div
       role="separator"
       data-time-separator
-      className="flex items-center justify-center py-1 text-[11px] text-slate-400"
+      className="flex items-center justify-center py-1 text-[11px] text-faint"
     >
       {time.toLocaleString(i18n.language === "en" ? "en-US" : "zh-CN", {
         month: "short",
@@ -102,10 +102,10 @@ function EventRow({
           <span
             className={`max-w-[90%] px-2 py-0.5 text-center text-xs ${
               event.type === "reject"
-                ? "text-rose-700"
+                ? "text-danger"
                 : event.type === "confirm"
-                  ? "text-amber-700"
-                  : "text-slate-500"
+                  ? "text-warning"
+                  : "text-muted-foreground"
             }`}
           >
             {t(labels[event.type] || event.type)} · {event.content}
@@ -113,7 +113,7 @@ function EventRow({
           </span>
         </div>
         {attempts.length > 0 && (
-          <div className="mt-5">
+          <div className="mt-3">
             <ExecutionStatus attempts={attempts} live={live} {...actions} />
           </div>
         )}
@@ -127,19 +127,19 @@ function EventRow({
         id={"event-" + event.id}
         data-sequence={event.sequence}
         data-message-group-start={showSender}
-        className={`flex gap-3 ${human ? "justify-end" : "justify-start"} ${!human && !showSender ? "pl-12" : ""}`}
+        className={`flex gap-3.5 ${human ? "justify-end" : "justify-start"} ${!human && !showSender ? "pl-[46px]" : ""}`}
       >
         {showSender && !human && (
           <span
             aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-slate-100 text-slate-600"
+            className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
           >
             <Bot className="size-4" />
           </span>
         )}
         <div className="min-w-0 max-w-[78%]">
           {showSender && !human && (
-            <p className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
+            <p className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-semibold text-muted-foreground">
               <span>
                 {event.actor_name === "Cycle Agent"
                   ? "Cycle"
@@ -152,7 +152,7 @@ function EventRow({
                 <span
                   key={completedAttempt.id}
                   data-execution-id={completedAttempt.id}
-                  className="inline-flex items-center gap-2 text-[11px] font-normal text-slate-400"
+                  className="inline-flex items-center gap-2 text-[11px] font-normal text-faint"
                 >
                   {t("执行完成")}
                   <span className="inline-flex">
@@ -171,7 +171,7 @@ function EventRow({
             </p>
           )}
           <div
-            className={`w-fit max-w-full rounded-2xl px-3.5 py-2.5 ${human ? "ml-auto bg-sky-50" : "bg-slate-100"}`}
+            className={`w-fit max-w-full rounded-2xl px-4 py-2.5 ${human ? "ml-auto bg-sky-50" : "bg-muted"}`}
           >
             {(event.type === "finding" || event.type === "result") && (
               <p
@@ -183,7 +183,7 @@ function EventRow({
             {message?.type === "choice" && message.widget ? (
               <div className="space-y-3">
                 {message.content && <RichText content={message.content} />}
-                <p className="text-sm font-medium text-slate-900">
+                <p className="text-base font-medium text-heading">
                   {message.widget.question}
                 </p>
                 <div className="flex flex-col gap-2">
@@ -205,7 +205,7 @@ function EventRow({
                           });
                         }
                       }}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-default disabled:opacity-50"
+                      className="rounded-lg border border-line bg-surface px-3 py-2 text-left text-sm text-foreground transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-default disabled:opacity-50"
                     >
                       {option.label}
                     </button>
@@ -218,7 +218,7 @@ function EventRow({
               )
             )}
             {preview?.failed && (
-              <p className="mt-1 text-xs text-rose-700">{t("消息未发送")}</p>
+              <p className="mt-1 text-xs text-danger">{t("消息未发送")}</p>
             )}
             {message?.type === "attachment" && message.url && (
               <a
@@ -254,7 +254,7 @@ function EventRow({
         </div>
       </article>
       {attempts.length > 0 && (
-        <div className="mt-5">
+        <div className="mt-3">
           <ExecutionStatus attempts={attempts} live={live} {...actions} />
         </div>
       )}
@@ -401,20 +401,20 @@ export function ConversationView({
     <div
       ref={list}
       onScroll={onScroll}
-      className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-4 py-7 sm:px-6"
+      className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-4 pt-3.5 pb-1 sm:px-6"
       role="log"
       aria-label={t("统一消息时间线")}
     >
       <div className="mx-auto flex max-w-3xl flex-col">
         {!sortedEvents.length && !live && !standalone.length && (
           <div className="py-20 text-center">
-            <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-slate-100 text-slate-400">
+            <div className="mx-auto mb-5 grid size-16 place-items-center rounded-2xl bg-muted text-faint">
               <Bot className="size-8" />
             </div>
             <h2 className="text-lg font-semibold">
               {cardKind === "discussion" ? t("从第一句话开始") : t("开始协作")}
             </h2>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-muted-foreground">
               {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
             </p>
           </div>
@@ -431,7 +431,7 @@ export function ConversationView({
           return (
             <div
               key={key}
-              className={`${!preview && !previewKeys.has(event.id) && event.sequence > historyThrough ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-[5px]" : "mt-5"}`}
+              className={`${!preview && !previewKeys.has(event.id) && event.sequence > historyThrough ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-1.5" : "mt-3.5"}`}
             >
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
@@ -448,7 +448,7 @@ export function ConversationView({
         })}
 
         {standalone.length > 0 && (
-          <div className="mt-5">
+          <div className="mt-3">
             <StandaloneExecution
               attempts={standalone}
               live={displayLive}
@@ -456,7 +456,7 @@ export function ConversationView({
             />
           </div>
         )}
-        <div ref={bottom} className="h-1" />
+        <div ref={bottom} className="h-3 shrink-0" />
       </div>
 
       {showLatest && (
@@ -473,7 +473,7 @@ export function ConversationView({
               stick.current = true;
               setShowLatest(false);
             }}
-            className="grid size-9 place-items-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
+            className="grid size-9 place-items-center rounded-full border border-line bg-surface text-secondary-foreground shadow-sm transition hover:bg-canvas"
           >
             <ArrowDown className="size-4" />
           </button>

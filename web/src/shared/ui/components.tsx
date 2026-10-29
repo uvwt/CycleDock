@@ -1,82 +1,143 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { X, LoaderCircle, AlertCircle } from "lucide-react";
-import type {
-  ButtonHTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  TextareaHTMLAttributes,
-} from "react";
+import { LoaderCircle, AlertCircle } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import { cn } from "../lib/utils";
+import { Button as UIButton } from "./button";
+import { Label } from "./label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./alert-dialog";
+import {
+  Sheet as UISheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "./sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./dropdown-menu";
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "./tooltip";
 
-const variants = {
-  primary: "bg-sky-700 text-white hover:bg-sky-800 border-sky-700",
-  secondary: "bg-white text-slate-700 hover:bg-slate-50 border-slate-200",
-  ghost: "bg-transparent text-slate-600 hover:bg-slate-100 border-transparent",
-  danger: "bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200",
-};
+export { Input as TextInput } from "./input";
+export { Textarea as TextArea } from "./textarea";
+export { NativeSelect as Select } from "./native-select";
+export { Checkbox } from "./checkbox";
+export { Badge } from "./badge";
+export {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "./tooltip";
+
+export function HintTooltip({
+  content,
+  children,
+  side = "top",
+}: {
+  content: ReactNode;
+  children: React.ReactElement;
+  side?: "top" | "right" | "bottom" | "left";
+}) {
+  if (!content) return children;
+  return (
+    <UITooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side}>{content}</TooltipContent>
+    </UITooltip>
+  );
+}
+
+// 页面保留现有业务命名，底层样式和交互统一由 shadcn/ui 组件负责。
+const buttonVariants = {
+  primary: "default",
+  secondary: "outline",
+  ghost: "ghost",
+  danger: "destructive",
+} as const;
+
 export function Button({
   variant = "secondary",
-  className = "",
-  children,
+  size = "sm",
+  type = "button",
+  className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: keyof typeof variants;
+}: Omit<ComponentProps<typeof UIButton>, "variant"> & {
+  variant?: keyof typeof buttonVariants;
 }) {
   return (
-    <button
+    <UIButton
       {...props}
-      className={`inline-flex min-h-8.5 items-center justify-center gap-2 rounded-lg border px-3 text-[13px] font-medium transition-colors disabled:opacity-40 ${variants[variant]} ${className}`}
-    >
-      {children}
-    </button>
-  );
-}
-export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={`w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
+      type={type}
+      size={size}
+      variant={buttonVariants[variant]}
+      className={cn("text-[13px]", className)}
     />
   );
 }
-export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={`w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5 outline-none focus:border-sky-500 ${props.className ?? ""}`}
-    />
-  );
-}
+
 export function Field({
   label,
   children,
   hint,
+  error,
 }: {
   label: string;
   children: ReactNode;
   hint?: string;
+  error?: string;
 }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="block text-xs font-semibold text-slate-600">
+    <Label className="block space-y-1.5 font-normal leading-5 select-auto">
+      <span className="block text-xs font-semibold text-secondary-foreground">
         {label}
       </span>
       {children}
-      {hint && <span className="block text-xs text-slate-500">{hint}</span>}
-    </label>
+      {error && (
+        <span role="alert" className="block text-xs text-danger">
+          {error}
+        </span>
+      )}
+      {hint && (
+        <span className="block text-xs text-muted-foreground">{hint}</span>
+      )}
+    </Label>
   );
 }
+
 export function Spinner({ text = "加载中…" }: { text?: string }) {
   return (
     <span
       role="status"
-      className="inline-flex items-center gap-2 text-sm text-slate-500"
+      className="inline-flex items-center gap-2 text-sm text-muted-foreground"
     >
       <LoaderCircle className="size-4 animate-spin" />
       {text}
     </span>
   );
 }
+
 export function ErrorView({
   error,
   onRetry,
@@ -87,7 +148,7 @@ export function ErrorView({
   return (
     <div
       role="alert"
-      className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700"
+      className="rounded-xl border border-danger-line bg-danger-muted p-4 text-sm text-danger"
     >
       <AlertCircle className="mb-2 size-5" />
       {error instanceof Error ? error.message : "操作未成功，请稍后重试"}
@@ -99,6 +160,7 @@ export function ErrorView({
     </div>
   );
 }
+
 export function Sheet({
   open,
   onOpenChange,
@@ -107,63 +169,55 @@ export function Sheet({
   side = "right",
 }: {
   open: boolean;
-  onOpenChange: (x: boolean) => void;
+  onOpenChange: (open: boolean) => void;
   title: string;
   children: ReactNode;
   side?: "left" | "right";
 }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className={`fixed inset-y-0 z-50 flex w-[min(94vw,440px)] flex-col bg-white shadow-xl ${side === "right" ? "right-0" : "left-0"}`}
-        >
-          <header className="flex min-h-17 items-center justify-between border-b border-slate-100 px-5 py-4">
-            <Dialog.Title className="text-base font-semibold">
-              {title}
-            </Dialog.Title>
-            <Dialog.Close
-              className="rounded-lg p-2 hover:bg-slate-100"
-              aria-label="关闭"
-            >
-              <X className="size-5" />
-            </Dialog.Close>
-          </header>
-          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5">
-            {children}
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <UISheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side={side}
+        aria-describedby={undefined}
+        className="w-[min(94vw,440px)] gap-0 sm:max-w-none"
+      >
+        <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
+          <SheetTitle>{title}</SheetTitle>
+        </SheetHeader>
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5">
+          {children}
+        </div>
+      </SheetContent>
+    </UISheet>
   );
 }
+
 export function Menu({
   trigger,
   children,
   align = "end",
+  side = "bottom",
 }: {
   trigger: ReactNode;
   children: ReactNode;
   align?: "start" | "center" | "end";
+  side?: "top" | "right" | "bottom" | "left";
 }) {
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align={align}
-          sideOffset={6}
-          collisionPadding={12}
-          className="z-50 min-w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg outline-none"
-        >
-          {children}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent
+        align={align}
+        side={side}
+        sideOffset={6}
+        collisionPadding={12}
+      >
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
+
 export function MenuItem({
   children,
   onSelect,
@@ -176,22 +230,18 @@ export function MenuItem({
   danger?: boolean;
 }) {
   return (
-    <DropdownMenu.Item
+    <DropdownMenuItem
       disabled={disabled}
       onSelect={onSelect}
-      className={`flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 ${
-        danger
-          ? "text-rose-700 focus:bg-rose-50"
-          : "text-slate-700 focus:bg-slate-100"
-      }`}
+      variant={danger ? "destructive" : "default"}
     >
       {children}
-    </DropdownMenu.Item>
+    </DropdownMenuItem>
   );
 }
-export function MenuSeparator() {
-  return <DropdownMenu.Separator className="my-1 h-px bg-slate-100" />;
-}
+
+export const MenuSeparator = DropdownMenuSeparator;
+
 export function Modal({
   open,
   onOpenChange,
@@ -206,36 +256,21 @@ export function Modal({
   children: ReactNode;
 }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/30" />
-        <Dialog.Content
-          className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,520px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-5 shadow-xl outline-none sm:p-6"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <Dialog.Title className="text-base font-semibold text-slate-900">
-                {title}
-              </Dialog.Title>
-              {description && (
-                <Dialog.Description className="mt-1 text-[13px] leading-5 text-slate-500">
-                  {description}
-                </Dialog.Description>
-              )}
-            </div>
-            <Dialog.Close
-              aria-label="关闭"
-              className="-mt-1 -mr-1 grid size-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-            >
-              <X className="size-4" />
-            </Dialog.Close>
-          </div>
-          <div className="mt-5">{children}</div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        {...(!description ? { "aria-describedby": undefined } : {})}
+        className="max-h-[85dvh] overflow-y-auto sm:max-w-[520px]"
+      >
+        <DialogHeader className="pr-6 text-left">
+          <DialogTitle>{title}</DialogTitle>
+          {description && <DialogDescription>{description}</DialogDescription>}
+        </DialogHeader>
+        {children}
+      </DialogContent>
+    </Dialog>
   );
 }
+
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -254,23 +289,41 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <Modal
+    <AlertDialog
       open={open}
-      onOpenChange={onOpenChange}
-      title={title}
-      description={description}
+      onOpenChange={(next) => {
+        if (!pending) onOpenChange(next);
+      }}
     >
-      <div className="flex justify-end gap-2">
-        <Button disabled={pending} onClick={() => onOpenChange(false)}>
-          取消
-        </Button>
-        <Button variant="danger" disabled={pending} onClick={onConfirm}>
-          {confirmLabel}
-        </Button>
-      </div>
-    </Modal>
+      <AlertDialogContent
+        aria-busy={pending}
+        onEscapeKeyDown={(event) => {
+          if (pending) event.preventDefault();
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>取消</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={pending}
+            onClick={(event) => {
+              // 异步删除由调用方在成功后关闭；失败时保留确认框与错误提示。
+              event.preventDefault();
+              if (!pending) onConfirm();
+            }}
+          >
+            {confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
+
 export function Section({
   title,
   description,
@@ -281,11 +334,13 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
       <div className="mb-5">
-        <h2 className="text-[15px] font-semibold text-slate-900">{title}</h2>
+        <h2 className="text-[15px] font-semibold text-heading">{title}</h2>
         {description && (
-          <p className="mt-1 text-[13px] leading-5 text-slate-500">{description}</p>
+          <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
+            {description}
+          </p>
         )}
       </div>
       {children}

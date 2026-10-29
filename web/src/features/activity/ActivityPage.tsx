@@ -43,7 +43,8 @@ function presentation(item: ProjectActivity) {
     return { label: "正在运行", icon: LoaderCircle, spin: true };
   }
   if (item.status === "queued") return { label: "等待执行", icon: Clock3 };
-  if (item.status === "waiting_human") return { label: "等待回复", icon: Clock3 };
+  if (item.status === "waiting_human")
+    return { label: "等待回复", icon: Clock3 };
   if (["completed", "result", "checkin", "confirm"].includes(item.status)) {
     return { label: "已完成", icon: CircleCheck };
   }
@@ -63,7 +64,6 @@ export default function ActivityPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
-    project,
     projectID,
     isPending: projectsPending,
     error: projectsError,
@@ -109,21 +109,18 @@ export default function ActivityPage() {
   }
 
   return (
-    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-5xl px-5 py-8 md:min-h-dvh md:px-8">
-      <header className="flex flex-wrap items-end justify-between gap-4">
+    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-[1600px] space-y-7 px-5 py-8 md:min-h-dvh md:px-8">
+      <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold tracking-widest text-sky-700">
-            {project?.name || t("当前项目")}
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
+          <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("活动")}
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted-foreground">
             {t("查看 Agent 正在做什么，以及最近发生了什么。")}
           </p>
         </div>
         {projectID && (
-          <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1">
+          <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-1">
             {filters.map((filter) => (
               <button
                 key={filter.id}
@@ -136,8 +133,8 @@ export default function ActivityPage() {
                 }
                 className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                   view === filter.id
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-500 hover:text-slate-800"
+                    ? "bg-muted text-heading"
+                    : "text-muted-foreground hover:text-strong"
                 }`}
               >
                 {filter.label}
@@ -148,19 +145,19 @@ export default function ActivityPage() {
       </header>
 
       {!projectID ? (
-        <div className="mt-20 text-center text-sm text-slate-500">
+        <div className="py-20 text-center text-sm text-muted-foreground">
           {t("还没有项目")}
         </div>
       ) : activity.isPending ? (
-        <div className="mt-20 grid place-items-center">
+        <div className="py-20 grid place-items-center">
           <Spinner />
         </div>
       ) : activity.error ? (
-        <div className="mt-8">
+        <div>
           <ErrorView error={activity.error} />
         </div>
       ) : items.length ? (
-        <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface">
           {items.map((item) => {
             const state = presentation(item);
             const Icon = state.icon;
@@ -169,28 +166,26 @@ export default function ActivityPage() {
                 key={`${item.activity_type}-${item.id}`}
                 type="button"
                 onClick={() => open(item)}
-                className="flex w-full items-start gap-4 border-b border-slate-100 px-5 py-4 text-left transition last:border-b-0 hover:bg-slate-50"
+                className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
               >
-                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-600">
+                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground">
                   <Icon
                     className={`size-[18px] ${state.spin ? "animate-spin" : ""}`}
                   />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="truncate text-sm font-semibold text-slate-900">
+                    <span className="truncate text-sm font-semibold text-heading">
                       {item.card_title || t("未命名工作")}
                     </span>
-                    <span className="text-xs text-slate-400">
-                      {t(state.label)}
-                    </span>
+                    <span className="text-xs text-faint">{t(state.label)}</span>
                   </span>
                   {item.content && (
-                    <span className="mt-1 line-clamp-2 block text-[13px] leading-5 text-slate-500">
+                    <span className="mt-1 line-clamp-2 block text-[13px] leading-5 text-muted-foreground">
                       {item.content}
                     </span>
                   )}
-                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                  <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
                     {item.actor_name && <span>{item.actor_name}</span>}
                     <span>{localTime(item.occurred_at)}</span>
                   </span>
@@ -200,12 +195,12 @@ export default function ActivityPage() {
           })}
         </div>
       ) : (
-        <div className="mt-20 text-center">
-          <Activity className="mx-auto size-9 text-slate-300" />
-          <p className="mt-4 text-sm font-medium text-slate-700">
+        <div className="py-20 text-center">
+          <Activity className="mx-auto size-9 text-placeholder" />
+          <p className="mt-4 text-sm font-medium text-foreground">
             {view === "all" ? t("这个项目还没有活动") : t("这个筛选下没有活动")}
           </p>
-          <p className="mt-1 text-[13px] text-slate-400">
+          <p className="mt-1 text-[13px] text-faint">
             {t("Agent 执行状态和重要活动会出现在这里。")}
           </p>
         </div>

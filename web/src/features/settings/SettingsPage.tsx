@@ -26,6 +26,7 @@ import {
   ErrorView,
   Field,
   Section,
+  Select,
   Spinner,
   TextArea,
   TextInput,
@@ -84,14 +85,14 @@ export default function SettingsPage({ role }: { role: string }) {
   return (
     <main className="mx-auto w-full min-w-0 max-w-6xl overflow-x-hidden px-4 py-7 sm:px-8 sm:py-8">
       <div className="mb-6">
-        <h1 className="text-[22px] font-semibold tracking-tight text-slate-900">
+        <h1 className="text-[22px] font-semibold tracking-tight text-heading">
           {t("设置")}
         </h1>
       </div>
       <div className="space-y-6">
         <nav
           aria-label={t("设置")}
-          className="scrollbar-thin flex max-w-full flex-wrap gap-1 border-b border-slate-200 pb-2 md:flex-nowrap md:overflow-x-auto"
+          className="scrollbar-thin flex max-w-full flex-wrap gap-1 border-b border-line pb-2 md:flex-nowrap md:overflow-x-auto"
         >
           {menus.map((group) => (
             <div key={group.group} className="flex shrink-0 gap-1">
@@ -101,7 +102,7 @@ export default function SettingsPage({ role }: { role: string }) {
                   to={"/settings/" + item.id}
                   key={item.id}
                   className={({ isActive }) =>
-                    `flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs transition-colors ${isActive ? "bg-white font-medium text-sky-700 ring-1 ring-slate-200" : "text-slate-500 hover:bg-white hover:text-slate-900"}`
+                    `flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs transition-colors ${isActive ? "bg-surface font-medium text-sky-700 ring-1 ring-line" : "text-muted-foreground hover:bg-surface hover:text-heading"}`
                   }
                 >
                   <item.icon className="size-3.5" />
@@ -112,7 +113,7 @@ export default function SettingsPage({ role }: { role: string }) {
           ))}
         </nav>
         <div className="min-w-0 space-y-5">
-          <div className="mb-5 border-b border-slate-200 pb-4">
+          <div className="mb-5 border-b border-line pb-4">
             <h2 className="text-base font-semibold">
               {t(current?.title || "常规")}
             </h2>
@@ -127,9 +128,8 @@ export default function SettingsPage({ role }: { role: string }) {
               <div className="space-y-4 text-[13px]">
                 <NotificationSettings />
                 <Field label={t("界面语言")}>
-                  <select
+                  <Select
                     aria-label={t("界面语言")}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
                     value={i18n.resolvedLanguage === "en" ? "en" : "zh"}
                     onChange={(event) =>
                       setLanguage(event.target.value as Language)
@@ -137,12 +137,11 @@ export default function SettingsPage({ role }: { role: string }) {
                   >
                     <option value="zh">{t("简体中文")}</option>
                     <option value="en">{t("英语")}</option>
-                  </select>
+                  </Select>
                 </Field>
                 <Field label={t("外观")}>
-                  <select
+                  <Select
                     aria-label={t("外观")}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] leading-5"
                     value={theme}
                     onChange={(event) =>
                       changeTheme(event.target.value as Theme)
@@ -151,7 +150,7 @@ export default function SettingsPage({ role }: { role: string }) {
                     <option value="light">{t("浅色")}</option>
                     <option value="dark">{t("深色")}</option>
                     <option value="system">{t("跟随系统")}</option>
-                  </select>
+                  </Select>
                 </Field>
               </div>
             </Section>
@@ -166,22 +165,22 @@ export default function SettingsPage({ role }: { role: string }) {
                 ) : (
                   <>
                     <div>
-                      <p className="text-xs text-slate-400">{t("显示名称")}</p>
+                      <p className="text-xs text-faint">{t("显示名称")}</p>
                       <p className="mt-1 font-semibold">
                         {me.data?.display_name}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400">{t("邮箱")}</p>
+                      <p className="text-xs text-faint">{t("邮箱")}</p>
                       <p className="mt-1">{me.data?.email || t("未提供")}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-400">{t("工作空间")}</p>
+                      <p className="text-xs text-faint">{t("工作空间")}</p>
                       <p className="mt-1">
                         {me.data?.workspace.name} · {role}
                       </p>
                     </div>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-muted-foreground">
                       {t(
                         "Hosted 身份在 NexusDock 管理；模型授权不属于登录身份。",
                       )}
@@ -198,7 +197,7 @@ export default function SettingsPage({ role }: { role: string }) {
           {["models", "agent", "nexusdock", "mcp"].includes(tab) &&
             !isOwner && (
               <Section title={t("需要所有者权限")}>
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-muted-foreground">
                   {t("这些设置只允许 Workspace owner 修改。")}
                 </p>
               </Section>
@@ -210,7 +209,9 @@ export default function SettingsPage({ role }: { role: string }) {
           {tab === "projects" && <ProjectSettings />}
           {!current && (
             <Section title={t("未找到设置页面")}>
-              <p className="text-slate-500">{t("请选择左侧的设置分类。")}</p>
+              <p className="text-muted-foreground">
+                {t("请选择左侧的设置分类。")}
+              </p>
             </Section>
           )}
         </div>
@@ -230,7 +231,7 @@ function ProjectSettings() {
   if (!current)
     return (
       <Section title={t("项目设置")}>
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-muted-foreground">
           {t("没有项目，请先创建项目。")}
         </p>
       </Section>

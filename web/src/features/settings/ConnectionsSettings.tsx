@@ -1,3 +1,6 @@
+import { useForm, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { mcpFormSchema, type MCPFormValues } from "./mcp-form";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,6 +10,8 @@ import type { MCPConnection, MCPInput } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
 import {
   Button,
+  Checkbox,
+  ConfirmDialog,
   ErrorView,
   Field,
   Section,
@@ -40,16 +45,16 @@ export function NexusSettings() {
       ) : q.error ? (
         <ErrorView error={q.error} />
       ) : !q.data?.available ? (
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-muted-foreground">
           当前部署尚未启用 NexusDock 第一方连接。
         </p>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center gap-3 rounded-xl border border-line bg-canvas p-4">
             <Cable className="size-6 text-sky-700" />
             <div>
               <p className="font-semibold">NexusDock</p>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-muted-foreground">
                 {q.data.connected
                   ? "已授权 Cycle Agent 使用已配对设备"
                   : "尚未连接"}
@@ -71,7 +76,7 @@ export function NexusSettings() {
                     href={q.data.manage_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    className="inline-flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-sm"
                   >
                     <ExternalLink className="size-4" />
                     前往 NexusDock 管理设备
@@ -138,7 +143,7 @@ export function MCPSettings() {
       description="Agent 在执行开始时发现 MCP 工具；Bearer Token 由服务端加密保存。"
     >
       <div className="mb-5 flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">自定义 MCP 连接</p>
+        <p className="text-sm text-muted-foreground">自定义 MCP 连接</p>
         <Button
           onClick={() => {
             setPicked(null);
@@ -156,7 +161,7 @@ export function MCPSettings() {
       ) : (
         <div className="space-y-2">
           {!list.data?.length && (
-            <p className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">
+            <p className="rounded-xl border border-dashed border-line p-6 text-center text-sm text-faint">
               没有自定义 MCP 服务
             </p>
           )}
@@ -167,14 +172,16 @@ export function MCPSettings() {
                 setPicked(c);
                 setOpen(true);
               }}
-              className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-200 p-4 text-left hover:border-sky-300"
+              className="flex w-full items-center justify-between gap-4 rounded-xl border border-line p-4 text-left hover:border-sky-300"
             >
               <div className="min-w-0">
                 <p className="font-semibold">{c.name}</p>
-                <p className="mt-1 truncate text-xs text-slate-500">{c.url}</p>
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {c.url}
+                </p>
               </div>
               <span
-                className={`text-xs ${c.enabled ? "text-emerald-700" : "text-slate-400"}`}
+                className={`text-xs ${c.enabled ? "text-emerald-700" : "text-faint"}`}
               >
                 {c.enabled ? "启用" : "停用"}
               </span>
@@ -212,104 +219,134 @@ function MCPForm({
   onDelete?: () => void;
   busy: boolean;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // 编辑连接只展示是否已配置，绝不向浏览器回传已保存的 Token。
-  const [value, setValue] = useState<MCPInput>({
-    name: initial.name,
-    url: initial.url,
-    enabled: initial.enabled,
-    timeout_ms: initial.timeout_ms,
-    bearer_token: "",
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    control,
+    formState: { errors },
+  } = useForm<MCPFormValues>({
+    resolver: zodResolver(mcpFormSchema),
+    defaultValues: {
+      name: initial.name,
+      url: initial.url,
+      enabled: initial.enabled,
+      timeout_ms: initial.timeout_ms,
+      bearer_token: "",
+      clear_bearer_token: false,
+    },
   });
+  const clearBearerToken = useWatch({ control, name: "clear_bearer_token" });
+  const enabled = useWatch({ control, name: "enabled" });
   const configured = "token_configured" in initial && initial.token_configured;
   return (
-    <div className="space-y-4">
-      <Field label="连接名称">
-        <TextInput
-          value={value.name}
-          onChange={(e) => setValue({ ...value, name: e.target.value })}
-        />
-      </Field>
-      <Field label="Remote MCP URL">
-        <TextInput
-          value={value.url}
-          onChange={(e) => setValue({ ...value, url: e.target.value })}
-          placeholder="https://mcp.example.com/mcp"
-        />
-      </Field>
-      <Field label="Bearer Token（可选）">
-        <TextInput
-          type="password"
-          autoComplete="new-password"
-          value={value.bearer_token}
-          onChange={(e) =>
-            setValue({ ...value, bearer_token: e.target.value, clear_bearer_token: false })
-          }
-          placeholder={configured ? "留空则保留现有 Token" : "粘贴真实 Bearer Token"}
-        />
-        {configured && (
-          <p className="mt-1 text-xs text-slate-500">已保存 Token。留空不会覆盖；填写新值将替换。</p>
-        )}
-        {configured && (
-          <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              checked={!!value.clear_bearer_token}
-              onChange={(e) =>
-                setValue({ ...value, clear_bearer_token: e.target.checked, bearer_token: "" })
+    <>
+      <form
+        noValidate
+        onSubmit={handleSubmit((value) => {
+          if (!busy) onSave(value);
+        })}
+      >
+        <fieldset disabled={busy} className="space-y-4">
+          <Field label="连接名称" error={errors.name?.message}>
+            <TextInput {...register("name")} aria-invalid={!!errors.name} />
+          </Field>
+          <Field label="Remote MCP URL" error={errors.url?.message}>
+            <TextInput
+              {...register("url")}
+              aria-invalid={!!errors.url}
+              placeholder="https://mcp.example.com/mcp"
+            />
+          </Field>
+          <Field
+            label="Bearer Token（可选）"
+            error={errors.bearer_token?.message}
+          >
+            <TextInput
+              type="password"
+              autoComplete="new-password"
+              {...register("bearer_token", {
+                onChange: () => setValue("clear_bearer_token", false),
+              })}
+              aria-invalid={!!errors.bearer_token}
+              placeholder={
+                configured ? "留空则保留现有 Token" : "粘贴真实 Bearer Token"
               }
             />
-            清除已保存的 Token（改为匿名连接）
+          </Field>
+          {configured && (
+            <div className="space-y-2 text-xs text-muted-foreground">
+              <p>已保存 Token。留空不会覆盖；填写新值将替换。</p>
+              <label className="flex cursor-pointer items-center gap-2 text-secondary-foreground">
+                <Checkbox
+                  checked={clearBearerToken}
+                  onCheckedChange={(checked) => {
+                    const next = Boolean(checked);
+                    setValue("clear_bearer_token", next);
+                    if (next) setValue("bearer_token", "");
+                  }}
+                />
+                清除已保存的 Token（改为匿名连接）
+              </label>
+            </div>
+          )}
+          <Field label="请求超时（毫秒）" error={errors.timeout_ms?.message}>
+            <TextInput
+              type="number"
+              min={1000}
+              max={300000}
+              {...register("timeout_ms", { valueAsNumber: true })}
+              aria-invalid={!!errors.timeout_ms}
+            />
+          </Field>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox
+              checked={enabled}
+              onCheckedChange={(checked) =>
+                setValue("enabled", Boolean(checked))
+              }
+            />
+            启用服务
           </label>
-        )}
-      </Field>
-      <Field label="请求超时（毫秒）">
-        <TextInput
-          type="number"
-          min={1000}
-          max={300000}
-          value={value.timeout_ms}
-          onChange={(e) =>
-            setValue({ ...value, timeout_ms: Number(e.target.value) })
-          }
-        />
-      </Field>
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="size-4 accent-sky-700"
-          checked={value.enabled}
-          onChange={(e) => setValue({ ...value, enabled: e.target.checked })}
-        />
-        启用服务
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="primary"
-          disabled={busy || !value.name.trim() || !value.url.trim()}
-          onClick={() => onSave(value)}
-        >
-          保存连接
-        </Button>
-        <Button
-          disabled={busy || !value.name.trim() || !value.url.trim()}
-          onClick={() => onTest(value)}
-        >
-          <TestTube2 className="size-4" />
-          测试
-        </Button>
-        {onDelete && (
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => {
-              if (window.confirm("确定删除此 MCP 服务？")) onDelete();
-            }}
-          >
-            <Trash2 className="size-4" />
-            删除
-          </Button>
-        )}
-      </div>
-    </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" variant="primary" disabled={busy}>
+              保存连接
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={handleSubmit((value) => {
+                if (!busy) onTest(value);
+              })}
+            >
+              <TestTube2 className="size-4" />
+              测试
+            </Button>
+            {onDelete && (
+              <Button
+                variant="danger"
+                disabled={busy}
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 className="size-4" />
+                删除
+              </Button>
+            )}
+          </div>
+        </fieldset>
+      </form>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="删除 MCP 服务"
+        description="确定删除此 MCP 服务？"
+        confirmLabel="删除"
+        pending={busy}
+        onConfirm={() => {
+          if (!busy) onDelete?.();
+        }}
+      />
+    </>
   );
 }

@@ -16,19 +16,18 @@ import {
   Activity,
   FolderPlus,
   ListPlus,
-  MessageSquareText,
   Clock3,
-  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import {
+  Badge,
   Button,
   ErrorView,
   Field,
-  Sheet,
+  Modal,
   Spinner,
   TextArea,
   TextInput,
@@ -58,22 +57,25 @@ function Lane({
   return (
     <section
       ref={setNodeRef}
-      className={`min-h-75 rounded-2xl border p-3 ${isOver ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-slate-100/60"}`}
+      className={`flex min-h-[520px] flex-col rounded-2xl border p-3 ${isOver ? "border-sky-300 bg-sky-50" : "border-line bg-muted/60"}`}
     >
       <header className="mb-4 flex items-center justify-between px-1">
-        <h2 className="text-sm font-semibold text-slate-700">
+        <h2 className="text-sm font-semibold text-foreground">
           {t(labels[state])}
         </h2>
-        <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-500">
+        <Badge
+          variant="secondary"
+          className="border-border/60 bg-surface font-normal text-muted-foreground"
+        >
           {cards.length}
-        </span>
+        </Badge>
       </header>
-      <div className="space-y-2">
+      <div className="flex flex-1 flex-col space-y-2">
         {cards.map((c) => (
           <TaskCard key={c.id} card={c} onOpen={onOpen} />
         ))}
         {!cards.length && (
-          <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
+          <div className="grid flex-1 place-items-center rounded-xl border border-dashed border-line p-6 text-center text-xs text-faint">
             {t("没有任务")}
           </div>
         )}
@@ -92,13 +94,13 @@ function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
       {...attributes}
       {...listeners}
       onClick={() => onOpen(card)}
-      className={`w-full rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-sky-300 ${isDragging ? "relative z-20 opacity-60" : ""}`}
+      className={`w-full rounded-xl border border-line bg-surface p-4 text-left shadow-sm hover:border-sky-300 ${isDragging ? "relative z-20 opacity-60" : ""}`}
     >
       <h3 className="line-clamp-2 text-sm font-semibold">{card.title}</h3>
-      <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
+      <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
         {card.description}
       </p>
-      <div className="mt-4 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="mt-4 flex items-center justify-between text-[11px] text-faint">
         <span>{card.current_attempt_status || t("未运行")}</span>
         <Clock3 className="size-3" />
       </div>
@@ -208,13 +210,10 @@ export default function BoardPage() {
     <main className="mx-auto max-w-[1600px] space-y-7 px-5 py-8 md:px-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold tracking-widest text-sky-700">
-            PROJECT BOARD
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+          <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("工作")}
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted-foreground">
             {t("查看执行状态，跟踪长期工作。")}
           </p>
         </div>
@@ -237,16 +236,6 @@ export default function BoardPage() {
       )}
       {projectID && (
         <>
-          <div className="flex justify-end">
-            <Button
-              onClick={() =>
-                navigate(`/chat?project=${encodeURIComponent(projectID)}`)
-              }
-            >
-              <MessageSquareText className="size-4" />
-              {t("从讨论中生成工作")} <ChevronRight className="size-4" />
-            </Button>
-          </div>
           {cards.isPending ? (
             <Spinner />
           ) : cards.error ? (
@@ -271,7 +260,7 @@ export default function BoardPage() {
                 <h2 className="flex items-center gap-2 font-semibold">
                   <Activity className="size-5 text-sky-700" />
                   {t("持续事项")}{" "}
-                  <span className="text-sm text-slate-400">
+                  <span className="text-sm text-faint">
                     {cards.data?.filter((c) => c.kind === "ongoing").length}
                   </span>
                 </h2>
@@ -282,15 +271,15 @@ export default function BoardPage() {
                       <button
                         key={c.id}
                         onClick={() => open(c)}
-                        className="rounded-2xl border border-slate-200 bg-white p-5 text-left hover:border-sky-300"
+                        className="rounded-2xl border border-line bg-surface p-5 text-left hover:border-sky-300"
                       >
                         <div className="flex justify-between gap-3">
                           <span className="font-semibold">{c.title}</span>
-                          <span className="text-xs text-slate-400">
+                          <span className="text-xs text-faint">
                             {c.health || "unknown"}
                           </span>
                         </div>
-                        <p className="mt-2 line-clamp-2 text-sm text-slate-500">
+                        <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
                           {c.description}
                         </p>
                         <p className="mt-4 text-xs text-sky-700">
@@ -299,9 +288,7 @@ export default function BoardPage() {
                       </button>
                     ))}
                   {!cards.data?.some((c) => c.kind === "ongoing") && (
-                    <p className="text-sm text-slate-400">
-                      {t("暂无持续事项")}
-                    </p>
+                    <p className="text-sm text-faint">{t("暂无持续事项")}</p>
                   )}
                 </div>
               </section>
@@ -309,52 +296,66 @@ export default function BoardPage() {
           )}
         </>
       )}
-      <Sheet
+      <Modal
         open={creating || creatingFromURL}
         onOpenChange={setCreateProjectOpen}
         title={t("新建项目")}
+        description={t("创建一个新的项目看板来组织任务与 Agent 会话。")}
       >
         <form
           onSubmit={(e) => {
             e.preventDefault();
             create.mutate();
           }}
-          className="space-y-5"
+          className="space-y-4"
         >
           <Field label={t("项目名称")}>
             <TextInput
+              autoFocus
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
+              placeholder={t("输入项目名称")}
             />
           </Field>
           <Field label={t("项目描述")}>
             <TextArea
-              rows={4}
+              rows={3}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              placeholder={t("描述该项目的工作范围或目标")}
             />
           </Field>
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={!name.trim() || create.isPending}
-          >
-            {t("创建项目")}
-          </Button>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={() => setCreateProjectOpen(false)}
+            >
+              {t("取消")}
+            </Button>
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!name.trim() || create.isPending}
+            >
+              {t("创建项目")}
+            </Button>
+          </div>
         </form>
-      </Sheet>
-      <Sheet
+      </Modal>
+      <Modal
         open={creatingTodo}
         onOpenChange={setCreatingTodo}
         title={t("新建待办")}
+        description={t("添加一个待办任务到当前项目看板中。")}
       >
         <form
           onSubmit={(e) => {
             e.preventDefault();
             createTodo.mutate();
           }}
-          className="space-y-5"
+          className="space-y-4"
         >
           <Field label={t("待办标题")}>
             <TextInput
@@ -367,21 +368,30 @@ export default function BoardPage() {
           </Field>
           <Field label={t("待办描述")}>
             <TextArea
-              rows={5}
+              rows={4}
               value={todoDescription}
               onChange={(e) => setTodoDescription(e.target.value)}
               placeholder={t("补充目标、范围或完成条件")}
             />
           </Field>
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={!todoTitle.trim() || createTodo.isPending}
-          >
-            {t("创建待办")}
-          </Button>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={() => setCreatingTodo(false)}
+            >
+              {t("取消")}
+            </Button>
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!todoTitle.trim() || createTodo.isPending}
+            >
+              {t("创建待办")}
+            </Button>
+          </div>
         </form>
-      </Sheet>
+      </Modal>
     </main>
   );
 }

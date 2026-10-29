@@ -1,11 +1,18 @@
-import * as Dialog from "@radix-ui/react-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "./dropdown-menu";
 import {
   Check,
   ChevronDown,
   FolderKanban,
   FolderPlus,
   Settings2,
-  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Project } from "../api/types";
@@ -29,8 +36,8 @@ export function ProjectSwitcher({
   const current = projects.find((project) => project.id === projectID);
 
   return (
-    <Dialog.Root>
-      <Dialog.Trigger asChild>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           title={current?.name || t("选择项目")}
@@ -38,124 +45,101 @@ export function ProjectSwitcher({
           disabled={!projects.length && !onCreate}
           className={
             compact
-              ? "grid size-10 place-items-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40"
-              : "flex min-h-10 w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 text-left text-sm text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40"
+              ? "grid size-10 place-items-center rounded-xl text-faint transition hover:bg-canvas hover:text-strong data-[state=open]:bg-muted data-[state=open]:text-heading disabled:opacity-40"
+              : "flex min-h-10 w-full items-center justify-between gap-2.5 rounded-xl border border-line bg-surface px-3 text-left text-sm text-foreground shadow-xs transition hover:border-line-strong hover:bg-canvas data-[state=open]:border-line-strong disabled:opacity-40"
           }
         >
-          <FolderKanban
-            className={compact ? "size-5" : "size-4 text-slate-400"}
-          />
-          {!compact && (
+          {compact ? (
+            <FolderKanban className="size-5" />
+          ) : (
             <>
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {current?.name || t("选择项目")}
+              <span className="flex min-w-0 items-center gap-2 truncate font-medium">
+                <FolderKanban className="size-4 shrink-0 text-faint" />
+                <span className="truncate">
+                  {current?.name || t("选择项目")}
+                </span>
               </span>
-              <ChevronDown className="size-4 shrink-0 text-slate-400" />
+              <ChevronDown className="size-4 shrink-0 text-faint" />
             </>
           )}
         </button>
-      </Dialog.Trigger>
+      </DropdownMenuTrigger>
 
-      <Dialog.Portal>
-        <Dialog.Overlay
-          className={`fixed inset-0 z-[60] ${
-            compact
-              ? "bg-slate-950/15 backdrop-blur-[1px] md:bg-transparent md:backdrop-blur-none"
-              : "bg-slate-950/20 backdrop-blur-[1px]"
-          }`}
-        />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className={`fixed z-[70] rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_24px_80px_rgba(15,23,42,0.22)] outline-none ${
-            compact
-              ? "top-1/2 left-1/2 w-[min(92vw,360px)] -translate-x-1/2 -translate-y-1/2 md:top-auto md:bottom-3 md:left-[4.5rem] md:w-[280px] md:translate-x-0 md:translate-y-0"
-              : "top-1/2 left-1/2 w-[min(92vw,360px)] -translate-x-1/2 -translate-y-1/2"
-          }`}
-        >
-          <div className="flex items-center justify-between px-2.5 pt-2 pb-1.5">
-            <div>
-              <Dialog.Title className="text-sm font-semibold text-slate-900">
-                {t("选择项目")}
-              </Dialog.Title>
-              <p className="mt-0.5 text-xs text-slate-400">
-                {current?.name || t("还没有项目")}
-              </p>
+      <DropdownMenuContent
+        side={compact ? "right" : "bottom"}
+        align={compact ? "end" : "start"}
+        sideOffset={8}
+        collisionPadding={12}
+        className="w-64 p-1.5 shadow-lg rounded-xl sm:w-72"
+      >
+        <DropdownMenuLabel className="px-2.5 py-1 text-xs font-semibold text-muted-foreground">
+          {t("选择项目")}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator className="my-1" />
+
+        <DropdownMenuGroup className="max-h-64 overflow-y-auto py-0.5">
+          {!projects.length ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              {t("还没有项目")}
             </div>
-            <Dialog.Close
-              aria-label={t("关闭")}
-              className="grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-            >
-              <X className="size-4" />
-            </Dialog.Close>
-          </div>
-
-          <div className="max-h-[min(50dvh,360px)] overflow-y-auto py-1.5">
-            {!projects.length && (
-              <div className="px-2.5 py-6 text-center text-sm text-slate-400">
-                {t("还没有项目")}
-              </div>
-            )}
-            {projects.map((project) => {
+          ) : (
+            projects.map((project) => {
               const selected = project.id === projectID;
               return (
-                <Dialog.Close asChild key={project.id}>
-                  <button
-                    type="button"
-                    onClick={() => onChange(project.id)}
-                    className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm transition ${
-                      selected
-                        ? "bg-slate-100 text-slate-900"
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                    }`}
-                  >
-                    <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-500">
-                      <FolderKanban className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {project.name}
-                    </span>
-                    {selected && (
-                      <Check className="size-4 shrink-0 text-sky-700" />
-                    )}
-                  </button>
-                </Dialog.Close>
+                <DropdownMenuItem
+                  key={project.id}
+                  onSelect={() => onChange(project.id)}
+                  className={`flex cursor-pointer items-center justify-between rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                    selected
+                      ? "bg-muted font-medium text-heading"
+                      : "text-secondary-foreground"
+                  }`}
+                >
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <FolderKanban
+                      className={`size-4 shrink-0 ${
+                        selected
+                          ? "text-sky-700 dark:text-sky-400"
+                          : "text-faint"
+                      }`}
+                    />
+                    <span className="truncate">{project.name}</span>
+                  </span>
+                  {selected && (
+                    <Check className="size-4 shrink-0 text-sky-700 dark:text-sky-400" />
+                  )}
+                </DropdownMenuItem>
               );
-            })}
-          </div>
-
-          {(onCreate || onManage) && (
-            <>
-              <div className="mx-1 h-px bg-slate-100" />
-              <div className="space-y-0.5 py-1.5">
-                {onCreate && (
-                  <Dialog.Close asChild>
-                    <button
-                      type="button"
-                      onClick={onCreate}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-                    >
-                      <FolderPlus className="size-4 text-slate-400" />
-                      {t("新建项目")}
-                    </button>
-                  </Dialog.Close>
-                )}
-                {onManage && (
-                  <Dialog.Close asChild>
-                    <button
-                      type="button"
-                      onClick={onManage}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-sm text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-                    >
-                      <Settings2 className="size-4 text-slate-400" />
-                      {t("项目设置")}
-                    </button>
-                  </Dialog.Close>
-                )}
-              </div>
-            </>
+            })
           )}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        </DropdownMenuGroup>
+
+        {(onCreate || onManage) && (
+          <>
+            <DropdownMenuSeparator className="my-1" />
+            <DropdownMenuGroup className="space-y-0.5 pt-0.5">
+              {onCreate && (
+                <DropdownMenuItem
+                  onSelect={onCreate}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-secondary-foreground"
+                >
+                  <FolderPlus className="size-4 shrink-0 text-faint" />
+                  <span>{t("新建项目")}</span>
+                </DropdownMenuItem>
+              )}
+              {onManage && (
+                <DropdownMenuItem
+                  onSelect={onManage}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-secondary-foreground"
+                >
+                  <Settings2 className="size-4 shrink-0 text-faint" />
+                  <span>{t("项目设置")}</span>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuGroup>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

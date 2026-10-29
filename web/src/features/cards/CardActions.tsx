@@ -25,16 +25,17 @@ import {
   TextInput,
 } from "../../shared/ui/components";
 
-export function CardHeaderActions({
-  detail,
-  projectCards,
+export function CardActions({
+  card,
+  taskDetails,
   onDeleted,
+  menuSide = "bottom",
 }: {
-  detail: CardDetail;
-  projectCards: Card[];
+  card: Card;
+  taskDetails?: { detail: CardDetail; projectCards: Card[] };
   onDeleted: () => void;
+  menuSide?: "bottom" | "right";
 }) {
-  const card = detail.card;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -87,18 +88,21 @@ export function CardHeaderActions({
   return (
     <>
       <Menu
+        side={menuSide}
+        align={menuSide === "right" ? "start" : "end"}
         trigger={
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             title="更多操作"
             aria-label="更多操作"
-            className="grid size-8 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 data-[state=open]:bg-slate-100 data-[state=open]:text-slate-700"
+            className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
           >
-            <MoreHorizontal className="size-[18px]" />
-          </button>
+            <MoreHorizontal className="size-4" />
+          </Button>
         }
       >
-        {card.kind !== "discussion" && (
+        {taskDetails && card.kind !== "discussion" && (
           <MenuItem onSelect={() => setDetailsOpen(true)}>
             <FileText className="size-4" />
             任务详情
@@ -133,7 +137,7 @@ export function CardHeaderActions({
         )}
       </Menu>
 
-      {card.kind !== "discussion" && (
+      {taskDetails && card.kind !== "discussion" && (
         <Modal
           open={detailsOpen}
           onOpenChange={setDetailsOpen}
@@ -141,8 +145,8 @@ export function CardHeaderActions({
           description="查看任务目标、来源关系，以及持续事项的健康状态和定时日程。"
         >
           <TaskDetailsPanel
-            detail={detail}
-            projectCards={projectCards}
+            detail={taskDetails.detail}
+            projectCards={taskDetails.projectCards}
             onChange={sync}
           />
         </Modal>

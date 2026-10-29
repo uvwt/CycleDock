@@ -13,13 +13,13 @@ export function ContextSidebar({
 }) {
   return (
     <aside
-      className={`flex h-full min-h-0 w-full flex-col bg-slate-50/80 ${className}`}
+      className={`flex h-full min-h-0 w-full flex-col bg-canvas/80 ${className}`}
       aria-label={ariaLabel}
     >
       {header ? (
-        <div className="space-y-3 border-b border-slate-200 p-3">{header}</div>
+        <div className="space-y-2 border-b border-line p-2.5">{header}</div>
       ) : null}
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-1.5">
         {children}
       </div>
     </aside>
@@ -32,6 +32,7 @@ export function ContextSidebarItem({
   title,
   description,
   meta,
+  actions,
   onClick,
 }: {
   active: boolean;
@@ -39,33 +40,45 @@ export function ContextSidebarItem({
   title: ReactNode;
   description?: ReactNode;
   meta?: ReactNode;
+  actions?: ReactNode;
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active ? "page" : undefined}
-      className={`w-full rounded-xl px-3 py-3 text-left transition ${
+    <div
+      className={`group relative flex w-full items-center rounded-lg transition ${
         active
-          ? "bg-white shadow-sm ring-1 ring-slate-200"
-          : "hover:bg-white/80"
+          ? "bg-surface text-foreground shadow-sm ring-1 ring-line"
+          : "text-secondary-foreground hover:bg-surface/80 hover:text-foreground"
       }`}
     >
-      <div className="flex items-start gap-2.5">
-        {icon ? <div className="mt-0.5 shrink-0">{icon}</div> : null}
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-800">{title}</p>
-          {description ? (
-            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
-              {description}
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={active ? "page" : undefined}
+        className={`min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left ${actions ? "pr-10" : ""}`}
+      >
+        <div className="flex items-start gap-2">
+          {icon ? <div className="mt-0.5 shrink-0">{icon}</div> : null}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-normal text-foreground leading-5">
+              {title}
             </p>
-          ) : null}
-          {meta ? (
-            <p className="mt-1.5 text-[11px] text-slate-400">{meta}</p>
-          ) : null}
+            {description ? (
+              <p className="mt-0.5 line-clamp-2 text-xs font-normal leading-normal text-muted-foreground">
+                {description}
+              </p>
+            ) : null}
+            {meta ? (
+              <p className="mt-0.5 text-[11px] font-normal text-faint">{meta}</p>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      {actions ? (
+        <div className="absolute top-1/2 right-1.5 -translate-y-1/2 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 [@media(hover:hover)]:opacity-0">
+          {actions}
+        </div>
+      ) : null}
+    </div>
   );
 }

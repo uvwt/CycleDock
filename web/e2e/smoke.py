@@ -42,7 +42,7 @@ class CycleDockSmoke(unittest.TestCase):
         picker.get_by_role("button", name=name, exact=True).click()
 
     def open_card_menu(self):
-        self.page.get_by_role("button", name="更多操作").click()
+        self.page.locator("main header").get_by_role("button", name="更多操作").click()
         menu = self.page.get_by_role("menu")
         menu.wait_for()
         return menu
@@ -84,6 +84,73 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.locator(
             'textarea[aria-label="发送消息，继续推进任务…"]'
         ).wait_for()
+
+    def test_confirmation_uses_safe_focus_and_keeps_failed_delete_open(self):
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.open_card_menu().get_by_role("menuitem", name="删除讨论").click()
+        confirmation = self.page.get_by_role("alertdialog", name="删除这个讨论？")
+        cancel = confirmation.get_by_role("button", name="取消")
+        cancel.wait_for()
+        self.page.wait_for_function("document.activeElement?.textContent === '取消'")
+        self.page.keyboard.press("Tab")
+        self.assertTrue(confirmation.get_by_role("button", name="删除讨论", exact=True).evaluate("node => node === document.activeElement"))
+        self.page.keyboard.press("Tab")
+        self.assertTrue(cancel.evaluate("node => node === document.activeElement"))
+        self.page.mouse.click(5, 5)
+        self.assertTrue(confirmation.is_visible())
+
+        pending_delete = []
+        def hold_delete(route):
+            if route.request.method == "DELETE":
+                pending_delete.append(route)
+            else:
+                route.continue_()
+
+        self.page.route("**/api/v1/cards/discussion-1", hold_delete)
+        confirmation.get_by_role("button", name="删除讨论", exact=True).click()
+        self.page.wait_for_function("document.querySelector('[role=alertdialog]')?.getAttribute('aria-busy') === 'true'")
+        self.page.keyboard.press("Escape")
+        self.assertTrue(confirmation.is_visible())
+        self.assertFalse(cancel.is_enabled())
+        pending_delete[0].fulfill(status=500, content_type="application/json", body='{"error":{"code":"fixture_failure","message":"模拟删除失败"}}')
+        self.page.get_by_text("模拟删除失败", exact=True).wait_for()
+        self.assertTrue(confirmation.is_visible())
+        self.assertTrue(cancel.is_enabled())
+        cancel.click()
+        confirmation.wait_for(state="hidden")
+
+    def test_edit_dialog_scrolls_on_small_screen_and_closes_with_escape(self):
+        self.page.set_viewport_size({"width": 375, "height": 520})
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.open_card_menu().get_by_role("menuitem", name="编辑信息").click()
+        editor = self.page.get_by_role("dialog", name="编辑任务信息")
+        title = editor.get_by_placeholder("任务标题")
+        title.wait_for()
+        self.page.wait_for_function("document.activeElement?.getAttribute('placeholder') === '任务标题'")
+        self.assertGreaterEqual(editor.get_by_placeholder("目标、范围与必要背景").evaluate("node => node.getBoundingClientRect().height"), 100)
+        editor.get_by_role("button", name="保存", exact=True).scroll_into_view_if_needed()
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
+        self.page.keyboard.press("Escape")
+        editor.wait_for(state="hidden")
+        self.page.locator("main header").get_by_role("button", name="更多操作").focus()
+        self.page.keyboard.press("Enter")
+        self.page.get_by_role("menu").wait_for()
+
+    def test_composers_preserve_newline_and_ime_confirmation(self):
+        for path, placeholder in [
+            ("/chat?project=demo-project", "发送消息，开始讨论…"),
+            ("/chat/demo-project/discussion-1", "发送消息，继续推进任务…"),
+        ]:
+            self.page.goto(BASE + path)
+            self.page.locator('input[aria-label="' + placeholder + '"]').focus()
+            composer = self.page.locator('textarea[aria-label="' + placeholder + '"]')
+            composer.fill("保留输入")
+            composer.dispatch_event("keydown", {"key": "Enter", "isComposing": True, "bubbles": True})
+            self.assertEqual(composer.input_value(), "保留输入")
+            composer.press("End")
+            composer.press("Shift+Enter")
+            self.assertEqual(composer.input_value(), "保留输入\n")
+            self.assertEqual(self.page.url, BASE + path)
 
     def test_new_discussion_button_only_opens_draft_until_first_send(self):
         create_requests = []
@@ -395,6 +462,52 @@ class CycleDockSmoke(unittest.TestCase):
         details.get_by_text("新增日程", exact=True).last.wait_for()
         details.get_by_role("button", name="取消").last.click()
 
+    def test_schedule_validation_and_frequency_switch(self):
+        self.page.goto(BASE + "/cards/demo-project/ongoing-1")
+        details = self.open_task_details()
+        details.get_by_role("button", name="新增日程").click()
+        details.get_by_label("IANA 时区").fill("Not/AZone")
+        details.get_by_role("button", name="保存", exact=True).click()
+        details.get_by_role("alert").filter(has_text="IANA 时区").wait_for()
+        details.get_by_label("IANA 时区").fill("Asia/Shanghai")
+        details.get_by_label("频率", exact=True).select_option("monthly")
+        details.get_by_label("日期（1–28）").fill("29")
+        details.get_by_role("button", name="保存", exact=True).click()
+        details.get_by_role("alert").filter(has_text="日期应为 1–28").wait_for()
+        details.get_by_label("频率", exact=True).select_option("daily")
+        with self.page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/schedules")) as sent:
+            details.get_by_role("button", name="保存", exact=True).click()
+        self.assertNotIn("day_of_month", sent.value.post_data_json)
+        self.assertNotIn("day_of_week", sent.value.post_data_json)
+
+    def test_mcp_validation_token_retention_and_delete_cancel(self):
+        self.page.goto(BASE + "/settings/mcp")
+        self.page.get_by_role("button", name=re.compile("示例 MCP")).click()
+        form = self.page.get_by_role("dialog", name="编辑 MCP 服务")
+        form.get_by_label("请求超时（毫秒）").fill("999")
+        form.get_by_role("button", name="测试", exact=True).click()
+        form.get_by_role("alert").filter(has_text="1000").wait_for()
+        form.get_by_label("请求超时（毫秒）").fill("30000")
+        form.get_by_label("Bearer Token（可选）").fill("fixture-token")
+        with self.page.expect_request(lambda request: request.method == "PUT" and "/mcp-connections/" in request.url):
+            form.get_by_role("button", name="保存连接").click()
+        form.wait_for(state="hidden")
+        self.page.get_by_role("button", name=re.compile("示例 MCP")).click()
+        self.assertEqual(form.get_by_label("Bearer Token（可选）").input_value(), "")
+        form.get_by_label("清除已保存的 Token（改为匿名连接）").check()
+        form.get_by_label("Bearer Token（可选）").fill("replacement")
+        self.assertFalse(form.get_by_label("清除已保存的 Token（改为匿名连接）").is_checked())
+        form.get_by_label("清除已保存的 Token（改为匿名连接）").check()
+        self.assertEqual(form.get_by_label("Bearer Token（可选）").input_value(), "")
+        with self.page.expect_request(lambda request: request.url.endswith("/agent/mcp-test")) as sent:
+            form.get_by_role("button", name="测试", exact=True).click()
+        self.assertTrue(sent.value.post_data_json["clear_bearer_token"])
+        self.assertNotIn("enabled", sent.value.post_data_json)
+        form.get_by_role("button", name="删除", exact=True).click()
+        confirmation = self.page.get_by_role("alertdialog", name="删除 MCP 服务")
+        confirmation.get_by_role("button", name="取消").click()
+        form.wait_for()
+
     def test_shell_uses_logo_without_account_drawer(self):
         self.page.goto(BASE + "/board/demo-project")
         self.page.get_by_role("heading", name="工作", exact=True).wait_for()
@@ -491,7 +604,7 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.evaluate("document.documentElement.dataset.theme"),
             "dark",
         )
-        surface = self.page.locator(".bg-slate-50").first.evaluate(
+        surface = self.page.locator(".bg-canvas").first.evaluate(
             "(element) => getComputedStyle(element).backgroundColor"
         )
         self.assertNotEqual(surface, "rgb(248, 250, 252)")
@@ -514,8 +627,8 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.get_by_role(
             "heading", name="What would you like to move forward today?"
         ).wait_for()
-        self.page.get_by_role(
-            "button", name="New discussion", exact=True
+        self.page.locator(
+            'button[aria-label="New discussion"]'
         ).wait_for()
         self.assertEqual(
             self.page.evaluate("document.documentElement.dataset.theme"),

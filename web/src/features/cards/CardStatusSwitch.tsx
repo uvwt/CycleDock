@@ -34,7 +34,9 @@ export function CardStatusSwitch({ card }: { card: Card }) {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: keys.card(card.id) }),
-        queryClient.invalidateQueries({ queryKey: keys.cards(card.project_id) }),
+        queryClient.invalidateQueries({
+          queryKey: keys.cards(card.project_id),
+        }),
       ]);
     },
     onError: (error) =>
@@ -51,11 +53,18 @@ export function CardStatusSwitch({ card }: { card: Card }) {
           type="button"
           aria-label={t("切换任务状态")}
           title={t("切换任务状态")}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-100 data-[state=open]:border-slate-300 data-[state=open]:bg-slate-100"
+          className="flex h-8 items-center gap-1.5 rounded-lg border border-line bg-canvas px-2.5 text-xs font-medium text-foreground hover:border-line-strong hover:bg-muted data-[state=open]:border-line-strong data-[state=open]:bg-muted"
         >
-          <span className={`size-1.5 rounded-full ${current === "done" || current === "active" ? "bg-emerald-500" : current === "review" ? "bg-amber-500" : current === "working" ? "bg-sky-500" : "bg-slate-400"}`} />
-          <span>{t(options.find((option) => option.value === current)?.label || "待办")}</span>
-          <ChevronDown className="size-3 text-slate-400" />
+          <span
+            className={`size-1.5 rounded-full ${current === "done" || current === "active" ? "bg-emerald-500" : current === "review" ? "bg-warning-muted0" : current === "working" ? "bg-sky-500" : "bg-faint"}`}
+          />
+          <span>
+            {t(
+              options.find((option) => option.value === current)?.label ||
+                "待办",
+            )}
+          </span>
+          <ChevronDown className="size-3 text-faint" />
         </button>
       }
     >
