@@ -1,5 +1,47 @@
 # 开发路线
 
+## 本地开发
+
+需要 Go 1.26.6（见 go.mod）、Node.js 24（见 .node-version）、npm、Make 和可连接的 PostgreSQL 17。
+开发入口支持 macOS / Linux，使用进程组管理前后端生命周期。
+
+首次在仓库根目录运行：
+
+```bash
+make setup
+```
+
+该命令下载 Go 依赖、安装固定版本 Air v1.67.4 到被 Git 忽略的 bin/，并使用 npm ci 安装前端依赖。
+仅在不存在时从 .env.local.example 创建 .env.local，不覆盖已有本机配置。
+根据本机数据库修改 DATABASE_URL；setup 不启动或新建数据库，不执行迁移。
+配置文件使用 Node.js 的 env 文件格式，由启动入口显式加载；已有进程环境变量优先。
+
+日常启动：
+
+```bash
+make dev
+```
+
+- 先检查依赖和前后端端口，再运行 Goose migration。连接或迁移失败时不会启动开发服务器。
+- 数据迁移会修改 DATABASE_URL 指向的数据库；使用专用开发库，不要指向生产或测试库。
+- Go 后端默认监听 127.0.0.1:8080，Air 在后端 Go 源文件变化后重新编译并重启。
+- 浏览器访问 http://127.0.0.1:5173；Vite 提供前端热更新，并将 API、SSE、OAuth/MCP 和回调请求代理到 Go。
+- HTTP_ADDR 可设为其他本机 host:port；DEV_WEB_PORT 可调整前端端口。端口被占用时直接报错，不自动换端口或终止已有服务。
+- Ctrl+C 停止本次启动的前后端及其子进程；任一开发进程退出也会停止另一进程。
+- 修改 .env.local、go.mod、go.sum、Air 配置或数据库迁移后，重新运行 make dev；Go 依赖变化或 lockfile / Air 版本更新后重新运行 make setup。
+- 配置本机 OAuth 时，CYCLEDOCK_PUBLIC_URL 使用浏览器入口（例如 http://127.0.0.1:5173）。本机密码登录无需配置。
+
+单独执行迁移：
+
+```bash
+make migrate
+```
+
+模型 API Key 等可按需加入 .env.local；该文件已被 Git 忽略。
+如需订阅模型账号或带 Token 的 MCP，分别配置 CYCLEDOCK_MODEL_SECRET_KEY 和 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY，
+每个密钥独立使用 `openssl rand -base64 32` 生成并持久保留。完整变量说明见 .env.example 与 install.md。
+日常开发不需要设置 WEB_DIR，也不需要执行前端 build；生产构建仍按 Dockerfile 执行。
+
 ## 1. 当前目标
 
 CycleDock 在首次公开发布前完成 Session-first / Google ADK Go v2 Runtime 重构。

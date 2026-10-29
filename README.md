@@ -32,6 +32,9 @@ Workspace
 
 ## 文档
 
+本地开发：首次运行 `make setup`，配置 `.env.local`，之后运行 `make dev`。
+默认访问 http://127.0.0.1:5173，详见 [开发环境](docs/development.md#本地开发)。
+
 - Session-first / ADK 架构决策：docs/session-first-adk.md
 - 产品定义：docs/product.md
 - 系统架构：docs/architecture.md
