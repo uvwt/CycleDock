@@ -336,6 +336,7 @@ func (r *Runner) openADKMCPSessions(
 	}
 
 	nexusDockMounted := false
+	var nexusDockConnection nexusdock.RuntimeConnection
 	if r.nexusDock != nil {
 		connection, err := r.nexusDock.Runtime(ctx, workspaceID)
 		switch {
@@ -353,6 +354,7 @@ func (r *Runner) openADKMCPSessions(
 					"agentdock_context": true,
 				},
 			})
+			nexusDockConnection = connection
 			nexusDockMounted = true
 		}
 	}
@@ -364,7 +366,11 @@ func (r *Runner) openADKMCPSessions(
 	if !nexusDockMounted {
 		return sessions, "", nil
 	}
-	bootstrap, err := nexusDockExecutionTargets(ctx, sessions)
+	bootstrap, supported, err := nexusDockDirectoryTargets(ctx, nexusDockConnection)
+	if !supported {
+		// 旧版 Cloud 尚无目录 API 时保留原 MCP 发现流程，执行工具始终走 MCP。
+		bootstrap, err = nexusDockExecutionTargets(ctx, sessions)
+	}
 	if err != nil {
 		sessions.Close()
 		return nil, "", fmt.Errorf("bootstrap NexusDock remote devices: %w", err)

@@ -23,6 +23,8 @@ type nexusDockTargetSnapshot struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
 	DynamicMCP   []string `json:"dynamic_mcp,omitempty"`
+	Plugins      []string `json:"plugins,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
 }
 
 func nexusDockExecutionTargets(ctx context.Context, sessions *mcpclient.SessionSet) (string, error) {
