@@ -134,6 +134,11 @@ func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *test
 	}
 	first := httptest.NewRequest(http.MethodGet, "/auth/nexusdock/callback?state="+url.QueryEscape(state)+"&code=oidc-code", nil)
 	first.AddCookie(stateCookie)
+	for _, cookie := range start.Result().Cookies() {
+		if cookie.Name == oidcReturnCookieName {
+			first.AddCookie(cookie)
+		}
+	}
 	callback := httptest.NewRecorder()
 	handler.ServeHTTP(callback, first)
 	if callback.Code != http.StatusFound {
