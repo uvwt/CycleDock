@@ -36,9 +36,17 @@ function Authenticated() {
     const model = params.get("model_auth");
     const connection = params.get("agent_connections");
     if (!model && !connection) return;
-    if (model === "chatgpt_connected" || connection === "nexusdock-connected")
+    if (model === "chatgpt_connected" || connection === "nexusdock-connected") {
       toast.success("账号连接成功");
-    else if (model || connection) toast.warning("授权未完成，请检查连接状态");
+    } else if (connection === "nexusdock-account-mismatch") {
+      toast.error("NexusDock 登录账号与设备授权账号不一致。请检查 DEV/生产环境及账号是否相同后重新授权。", { duration: 10000 });
+    } else if (connection === "nexusdock-invalid-state") {
+      toast.warning("设备授权已过期或重复使用，请重新发起授权。");
+    } else if (connection === "nexusdock-denied") {
+      toast.info("已取消 NexusDock 设备授权，可随时在设置中重新连接。");
+    } else if (model || connection) {
+      toast.warning("授权未完成，请检查连接状态");
+    }
     void queryClient.invalidateQueries({ queryKey: keys.auth });
     void queryClient.invalidateQueries({ queryKey: keys.nexus });
     navigate("/settings/" + (connection ? "nexusdock" : "models"), {

@@ -176,3 +176,13 @@ Hosted 第一方连接由部署层配置：
 - `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`
 
 这些是服务端部署配置，不是终端用户填写的 MCP 设置。未配置第一方 NexusDock 参数时设备卡片不可用；普通 MCP 无 Token 连接仍能使用，但要保存或调用带 Bearer Token 的普通 MCP，必须配置加密密钥。
+
+### `nexusdock-account-mismatch` 排查
+
+此错误是安全校验拒绝了两次授权中不同的 `sub`，**不得移除校验、按邮箱匹配身份或直接存入 Token**。首先由有权限的运维人员核对当前 CycleDock 的 `CYCLEDOCK_OIDC_ISSUER` 和 `CYCLEDOCK_NEXUSDOCK_MCP_URL`：
+
+- RN DEV：`CYCLEDOCK_OIDC_ISSUER=https://dev.nexusdock.co`，`CYCLEDOCK_NEXUSDOCK_MCP_URL=https://dev.nexusdock.co/mcp`，`CYCLEDOCK_NEXUSDOCK_WEB_URL=https://dev.nexusdock.co`。
+- 通过 MCP Protected Resource Metadata 追溯真实 OAuth authorization server，检查 consent 页面登录账号是否与 OIDC 账号一致。
+- 不要仅按域名不同判断错误：有些生产架构允许独立的 OIDC 和 MCP 域名共享一个账号体系，最终仍以服务端签发的授权 `sub` 为准。
+- RN 配置受 root-only 文件和固定 `agentdock-ops` Broker 保护，现有只读/镜像发布权限不允许修改这些变量；应由正式配置管理权限修改、备份并重建 DEV，不能通过容器、临时提权或绕过 Broker 读取秘密。
+- 配置修复后必须重新发起设备授权；已拒绝保存的 Token 不应自动恢复或绕过重新同意。
