@@ -17,8 +17,12 @@ func TestResponsesTransportStreamsTextAndToolCalls(t *testing.T) {
 		Model        string          `json:"model"`
 		Instructions string          `json:"instructions"`
 		Input        []responsesItem `json:"input"`
-		Store        bool            `json:"store"`
-		Stream       bool            `json:"stream"`
+		Tools        []struct {
+			Strict     *bool          `json:"strict"`
+			Parameters map[string]any `json:"parameters"`
+		} `json:"tools"`
+		Store  bool `json:"store"`
+		Stream bool `json:"stream"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {
@@ -70,8 +74,15 @@ func TestResponsesTransportStreamsTextAndToolCalls(t *testing.T) {
 	}, []ToolDefinition{{
 		Type: "function",
 		Function: ToolDefinitionFunc{
-			Name:       "lookup",
-			Parameters: map[string]any{"type": "object"},
+			Name: "lookup",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":     map[string]any{"type": "integer"},
+					"detail": map[string]any{"type": "string"},
+				},
+				"required": []string{"id"},
+			},
 		},
 	}})
 	if err != nil {
@@ -92,6 +103,14 @@ func TestResponsesTransportStreamsTextAndToolCalls(t *testing.T) {
 	}
 	if requestBody.Store || !requestBody.Stream {
 		t.Fatalf("Responses plan usage must send store=false stream=true: %#v", requestBody)
+	}
+	// 必须显式传 false；省略字段会允许服务端把可选参数自动改成必填。
+	if len(requestBody.Tools) != 1 || requestBody.Tools[0].Strict == nil || *requestBody.Tools[0].Strict {
+		t.Fatalf("Responses tools must explicitly disable strict normalization: %+v", requestBody.Tools)
+	}
+	required, _ := requestBody.Tools[0].Parameters["required"].([]any)
+	if len(required) != 1 || required[0] != "id" {
+		t.Fatalf("optional tool parameter became required: %+v", requestBody.Tools[0].Parameters)
 	}
 	if len(requestBody.Input) != 3 {
 		t.Fatalf("input item count = %d, want 3", len(requestBody.Input))

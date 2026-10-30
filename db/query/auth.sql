@@ -63,6 +63,9 @@ VALUES (
 )
 RETURNING *;
 
+-- name: GetLocalAdminAccount :one
+SELECT * FROM human_accounts WHERE is_local_admin;
+
 -- name: UpdateHumanAccountSnapshot :exec
 UPDATE human_accounts
 SET display_name = sqlc.arg(display_name),

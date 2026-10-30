@@ -74,11 +74,14 @@ func (m *ReplyMessage) Validate() error {
 	}
 	switch m.Type {
 	case "text":
-		if m.Content == "" || m.URL != "" || m.Widget != nil {
+		if m.Content == "" {
 			return fmt.Errorf("%w: text reply requires content", domain.ErrConflict)
 		}
+		if m.URL != "" {
+			return fmt.Errorf("%w: text reply must omit url; use type=attachment for attachments", domain.ErrConflict)
+		}
 	case "attachment":
-		if len(m.URL) > 2048 || !validReplyURL(m.URL) || m.Widget != nil {
+		if len(m.URL) > 2048 || !validReplyURL(m.URL) {
 			return fmt.Errorf("%w: attachment requires HTTPS URL", domain.ErrConflict)
 		}
 	case "choice":
@@ -105,7 +108,7 @@ func (m *ReplyMessage) Validate() error {
 		return fmt.Errorf("%w: unsupported reply type", domain.ErrConflict)
 	}
 	if m.Type != "choice" && m.Widget != nil {
-		return fmt.Errorf("%w: unexpected widget", domain.ErrConflict)
+		return fmt.Errorf("%w: widget is only allowed for type=choice; omit widget for text and attachment replies", domain.ErrConflict)
 	}
 	return nil
 }

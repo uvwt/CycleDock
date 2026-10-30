@@ -30,7 +30,7 @@ var (
 	ErrInvalidConfig      = errors.New("invalid auth configuration")
 	ErrMultipleWorkspaces = errors.New("self-hosted login requires a single workspace")
 	ErrInvalidHumanSource = errors.New("session source is not human")
-	ErrWorkspaceAccess     = errors.New("workspace access denied")
+	ErrWorkspaceAccess    = errors.New("workspace access denied")
 )
 
 type Config struct {
@@ -152,19 +152,24 @@ func (s *Service) EnsureSelfHostedIdentity(ctx context.Context) (Identity, error
 		return Identity{}, fmt.Errorf("resolve self-hosted workspace: %w", err)
 	}
 
-	account, err := q.CreateHumanAccount(ctx, db.CreateHumanAccountParams{
-		ID:           uuid.New(),
-		DisplayName:  defaultAdminName,
-		IsLocalAdmin: true,
-	})
+	// Workspace/Source 删除会级联移除成员关系，但管理员账户独立保留。
+	// 找不到完整身份时仍须复用原账户，不能再次插入唯一的本地管理员。
+	account, err := q.GetLocalAdminAccount(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		account, err = q.CreateHumanAccount(ctx, db.CreateHumanAccountParams{
+			ID:           uuid.New(),
+			DisplayName:  defaultAdminName,
+			IsLocalAdmin: true,
+		})
+	}
 	if err != nil {
-		return Identity{}, fmt.Errorf("create self-hosted human account: %w", err)
+		return Identity{}, fmt.Errorf("resolve self-hosted human account: %w", err)
 	}
 	source, err := q.CreateSource(ctx, db.CreateSourceParams{
 		ID:          uuid.New(),
 		WorkspaceID: workspace.ID,
 		Kind:        string(domain.SourceKindHuman),
-		Name:        defaultAdminName,
+		Name:        account.DisplayName,
 	})
 	if err != nil {
 		return Identity{}, fmt.Errorf("create self-hosted human source: %w", err)

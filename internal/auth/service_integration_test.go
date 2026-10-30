@@ -125,6 +125,52 @@ func TestSelfHostedSessionStoresDigestAndAuthenticates(t *testing.T) {
 	}
 }
 
+func TestSelfHostedLoginReusesAdminWithoutMembership(t *testing.T) {
+	for _, keepWorkspace := range []bool{false, true} {
+		name := "workspace deleted"
+		if keepWorkspace {
+			name = "membership deleted"
+		}
+		t.Run(name, func(t *testing.T) {
+			service, pool := newAuthIntegrationService(t, Config{AdminPassword: "local-admin-password"})
+			ctx := context.Background()
+			original, err := service.EnsureSelfHostedIdentity(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// 重现管理员仍在，但完整身份 JOIN 已无法查到的状态。
+			if keepWorkspace {
+				_, err = pool.Exec(ctx, "DELETE FROM workspace_memberships WHERE human_account_id=$1", original.HumanAccountID)
+			} else {
+				_, err = pool.Exec(ctx, "DELETE FROM workspaces WHERE id=$1", original.WorkspaceID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := service.Login(ctx, "local-admin-password")
+			if err != nil {
+				t.Fatalf("login with orphaned local admin: %v", err)
+			}
+			if session.Identity.HumanAccountID != original.HumanAccountID {
+				t.Fatal("login replaced the existing admin account")
+			}
+			if keepWorkspace && session.Identity.WorkspaceID != original.WorkspaceID {
+				t.Fatal("login replaced the existing workspace")
+			}
+			if _, err := service.Authenticate(ctx, session.Token); err != nil {
+				t.Fatalf("authenticate repaired membership: %v", err)
+			}
+			repeated, err := service.EnsureSelfHostedIdentity(ctx)
+			if err != nil || repeated != session.Identity {
+				t.Fatalf("repeated bootstrap changed identity: %+v %v", repeated, err)
+			}
+			assertAuthTableCount(t, pool, "human_accounts", 1)
+			assertAuthTableCount(t, pool, "workspace_memberships", 1)
+			assertAuthTableCount(t, pool, "workspaces", 1)
+		})
+	}
+}
+
 func TestOIDCPersonalIdentityIsIdempotentAndIsolated(t *testing.T) {
 	service, pool := newAuthIntegrationService(t, Config{})
 	ctx := context.Background()

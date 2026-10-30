@@ -34,7 +34,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "reply_message",
-				Description: "Publish exactly one user-visible message bubble. Call multiple times to send multiple bubbles. Set end_turn=true for your last message. Use choice and end_turn=true to wait for the human; do not send a second final answer.",
+				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Use choice and end_turn=true to wait for the human; do not send a second final answer.",
 				Parameters: object(map[string]any{
 					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
 					"content": stringField("Markdown content. Required for text."),
