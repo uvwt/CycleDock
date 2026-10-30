@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
 
+	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 )
 
@@ -57,9 +59,7 @@ func (api *API) connectNexusDock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "nexusdock_unavailable", "NexusDock remote devices are not available on this deployment")
 		return
 	}
-	start, err := api.nexusDock.BeginAuthorization(
-		r.Context(), identity.WorkspaceID, identity.HumanAccountID, identity.SourceID,
-	)
+	start, err := api.startNexusDockAuthorization(r.Context(), identity, false, "/")
 	if err != nil {
 		api.handleNexusDockError(w, err)
 		return
@@ -68,6 +68,16 @@ func (api *API) connectNexusDock(w http.ResponseWriter, r *http.Request) {
 		AuthorizationURL: start.URL,
 		ExpiresAt:        start.ExpiresAt.UTC(),
 	})
+}
+
+// startNexusDockAuthorization 在登录回调与手动设置中复用同一条授权链。
+func (api *API) startNexusDockAuthorization(ctx context.Context, identity auth.Identity, automatic bool, returnTo string) (nexusdock.AuthorizationStart, error) {
+	subject, err := api.auth.SubjectForHuman(ctx, identity.HumanAccountID)
+	if err != nil {
+		return nexusdock.AuthorizationStart{}, err
+	}
+	return api.nexusDock.BeginAuthorization(ctx, identity.WorkspaceID, identity.HumanAccountID, identity.SourceID,
+		nexusdock.AuthorizationOptions{Automatic: automatic, ReturnTo: safeInternalReturnTo(returnTo), ExpectedSubject: subject})
 }
 
 func (api *API) disconnectNexusDock(w http.ResponseWriter, r *http.Request) {
@@ -92,25 +102,38 @@ func (api *API) nexusDockDeviceCallback(w http.ResponseWriter, r *http.Request) 
 		api.redirectNexusDockConnection(w, r, "unavailable")
 		return
 	}
+	state := r.URL.Query().Get("state")
 	if r.URL.Query().Get("error") != "" {
+		if r.URL.Query().Get("error") == "access_denied" {
+			outcome, err := api.nexusDock.DenyAuthorization(r.Context(), identity.WorkspaceID, identity.HumanAccountID, identity.SourceID, state)
+			if err == nil && outcome.Automatic {
+				http.Redirect(w, r, safeInternalReturnTo(outcome.ReturnTo), http.StatusFound)
+				return
+			}
+			if err != nil {
+				api.logger.Warn("NexusDock consent denial callback rejected", "error", err)
+			}
+		}
 		api.redirectNexusDockConnection(w, r, "denied")
 		return
 	}
-	err := api.nexusDock.CompleteAuthorization(
-		r.Context(),
-		identity.WorkspaceID,
-		identity.HumanAccountID,
-		identity.SourceID,
-		r.URL.Query().Get("state"),
-		r.URL.Query().Get("code"),
+	outcome, err := api.nexusDock.CompleteAuthorization(
+		r.Context(), identity.WorkspaceID, identity.HumanAccountID, identity.SourceID, state, r.URL.Query().Get("code"),
 	)
 	if err != nil {
-		code := "failed"
+		status := "failed"
 		if errors.Is(err, nexusdock.ErrInvalidState) {
-			code = "invalid-state"
+			status = "invalid-state"
 		}
-		api.logger.Warn("NexusDock device authorization callback failed", slog.String("code", code))
-		api.redirectNexusDockConnection(w, r, code)
+		if errors.Is(err, nexusdock.ErrIdentityMismatch) {
+			status = "account-mismatch"
+		}
+		api.logger.Warn("NexusDock device authorization callback failed", slog.String("code", status))
+		api.redirectNexusDockConnection(w, r, status)
+		return
+	}
+	if outcome.Automatic {
+		http.Redirect(w, r, safeInternalReturnTo(outcome.ReturnTo), http.StatusFound)
 		return
 	}
 	api.redirectNexusDockConnection(w, r, "connected")
