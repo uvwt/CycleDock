@@ -104,6 +104,10 @@ func TestFirstPartyNativeToolsHideRuntimeBootstrap(t *testing.T) {
 	if set.HasTool("agentdock_context") {
 		t.Fatal("runtime-only agentdock_context was exposed to the model")
 	}
+	metadata, ok := set.Tool("exec_command")
+	if !ok || metadata.ServerName != "__nexusdock_first_party" || metadata.RemoteName != "exec_command" {
+		t.Fatalf("first-party tool metadata=%+v ok=%v", metadata, ok)
+	}
 	if _, err := set.Call(context.Background(), "agentdock_context", map[string]any{}); err == nil {
 		t.Fatal("model-facing call reached runtime-only agentdock_context")
 	}

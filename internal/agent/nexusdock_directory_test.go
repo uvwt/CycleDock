@@ -25,16 +25,17 @@ func TestNexusDockDirectoryTargets_使用授权设备目录并聚合能力(t *te
 		case "/v1/integrations/devices":
 			w.Write([]byte(`{"devices":[{"id":"node_a","name":"TianYi","online":true,"os":"windows","agent_version":"1.1.1"},{"id":"node_b","name":"RN","online":false}]}`))
 		case "/v1/integrations/capabilities":
-			w.Write([]byte(`{"items":[{"node_id":"node_a","name":"browser","type":"skill"},{"node_id":"node_a","name":"neo","type":"mcp"},{"node_id":"node_a","name":"screenshots","type":"tool"},{"node_id":"node_a","name":"pluginX","type":"plugin"},{"node_id":"node_b","name":"docker","type":"tool"},{"node_id":"other","name":"forbidden","type":"tool"}]}`))
+			w.Write([]byte(`{"items":[{"node_id":"node_a","name":"browser","type":"skill"},{"node_id":"node_a","name":"neo","type":"mcp"},{"id":"cap_screen","node_id":"node_a","name":"screenshots","type":"tool","online":true,"stale":false,"contract_hash":"sha256:screen"},{"node_id":"node_a","name":"pluginX","type":"plugin"},{"id":"cap_docker","node_id":"node_b","name":"docker","type":"tool","online":false,"stale":true,"contract_hash":"sha256:docker"},{"node_id":"other","name":"forbidden","type":"tool"}]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer server.Close()
-	text, supported, err := nexusDockDirectoryTargets(context.Background(), nexusdock.RuntimeConnection{URL: server.URL + "/mcp", AccessToken: "oauth-token"})
+	directory, supported, err := nexusDockDirectoryTargets(context.Background(), nexusdock.RuntimeConnection{URL: server.URL + "/mcp", AccessToken: "oauth-token"})
 	if err != nil || !supported || calls != 2 {
 		t.Fatalf("REST 目录失败: supported=%v calls=%d err=%v", supported, calls, err)
 	}
+	text := directory.Bootstrap
 	for _, want := range []string{"node_a", "TianYi", "node_b", "browser", "neo", "screenshots", "pluginX", "docker"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("目录缺少 %s: %s", want, text)
@@ -42,6 +43,9 @@ func TestNexusDockDirectoryTargets_使用授权设备目录并聚合能力(t *te
 	}
 	if strings.Contains(text, "forbidden") || strings.Contains(text, "oauth-token") {
 		t.Fatalf("上下文包含越权信息或密钥: %s", text)
+	}
+	if directory.Execution == nil {
+		t.Fatal("在线 Tool capability 应建立 Execution 路由")
 	}
 }
 

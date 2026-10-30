@@ -4,7 +4,8 @@ CycleDock 第一方连接仍使用 NexusDock MCP OAuth，Token 的 resource 为 
 
 1. `GET /v1/integrations/devices` 获取设备和实时在线标记。
 2. `GET /v1/integrations/capabilities` 获取服务端已缓存的 Skill、MCP、Plugin、Tool 名称。
-3. 将设备、能力索引（最多 20 台设备，每类最多 14 项）作为非可信元数据追加到本轮上下文；真实执行仍通过已连接的 MCP Session。
+3. 将设备、能力索引（最多 20 台设备，每类最多 14 项）作为非可信元数据追加到本轮上下文。
+4. 新版 Cloud 提供 Execution API 时，能精确映射到节点 Tool capability 的实际调用走持久 Execution；MCP 仍负责模型 Tool Schema、NexusDock 自有工具和旧 Cloud 回退。执行可靠性细节见 [nexusdock-execution-api.md](nexusdock-execution-api.md)。
 
 Cloud 老版本没有该 API（404）或目录服务暂时不可用时，沿用现有 `agentdock_context` 发现方法。目录明确标注“元数据不等于可执行权限”；在线状态由设备接口决定。拒绝 HTTP 重定向（防止 Bearer 泄漏），响应大小上限 2 MiB；401/403 等授权错误不会静默回退。
 
