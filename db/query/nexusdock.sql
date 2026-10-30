@@ -16,12 +16,11 @@ WHERE expires_at <= now() OR consumed_at IS NOT NULL;
 -- name: CreateNexusDockAuthFlow :exec
 INSERT INTO nexusdock_auth_flows (
     state_digest, workspace_id, human_account_id, source_id,
-    client_id, code_verifier, expires_at, automatic, return_to, expected_subject
+    client_id, code_verifier, expires_at
 )
 VALUES (
     sqlc.arg(state_digest), sqlc.arg(workspace_id), sqlc.arg(human_account_id),
-    sqlc.arg(source_id), sqlc.arg(client_id), sqlc.arg(code_verifier), sqlc.arg(expires_at),
-    sqlc.arg(automatic), sqlc.arg(return_to), sqlc.arg(expected_subject)
+    sqlc.arg(source_id), sqlc.arg(client_id), sqlc.arg(code_verifier), sqlc.arg(expires_at)
 );
 
 -- name: ConsumeNexusDockAuthFlow :one
@@ -42,12 +41,12 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 -- name: UpsertWorkspaceNexusDockConnection :one
 INSERT INTO workspace_nexusdock_connections (
     workspace_id, resource, client_id,
-    access_token_ciphertext, refresh_token_ciphertext, access_expires_at
+    access_token_ciphertext, refresh_token_ciphertext, access_expires_at, authorized_subject
 )
 VALUES (
     sqlc.arg(workspace_id), sqlc.arg(resource), sqlc.arg(client_id),
     sqlc.arg(access_token_ciphertext), sqlc.arg(refresh_token_ciphertext),
-    sqlc.arg(access_expires_at)
+    sqlc.arg(access_expires_at), sqlc.arg(authorized_subject)
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET resource = EXCLUDED.resource,
@@ -55,21 +54,11 @@ SET resource = EXCLUDED.resource,
     access_token_ciphertext = EXCLUDED.access_token_ciphertext,
     refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
     access_expires_at = EXCLUDED.access_expires_at,
+    authorized_subject = EXCLUDED.authorized_subject,
+    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject IS DISTINCT FROM EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
     updated_at = now()
 RETURNING *;
 
 -- name: DeleteWorkspaceNexusDockConnection :execrows
 DELETE FROM workspace_nexusdock_connections
 WHERE workspace_id = sqlc.arg(workspace_id);
-
--- name: NexusDockAutoAuthorizationDeclined :one
-SELECT EXISTS (
-    SELECT 1 FROM nexusdock_auth_preferences
-    WHERE workspace_id = sqlc.arg(workspace_id) AND auto_login_declined
-) AS declined;
-
--- name: SetNexusDockAutoAuthorizationDeclined :exec
-INSERT INTO nexusdock_auth_preferences (workspace_id, auto_login_declined)
-VALUES (sqlc.arg(workspace_id), sqlc.arg(declined))
-ON CONFLICT (workspace_id)
-DO UPDATE SET auto_login_declined = excluded.auto_login_declined;

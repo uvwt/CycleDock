@@ -38,8 +38,6 @@ function Authenticated() {
     if (!model && !connection) return;
     if (model === "chatgpt_connected" || connection === "nexusdock-connected") {
       toast.success("账号连接成功");
-    } else if (connection === "nexusdock-account-mismatch") {
-      toast.error("NexusDock 登录账号与设备授权账号不一致。请检查 DEV/生产环境及账号是否相同后重新授权。", { duration: 10000 });
     } else if (connection === "nexusdock-invalid-state") {
       toast.warning("设备授权已过期或重复使用，请重新发起授权。");
     } else if (connection === "nexusdock-denied") {

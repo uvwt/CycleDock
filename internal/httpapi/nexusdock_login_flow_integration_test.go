@@ -19,7 +19,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 )
 
-func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *testing.T) {
+func TestOIDCLoginReturnsToChatWithoutRequestingDeviceAuthorization(t *testing.T) {
 	_, pool, dataStore := newHTTPIntegration(t)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *test
 		t.Fatal(err)
 	}
 	handler := NewRouter(pool, dataStore, authService, Config{NexusDock: deviceService})
-	// 登录入口只有一次；授权流程由服务端在 OIDC 回调中连续发起。
+	// 登录入口只完成身份认证，设备 OAuth 必须单独由设置页的连接按钮触发。
 	start := httptest.NewRecorder()
 	handler.ServeHTTP(start, httptest.NewRequest(http.MethodGet, "/auth/nexusdock/start?return_to=%2Fprojects", nil))
 	if start.Code != http.StatusFound {
@@ -144,12 +144,8 @@ func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *test
 	if callback.Code != http.StatusFound {
 		t.Fatalf("OIDC callback: %d %s", callback.Code, callback.Body.String())
 	}
-	authorizationURL, err := url.Parse(callback.Header().Get("Location"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if authorizationURL.Path != "/oauth/authorize" || authorizationURL.Query().Get("scope") != "mcp" {
-		t.Fatalf("first login must continue to explicit device consent: %s", callback.Header().Get("Location"))
+	if callback.Header().Get("Location") != "/projects" {
+		t.Fatalf("OIDC should resume Chat without MCP consent: %s", callback.Header().Get("Location"))
 	}
 	var sessionCookie *http.Cookie
 	for _, cookie := range callback.Result().Cookies() {
@@ -158,27 +154,16 @@ func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *test
 		}
 	}
 	if sessionCookie == nil {
-		t.Fatal("Chat session must exist before device consent")
-	}
-	oauthState := authorizationURL.Query().Get("state")
-	if oauthState == "" {
-		t.Fatal("OAuth PKCE state missing")
-	}
-	approve := httptest.NewRequest(http.MethodGet, "/auth/nexusdock-device/callback?state="+url.QueryEscape(oauthState)+"&code=device-code", nil)
-	approve.AddCookie(sessionCookie)
-	done := httptest.NewRecorder()
-	handler.ServeHTTP(done, approve)
-	if done.Code != http.StatusFound || done.Header().Get("Location") != "/projects" {
-		t.Fatalf("consent must resume original Chat path: %d %s", done.Code, done.Header().Get("Location"))
+		t.Fatal("OIDC should establish a Human session")
 	}
 	status := httptest.NewRequest(http.MethodGet, "/api/v1/agent/nexusdock", nil)
 	status.AddCookie(sessionCookie)
 	connected := httptest.NewRecorder()
 	handler.ServeHTTP(connected, status)
-	if connected.Code != http.StatusOK || !strings.Contains(connected.Body.String(), strings.Join([]string{string('"'), "connected", string('"'), ":true"}, "")) {
-		t.Fatalf("device authorization not persisted: %d %s", connected.Code, connected.Body.String())
+	if connected.Code != http.StatusOK || !strings.Contains(connected.Body.String(), `"connected":false`) {
+		t.Fatalf("login must not create a device connection: %d %s", connected.Code, connected.Body.String())
 	}
-	// 同一个 OIDC 账号再次登录，已授权设备无需第二次 consent。
+	// 后续登录也不会因为没有连接设备而强制触发 OAuth。
 	nextStart := httptest.NewRecorder()
 	handler.ServeHTTP(nextStart, httptest.NewRequest(http.MethodGet, "/auth/nexusdock/start", nil))
 	nextURL, _ := url.Parse(nextStart.Header().Get("Location"))
@@ -194,6 +179,6 @@ func TestOIDCLoginAutomaticallyContinuesNexusDockConsentAndSkipsOnRepeat(t *test
 	secondCallback := httptest.NewRecorder()
 	handler.ServeHTTP(secondCallback, second)
 	if secondCallback.Code != http.StatusFound || secondCallback.Header().Get("Location") != "/" {
-		t.Fatalf("second OIDC login must skip previously consented device flow: %d %s", secondCallback.Code, secondCallback.Header().Get("Location"))
+		t.Fatalf("repeated OIDC login must not start MCP authorization: %d %s", secondCallback.Code, secondCallback.Header().Get("Location"))
 	}
 }

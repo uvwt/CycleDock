@@ -204,6 +204,7 @@ export type NexusConnection = {
   connected: boolean;
   manage_url?: string;
   connected_at?: string;
+  authorized_subject?: string;
 };
 export type TestResult = {
   ok: boolean;
