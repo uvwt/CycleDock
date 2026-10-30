@@ -40,7 +40,6 @@ var (
 	ErrAuthorization     = errors.New("NexusDock authorization failed")
 	ErrInvalidConfig     = errors.New("invalid NexusDock connection configuration")
 	ErrConnectionExpired = errors.New("NexusDock authorization expired")
-	ErrIdentityMismatch  = errors.New("NexusDock OAuth account differs from OIDC login")
 )
 
 type Config struct {
@@ -62,26 +61,16 @@ type Service struct {
 }
 
 type Status struct {
-	Available   bool
-	Connected   bool
-	ManageURL   string
-	ConnectedAt time.Time
+	Available         bool
+	Connected         bool
+	ManageURL         string
+	ConnectedAt       time.Time
+	AuthorizedSubject string
 }
 
 type AuthorizationStart struct {
 	URL       string
 	ExpiresAt time.Time
-}
-
-// AuthorizationOptions 仅由服务端信任的 Human Session 决定。
-type AuthorizationOptions struct {
-	Automatic       bool
-	ReturnTo        string
-	ExpectedSubject string
-}
-type AuthorizationOutcome struct {
-	Automatic bool
-	ReturnTo  string
 }
 
 type RuntimeConnection struct {
@@ -185,6 +174,7 @@ func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID) (Status, er
 		return Status{}, fmt.Errorf("load NexusDock connection: %w", err)
 	}
 	status.Connected = true
+	status.AuthorizedSubject = connection.AuthorizedSubject
 	if connection.ConnectedAt.Valid {
 		status.ConnectedAt = connection.ConnectedAt.Time
 	}
@@ -194,7 +184,6 @@ func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID) (Status, er
 func (s *Service) BeginAuthorization(
 	ctx context.Context,
 	workspaceID, humanAccountID, sourceID uuid.UUID,
-	options AuthorizationOptions,
 ) (AuthorizationStart, error) {
 	if s == nil {
 		return AuthorizationStart{}, ErrDisabled
@@ -223,7 +212,6 @@ func (s *Service) BeginAuthorization(
 		StateDigest: stateDigest[:], WorkspaceID: workspaceID, HumanAccountID: humanAccountID,
 		SourceID: sourceID, ClientID: clientID, CodeVerifier: verifier,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
-		Automatic: options.Automatic, ReturnTo: options.ReturnTo, ExpectedSubject: options.ExpectedSubject,
 	}); err != nil {
 		return AuthorizationStart{}, fmt.Errorf("save NexusDock auth flow: %w", err)
 	}
@@ -243,19 +231,6 @@ func (s *Service) BeginAuthorization(
 		URL:       metadata.Server.AuthorizationEndpoint + "?" + values.Encode(),
 		ExpiresAt: expiresAt,
 	}, nil
-}
-
-// ShouldAutoAuthorize 遵守已连接状态和用户显式拒绝，不在每次登录重复弹授权。
-func (s *Service) ShouldAutoAuthorize(ctx context.Context, workspaceID uuid.UUID) (bool, error) {
-	if s == nil {
-		return false, nil
-	}
-	status, err := s.Status(ctx, workspaceID)
-	if err != nil || status.Connected {
-		return false, err
-	}
-	declined, err := s.queries.NexusDockAutoAuthorizationDeclined(ctx, workspaceID)
-	return !declined, err
 }
 
 func (s *Service) consumeAuthorization(ctx context.Context, workspaceID, humanAccountID, sourceID uuid.UUID, state string) (db.NexusdockAuthFlow, error) {
@@ -278,53 +253,40 @@ func (s *Service) consumeAuthorization(ctx context.Context, workspaceID, humanAc
 	return flow, nil
 }
 
-func (s *Service) DenyAuthorization(ctx context.Context, workspaceID, humanAccountID, sourceID uuid.UUID, state string) (AuthorizationOutcome, error) {
-	flow, err := s.consumeAuthorization(ctx, workspaceID, humanAccountID, sourceID, state)
-	if err != nil {
-		return AuthorizationOutcome{}, err
-	}
-	outcome := AuthorizationOutcome{Automatic: flow.Automatic, ReturnTo: flow.ReturnTo}
-	// 无论来自首次自动衔接还是设置页手动连接，明确拒绝都不能在下一次登录自动重新弹出。
-	if err := s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: true}); err != nil {
-		return outcome, fmt.Errorf("record NexusDock consent denial: %w", err)
-	}
-	return outcome, nil
+func (s *Service) DenyAuthorization(ctx context.Context, workspaceID, humanAccountID, sourceID uuid.UUID, state string) error {
+	// 用户拒绝设备授权时只消耗该次 state；已经建立的登录 Session 不受影响。
+	_, err := s.consumeAuthorization(ctx, workspaceID, humanAccountID, sourceID, state)
+	return err
 }
 
-// 授权码独立于 OIDC 身份令牌；同一个 NexusDock sub 才能连接设备。
-func (s *Service) CompleteAuthorization(ctx context.Context, workspaceID, humanAccountID, sourceID uuid.UUID, state, code string) (AuthorizationOutcome, error) {
+// 设备 OAuth 授权属于资源所有者 B，允许与 CycleDock 的 OIDC 登录身份 A 不同。
+// 但 state 必须绑定当前 A 的 Human、Source 和 Workspace，绝不能跨工作空间使用。
+func (s *Service) CompleteAuthorization(ctx context.Context, workspaceID, humanAccountID, sourceID uuid.UUID, state, code string) error {
 	if strings.TrimSpace(code) == "" {
-		return AuthorizationOutcome{}, ErrInvalidState
+		return ErrInvalidState
 	}
 	flow, err := s.consumeAuthorization(ctx, workspaceID, humanAccountID, sourceID, state)
 	if err != nil {
-		return AuthorizationOutcome{}, err
+		return err
 	}
-	outcome := AuthorizationOutcome{Automatic: flow.Automatic, ReturnTo: flow.ReturnTo}
 	metadata, err := s.discover(ctx)
 	if err != nil {
-		return outcome, err
+		return err
 	}
 	tokens, err := s.exchangeCode(ctx, metadata, flow.ClientID, flow.CodeVerifier, code)
 	if err != nil {
-		return outcome, err
+		return err
 	}
-	if flow.ExpectedSubject != "" && tokens.Subject != flow.ExpectedSubject {
-		// Token 绝不落库；尽力撤销被错误账号批准的远端 grant。
+	if strings.TrimSpace(tokens.Subject) == "" {
+		// NexusDock 第一方返回资源账号 sub；不接受无法识别所有者的 Token。
 		if tokens.RefreshToken != "" {
 			_ = s.postFormNoContent(ctx, metadata.Server.RevocationEndpoint, url.Values{
 				"client_id": {flow.ClientID}, "token": {tokens.RefreshToken}, "token_type_hint": {"refresh_token"},
 			})
 		}
-		return outcome, ErrIdentityMismatch
+		return ErrAuthorization
 	}
-	if err := s.storeTokens(ctx, workspaceID, metadata.Resource, flow.ClientID, tokens); err != nil {
-		return outcome, err
-	}
-	if err := s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: false}); err != nil {
-		return outcome, fmt.Errorf("clear NexusDock consent denial: %w", err)
-	}
-	return outcome, nil
+	return s.storeTokens(ctx, workspaceID, metadata.Resource, flow.ClientID, tokens)
 }
 
 func (s *Service) Runtime(ctx context.Context, workspaceID uuid.UUID) (RuntimeConnection, error) {
@@ -357,7 +319,7 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 	}
 	row, err := s.queries.GetWorkspaceNexusDockConnection(ctx, workspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: true})
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("load NexusDock connection: %w", err)
@@ -380,10 +342,6 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 	}
 	if _, err := s.queries.DeleteWorkspaceNexusDockConnection(ctx, workspaceID); err != nil {
 		return fmt.Errorf("delete NexusDock connection: %w", err)
-	}
-	// 手动断开属于明确的用户选择，下次登录不能自动重新弹授权。
-	if err := s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: true}); err != nil {
-		return fmt.Errorf("record manual disconnect preference: %w", err)
 	}
 	return nil
 }
@@ -434,6 +392,10 @@ func (s *Service) refresh(ctx context.Context, workspaceID uuid.UUID) (RuntimeCo
 		}
 		return RuntimeConnection{}, err
 	}
+	// 刷新仅能续期原有资源账号，不能无声替换成另一位账号的设备权限。
+	if row.AuthorizedSubject != "" && tokens.Subject != row.AuthorizedSubject {
+		return RuntimeConnection{}, ErrConnectionExpired
+	}
 	updated, err := s.storeTokensWithQueries(ctx, q, workspaceID, metadata.Resource, row.ClientID, tokens)
 	if err != nil {
 		return RuntimeConnection{}, err
@@ -462,7 +424,7 @@ func (s *Service) storeTokensWithQueries(
 	resource, clientID string,
 	tokens tokenResponse,
 ) (db.WorkspaceNexusdockConnection, error) {
-	if tokens.AccessToken == "" || tokens.RefreshToken == "" || !strings.EqualFold(tokens.TokenType, "Bearer") || tokens.ExpiresIn <= 0 {
+	if tokens.AccessToken == "" || tokens.RefreshToken == "" || strings.TrimSpace(tokens.Subject) == "" || !strings.EqualFold(tokens.TokenType, "Bearer") || tokens.ExpiresIn <= 0 {
 		return db.WorkspaceNexusdockConnection{}, fmt.Errorf("%w: incomplete token response", ErrAuthorization)
 	}
 	accessCiphertext, err := s.encryptToken(workspaceID, "access", tokens.AccessToken)
@@ -477,7 +439,8 @@ func (s *Service) storeTokensWithQueries(
 	row, err := q.UpsertWorkspaceNexusDockConnection(ctx, db.UpsertWorkspaceNexusDockConnectionParams{
 		WorkspaceID: workspaceID, Resource: resource, ClientID: clientID,
 		AccessTokenCiphertext: accessCiphertext, RefreshTokenCiphertext: refreshCiphertext,
-		AccessExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		AccessExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		AuthorizedSubject: tokens.Subject,
 	})
 	if err != nil {
 		return db.WorkspaceNexusdockConnection{}, fmt.Errorf("save NexusDock connection: %w", err)

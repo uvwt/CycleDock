@@ -21,7 +21,7 @@ WHERE state_digest = $1
   AND source_id = $4
   AND consumed_at IS NULL
   AND expires_at > now()
-RETURNING state_digest, workspace_id, human_account_id, source_id, client_id, code_verifier, expires_at, consumed_at, created_at, automatic, return_to, expected_subject
+RETURNING state_digest, workspace_id, human_account_id, source_id, client_id, code_verifier, expires_at, consumed_at, created_at
 `
 
 type ConsumeNexusDockAuthFlowParams struct {
@@ -49,9 +49,6 @@ func (q *Queries) ConsumeNexusDockAuthFlow(ctx context.Context, arg ConsumeNexus
 		&i.ExpiresAt,
 		&i.ConsumedAt,
 		&i.CreatedAt,
-		&i.Automatic,
-		&i.ReturnTo,
-		&i.ExpectedSubject,
 	)
 	return i, err
 }
@@ -59,26 +56,22 @@ func (q *Queries) ConsumeNexusDockAuthFlow(ctx context.Context, arg ConsumeNexus
 const createNexusDockAuthFlow = `-- name: CreateNexusDockAuthFlow :exec
 INSERT INTO nexusdock_auth_flows (
     state_digest, workspace_id, human_account_id, source_id,
-    client_id, code_verifier, expires_at, automatic, return_to, expected_subject
+    client_id, code_verifier, expires_at
 )
 VALUES (
     $1, $2, $3,
-    $4, $5, $6, $7,
-    $8, $9, $10
+    $4, $5, $6, $7
 )
 `
 
 type CreateNexusDockAuthFlowParams struct {
-	StateDigest     []byte             `json:"state_digest"`
-	WorkspaceID     uuid.UUID          `json:"workspace_id"`
-	HumanAccountID  uuid.UUID          `json:"human_account_id"`
-	SourceID        uuid.UUID          `json:"source_id"`
-	ClientID        string             `json:"client_id"`
-	CodeVerifier    string             `json:"code_verifier"`
-	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
-	Automatic       bool               `json:"automatic"`
-	ReturnTo        string             `json:"return_to"`
-	ExpectedSubject string             `json:"expected_subject"`
+	StateDigest    []byte             `json:"state_digest"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	HumanAccountID uuid.UUID          `json:"human_account_id"`
+	SourceID       uuid.UUID          `json:"source_id"`
+	ClientID       string             `json:"client_id"`
+	CodeVerifier   string             `json:"code_verifier"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreateNexusDockAuthFlow(ctx context.Context, arg CreateNexusDockAuthFlowParams) error {
@@ -90,9 +83,6 @@ func (q *Queries) CreateNexusDockAuthFlow(ctx context.Context, arg CreateNexusDo
 		arg.ClientID,
 		arg.CodeVerifier,
 		arg.ExpiresAt,
-		arg.Automatic,
-		arg.ReturnTo,
-		arg.ExpectedSubject,
 	)
 	return err
 }
@@ -153,7 +143,7 @@ func (q *Queries) GetNexusDockOAuthClient(ctx context.Context, resource string) 
 }
 
 const getWorkspaceNexusDockConnection = `-- name: GetWorkspaceNexusDockConnection :one
-SELECT workspace_id, resource, client_id, access_token_ciphertext, refresh_token_ciphertext, access_expires_at, connected_at, updated_at FROM workspace_nexusdock_connections
+SELECT workspace_id, resource, client_id, access_token_ciphertext, refresh_token_ciphertext, access_expires_at, connected_at, updated_at, authorized_subject FROM workspace_nexusdock_connections
 WHERE workspace_id = $1
 `
 
@@ -169,50 +159,20 @@ func (q *Queries) GetWorkspaceNexusDockConnection(ctx context.Context, workspace
 		&i.AccessExpiresAt,
 		&i.ConnectedAt,
 		&i.UpdatedAt,
+		&i.AuthorizedSubject,
 	)
 	return i, err
-}
-
-const nexusDockAutoAuthorizationDeclined = `-- name: NexusDockAutoAuthorizationDeclined :one
-SELECT EXISTS (
-    SELECT 1 FROM nexusdock_auth_preferences
-    WHERE workspace_id = $1 AND auto_login_declined
-) AS declined
-`
-
-func (q *Queries) NexusDockAutoAuthorizationDeclined(ctx context.Context, workspaceID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, nexusDockAutoAuthorizationDeclined, workspaceID)
-	var declined bool
-	err := row.Scan(&declined)
-	return declined, err
-}
-
-const setNexusDockAutoAuthorizationDeclined = `-- name: SetNexusDockAutoAuthorizationDeclined :exec
-INSERT INTO nexusdock_auth_preferences (workspace_id, auto_login_declined)
-VALUES ($1, $2)
-ON CONFLICT (workspace_id)
-DO UPDATE SET auto_login_declined = excluded.auto_login_declined
-`
-
-type SetNexusDockAutoAuthorizationDeclinedParams struct {
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	Declined    bool      `json:"declined"`
-}
-
-func (q *Queries) SetNexusDockAutoAuthorizationDeclined(ctx context.Context, arg SetNexusDockAutoAuthorizationDeclinedParams) error {
-	_, err := q.db.Exec(ctx, setNexusDockAutoAuthorizationDeclined, arg.WorkspaceID, arg.Declined)
-	return err
 }
 
 const upsertWorkspaceNexusDockConnection = `-- name: UpsertWorkspaceNexusDockConnection :one
 INSERT INTO workspace_nexusdock_connections (
     workspace_id, resource, client_id,
-    access_token_ciphertext, refresh_token_ciphertext, access_expires_at
+    access_token_ciphertext, refresh_token_ciphertext, access_expires_at, authorized_subject
 )
 VALUES (
     $1, $2, $3,
     $4, $5,
-    $6
+    $6, $7
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET resource = EXCLUDED.resource,
@@ -220,8 +180,10 @@ SET resource = EXCLUDED.resource,
     access_token_ciphertext = EXCLUDED.access_token_ciphertext,
     refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
     access_expires_at = EXCLUDED.access_expires_at,
+    authorized_subject = EXCLUDED.authorized_subject,
+    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject IS DISTINCT FROM EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
     updated_at = now()
-RETURNING workspace_id, resource, client_id, access_token_ciphertext, refresh_token_ciphertext, access_expires_at, connected_at, updated_at
+RETURNING workspace_id, resource, client_id, access_token_ciphertext, refresh_token_ciphertext, access_expires_at, connected_at, updated_at, authorized_subject
 `
 
 type UpsertWorkspaceNexusDockConnectionParams struct {
@@ -231,6 +193,7 @@ type UpsertWorkspaceNexusDockConnectionParams struct {
 	AccessTokenCiphertext  []byte             `json:"access_token_ciphertext"`
 	RefreshTokenCiphertext []byte             `json:"refresh_token_ciphertext"`
 	AccessExpiresAt        pgtype.Timestamptz `json:"access_expires_at"`
+	AuthorizedSubject      string             `json:"authorized_subject"`
 }
 
 func (q *Queries) UpsertWorkspaceNexusDockConnection(ctx context.Context, arg UpsertWorkspaceNexusDockConnectionParams) (WorkspaceNexusdockConnection, error) {
@@ -241,6 +204,7 @@ func (q *Queries) UpsertWorkspaceNexusDockConnection(ctx context.Context, arg Up
 		arg.AccessTokenCiphertext,
 		arg.RefreshTokenCiphertext,
 		arg.AccessExpiresAt,
+		arg.AuthorizedSubject,
 	)
 	var i WorkspaceNexusdockConnection
 	err := row.Scan(
@@ -252,6 +216,7 @@ func (q *Queries) UpsertWorkspaceNexusDockConnection(ctx context.Context, arg Up
 		&i.AccessExpiresAt,
 		&i.ConnectedAt,
 		&i.UpdatedAt,
+		&i.AuthorizedSubject,
 	)
 	return i, err
 }

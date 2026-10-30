@@ -28,10 +28,12 @@ CycleDock 只信任标准 OIDC 身份：
 
 未来团队 Workspace 通过 Membership 扩展，不改变 OIDC 主身份模型。
 
-## Hosted 一体式设备授权
-用户点击 NexusDock 登录后先完成 OIDC 身份验证；第一次登录且无已连接设备、未曾拒绝自动授权时，CycleDock 服务端直接重定向到 NexusDock MCP OAuth consent，同意后恢复最初 Chat 页面。OIDC id_token 只能建立 Human Session，不能用于设备 API。
-设备 OAuth token 的 sub 必须等于当前 NexusDock OIDC 登录的 issuer + sub 中的 sub；不匹配或响应缺少 sub 时严禁落库，并撤销刚生成的远端 grant。设备权限由 NexusDock OAuth consent 明确授予，不能隐式授予。
-已连接设备的后续登录不重复授权；用户拒绝首次 consent 或手动断开后保留拒绝偏好，仍可登录 Chat 并主动在设置页重新授权。过期、撤销或切换账号必须重新走 OAuth。CycleDock 不根据 email 推断权限。
+## Hosted 账号登录与独立设备授权
+
+NexusDock OIDC 只负责登录 CycleDock 并创建 Human Session，成功后返回原始目标页面。**不**在登录时自动重定向到设备 MCP OAuth。
+在设置的「NexusDock 远程设备」中，Workspace Owner 主动点击「连接 NexusDock 设备」才触发独立 MCP OAuth Consent。授权时用户可以选择与 OIDC 登录账号不同的 NexusDock 账号 B：OIDC A 决定工作空间归属，OAuth B 决定可访问的设备资源；B 的 Token 只绑定发起授权的 Workspace，不替换 A 的登录会话。
+OAuth state 绑定 Workspace + Human + Source，授权码使用 PKCE，所有设备权限必须经资源账号明确同意。NexusDock OAuth 的 token 响应附加资源账号 sub，服务端保存为 authorized_subject、连接状态展示该账号；无 sub 不落库。刷新 token 时若已知资源账号 sub 变化，拒绝继续使用并要求重新授权。旧连接记录的 sub 初始为空，重新连接后显示。
+用户拒绝设备授权或断开连接不影响 OIDC 登录；断开时撤销已授权的 refresh token。一个 Workspace 目前只保留一条 NexusDock 连接，重新授权会替换原连接；多资源账号并存是独立需求，不在本次变更中。
 
 ## 3. Self-hosted
 
@@ -177,12 +179,6 @@ Hosted 第一方连接由部署层配置：
 
 这些是服务端部署配置，不是终端用户填写的 MCP 设置。未配置第一方 NexusDock 参数时设备卡片不可用；普通 MCP 无 Token 连接仍能使用，但要保存或调用带 Bearer Token 的普通 MCP，必须配置加密密钥。
 
-### `nexusdock-account-mismatch` 排查
+### NexusDock DEV 环境配置
 
-此错误是安全校验拒绝了两次授权中不同的 `sub`，**不得移除校验、按邮箱匹配身份或直接存入 Token**。首先由有权限的运维人员核对当前 CycleDock 的 `CYCLEDOCK_OIDC_ISSUER` 和 `CYCLEDOCK_NEXUSDOCK_MCP_URL`：
-
-- RN DEV：`CYCLEDOCK_OIDC_ISSUER=https://dev.nexusdock.co`，`CYCLEDOCK_NEXUSDOCK_MCP_URL=https://dev.nexusdock.co/mcp`，`CYCLEDOCK_NEXUSDOCK_WEB_URL=https://dev.nexusdock.co`。
-- 通过 MCP Protected Resource Metadata 追溯真实 OAuth authorization server，检查 consent 页面登录账号是否与 OIDC 账号一致。
-- 不要仅按域名不同判断错误：有些生产架构允许独立的 OIDC 和 MCP 域名共享一个账号体系，最终仍以服务端签发的授权 `sub` 为准。
-- RN 配置受 root-only 文件和固定 `agentdock-ops` Broker 保护，现有只读/镜像发布权限不允许修改这些变量；应由正式配置管理权限修改、备份并重建 DEV，不能通过容器、临时提权或绕过 Broker 读取秘密。
-- 配置修复后必须重新发起设备授权；已拒绝保存的 Token 不应自动恢复或绕过重新同意。
+RN DEV 的 OIDC issuer 为 https://dev.nexusdock.co，第一方 MCP URL 为 https://dev.nexusdock.co/mcp，Web URL 为 https://dev.nexusdock.co。三项都应指向 DEV 环境，避免把 DEV 的授权错误发送给生产 OAuth 服务。已设置的受控 agentdock-ops Broker 仅允许在 RN DEV 修改固定的三个字段；不开放通用 root/任意配置写入。区分 A/B 账号合法授权与错误混用 DEV/生产环境。

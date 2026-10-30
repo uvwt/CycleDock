@@ -56,11 +56,21 @@ export function NexusSettings() {
               <p className="font-semibold">NexusDock</p>
               <p className="text-xs text-muted-foreground">
                 {q.data.connected
-                  ? "已授权 Cycle Agent 使用已配对设备"
+                  ? "已授权 Cycle Agent 使用此账号下的设备"
                   : "尚未连接"}
               </p>
+              {q.data.connected && (
+                <p className="mt-1 break-all text-xs text-muted-foreground">
+                  {q.data.authorized_subject
+                    ? "NexusDock 授权账号 ID：" + q.data.authorized_subject
+                    : "授权账号未知，重新连接后可显示"}
+                </p>
+              )}
             </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            登录账号和设备授权账号可以不同；连接时请确认授权账号。
+          </p>
           <div className="flex flex-wrap gap-2">
             {q.data.connected ? (
               <>
@@ -89,7 +99,7 @@ export function NexusSettings() {
                 disabled={connect.isPending}
                 onClick={() => connect.mutate()}
               >
-                授权使用设备
+                连接 NexusDock 设备
               </Button>
             )}
           </div>
