@@ -2,17 +2,18 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
@@ -21,15 +22,39 @@ import (
 var integrationStore *Store
 
 func TestMain(m *testing.M) {
+	os.Exit(runStoreTests(m))
+}
+
+func runStoreTests(m *testing.M) int {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
-		os.Exit(m.Run())
+		return m.Run()
 	}
 
-	sqlDB, err := sql.Open("pgx", databaseURL)
+	adminPool, err := pgxpool.New(context.Background(), databaseURL)
 	if err != nil {
 		panic(err)
 	}
+	defer adminPool.Close()
+	// 所有迁移和清表都只能发生在本次测试的独立 schema 中，
+	// 即使误传开发库连接串，也不得修改已有业务表。
+	schema := "store_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
+		panic(err)
+	}
+	defer func() {
+		if _, err := adminPool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			panic(err)
+		}
+	}()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		panic(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*config.ConnConfig)
+	defer sqlDB.Close()
 	_, filename, _, _ := runtime.Caller(0)
 	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
 	if err := goose.SetDialect("postgres"); err != nil {
@@ -39,19 +64,17 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	pool, err := pgxpool.New(context.Background(), databaseURL)
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		panic(err)
 	}
 	if err := pool.Ping(context.Background()); err != nil {
 		panic(err)
 	}
+	defer pool.Close()
 	integrationStore = New(pool)
 
-	code := m.Run()
-	pool.Close()
-	_ = sqlDB.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 type testFixture struct {
@@ -264,12 +287,12 @@ func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 	}
 
 	validTurn, err := s.SubmitSessionComment(ctx, SubmitSessionCommentParams{
-		WorkspaceID: f.WorkspaceID,
-		CardID: f.CardID,
+		WorkspaceID:    f.WorkspaceID,
+		CardID:         f.CardID,
 		AuthorSourceID: f.HumanID,
-		Content: "valid turn on card A",
+		Content:        "valid turn on card A",
 		IdempotencyKey: "cross-card-valid-turn",
-		DispatchMode: domain.DispatchModeEnqueue,
+		DispatchMode:   domain.DispatchModeEnqueue,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -317,9 +340,9 @@ func TestDatabaseRejectsCrossCardReferencesInsideWorkspace(t *testing.T) {
 	now := time.Now()
 	schedule, err := s.CreateSchedule(ctx, f.WorkspaceID, ongoingA.ID, domain.ScheduleRule{
 		Frequency: domain.ScheduleDaily,
-		Hour: 9,
-		Minute: 0,
-		Timezone: "Asia/Shanghai",
+		Hour:      9,
+		Minute:    0,
+		Timezone:  "Asia/Shanghai",
 	}, now)
 	if err != nil {
 		t.Fatal(err)

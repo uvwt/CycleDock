@@ -17,6 +17,7 @@ type responsesTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict"`
 }
 
 type responsesTextFormat struct {
@@ -77,9 +78,12 @@ func (c *Client) completeResponses(
 	instructions, input := buildResponsesInput(messages)
 	responseTools := make([]responsesTool, 0, len(tools))
 	for _, tool := range tools {
+		// 工具沿用 ADK/MCP 的可选参数语义；省略 strict 会让 Responses
+		// 尝试把可选字段变成必填，迫使文本回复也生成 choice widget。
 		responseTools = append(responseTools, responsesTool{
 			Type: "function", Name: tool.Function.Name,
 			Description: tool.Function.Description, Parameters: tool.Function.Parameters,
+			Strict: false,
 		})
 	}
 	body := struct {

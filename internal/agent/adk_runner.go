@@ -425,7 +425,7 @@ func buildADKInstructions(
 	out.WriteString("Rules:\n")
 	out.WriteString("- Treat the current Project/Card business metadata below as authoritative.\n")
 	out.WriteString("- All user-visible content must use reply_message. Each call creates exactly one separate bubble; you may call it several times per Turn. Do not put replies in plain assistant text.\n")
-	out.WriteString("- Send progress as reply_message(type=text,end_turn=false); finish with end_turn=true. A choice reply must include widget.question and widget.options and end_turn=true, which waits for human input. Use a unique idempotency_key for each bubble.\n")
+	out.WriteString("- For a simple question or greeting, send one text reply with end_turn=true. Send progress with end_turn=false only when useful during longer work; finish with end_turn=true. Text replies must omit widget and url. A choice reply must use type=choice and include widget.question and widget.options and end_turn=true, which waits for human input. Use a unique idempotency_key for each bubble.\n")
 	out.WriteString("- If an earlier FunctionResponse contains artifact_ref, use cycledock_read_artifact to inspect that historical payload instead of re-running the real tool merely to recover old evidence.\n")
 	out.WriteString("- If context compaction no longer includes an exact old value, use cycledock_search_session_history before re-querying a real read-only tool just to recover history.\n")
 	out.WriteString("- Only an active Discussion may generate Todo/Ongoing work.\n")

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,24 @@ func TestReplyMessageValidate(t *testing.T) {
 				t.Fatalf("valid=%v want %v: %v", err == nil, tc.ok, err)
 			}
 		})
+	}
+}
+
+func TestReplyMessageRejectsTextWidgetWithActionableError(t *testing.T) {
+	// 真实故障参数：正文已经完整，但文本消息错误地携带选择题。
+	message := ReplyMessage{
+		Type: "text", Content: "你好！有什么我可以帮你的吗？", EndTurn: true,
+		Widget: &ChoiceWidget{Question: "你想聊些什么？", Options: []ChoiceOption{
+			{Value: "ideas", Label: "讨论想法"}, {Value: "tasks", Label: "梳理任务"},
+		}},
+	}
+	err := message.Validate()
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "omit widget") {
+		t.Fatalf("text with widget must explain how to correct the call: %v", err)
+	}
+	message.Widget = nil
+	if err := message.Validate(); err != nil {
+		t.Fatalf("text reply corrected as instructed must be accepted: %v", err)
 	}
 }
 

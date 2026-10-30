@@ -12,10 +12,10 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	var cardTurns, turnAttempts, triggers, agentRuns *string
 	if err := s.pool.QueryRow(ctx, `
 		SELECT
-			to_regclass('public.card_turns')::text,
-			to_regclass('public.turn_attempts')::text,
-			to_regclass('public.triggers')::text,
-			to_regclass('public.agent_runs')::text
+			to_regclass('card_turns')::text,
+			to_regclass('turn_attempts')::text,
+			to_regclass('triggers')::text,
+			to_regclass('agent_runs')::text
 	`).Scan(&cardTurns, &turnAttempts, &triggers, &agentRuns); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM information_schema.columns
-		WHERE table_schema='public'
+		WHERE table_schema=current_schema()
 		  AND table_name='events'
 		  AND column_name='run_id'
 	`).Scan(&legacyRunColumnCount); err != nil {
@@ -46,7 +46,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM information_schema.columns
-		WHERE table_schema='public'
+		WHERE table_schema=current_schema()
 		  AND table_name='events'
 		  AND column_name='attempt_id'
 	`).Scan(&attemptColumnCount); err != nil {
@@ -59,7 +59,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	var resultColumnCount int
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM information_schema.columns
-		WHERE table_schema='public' AND table_name='turn_attempts'
+		WHERE table_schema=current_schema() AND table_name='turn_attempts'
 		  AND column_name='result_summary'
 	`).Scan(&resultColumnCount); err != nil {
 		t.Fatal(err)

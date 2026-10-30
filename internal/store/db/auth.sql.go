@@ -236,6 +236,24 @@ func (q *Queries) GetFirstWorkspace(ctx context.Context) (Workspace, error) {
 	return i, err
 }
 
+const getLocalAdminAccount = `-- name: GetLocalAdminAccount :one
+SELECT id, display_name, email_snapshot, is_local_admin, created_at, updated_at FROM human_accounts WHERE is_local_admin
+`
+
+func (q *Queries) GetLocalAdminAccount(ctx context.Context) (HumanAccount, error) {
+	row := q.db.QueryRow(ctx, getLocalAdminAccount)
+	var i HumanAccount
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.EmailSnapshot,
+		&i.IsLocalAdmin,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getLocalAdminIdentity = `-- name: GetLocalAdminIdentity :one
 SELECT
     ha.id AS human_account_id,
