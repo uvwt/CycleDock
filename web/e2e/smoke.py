@@ -237,6 +237,11 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.locator(
             'textarea[aria-label="发送消息，开始讨论…"]'
         ).fill("切换项目后继续编辑这段草稿")
+        # React useEffect 异步持久化草稿；在切项目之前等待真实保存完成，
+        # 而不是依赖宿主机器恰好在点击之间有足够的空闲时间。
+        self.page.wait_for_function(
+            "() => JSON.parse(localStorage.getItem('cycledock.new-discussion.drafts.v2') || '{}')['demo-project']?.content === '切换项目后继续编辑这段草稿'"
+        )
 
         self.switch_project("产品发布")
         self.page.wait_for_url("**/chat?project=demo-project-b")
