@@ -284,10 +284,9 @@ func (s *Service) DenyAuthorization(ctx context.Context, workspaceID, humanAccou
 		return AuthorizationOutcome{}, err
 	}
 	outcome := AuthorizationOutcome{Automatic: flow.Automatic, ReturnTo: flow.ReturnTo}
-	if flow.Automatic {
-		if err := s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: true}); err != nil {
-			return outcome, fmt.Errorf("record NexusDock consent denial: %w", err)
-		}
+	// 无论来自首次自动衔接还是设置页手动连接，明确拒绝都不能在下一次登录自动重新弹出。
+	if err := s.queries.SetNexusDockAutoAuthorizationDeclined(ctx, db.SetNexusDockAutoAuthorizationDeclinedParams{WorkspaceID: workspaceID, Declined: true}); err != nil {
+		return outcome, fmt.Errorf("record NexusDock consent denial: %w", err)
 	}
 	return outcome, nil
 }

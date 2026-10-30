@@ -161,6 +161,24 @@ func TestNexusDockUnifiedAuthorization_拒绝跨账号授权并记住用户拒�
 	if strings.TrimSpace(denied.ReturnTo) != "/chat/project" {
 		t.Fatal("denied consent should resume chat")
 	}
+	// 模拟用户撤销拒绝偏好后又从设置页手动发起连接，并在 NexusDock 明确拒绝。
+	// 即使手动发起，下一次 OIDC 登录也不能不顾拒绝再次跳转授权页。
+	if _, err := pool.Exec(ctx, "DELETE FROM nexusdock_auth_preferences WHERE workspace_id=$1", workspace); err != nil {
+		t.Fatal(err)
+	}
+	manualDenied, err := svc.BeginAuthorization(ctx, workspace, human, source, nexusdock.AuthorizationOptions{ReturnTo: "/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualDeniedURL, _ := url.Parse(manualDenied.URL)
+	manualOutcome, err := svc.DenyAuthorization(ctx, workspace, human, source, manualDeniedURL.Query().Get("state"))
+	if err != nil || manualOutcome.Automatic {
+		t.Fatalf("manual consent denial failed: %v %+v", err, manualOutcome)
+	}
+	should, err = svc.ShouldAutoAuthorize(ctx, workspace)
+	if err != nil || should {
+		t.Fatal("manual consent denial must suppress automatic consent on the next login")
+	}
 }
 
 func respondUnified(t *testing.T, w http.ResponseWriter, value any) {
