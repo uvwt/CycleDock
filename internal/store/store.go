@@ -148,6 +148,7 @@ func mapConstraintError(err error) error {
 	switch pgErr.ConstraintName {
 	case "agent_runs_trigger_uq",
 		"agent_runs_one_current_per_card_uq",
+		"turn_attempts_workspace_id_turn_id_attempt_number_key",
 		"turn_attempts_one_current_per_card_uq",
 		"turn_attempts_one_successor_uq",
 		"turn_attempts_invocation_uq":

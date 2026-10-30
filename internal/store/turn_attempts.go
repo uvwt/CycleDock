@@ -373,6 +373,11 @@ func (s *Store) ClaimNextTurnAttempt(
 		uuid.NullUUID{}, now, leaseDuration,
 	)
 	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			// SELECT 的快照建立后，另一个 claimant 仍可能先提交同一 Turn 的 Attempt。
+			// 唯一约束负责最终仲裁；失败方必须停止本次 Claim，不能顺手领取同一卡片的后续 Turn。
+			return nil, domain.ErrNotFound
+		}
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
