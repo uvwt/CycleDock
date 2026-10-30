@@ -61,6 +61,16 @@ class CycleDockSmoke(unittest.TestCase):
         details.wait_for()
         return details
 
+    def test_nexusdock_account_mismatch_explains_environment_and_account(self):
+        self.page.goto(BASE + "/?agent_connections=nexusdock-account-mismatch")
+        warning = self.page.get_by_text(
+            "NexusDock 登录账号与设备授权账号不一致。请检查 DEV/生产环境及账号是否相同后重新授权。",
+            exact=True,
+        )
+        warning.wait_for()
+        self.page.wait_for_url("**/settings/nexusdock")
+        self.page.get_by_role("button", name="授权使用设备").wait_for()
+
     def test_discussion_workbench_composer_and_time_separator(self):
         self.page.goto(BASE + "/chat")
         self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
