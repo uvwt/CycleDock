@@ -42,8 +42,14 @@ class CycleDockSmoke(unittest.TestCase):
         picker.wait_for()
         picker.get_by_role("menuitem", name=name, exact=True).click()
 
+    def card_action_button(self):
+        # 侧边栏每一项也有“更多操作”；只操作当前 Card 顶部的操作按钮。
+        return self.page.locator("main section > div.absolute").get_by_role(
+            "button", name="更多操作"
+        )
+
     def open_card_menu(self):
-        self.page.get_by_role("button", name="更多操作").click()
+        self.card_action_button().click()
         menu = self.page.get_by_role("menu")
         menu.wait_for()
         return menu
@@ -75,10 +81,11 @@ class CycleDockSmoke(unittest.TestCase):
         menu.get_by_role("menuitem", name="编辑信息").click()
         self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.page.keyboard.press("Escape")
-        self.page.get_by_role("button", name="生成任务").wait_for()
+        # 旧「生成任务」按钮已从会话工作台移除；编辑完应回到可输入状态。
+        self.page.get_by_role("dialog", name="编辑讨论信息").wait_for(state="hidden")
 
         collapsed = self.page.locator(
-            'input[aria-label="发送消息，继续推进任务…"]'
+            'textarea[aria-label="发送消息，继续推进任务…"]'
         )
         collapsed.wait_for()
         collapsed.focus()
@@ -133,7 +140,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
         self.page.keyboard.press("Escape")
         editor.wait_for(state="hidden")
-        self.page.locator("main header").get_by_role("button", name="更多操作").focus()
+        self.card_action_button().focus()
         self.page.keyboard.press("Enter")
         self.page.get_by_role("menu").wait_for()
 
@@ -143,7 +150,7 @@ class CycleDockSmoke(unittest.TestCase):
             ("/chat/demo-project/discussion-1", "发送消息，继续推进任务…"),
         ]:
             self.page.goto(BASE + path)
-            self.page.locator('input[aria-label="' + placeholder + '"]').focus()
+            self.page.locator('textarea[aria-label="' + placeholder + '"]').focus()
             composer = self.page.locator('textarea[aria-label="' + placeholder + '"]')
             composer.fill("保留输入")
             composer.dispatch_event("keydown", {"key": "Enter", "isComposing": True, "bubbles": True})
@@ -167,7 +174,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.get_by_role("button", name="新建讨论", exact=True).click()
         self.page.wait_for_url("**/chat?project=demo-project")
         collapsed = self.page.locator(
-            'input[aria-label="发送消息，开始讨论…"]'
+            'textarea[aria-label="发送消息，开始讨论…"]'
         )
         collapsed.wait_for()
         self.page.wait_for_timeout(100)
@@ -202,7 +209,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
         before = rows.count()
         collapsed = self.page.locator(
-            'input[aria-label="发送消息，开始讨论…"]'
+            'textarea[aria-label="发送消息，开始讨论…"]'
         )
         collapsed.focus()
         expanded = self.page.locator(
@@ -224,7 +231,7 @@ class CycleDockSmoke(unittest.TestCase):
     def test_discussion_draft_survives_project_switch(self):
         self.page.goto(BASE + "/chat?project=demo-project")
         collapsed = self.page.locator(
-            'input[aria-label="发送消息，开始讨论…"]'
+            'textarea[aria-label="发送消息，开始讨论…"]'
         )
         collapsed.focus()
         self.page.locator(
@@ -250,7 +257,7 @@ class CycleDockSmoke(unittest.TestCase):
     def test_welcome_message_creates_discussion_and_sends_first_turn(self):
         self.page.goto(BASE + "/chat")
         collapsed = self.page.locator(
-            'input[aria-label="发送消息，开始讨论…"]'
+            'textarea[aria-label="发送消息，开始讨论…"]'
         )
         collapsed.wait_for()
         collapsed.focus()
@@ -285,7 +292,7 @@ class CycleDockSmoke(unittest.TestCase):
         dialog.get_by_role("button", name="创建待办").click()
 
         self.page.wait_for_url("**/cards/demo-project/todo-*")
-        self.page.get_by_role("heading", name="手工填写待办").first.wait_for()
+        self.page.get_by_text("手工填写待办", exact=True).first.wait_for()
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
@@ -310,7 +317,7 @@ class CycleDockSmoke(unittest.TestCase):
             ).is_disabled()
         )
         self.page.keyboard.press("Escape")
-        self.page.get_by_role("button", name="更多操作").wait_for()
+        self.card_action_button().wait_for()
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
@@ -342,7 +349,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         composer = self.page.locator("main form")
         composer.get_by_role("button", name="中止", exact=True).wait_for()
-        self.page.get_by_role("button", name="暂不开启", exact=True).click()
         self.assertEqual(composer.get_by_role("button").count(), 1)
         text = composer.get_by_role("textbox")
         text.fill("后续要求")
@@ -404,7 +410,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         row = self.page.locator('[data-queued-turn="turn-queued"]')
         row.wait_for()
-        self.page.get_by_role("button", name="暂不开启", exact=True).click()
         timeline = self.page.get_by_role("log", name="统一消息时间线")
         self.assertEqual(timeline.get_by_text("顺便检查磁盘空间。", exact=True).count(), 0)
         self.assertEqual(self.page.locator("#event-event-7").count(), 0)
@@ -446,7 +451,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         row = self.page.locator('[data-queued-turn="turn-queued"]')
         row.wait_for()
-        self.page.get_by_role("button", name="暂不开启", exact=True).click()
         row.get_by_role("button", name="编辑内容").click()
         editor = self.page.get_by_role("dialog", name="编辑内容")
         content = editor.get_by_role("textbox", name="排队输入")
@@ -482,7 +486,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         row = self.page.locator('[data-queued-turn="turn-queued"]')
         row.wait_for()
-        self.page.get_by_role("button", name="暂不开启", exact=True).click()
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
         row.get_by_role("button", name="取消排队").click()
         self.page.get_by_text("模拟取消失败", exact=True).wait_for()
@@ -490,7 +493,7 @@ class CycleDockSmoke(unittest.TestCase):
         row.wait_for(state="detached")
         self.assertEqual(self.page.locator("#event-event-7").count(), 0)
         self.page.reload()
-        self.page.get_by_role("button", name="更多操作").wait_for()
+        self.card_action_button().wait_for()
         self.assertEqual(self.page.locator('[data-queued-turn="turn-queued"]').count(), 0)
         self.assertEqual(self.page.locator("#event-event-7").count(), 0)
 
@@ -795,14 +798,36 @@ class CycleDockSmoke(unittest.TestCase):
         )
 
     def test_model_routes_can_add_reorder_and_save(self):
+        # 测试环境的 mock-server 同进程持久化 settings，重复执行也必须从固定基线开始。
+        current = self.page.request.get(BASE + "/api/v1/agent/settings").json()
+        current["routes"] = [{
+            "id": "00000000-0000-4000-8000-000000000101",
+            "enabled": True,
+            "provider_type": "openai_compatible",
+            "credential_id": "",
+            "provider_base_url": "https://api.example.com/v1",
+            "model": "example-model",
+            "api_key_env": "CYCLEDOCK_MODEL_API_KEY",
+        }]
+        reset = self.page.request.put(BASE + "/api/v1/agent/settings", data=current)
+        self.assertTrue(reset.ok, "reset fixture model routes")
         self.page.goto(BASE + "/settings/models")
         self.page.get_by_role("heading", name="模型服务").wait_for()
         self.page.get_by_text("模型路由", exact=True).wait_for()
-        self.page.get_by_text("优先级 1", exact=True).wait_for()
+        handles = self.page.get_by_role("button", name="拖拽调整优先级")
+        self.assertEqual(handles.count(), 1)
 
-        self.page.get_by_role("button", name="添加 Route").click()
-        self.page.get_by_text("优先级 2", exact=True).wait_for()
-        self.page.get_by_role("button", name="下移模型 Route").first.click()
+        # 目前通过现有服务商添加 Route，通过 dnd-kit 键盘传感器调整优先级。
+        self.page.get_by_role(
+            "button", name="为此服务商添加一条模型 Route"
+        ).click()
+        self.assertEqual(handles.count(), 2)
+        handles.nth(1).focus()
+        self.page.keyboard.press("Space")
+        self.page.wait_for_timeout(200)
+        self.page.keyboard.press("ArrowUp")
+        self.page.wait_for_timeout(300)
+        self.page.keyboard.press("Space")
 
         with self.page.expect_request(
             lambda request: request.url.endswith("/api/v1/agent/settings")
