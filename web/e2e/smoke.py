@@ -9,7 +9,7 @@ import re
 import sys
 import unittest
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:4188"
 if len(sys.argv) > 1:
@@ -255,9 +255,8 @@ class CycleDockSmoke(unittest.TestCase):
             'textarea[aria-label="发送消息，开始讨论…"]'
         )
         restored.wait_for()
-        self.assertEqual(
-            restored.input_value(), "切换项目后继续编辑这段草稿"
-        )
+        # URL 先于 ProjectContext 组件渲染更新，必须等待项目完成切换。
+        expect(restored).to_have_value("切换项目后继续编辑这段草稿", timeout=10000)
 
     def test_welcome_message_creates_discussion_and_sends_first_turn(self):
         self.page.goto(BASE + "/chat")
