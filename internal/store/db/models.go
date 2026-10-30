@@ -157,15 +157,23 @@ type ModelOauthCredential struct {
 }
 
 type NexusdockAuthFlow struct {
-	StateDigest    []byte             `json:"state_digest"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	HumanAccountID uuid.UUID          `json:"human_account_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	ClientID       string             `json:"client_id"`
-	CodeVerifier   string             `json:"code_verifier"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
-	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	StateDigest     []byte             `json:"state_digest"`
+	WorkspaceID     uuid.UUID          `json:"workspace_id"`
+	HumanAccountID  uuid.UUID          `json:"human_account_id"`
+	SourceID        uuid.UUID          `json:"source_id"`
+	ClientID        string             `json:"client_id"`
+	CodeVerifier    string             `json:"code_verifier"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt      pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	Automatic       bool               `json:"automatic"`
+	ReturnTo        string             `json:"return_to"`
+	ExpectedSubject string             `json:"expected_subject"`
+}
+
+type NexusdockAuthPreference struct {
+	WorkspaceID       uuid.UUID `json:"workspace_id"`
+	AutoLoginDeclined bool      `json:"auto_login_declined"`
 }
 
 type NexusdockOauthClient struct {

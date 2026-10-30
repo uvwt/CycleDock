@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/oauth2"
@@ -125,6 +126,23 @@ func (s *Service) LoginMethods() LoginMethods {
 		methods.Providers = []LoginProvider{ProviderNexusDock}
 	}
 	return methods
+}
+
+// SubjectForHuman 以当前 OIDC issuer 和已建立的 Human Account 读取可信 sub，
+// 不以邮件地址或客户端 query 参数关联设备权限。
+func (s *Service) SubjectForHuman(ctx context.Context, humanAccountID uuid.UUID) (string, error) {
+	if !s.oidc.enabled() {
+		return "", nil
+	}
+	var subject string
+	err := s.pool.QueryRow(ctx, "SELECT subject FROM oidc_identities WHERE issuer=$1 AND human_account_id=$2", s.oidc.issuer, humanAccountID).Scan(&subject)
+	if err != nil {
+		return "", fmt.Errorf("load NexusDock OIDC subject: %w", err)
+	}
+	if subject == "" {
+		return "", ErrOIDCProvider
+	}
+	return subject, nil
 }
 
 func (s *Service) BeginOIDCLogin(ctx context.Context) (OIDCLoginStart, error) {

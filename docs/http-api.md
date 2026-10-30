@@ -149,6 +149,8 @@ POST / PUT / PATCH 必须使用 `Content-Type: application/json`。
 - `DELETE /api/v1/agent/nexusdock`：撤销远端 OAuth grant 后删除本地连接。
 - `GET /auth/nexusdock-device/callback`：要求已有 CycleDock Human Session；校验 state 与 Workspace/Human 绑定后兑换 code，并重定向回 Agent Connections。
 
+Hosted OIDC 完成后若尚未连接且未显式拒绝，服务端自动发起同一条设备 OAuth 链；首次授权后回到原登录目标路径，无须回到设置页再点击连接。用户取消或手动断开后不自动重新弹出；授权 token 响应的 sub 与 OIDC 身份不一致时拒绝绑定。
+
 该连接不是普通 MCP Connection；终端用户不会提交 NexusDock MCP URL、PAT、Bearer Token 或 `tenant_id`。
 
 

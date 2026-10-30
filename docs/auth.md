@@ -28,6 +28,11 @@ CycleDock 只信任标准 OIDC 身份：
 
 未来团队 Workspace 通过 Membership 扩展，不改变 OIDC 主身份模型。
 
+## Hosted 一体式设备授权
+用户点击 NexusDock 登录后先完成 OIDC 身份验证；第一次登录且无已连接设备、未曾拒绝自动授权时，CycleDock 服务端直接重定向到 NexusDock MCP OAuth consent，同意后恢复最初 Chat 页面。OIDC id_token 只能建立 Human Session，不能用于设备 API。
+设备 OAuth token 的 sub 必须等于当前 NexusDock OIDC 登录的 issuer + sub 中的 sub；不匹配或响应缺少 sub 时严禁落库，并撤销刚生成的远端 grant。设备权限由 NexusDock OAuth consent 明确授予，不能隐式授予。
+已连接设备的后续登录不重复授权；用户拒绝首次 consent 或手动断开后保留拒绝偏好，仍可登录 Chat 并主动在设置页重新授权。过期、撤销或切换账号必须重新走 OAuth。CycleDock 不根据 email 推断权限。
+
 ## 3. Self-hosted
 
 未配置 OIDC 时，保留单 Workspace Administrator password fallback。

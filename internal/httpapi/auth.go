@@ -249,6 +249,21 @@ func (api *API) oidcLoginCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.setSessionCookie(w, session)
+	// 一次点击登录后继续完成设备 OAuth；OIDC 凭据不直接被用于设备 API。
+	// 用户曾拒绝或已经连接时直接进入 Chat，不再出现重复的授权步骤。
+	if api.nexusDock != nil && session.Identity.Role == "owner" {
+		should, err := api.nexusDock.ShouldAutoAuthorize(r.Context(), session.Identity.WorkspaceID)
+		if err == nil && should {
+			start, authErr := api.startNexusDockAuthorization(r.Context(), session.Identity, true, returnTo)
+			if authErr == nil {
+				http.Redirect(w, r, start.URL, http.StatusFound)
+				return
+			}
+			api.logger.Warn("NexusDock unified login device authorization unavailable", "error", authErr)
+		} else if err != nil {
+			api.logger.Warn("NexusDock unified login preference unavailable", "error", err)
+		}
+	}
 	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 
