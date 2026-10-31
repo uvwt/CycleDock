@@ -40,6 +40,9 @@ export type Card = {
   health?: string;
   current_attempt_status?: string;
   latest_attempt_status?: string;
+  latest_message_sequence?: number;
+  last_read_message_sequence?: number;
+  unread?: boolean;
   pinned_at?: string;
   created_at: string;
   updated_at: string;

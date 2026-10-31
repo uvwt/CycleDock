@@ -118,7 +118,16 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	update := updates[0]
+	var update cardUpdate
+	for _, candidate := range updates {
+		if candidate.ID == card.ID.String() {
+			update = candidate
+			break
+		}
+	}
+	if update.ID == "" {
+		t.Fatalf("target card missing from updates: %+v", updates)
+	}
 	if update.MessagePreview != string([]rune(answer)[:180])+"…" {
 		t.Fatalf("model reply preview = %q", update.MessagePreview)
 	}
@@ -152,8 +161,18 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 		if message.Widget != nil {
 			want = message.Widget.Question
 		}
-		if updates[0].MessagePreview != want {
-			t.Fatalf("%s notification preview=%q want=%q", message.Type, updates[0].MessagePreview, want)
+		var target cardUpdate
+		for _, candidate := range updates {
+			if candidate.ID == card.ID.String() {
+				target = candidate
+				break
+			}
+		}
+		if target.ID == "" {
+			t.Fatalf("target card missing from updates: %+v", updates)
+		}
+		if target.MessagePreview != want {
+			t.Fatalf("%s notification preview=%q want=%q", message.Type, target.MessagePreview, want)
 		}
 	}
 }

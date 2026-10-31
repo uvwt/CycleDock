@@ -32,7 +32,10 @@ SELECT
     c.*,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT e.checkin_status
@@ -55,9 +58,55 @@ LEFT JOIN LATERAL (
     ORDER BY a.created_at DESC, a.attempt_number DESC
     LIMIT 1
 ) latest_attempt ON true
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> sqlc.arg(source_id)
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = sqlc.arg(source_id)
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
+
+-- name: MarkCardRead :one
+INSERT INTO card_read_cursors (
+    workspace_id, source_id, card_id, last_read_message_sequence, updated_at
+)
+SELECT
+    c.workspace_id,
+    s.id,
+    c.id,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0),
+    now()
+FROM cards c
+JOIN sources s
+  ON s.workspace_id = c.workspace_id
+ AND s.id = sqlc.arg(source_id)
+ AND s.kind = 'human'
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.id = sqlc.arg(card_id)
+ON CONFLICT (workspace_id, source_id, card_id) DO UPDATE
+SET last_read_message_sequence = GREATEST(
+        card_read_cursors.last_read_message_sequence,
+        EXCLUDED.last_read_message_sequence
+    ),
+    updated_at = now()
+RETURNING last_read_message_sequence;
 
 -- name: ListProjectSchedules :many
 SELECT

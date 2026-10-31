@@ -137,6 +137,12 @@ export const api = {
       description,
     }),
   card: (id: string) => request<CardDetail>(`/cards/${id}`),
+  markCardRead: (id: string) =>
+    request<{ last_read_message_sequence: number }>(
+      `/cards/${id}/read`,
+      "POST",
+      {},
+    ),
   updateCard: (id: string, title: string, description: string) =>
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
   pinCard: (id: string, pinned: boolean) =>

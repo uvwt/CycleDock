@@ -41,6 +41,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/notifications/push/seen", api.ackPushCards)
 	r.Get("/cards/{cardID}", api.getCard)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
+	r.Post("/cards/{cardID}/read", api.markCardRead)
 	r.Patch("/cards/{cardID}", api.updateCard)
 	r.Post("/cards/{cardID}/pin", api.togglePinCard)
 	r.Post("/cards/{cardID}/move", api.moveCard)
@@ -92,21 +93,28 @@ type projectResponse struct {
 }
 
 type cardResponse struct {
-	ID                   string     `json:"id"`
-	ProjectID            string     `json:"project_id"`
-	Kind                 string     `json:"kind"`
-	Title                string     `json:"title"`
-	Description          string     `json:"description"`
-	DiscussionState      string     `json:"discussion_state,omitempty"`
-	TodoState            string     `json:"todo_state,omitempty"`
-	OngoingState         string     `json:"ongoing_state,omitempty"`
-	SourceDiscussionID   string     `json:"source_discussion_id,omitempty"`
-	Health               string     `json:"health,omitempty"`
-	CurrentAttemptStatus string     `json:"current_attempt_status,omitempty"`
-	LatestAttemptStatus  string     `json:"latest_attempt_status,omitempty"`
-	PinnedAt             *time.Time `json:"pinned_at,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                      string     `json:"id"`
+	ProjectID               string     `json:"project_id"`
+	Kind                    string     `json:"kind"`
+	Title                   string     `json:"title"`
+	Description             string     `json:"description"`
+	DiscussionState         string     `json:"discussion_state,omitempty"`
+	TodoState               string     `json:"todo_state,omitempty"`
+	OngoingState            string     `json:"ongoing_state,omitempty"`
+	SourceDiscussionID      string     `json:"source_discussion_id,omitempty"`
+	Health                  string     `json:"health,omitempty"`
+	CurrentAttemptStatus    string     `json:"current_attempt_status,omitempty"`
+	LatestAttemptStatus     string     `json:"latest_attempt_status,omitempty"`
+	LatestMessageSequence   *int64     `json:"latest_message_sequence,omitempty"`
+	LastReadMessageSequence *int64     `json:"last_read_message_sequence,omitempty"`
+	Unread                  *bool      `json:"unread,omitempty"`
+	PinnedAt                *time.Time `json:"pinned_at,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+}
+
+type cardReadResponse struct {
+	LastReadMessageSequence int64 `json:"last_read_message_sequence"`
 }
 
 type attemptResponse struct {
@@ -316,7 +324,9 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	cards, err := api.store.ListProjectCardSummaries(r.Context(), identity.WorkspaceID, projectID)
+	cards, err := api.store.ListProjectCardSummaries(
+		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+	)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -326,6 +336,22 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 		response = append(response, cardSummaryToResponse(card))
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) markCardRead(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	sequence, err := api.store.MarkCardRead(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cardReadResponse{LastReadMessageSequence: sequence})
 }
 
 func (api *API) listProjectSchedules(w http.ResponseWriter, r *http.Request) {
@@ -1150,10 +1176,16 @@ func cardToResponse(card db.Card) cardResponse {
 }
 
 func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
+	latestMessageSequence := card.LatestMessageSequence
+	lastReadMessageSequence := card.LastReadMessageSequence
+	unread := card.Unread
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		LatestMessageSequence:   &latestMessageSequence,
+		LastReadMessageSequence: &lastReadMessageSequence,
+		Unread:                  &unread,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String

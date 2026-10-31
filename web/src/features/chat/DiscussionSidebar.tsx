@@ -35,57 +35,25 @@ function formatRelativeTime(dateStr?: string) {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-const STORAGE_KEY = "cycledock_discussions_last_read";
-
-function getLastReadMap(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveLastReadMap(map: Record<string, string>) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // ignore
-  }
-}
-
 function getDiscussionStatus(
   card: Card,
   isActive: boolean,
   activeAttemptStatus?: string,
-  lastReadAt?: string,
 ): "answering" | "unread" | "idle" {
-  // 1. 如果当前卡片正在运行或排队，展示活跃回答绿点
-  if (isActive && activeAttemptStatus) {
-    if (activeAttemptStatus === "running" || activeAttemptStatus === "queued") {
-      return "answering";
-    }
-  }
-
-  const current = card.current_attempt_status;
-  if (current === "running" || current === "queued") {
+  if (
+    (isActive &&
+      (activeAttemptStatus === "running" ||
+        activeAttemptStatus === "queued")) ||
+    card.current_attempt_status === "running" ||
+    card.current_attempt_status === "queued"
+  ) {
     return "answering";
   }
 
-  // 2. 如果当前会话处于激活查看状态，直接视为已看，不展示未读蓝点
-  if (isActive) {
-    return "idle";
-  }
-
-  // 3. 检查是否有已完成且未读的回答
-  const latest = card.latest_attempt_status;
-  const hasFinished = latest === "completed" || current === "waiting_human";
-
-  if (hasFinished) {
-    // 仅在卡片更新时间晚于最后已读时间时，才提示未读完成蓝点
-    if (!lastReadAt || card.updated_at > lastReadAt) {
-      return "unread";
-    }
+  // unread 由后端基于 message sequence + Human Source read cursor 计算；
+  // 标题、置顶、状态变化不会推进这个游标。
+  if (!isActive && card.unread) {
+    return "unread";
   }
 
   return "idle";
@@ -151,53 +119,26 @@ export function DiscussionSidebar({
   });
   const mainDiscussionID = mainDiscussion.data?.id || "";
 
-  const [lastReadMap, setLastReadMap] = useState<Record<string, string>>(() =>
-    getLastReadMap(),
-  );
-
-  // 初始化基线：若本地无任何记录，将当前已有历史卡片设为已读，避免历史列表全量显示蓝点
-  useEffect(() => {
-    if (!discussions.length) return;
-    const timer = setTimeout(() => {
-      setLastReadMap((prev) => {
-        if (Object.keys(prev).length === 0) {
-          const initialMap: Record<string, string> = {};
-          for (const card of discussions) {
-            initialMap[card.id] = card.updated_at;
-          }
-          saveLastReadMap(initialMap);
-          return initialMap;
-        }
-        return prev;
-      });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [discussions]);
-
-  // 当前激活的讨论，自动更新为已读
+  // 打开会话即推进服务端已读游标。成功后重新取列表，让服务端继续作为
+  // unread 的唯一事实来源；不再使用浏览器 localStorage 推导。
   useEffect(() => {
     if (!activeCardID) return;
-    const activeCard = discussions.find((d) => d.id === activeCardID);
-    const recorded = lastReadMap[activeCardID];
-    if (activeCard && recorded && recorded >= activeCard.updated_at) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      setLastReadMap((prev) => {
-        const next = { ...prev, [activeCardID]: new Date().toISOString() };
-        saveLastReadMap(next);
-        return next;
+    const activeCard = discussions.find((card) => card.id === activeCardID);
+    if (!activeCard?.unread) return;
+
+    void api
+      .markCardRead(activeCard.id)
+      .then(() =>
+        queryClient.invalidateQueries({
+          queryKey: keys.cards(activeCard.project_id),
+        }),
+      )
+      .catch(() => {
+        // 读状态失败不影响会话本身；下一次列表刷新或再次打开时会重试。
       });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [activeCardID, discussions, lastReadMap]);
+  }, [activeCardID, discussions]);
 
   const handleSelect = (card: Card) => {
-    setLastReadMap((prev) => {
-      const next = { ...prev, [card.id]: new Date().toISOString() };
-      saveLastReadMap(next);
-      return next;
-    });
     onSelect(card);
   };
 
@@ -294,7 +235,6 @@ export function DiscussionSidebar({
                     card,
                     card.id === activeCardID,
                     activeAttemptStatus,
-                    lastReadMap[card.id],
                   )}
                 />
               }

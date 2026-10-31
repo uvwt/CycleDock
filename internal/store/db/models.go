@@ -74,6 +74,14 @@ type Card struct {
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 }
 
+type CardReadCursor struct {
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	SourceID                uuid.UUID          `json:"source_id"`
+	CardID                  uuid.UUID          `json:"card_id"`
+	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+}
+
 type CardSchedule struct {
 	ID              uuid.UUID          `json:"id"`
 	WorkspaceID     uuid.UUID          `json:"workspace_id"`

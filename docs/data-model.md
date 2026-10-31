@@ -41,6 +41,23 @@ Card 是长期工作对象；Attempt status 不写入 Card。
 
 Discussion 派生 Todo / Ongoing 时新 Card 保存 source_discussion_id，并通过显式 Handoff Package 传递必要上下文。
 
+### Card 已读游标
+
+讨论未读状态不从 `cards.updated_at` 推导。Human Web 为每个
+`(workspace_id, source_id, card_id)` 保存一个 `card_read_cursors`
+记录，其中 `last_read_message_sequence` 指向该 Human Source 已看过的
+最新用户可见消息。
+
+- 用户可见消息只认产品 Timeline 中的 `comment / message` Event。
+- `latest_message_sequence` 是 Card 当前最新可见消息序号；标题、置顶、
+  Card 状态、Schedule、heartbeat 等元数据变化不会推进它。
+- `unread` 只在“其他 Source 的最新可见消息 sequence 大于当前 Human
+  Source 的 read cursor”时成立，因此用户自己刚发送的消息不会制造蓝点。
+- 打开 Card 时服务端把 read cursor 单调推进到当前最新可见消息；
+  `GREATEST` 保证并发/重试不会把游标倒退。
+- 首次引入服务端游标时，迁移会把已有历史可见消息写成已读基线，避免升级后
+  所有旧讨论一次性显示未读。
+
 ## 3. card_turns
 
 目标字段：

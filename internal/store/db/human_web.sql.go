@@ -447,7 +447,10 @@ SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT e.checkin_status
@@ -470,41 +473,60 @@ LEFT JOIN LATERAL (
     ORDER BY a.created_at DESC, a.attempt_number DESC
     LIMIT 1
 ) latest_attempt ON true
-WHERE c.workspace_id = $1
-  AND c.project_id = $2
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> $1
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = $1
+WHERE c.workspace_id = $2
+  AND c.project_id = $3
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
 `
 
 type ListProjectCardSummariesParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
 	WorkspaceID uuid.UUID `json:"workspace_id"`
 	ProjectID   uuid.UUID `json:"project_id"`
 }
 
 type ListProjectCardSummariesRow struct {
-	ID                    uuid.UUID          `json:"id"`
-	WorkspaceID           uuid.UUID          `json:"workspace_id"`
-	ProjectID             uuid.UUID          `json:"project_id"`
-	Kind                  string             `json:"kind"`
-	Title                 string             `json:"title"`
-	Description           string             `json:"description"`
-	DiscussionState       pgtype.Text        `json:"discussion_state"`
-	TodoState             pgtype.Text        `json:"todo_state"`
-	OngoingState          pgtype.Text        `json:"ongoing_state"`
-	SourceDiscussionID    uuid.NullUUID      `json:"source_discussion_id"`
-	RequiredConfirmations int32              `json:"required_confirmations"`
-	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
-	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
-	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
-	Health                string             `json:"health"`
-	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
-	LatestAttemptStatus   string             `json:"latest_attempt_status"`
+	ID                      uuid.UUID          `json:"id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	ProjectID               uuid.UUID          `json:"project_id"`
+	Kind                    string             `json:"kind"`
+	Title                   string             `json:"title"`
+	Description             string             `json:"description"`
+	DiscussionState         pgtype.Text        `json:"discussion_state"`
+	TodoState               pgtype.Text        `json:"todo_state"`
+	OngoingState            pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations   int32              `json:"required_confirmations"`
+	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
+	Health                  string             `json:"health"`
+	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus     string             `json:"latest_attempt_status"`
+	LatestMessageSequence   int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
+	Unread                  bool               `json:"unread"`
 }
 
 func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectCardSummariesParams) ([]ListProjectCardSummariesRow, error) {
-	rows, err := q.db.Query(ctx, listProjectCardSummaries, arg.WorkspaceID, arg.ProjectID)
+	rows, err := q.db.Query(ctx, listProjectCardSummaries, arg.SourceID, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -533,6 +555,9 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.Health,
 			&i.CurrentAttemptStatus,
 			&i.LatestAttemptStatus,
+			&i.LatestMessageSequence,
+			&i.LastReadMessageSequence,
+			&i.Unread,
 		); err != nil {
 			return nil, err
 		}
@@ -724,6 +749,51 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 		return nil, err
 	}
 	return items, nil
+}
+
+const markCardRead = `-- name: MarkCardRead :one
+INSERT INTO card_read_cursors (
+    workspace_id, source_id, card_id, last_read_message_sequence, updated_at
+)
+SELECT
+    c.workspace_id,
+    s.id,
+    c.id,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0),
+    now()
+FROM cards c
+JOIN sources s
+  ON s.workspace_id = c.workspace_id
+ AND s.id = $1
+ AND s.kind = 'human'
+WHERE c.workspace_id = $2
+  AND c.id = $3
+ON CONFLICT (workspace_id, source_id, card_id) DO UPDATE
+SET last_read_message_sequence = GREATEST(
+        card_read_cursors.last_read_message_sequence,
+        EXCLUDED.last_read_message_sequence
+    ),
+    updated_at = now()
+RETURNING last_read_message_sequence
+`
+
+type MarkCardReadParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+func (q *Queries) MarkCardRead(ctx context.Context, arg MarkCardReadParams) (int64, error) {
+	row := q.db.QueryRow(ctx, markCardRead, arg.SourceID, arg.WorkspaceID, arg.CardID)
+	var last_read_message_sequence int64
+	err := row.Scan(&last_read_message_sequence)
+	return last_read_message_sequence, err
 }
 
 const scheduleHasTurns = `-- name: ScheduleHasTurns :one

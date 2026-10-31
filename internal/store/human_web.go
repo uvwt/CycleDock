@@ -56,12 +56,13 @@ func (s *Store) ListProjectCards(ctx context.Context, workspaceID, projectID uui
 
 func (s *Store) ListProjectCardSummaries(
 	ctx context.Context,
-	workspaceID, projectID uuid.UUID,
+	workspaceID, projectID, sourceID uuid.UUID,
 ) ([]db.ListProjectCardSummariesRow, error) {
 	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
 		return nil, err
 	}
 	return s.queries.ListProjectCardSummaries(ctx, db.ListProjectCardSummariesParams{
+		SourceID:    sourceID,
 		WorkspaceID: workspaceID,
 		ProjectID:   projectID,
 	})
