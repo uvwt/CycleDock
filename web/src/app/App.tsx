@@ -1,3 +1,4 @@
+import { DeviceSelectionProvider } from "../features/devices/DeviceSelectionProvider";
 import { Suspense, lazy, useEffect } from "react";
 import {
   Navigate,
@@ -67,43 +68,45 @@ function Authenticated() {
     );
   return (
     <ProjectProvider>
-      <Shell>
-        <NotificationPermissionPrompt />
-        <Suspense
-          fallback={
-            <div className="grid min-h-[50vh] place-items-center">
-              <Spinner />
-            </div>
-          }
-        >
-          <Routes>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
-            <Route path="/chat" element={<ChatHome />} />
-            <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
-            <Route path="/board" element={<BoardPage />} />
-            <Route path="/board/:projectID" element={<BoardPage />} />
-            <Route path="/plans" element={<PlanPage />} />
-            <Route path="/plans/:projectID" element={<PlanPage />} />
-            <Route path="/plans/:projectID/:cardID" element={<CardPage />} />
-            <Route path="/activity" element={<ActivityPage />} />
-            <Route path="/activity/:projectID" element={<ActivityPage />} />
-            <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
-            <Route
-              path="/settings/*"
-              element={<SettingsPage role={me.data.role} />}
-            />
-            <Route
-              path="/projects/:projectID/cards/:cardID"
-              element={<LegacyCardRedirect />}
-            />
-            <Route
-              path="/projects/:projectID"
-              element={<LegacyBoardRedirect />}
-            />
-            <Route path="*" element={<Navigate to="/chat" replace />} />
-          </Routes>
-        </Suspense>
-      </Shell>
+      <DeviceSelectionProvider key={me.data.workspace.id}>
+        <Shell>
+          <NotificationPermissionPrompt />
+          <Suspense
+            fallback={
+              <div className="grid min-h-[50vh] place-items-center">
+                <Spinner />
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Navigate to="/chat" replace />} />
+              <Route path="/chat" element={<ChatHome />} />
+              <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
+              <Route path="/board" element={<BoardPage />} />
+              <Route path="/board/:projectID" element={<BoardPage />} />
+              <Route path="/plans" element={<PlanPage />} />
+              <Route path="/plans/:projectID" element={<PlanPage />} />
+              <Route path="/plans/:projectID/:cardID" element={<CardPage />} />
+              <Route path="/activity" element={<ActivityPage />} />
+              <Route path="/activity/:projectID" element={<ActivityPage />} />
+              <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
+              <Route
+                path="/settings/*"
+                element={<SettingsPage role={me.data.role} />}
+              />
+              <Route
+                path="/projects/:projectID/cards/:cardID"
+                element={<LegacyCardRedirect />}
+              />
+              <Route
+                path="/projects/:projectID"
+                element={<LegacyBoardRedirect />}
+              />
+              <Route path="*" element={<Navigate to="/chat" replace />} />
+            </Routes>
+          </Suspense>
+        </Shell>
+      </DeviceSelectionProvider>
     </ProjectProvider>
   );
 }

@@ -74,6 +74,8 @@ export type TimelineEvent = {
   created_at: string;
 };
 export type Attempt = {
+  device_node_id?: string;
+  device_name?: string;
   id: string;
   turn_id: string;
   source_event_id?: string;
@@ -90,6 +92,8 @@ export type Attempt = {
   finished_at?: string;
 };
 export type PendingTurn = {
+  device_node_id?: string;
+  device_name?: string;
   id: string;
   sequence: number;
   source: "human" | "schedule" | "system";
@@ -198,6 +202,20 @@ export type MCPConnection = {
 export type MCPInput = Omit<MCPConnection, "id" | "token_configured"> & {
   bearer_token: string;
   clear_bearer_token?: boolean;
+};
+export type DeviceTarget = { node_id: string; name: string };
+export type NexusDevice = {
+  id: string;
+  name: string;
+  online: boolean;
+  os: string;
+  arch: string;
+  agent_version: string;
+};
+export type NexusDevices = {
+  available: boolean;
+  connected: boolean;
+  devices: NexusDevice[];
 };
 export type NexusConnection = {
   available: boolean;

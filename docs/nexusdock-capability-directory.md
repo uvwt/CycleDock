@@ -13,10 +13,16 @@ CycleDock 第一方连接使用 NexusDock MCP OAuth，Token 的 resource 为 `/m
 
 OAuth discovery、授权、refresh 和 Workspace scope 继续由 CycleDock 管理。认证凭据不交给模型或浏览器。普通第三方 MCP 连接与第一方连接分别管理。
 
-## 目标态：前端通过 API 展示设备
+## 当前实现：前端通过 API 展示和选择设备
 
-目前设置页只展示 NexusDock 连接状态，尚未实现设备在线列表。
+聊天、卡片、工作、计划、活动和设置页面右上角提供设备菜单。按钮显示在线数量，展开后按在线优先列出设备名称、系统和架构，并提供刷新和连接设置入口。菜单展开时每 10 秒刷新，收起时每 30 秒更新，后台标签页不轮询；错误不伪装成零台在线。未启用、未连接、空列表和授权过期分别提示。
 
-前端需要展示设备在线状态时，应请求 CycleDock 自己的认证 API，由后端复用当前 Workspace 的 NexusDock 授权调用 `GET /v1/integrations/devices`，只返回展示所需的设备摘要。能力摘要有实际展示需求时再接入 `GET /v1/integrations/capabilities`。
+前端请求 `GET /api/v1/agent/nexusdock/devices`，后端复用认证 Workspace 的 OAuth 授权调用同 origin 的 `GET /v1/integrations/devices`。只返回 `available`、`connected` 和设备摘要，Bearer 不进入浏览器；请求上限 12 秒、响应上限 2 MiB，拒绝重定向。401/403 映射为重新授权提示。成员可只读设备列表，Owner 才能管理连接。
 
-前端不建立 MCP Session，不直接持有 NexusDock Token。展示数据与对话工具调用独立，页面刷新或轮询不触发模型工具调用，也不修改 Card / Turn / Attempt 状态。
+用户可以选择在线设备，或保持默认的“不指定设备”。选择在当前 Workspace 的页面间共享，切换 Workspace 或刷新页面后重置。断开连接时也清除选择；已选设备暂时不可用时保留偏好并提示，不静默切换目标。
+
+发送消息时，`device_target` 的节点 ID 和名称快照随 Turn 保存为 `device_node_id` / `device_name`，纳入请求幂等校验。选择只影响之后发送的输入，不修改当前 Attempt 或已排队 Turn；编辑排队正文不改变目标，技术重试沿用原 Turn 的选择。新讨论首次发送失败后的重试也保留原目标，排队列表显示已选设备。
+
+Built-in Agent 在 Claim 后才将该选择作为本轮用户输入的一句上下文追加到 ADK Session；不指定时明确清除历史设备偏好。外部 Agent 可在 Attempt / Pending Turn 响应中读取目标。选择仅表达用户意图，不授予设备权限或强制隔离工具；实际执行继续由 MCP 校验授权。
+
+前端不建立 MCP Session，不直接持有 NexusDock Token。页面刷新和设备选择不触发模型工具调用，不制造新的业务 Turn。能力详情展示仍未接入，有实际需求时再扩展。

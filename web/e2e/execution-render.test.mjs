@@ -251,6 +251,16 @@ test("连续消息只在组首展示发送者，切换后再次出现仍开启�
   for (let i = 1; i <= 6; i++) assert.match(html, new RegExp(`消息 ${i}`));
 });
 
+test("显示名同为 Cycle 的连续气泡合并，不再重复头像和名称", () => {
+  const html = render([
+    chatEvent(1, "cycle_agent", "Cycle Agent", 0),
+    chatEvent(2, "cycle_agent", "Cycle", 1),
+  ]);
+  assert.deepEqual(groupStarts(html), [true, false]);
+  assert.equal((html.match(/<span>Cycle<\/span>/g) || []).length, 1);
+  assert.equal((html.match(/lucide-bot/g) || []).length, 1);
+});
+
 test("同名但不同角色不能合并，五分钟内连续消息合并，超过五分钟重新展示发送者", () => {
   const html = render([
     chatEvent(1, "agent", "同名", 0),
@@ -286,6 +296,93 @@ test("完成状态和耗时位于消息组的 Agent 名称右侧", () => {
   assert.match(header, /0:12/);
   assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
   assert.deepEqual(groupStarts(html), [true, false]);
+});
+
+test("正在操作的设备位于正文气泡上方、耗时右侧", () => {
+  const html = render(
+    [comment],
+    { ...attempt, status: "running" },
+    {
+      attemptID: attempt.id,
+      stage: "正在执行",
+      startedAt: attempt.started_at,
+      deviceName: "RN",
+      replies: [{ id: "preview", order: 0, text: "正在生成的正文" }],
+    },
+  );
+  const bubbleAt = html.indexOf("正在生成的正文");
+  const deviceAt = html.indexOf('data-operating-device="RN"');
+  const durationAt = html.indexOf("tabular-nums");
+  assert.ok(durationAt >= 0 && deviceAt > durationAt && deviceAt < bubbleAt);
+  assert.match(html.slice(durationAt, bubbleAt), /正在操作 RN/);
+  assert.equal((html.match(/正在生成的正文/g) || []).length, 1);
+  assert.doesNotMatch(html, /aria-label="正在执行"|live-dot/);
+});
+
+test("尚未输出正文时，正在操作位于运行气泡上方的耗时右侧", () => {
+  const html = render(
+    [comment],
+    { ...attempt, status: "running", progress_summary: "" },
+    {
+      attemptID: attempt.id,
+      stage: "正在执行",
+      deviceName: "RN",
+      replies: [],
+    },
+  );
+  const dotsAt = html.indexOf("live-dot");
+  const deviceAt = html.indexOf('data-operating-device="RN"');
+  assert.ok(deviceAt >= 0 && dotsAt > deviceAt);
+  assert.match(html.slice(0, dotsAt), /正在操作 RN/);
+});
+
+test("同一轮 Cycle 回复后面的运行气泡不再重复头像和名称", () => {
+  const progress = {
+    ...result,
+    id: "progress-message",
+    type: "message",
+    actor_kind: "cycle_agent",
+    actor_name: "Cycle Agent",
+    content: "正在分析磁盘",
+    created_at: new Date().toISOString(),
+    message: { type: "text", content: "正在分析磁盘", end_turn: false },
+  };
+  const html = render(
+    [comment, progress],
+    { ...attempt, status: "running", progress_summary: "" },
+    {
+      attemptID: attempt.id,
+      startedAt: attempt.started_at,
+      deviceName: "xxdeMacBook-Air.local",
+      replies: [],
+    },
+  );
+  assert.match(html, /正在分析磁盘/);
+  assert.equal((html.match(/lucide-bot/g) || []).length, 1);
+  assert.equal((html.match(/<span>Cycle<\/span>/g) || []).length, 1);
+  assert.match(html, /pl-\[46px\]/);
+  const dotsAt = html.indexOf("live-dot");
+  const deviceAt = html.indexOf(
+    'data-operating-device="xxdeMacBook-Air.local"',
+  );
+  assert.ok(deviceAt >= 0 && dotsAt > deviceAt);
+  assert.match(html.slice(0, dotsAt), /正在操作 xxdeMacBook-Air.local/);
+});
+
+test("新一轮运行紧挨上一轮回复时仍展示头像和名称", () => {
+  const html = render(
+    [comment, { ...result, created_at: new Date().toISOString() }],
+    {
+      ...attempt,
+      id: "next",
+      status: "running",
+      source_event_id: "input",
+      progress_summary: "",
+    },
+    { attemptID: "next", startedAt: attempt.started_at, replies: [] },
+  );
+  assert.equal((html.match(/>Cycle</g) || []).length, 2);
+  assert.equal((html.match(/lucide-bot/g) || []).length, 2);
 });
 
 test("正文流式输出时只展示正文，隐藏呼吸圆点和重复占位", () => {

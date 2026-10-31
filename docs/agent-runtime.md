@@ -189,7 +189,7 @@ ADK experimental model routing 可以辅助，但不替代已有更强的产品�
 
 每次 invocation 按需建立 MCP connection；Session 恢复不意味着复用失效 socket。
 
-NexusDock first-party integration 由 CycleDock 管理 OAuth、refresh 和 Workspace scope。每次 Attempt 建立 MCP Session，通过 `agentdock_context` 获取设备上下文；工具定义和设备 / Recall / Workflow 调用统一使用 MCP。对话运行时不请求 REST 目录，也不分流至 Execution API。前端设备在线列表是独立 API 展示需求，尚未实现。
+NexusDock first-party integration 由 CycleDock 管理 OAuth、refresh 和 Workspace scope。每次 Attempt 建立 MCP Session，通过 `agentdock_context` 获取设备上下文；工具定义和设备 / Recall / Workflow 调用统一使用 MCP。对话运行时不请求 REST 目录，也不分流至 Execution API。前端通过独立认证 API 展示和选择设备；选择快照随 Turn 保存，Claim 后作为本轮用户上下文追加到 Session。不指定时不沿用历史选择；排队输入和技术重试不受后续切换影响。
 
 ## 15. Security
 

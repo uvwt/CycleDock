@@ -190,9 +190,7 @@ class CycleDockSmoke(unittest.TestCase):
             'textarea[aria-label="发送消息，开始讨论…"]'
         ).fill("只在发送第一句话时创建会话")
         self.page.get_by_role("button", name="发送", exact=True).click()
-        self.page.get_by_text(
-            "讨论已创建，但首条消息还未确认送达。"
-        ).wait_for()
+        self.page.get_by_role("button", name="重试发送").wait_for()
         self.assertEqual(len(create_requests), 1)
 
         self.page.get_by_role("button", name="重试发送").click()
@@ -271,9 +269,7 @@ class CycleDockSmoke(unittest.TestCase):
         expanded.fill("把服务器巡检交给 AI 负责")
         self.page.get_by_role("button", name="发送", exact=True).click()
 
-        self.page.get_by_text(
-            "讨论已创建，但首条消息还未确认送达。"
-        ).wait_for()
+        self.page.get_by_role("button", name="重试发送").wait_for()
         self.assertEqual(
             self.page.locator(
                 'textarea[aria-label="发送消息，开始讨论…"]'

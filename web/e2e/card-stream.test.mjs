@@ -41,6 +41,39 @@ test("旧 Attempt 的迟到事件不影响当前回复，终止后不再接受�
   assert.equal(apply(live,"reply.preview",event({reply_id:"draft",text:"late"})), live);
 });
 
+test("任务进度在阶段轮询和执行结束后仍然保留", () => {
+  const task = {
+    id: "task-1",
+    title: "部署服务",
+    status: "active",
+    completed_step_count: 2,
+    step_count: 5,
+    current_step: "检查健康检查",
+  };
+  let live = apply(started(), "attempt.task", event({ task }));
+  live = apply(live, "attempt.stage", event({ stage: "正在执行" }));
+  assert.equal(live.task.title, "部署服务");
+  assert.equal(live.task.current_step, "检查健康检查");
+  live = apply(live, "attempt.finished", event());
+  assert.equal(live.finished, true);
+  assert.equal(live.task.title, "部署服务");
+  live = apply(null, "attempt.snapshot", event({ task }));
+  assert.equal(live.task.completed_step_count, 2);
+});
+
+test("阶段轮询保留正在操作的设备，调用结束或执行终止后清除", () => {
+  let live = apply(started(), "attempt.device", event({ device_name: "RN" }));
+  live = apply(live, "attempt.stage", event({ stage: "正在执行" }));
+  assert.equal(live.deviceName, "RN");
+  live = apply(live, "attempt.device", event());
+  assert.equal(live.deviceName, "");
+  live = apply(started(), "attempt.device", event({ device_name: "RN" }));
+  live = apply(live, "attempt.finished", event());
+  assert.equal(live.deviceName, "");
+  live = apply(null, "attempt.snapshot", event({ device_name: "Studio Mac" }));
+  assert.equal(live.deviceName, "Studio Mac");
+});
+
 test("重连快照恢复多个预览和已提交事件身份", () => {
   const live = apply(null,"attempt.snapshot",event({replies:[
     {id:"a",order:0,text:"已发送",event_id:"persisted"},

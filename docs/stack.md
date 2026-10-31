@@ -68,7 +68,7 @@ ADK experimental Model Routing 不作为唯一生产故障转移实现。
 
 普通 outbound MCP 优先使用 ADK McpToolset。
 
-NexusDock first-party connection 由 CycleDock 管 OAuth、refresh 和 Workspace scope；对话中的 bootstrap、工具定义和工具执行统一使用 MCP，工具通过 ADK FunctionTool 进入 tool loop。前端设备在线状态按需使用独立 API（尚未实现设备列表）。
+NexusDock first-party connection 由 CycleDock 管 OAuth、refresh 和 Workspace scope；对话中的 bootstrap、工具定义和工具执行统一使用 MCP，工具通过 ADK FunctionTool 进入 tool loop。前端通过独立认证 API 展示设备在线状态，设备选择随 Turn 保存为本轮偏好。
 
 ### Context
 

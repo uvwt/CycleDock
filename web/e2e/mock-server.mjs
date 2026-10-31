@@ -26,6 +26,7 @@ const secondProject = {
   updated_at: new Date().toISOString(),
 };
 const projects = [project, secondProject];
+let nexusConnected = true;
 const now = () => new Date().toISOString();
 const hoursAgo = (hours) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -713,8 +714,16 @@ http
               accounts: [],
             },
           ]);
-        if (route === "/agent/nexusdock")
-          return data(res, { available: true, connected: false });
+        if (route === "/agent/nexusdock/devices")
+          return data(res, { available: true, connected: nexusConnected, devices: nexusConnected ? [
+            { id: "node-rn", name: "RN Server", online: true, os: "linux", arch: "amd64", agent_version: "1.1.1" },
+            { id: "node-mac", name: "MacBook Pro", online: true, os: "darwin", arch: "arm64", agent_version: "1.1.1" },
+            { id: "node-win", name: "Office PC", online: false, os: "windows", arch: "amd64", agent_version: "1.1.0" },
+          ] : [] });
+        if (route === "/agent/nexusdock") {
+          if (req.method === "DELETE") nexusConnected = false;
+          return data(res, { available: true, connected: nexusConnected });
+        }
         if (route === "/agent/mcp-connections") {
           if (req.method === "GET") return data(res, mcp);
           if (req.method === "POST") {

@@ -1,5 +1,6 @@
 import type {
   AgentSettings,
+  DeviceTarget,
   Card,
   CardDetail,
   GrokStart,
@@ -10,6 +11,7 @@ import type {
   ModelAuth,
   ModelAuthStart,
   NexusConnection,
+  NexusDevices,
   Project,
   ProjectActivity,
   ActivityAgent,
@@ -127,18 +129,30 @@ export const api = {
     content: string,
     dispatch_mode: "enqueue" | "interrupt",
     idempotencyKey?: string,
+    device_target?: DeviceTarget | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
       "POST",
-      { content, dispatch_mode },
+      { content, dispatch_mode, device_target: device_target ?? undefined },
       idempotencyKey || true,
     ),
-  reply: (id: string, content: string, attemptID: string, messageID?: string) =>
+  reply: (
+    id: string,
+    content: string,
+    attemptID: string,
+    messageID?: string,
+    device_target?: DeviceTarget | null,
+  ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
       "POST",
-      { content, attempt_id: attemptID, message_id: messageID },
+      {
+        content,
+        attempt_id: attemptID,
+        message_id: messageID,
+        device_target: device_target ?? undefined,
+      },
       true,
     ),
   cancelAttempt: (id: string, attemptID: string) =>
@@ -202,6 +216,7 @@ export const api = {
       125_000,
     ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
+  nexusDevices: () => request<NexusDevices>("/agent/nexusdock/devices"),
   nexusConnect: () =>
     request<{ authorization_url: string }>(
       "/agent/nexusdock/connect",

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bot, LoaderCircle, RotateCcw } from "lucide-react";
+import { Bot, LoaderCircle, Monitor, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Attempt } from "../../shared/api/types";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
@@ -50,13 +50,29 @@ export function RunDuration({
   );
 }
 
+/** 跟在执行时长右侧，和名称、耗时同一行，位于气泡上方。 */
+export function OperatingDevice({ name }: { name: string }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      data-operating-device={name}
+      className="inline-flex items-center gap-1 text-[11px] font-normal text-sky-700"
+    >
+      <Monitor className="size-3 shrink-0" />
+      {t("正在操作")} {name}
+    </span>
+  );
+}
+
 /** 正文上方共用的执行元信息，不用错误块替代已输出的内容。 */
 export function AttemptMetadata({
   attempt,
+  deviceName,
   retryingAttemptID,
   onRetryAttempt,
 }: {
   attempt: Attempt;
+  deviceName?: string;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
 }) {
@@ -79,6 +95,7 @@ export function AttemptMetadata({
         finishedAt={attempt.finished_at}
         active={attempt.status === "running"}
       />
+      {deviceName && <OperatingDevice name={deviceName} />}
       {attempt.retry_of_attempt_id || attempt.reason === "retry"
         ? " · " + t("重试")
         : ""}
@@ -104,11 +121,13 @@ export function AttemptMetadata({
 function AgentAttempt({
   attempt,
   live,
+  showSender = true,
   retryingAttemptID,
   onRetryAttempt,
 }: {
   attempt: ExecutionAttempt;
   live?: LiveAttempt | null;
+  showSender?: boolean;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
 }) {
@@ -130,6 +149,21 @@ function AgentAttempt({
   const retried = Boolean(
     execution?.retry_of_attempt_id || execution?.reason === "retry",
   );
+  const runningStartedAt =
+    execution?.started_at || (sameLiveAttempt ? live?.startedAt : undefined);
+  const showRunningDevice = Boolean(
+    status === "running" &&
+      sameLiveAttempt &&
+      live?.deviceName &&
+      !live.finished,
+  );
+  // 续在上一条气泡后面时，没有耗时、设备和重试标记就不留空的名称行。
+  const showRunningHeader =
+    status !== "running" ||
+    showSender ||
+    retried ||
+    Boolean(runningStartedAt) ||
+    showRunningDevice;
 
   if (
     ["cancelled", "superseded", "waiting_human"].includes(status) &&
@@ -192,12 +226,14 @@ function AgentAttempt({
       <article
         className={
           status === "running"
-            ? "flex min-w-0 gap-3"
+            ? showSender
+              ? "flex min-w-0 gap-3"
+              : "min-w-0 pl-[46px]"
             : "ml-12 min-w-0 border-l-2 border-line py-1 pl-3"
         }
         data-execution-id={id}
       >
-        {status === "running" && (
+        {status === "running" && showSender && (
           <span
             aria-hidden
             className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
@@ -208,36 +244,44 @@ function AgentAttempt({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p
-                className={`text-xs font-medium ${
-                  failed
-                    ? "text-danger"
-                    : status === "running"
-                      ? "text-sky-700"
-                      : "text-secondary-foreground"
-                }`}
-              >
-                {status === "running" ? (
-                  <span className="font-semibold text-muted-foreground">
-                    Cycle
+              {showRunningHeader && (
+                <p
+                  className={`text-xs font-medium ${
+                    failed
+                      ? "text-danger"
+                      : status === "running"
+                        ? "text-sky-700"
+                        : "text-secondary-foreground"
+                  }`}
+                >
+                  {status === "running" ? (
+                    showSender ? (
+                      <span className="font-semibold text-muted-foreground">
+                        Cycle
+                      </span>
+                    ) : null
+                  ) : (
+                    t(attemptLabels[status] || status)
+                  )}
+                  {retried ? " · " + t("重试") : ""}
+                  <span
+                    className={`${status !== "running" || showSender ? "ml-2 " : ""}inline-flex items-center gap-2`}
+                  >
+                    <RunDuration
+                      startedAt={runningStartedAt}
+                      finishedAt={execution?.finished_at}
+                      active={status === "running"}
+                    />
+                    {showRunningDevice && live?.deviceName && (
+                      <OperatingDevice name={live.deviceName} />
+                    )}
                   </span>
-                ) : (
-                  t(attemptLabels[status] || status)
-                )}
-                {retried ? " · " + t("重试") : ""}
-                <span className="ml-2 inline-flex">
-                  <RunDuration
-                    startedAt={
-                      execution?.started_at ||
-                      (sameLiveAttempt ? live?.startedAt : undefined)
-                    }
-                    finishedAt={execution?.finished_at}
-                    active={status === "running"}
-                  />
-                </span>
-              </p>
+                </p>
+              )}
               {status === "running" ? (
-                <div className="mt-1.5 w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5 text-muted-foreground">
+                <div
+                  className={`${showRunningHeader ? "mt-1.5 " : ""}w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5 text-muted-foreground`}
+                >
                   <RunningDots />
                   {summary && (
                     <div className="mt-1 text-sm leading-6 text-secondary-foreground">
@@ -284,8 +328,9 @@ type ExecutionActions = {
 
 export function ExecutionStatus({
   attempts,
+  showSender = true,
   ...actions
-}: { attempts: ExecutionAttempt[] } & ExecutionActions) {
+}: { attempts: ExecutionAttempt[]; showSender?: boolean } & ExecutionActions) {
   const visibleAttempts = attempts.filter(
     (attempt) =>
       !(
@@ -305,6 +350,7 @@ export function ExecutionStatus({
           <AgentAttempt
             key={attempt.kind + ":" + id}
             attempt={attempt}
+            showSender={showSender}
             {...actions}
           />
         );

@@ -1,3 +1,4 @@
+import { DeviceMenu } from "../devices/DeviceMenu";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
@@ -62,7 +63,10 @@ export default function ChatHome() {
   }
 
   return (
-    <main className="h-[calc(100dvh-3.5rem)] min-h-0 bg-surface md:h-dvh">
+    <main className="relative h-[calc(100dvh-3.5rem)] min-h-0 bg-surface md:h-dvh">
+      <div className="absolute top-3 right-3 z-20 sm:right-4">
+        <DeviceMenu />
+      </div>
       {projectID ? (
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}

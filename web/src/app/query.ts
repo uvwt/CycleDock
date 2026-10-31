@@ -20,4 +20,6 @@ export const keys = {
     ["models", provider, credentialID] as const,
   mcp: ["mcp"] as const,
   nexus: ["nexus"] as const,
+  nexusDevices: (workspaceID: string) =>
+    ["nexus", "devices", workspaceID] as const,
 };

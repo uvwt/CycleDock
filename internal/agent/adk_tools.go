@@ -23,6 +23,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -41,6 +42,7 @@ type attemptToolRuntime struct {
 	historyService  *agentsession.PostgresService
 	fatal           *attemptToolFatal
 	replies         *replyState
+	live            *realtime.Hub
 }
 
 type replyState struct {
@@ -109,6 +111,9 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 						// Runner will turn the recorded fatal into an Attempt failure.
 						ctx.Actions().SkipSummarization = true
 						return map[string]any{"error": err.Error()}, nil
+					}
+					if decoded, err := decodeADKToolResult(raw); err == nil {
+						runtime.publishNexusTask(name, decoded)
 					}
 					return runtime.prepareMCPResult(ctx, name, raw)
 				},

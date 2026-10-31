@@ -126,6 +126,8 @@ type EventView struct {
 }
 
 type PendingTurnView struct {
+	DeviceNodeID  string `json:"device_node_id,omitempty"`
+	DeviceName    string `json:"device_name,omitempty"`
 	ID            string `json:"id"`
 	SourceEventID string `json:"source_event_id,omitempty"`
 	Sequence      int64  `json:"sequence"`
@@ -136,6 +138,8 @@ type PendingTurnView struct {
 }
 
 type AttemptView struct {
+	DeviceNodeID     string `json:"device_node_id,omitempty"`
+	DeviceName       string `json:"device_name,omitempty"`
 	ID               string `json:"id"`
 	CardID           string `json:"card_id"`
 	TurnID           string `json:"turn_id"`

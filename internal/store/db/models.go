@@ -107,6 +107,8 @@ type CardTurn struct {
 	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
 	CancelReason        string             `json:"cancel_reason"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	DeviceNodeID        string             `json:"device_node_id"`
+	DeviceName          string             `json:"device_name"`
 }
 
 type Event struct {

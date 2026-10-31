@@ -93,11 +93,18 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	heartbeatErrors := make(chan error, 1)
 	go r.heartbeatAttempt(runCtx, cardContext, heartbeatErrors, cancel)
 
-	mcpSessions, nexusContext, err := r.openADKMCPSessions(runCtx, cardContext.WorkspaceID)
+	mcpSessions, nexusContext, deviceNames, err := r.openADKMCPSessions(runCtx, cardContext.WorkspaceID)
 	if err != nil {
 		return err
 	}
 	defer mcpSessions.Close()
+	// 用户本轮指定的设备名只在 fleet 快照没有该节点时补上，供界面显示。
+	if cardContext.DeviceNodeID != "" && deviceNames[cardContext.DeviceNodeID] == "" && cardContext.DeviceName != "" {
+		if deviceNames == nil {
+			deviceNames = map[string]string{}
+		}
+		deviceNames[cardContext.DeviceNodeID] = metadataString(cardContext.DeviceName, 120)
+	}
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
 	replies := &replyState{}
@@ -109,6 +116,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		historyService:  historyService,
 		fatal:           &attemptToolFatal{},
 		replies:         replies,
+		live:            r.live,
 	}
 	tools, err := buildADKTools(toolRuntime)
 	if err != nil {
@@ -147,6 +155,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	}
 
 	instructions := buildADKInstructions(cardContext, settings.SystemInstructions, nexusContext)
+	deviceCallbacks := operatingDeviceCallbacks(r.live, cardContext.CardID, cardContext.AttemptID, deviceNames, replies)
 	rootAgent, err := llmagent.New(llmagent.Config{
 		Name:            "cycle_agent",
 		Description:     "CycleDock built-in agent for the current persistent Card Session.",
@@ -155,19 +164,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		InstructionProvider: func(agent.ReadonlyContext) (string, error) {
 			return instructions, nil
 		},
-		Tools: tools,
-		BeforeToolCallbacks: []llmagent.BeforeToolCallback{
-			func(ctx agent.Context, _ tool.Tool, _ map[string]any) (map[string]any, error) {
-				replies.mu.Lock()
-				defer replies.mu.Unlock()
-				if replies.ended {
-					// 同一批中结束消息后的工具也要返回响应，但不得再产生副作用。
-					ctx.Actions().SkipSummarization = true
-					return map[string]any{"error": "turn already ended"}, nil
-				}
-				return nil, nil
-			},
-		},
+		Tools:               tools,
+		BeforeToolCallbacks: deviceCallbacks.before,
+		AfterToolCallbacks:  deviceCallbacks.after,
 	})
 	if err != nil {
 		return fmt.Errorf("create ADK agent: %w", err)
@@ -202,7 +201,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		}
 	})
 	runCtx = agentsession.WithAttempt(runCtx, cardContext.AttemptID)
-	userMessage := genai.NewContentFromText(cardContext.TurnContent, genai.RoleUser)
+	userMessage := genai.NewContentFromText(turnMessage(cardContext), genai.RoleUser)
 	previews := replyEventPublisher{hub: r.live, cardID: cardContext.CardID, attemptID: cardContext.AttemptID,
 		store: r.store, context: cardContext, replies: replies,
 	}
@@ -313,19 +312,67 @@ func ensureADKSession(
 	return nil
 }
 
+type deviceToolCallbacks struct {
+	before []llmagent.BeforeToolCallback
+	after  []llmagent.AfterToolCallback
+}
+
+// 设备显示是本次工具调用的临时状态。工具返回后清除，不写入 Attempt 或 Timeline。
+func operatingDeviceCallbacks(
+	live *realtime.Hub,
+	cardID, attemptID uuid.UUID,
+	devices map[string]string,
+	replies *replyState,
+) deviceToolCallbacks {
+	publish := func(args map[string]any, active bool) {
+		if live == nil || operatingDeviceName(devices, args) == "" {
+			return
+		}
+		name := ""
+		if active {
+			name = operatingDeviceName(devices, args)
+		}
+		live.Publish(cardID, realtime.Event{
+			Type: "attempt.device", AttemptID: attemptID.String(), DeviceName: name,
+		})
+	}
+	return deviceToolCallbacks{
+		before: []llmagent.BeforeToolCallback{
+			func(ctx agent.Context, _ tool.Tool, args map[string]any) (map[string]any, error) {
+				replies.mu.Lock()
+				ended := replies.ended
+				replies.mu.Unlock()
+				if ended {
+					// 同一批中结束消息后的工具也要返回响应，但不得再产生副作用。
+					ctx.Actions().SkipSummarization = true
+					return map[string]any{"error": "turn already ended"}, nil
+				}
+				publish(args, true)
+				return nil, nil
+			},
+		},
+		after: []llmagent.AfterToolCallback{
+			func(_ agent.Context, _ tool.Tool, args, _ map[string]any, _ error) (map[string]any, error) {
+				publish(args, false)
+				return nil, nil
+			},
+		},
+	}
+}
+
 func (r *Runner) openADKMCPSessions(
 	ctx context.Context,
 	workspaceID uuid.UUID,
-) (*mcpclient.SessionSet, string, error) {
+) (*mcpclient.SessionSet, string, map[string]string, error) {
 	connections, err := r.store.ListEnabledMCPConnections(ctx, workspaceID)
 	if err != nil {
-		return nil, "", fmt.Errorf("load MCP connections: %w", err)
+		return nil, "", nil, fmt.Errorf("load MCP connections: %w", err)
 	}
 	mcpConnections := make([]mcpclient.Connection, 0, len(connections)+1)
 	for _, connection := range connections {
 		token, err := r.store.MCPBearerToken(connection)
 		if err != nil {
-			return nil, "", fmt.Errorf("decrypt MCP bearer token for %s: %w", connection.Name, err)
+			return nil, "", nil, fmt.Errorf("decrypt MCP bearer token for %s: %w", connection.Name, err)
 		}
 		mcpConnections = append(mcpConnections, mcpclient.Connection{
 			Name:        connection.Name,
@@ -341,7 +388,7 @@ func (r *Runner) openADKMCPSessions(
 		switch {
 		case errors.Is(err, nexusdock.ErrNotConnected):
 		case err != nil:
-			return nil, "", fmt.Errorf("load NexusDock remote device connection: %w", err)
+			return nil, "", nil, fmt.Errorf("load NexusDock remote device connection: %w", err)
 		default:
 			mcpConnections = append(mcpConnections, mcpclient.Connection{
 				Name:            firstPartyNexusDockServerName,
@@ -359,18 +406,18 @@ func (r *Runner) openADKMCPSessions(
 
 	sessions, err := mcpclient.Connect(ctx, mcpConnections)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	if !nexusDockMounted {
-		return sessions, "", nil
+		return sessions, "", nil, nil
 	}
 	// 对话所需设备上下文和全部工具统一通过 MCP 获取，REST 只用于前端展示。
-	bootstrap, err := nexusDockExecutionTargets(ctx, sessions)
+	bootstrap, names, err := nexusDockExecutionTargets(ctx, sessions)
 	if err != nil {
 		sessions.Close()
-		return nil, "", fmt.Errorf("bootstrap NexusDock remote devices: %w", err)
+		return nil, "", nil, fmt.Errorf("bootstrap NexusDock remote devices: %w", err)
 	}
-	return sessions, bootstrap, nil
+	return sessions, bootstrap, names, nil
 }
 
 func (r *Runner) heartbeatAttempt(
@@ -472,6 +519,14 @@ func buildADKInstructions(
 		out.WriteString("\n")
 	}
 	return out.String()
+}
+
+// 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
+func turnMessage(card store.AgentCardContext) string {
+	if card.DeviceNodeID != "" {
+		return fmt.Sprintf("%s\n\n本轮用户选择的操作设备：%q（node_id=%q）。涉及设备操作时使用该设备；不可用时向用户说明，不要自行切换设备。", card.TurnContent, card.DeviceName, card.DeviceNodeID)
+	}
+	return card.TurnContent + "\n\n本轮用户未指定操作设备；不要自动沿用历史轮次的设备选择，请根据本轮任务确定目标，必要时询问用户。"
 }
 
 func textFromADKContent(content *genai.Content) string {

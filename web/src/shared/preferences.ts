@@ -79,6 +79,35 @@ export function useTheme(): [Theme, (next: Theme) => void] {
 }
 
 const en = {
+  不指定设备: "No device preference",
+  "选择仅作用于之后发送的消息。":
+    "Your selection applies to future messages only.",
+  "所选设备当前不可用，可以切换或取消指定。":
+    "The selected device is unavailable. Choose another or clear the selection.",
+  设备在线列表: "Device status",
+  设备: "Devices",
+  "NexusDock 设备": "NexusDock devices",
+  "{{online}} / {{total}} 在线": "{{online}} / {{total}} online",
+  "正在读取设备…": "Loading devices…",
+  "设备授权已过期，请重新连接。":
+    "Device authorization has expired. Please reconnect.",
+  "设备状态暂时不可用，请重试。":
+    "Device status is temporarily unavailable. Please retry.",
+  "当前部署尚未启用 NexusDock 设备连接。":
+    "NexusDock device connections are not enabled on this deployment.",
+  "连接 NexusDock，查看设备在线状态。":
+    "Connect NexusDock to view device status.",
+  "请联系工作空间所有者连接 NexusDock。":
+    "Ask your workspace owner to connect NexusDock.",
+  "此授权账号下暂无设备。":
+    "There are no devices under this authorized account.",
+  设备列表: "Device list",
+  系统未知: "Unknown system",
+  在线: "Online",
+  离线: "Offline",
+  刷新设备状态: "Refresh devices",
+  连接设备: "Connect devices",
+  设备连接设置: "Device connection settings",
   开启卡片更新通知: "Enable card update notifications",
   "离开卡片或切到后台，也能及时看到模型回复与卡片更新。":
     "See model replies and card updates when viewing another card or working in the background.",
@@ -251,6 +280,14 @@ const en = {
   返回: "Back",
   生成任务: "Generate task",
   正在执行: "Running",
+  正在操作: "Operating",
+  任务进度: "Task progress",
+  关闭任务进度: "Close task progress",
+  当前步骤: "Current step",
+  已阻塞: "Blocked",
+  未开始: "Not started",
+  已通过: "Passed",
+  未通过: "Failed",
   排队中: "Queued",
   等待回复: "Waiting for reply",
   运行中: "Running",
@@ -301,8 +338,6 @@ const en = {
   "新讨论发送失败，草稿已保留":
     "Failed to send the new discussion. Draft saved.",
   "重试失败，草稿仍已保留": "Retry failed. Draft remains saved.",
-  "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card，不会重复创建讨论。":
-    "The discussion was created, but the first message is not confirmed. Retry reuses the same Card and will not create a duplicate.",
   打开讨论: "Open discussion",
   重试发送: "Retry send",
   中止: "Stop",

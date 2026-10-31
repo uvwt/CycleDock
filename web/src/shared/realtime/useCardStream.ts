@@ -77,6 +77,8 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       "attempt.started",
       "attempt.snapshot",
       "attempt.stage",
+      "attempt.device",
+      "attempt.task",
       "reply.preview",
       "reply.committed",
       "reply.discarded",

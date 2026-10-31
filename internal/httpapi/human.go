@@ -67,6 +67,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Put("/agent/mcp-connections/{connectionID}", api.updateAgentMCPConnection)
 	r.Delete("/agent/mcp-connections/{connectionID}", api.deleteAgentMCPConnection)
 	r.Get("/agent/nexusdock", api.getNexusDockConnection)
+	r.Get("/agent/nexusdock/devices", api.listNexusDockDevices)
 	r.Post("/agent/nexusdock/connect", api.connectNexusDock)
 	r.Delete("/agent/nexusdock", api.disconnectNexusDock)
 }
@@ -97,6 +98,8 @@ type cardResponse struct {
 }
 
 type attemptResponse struct {
+	DeviceNodeID     string     `json:"device_node_id,omitempty"`
+	DeviceName       string     `json:"device_name,omitempty"`
 	ID               string     `json:"id"`
 	TurnID           string     `json:"turn_id"`
 	SourceEventID    string     `json:"source_event_id,omitempty"`
@@ -127,6 +130,8 @@ type eventResponse struct {
 }
 
 type pendingTurnResponse struct {
+	DeviceNodeID  string    `json:"device_node_id,omitempty"`
+	DeviceName    string    `json:"device_name,omitempty"`
 	ID            string    `json:"id"`
 	Sequence      int64     `json:"sequence"`
 	Source        string    `json:"source"`
@@ -693,8 +698,9 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content      string `json:"content"`
-		DispatchMode string `json:"dispatch_mode"`
+		Content      string              `json:"content"`
+		DeviceTarget *store.DeviceTarget `json:"device_target,omitempty"`
+		DispatchMode string              `json:"dispatch_mode"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -722,7 +728,7 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 	result, err := api.store.SubmitSessionComment(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID: identity.SourceID,
-		Content:        request.Content, IdempotencyKey: idempotencyKey,
+		Content:        request.Content, IdempotencyKey: idempotencyKey, DeviceTarget: request.DeviceTarget,
 		DispatchMode: domain.DispatchMode(request.DispatchMode),
 	})
 	if err != nil {
@@ -738,9 +744,10 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content   string `json:"content"`
-		AttemptID string `json:"attempt_id"`
-		MessageID string `json:"message_id,omitempty"`
+		Content      string              `json:"content"`
+		DeviceTarget *store.DeviceTarget `json:"device_target,omitempty"`
+		AttemptID    string              `json:"attempt_id"`
+		MessageID    string              `json:"message_id,omitempty"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -774,7 +781,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	result, err := api.store.ReplySessionAndContinue(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID: identity.SourceID,
-		Content:        request.Content, IdempotencyKey: idempotencyKey,
+		Content:        request.Content, IdempotencyKey: idempotencyKey, DeviceTarget: request.DeviceTarget,
 		ReplyToAttemptID: attemptID, ChoiceMessageID: messageID,
 	})
 	if err != nil {
@@ -1095,6 +1102,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 
 func attemptToResponse(item store.SessionAttemptView) attemptResponse {
 	response := attemptResponse{
+		DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
 		ID:              item.ID.String(),
 		TurnID:          item.TurnID.String(),
 		AttemptNumber:   item.AttemptNumber,
@@ -1151,6 +1159,7 @@ func pendingTurnsToResponse(items []store.PendingTurnView) []pendingTurnResponse
 	response := make([]pendingTurnResponse, 0, len(items))
 	for _, item := range items {
 		entry := pendingTurnResponse{
+			DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
 			ID:           item.ID.String(),
 			Sequence:     item.Sequence,
 			Source:       string(item.Source),

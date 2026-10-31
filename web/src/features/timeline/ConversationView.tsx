@@ -11,6 +11,7 @@ import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import {
   AttemptMetadata,
   ExecutionStatus,
+  OperatingDevice,
   RunDuration,
   StandaloneExecution,
 } from "./ExecutionStatus";
@@ -38,6 +39,13 @@ const labels: Record<string, string> = {
   confirm: "提交审核",
   reject: "驳回",
 };
+
+/** 气泡上的发送者。内置 Agent 的来源名是 Cycle Agent，界面统一写成 Cycle。 */
+function senderLabel(actorKind: string, actorName?: string) {
+  if (actorKind === "human") return actorName || "";
+  if (!actorName || actorName === "Cycle Agent") return "Cycle";
+  return actorName;
+}
 
 type ExecutionActions = {
   retryingAttemptID?: string;
@@ -141,16 +149,17 @@ function EventRow({
         <div className="min-w-0 max-w-[78%]">
           {showSender && !human && (
             <p className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-semibold text-muted-foreground">
-              <span>
-                {event.actor_name === "Cycle Agent"
-                  ? "Cycle"
-                  : event.actor_name || "Cycle"}
-              </span>
+              <span>{senderLabel(event.actor_kind, event.actor_name)}</span>
               {preview &&
                 !live?.finished &&
                 event.attempt_id === live?.attemptID &&
                 !headerAttempts.length && (
-                  <RunDuration startedAt={live?.startedAt} active />
+                  <>
+                    <RunDuration startedAt={live?.startedAt} active />
+                    {live.deviceName && (
+                      <OperatingDevice name={live.deviceName} />
+                    )}
+                  </>
                 )}
               {preview?.failed &&
                 !["cancelled", "superseded"].includes(previewStatus || "") && (
@@ -162,6 +171,13 @@ function EventRow({
                 <AttemptMetadata
                   key={attempt.id}
                   attempt={attempt}
+                  deviceName={
+                    !live?.finished &&
+                    live?.deviceName &&
+                    live.attemptID === attempt.id
+                      ? live.deviceName
+                      : undefined
+                  }
                   {...actions}
                 />
               ))}
@@ -421,7 +437,8 @@ export function ConversationView({
       ) ||
         previous.attempt_id === event.attempt_id) &&
       previous.actor_kind === event.actor_kind &&
-      previous.actor_name === event.actor_name &&
+      senderLabel(previous.actor_kind, previous.actor_name) ===
+        senderLabel(event.actor_kind, event.actor_name) &&
       interval >= 0 &&
       interval <= FIVE_MINUTES_MS;
     if (!continuesGroup) {
@@ -435,6 +452,17 @@ export function ConversationView({
       statusByHeader.set(headerID, attempts);
     }
   }
+  const lastEvent = displayEvents.at(-1);
+  // 运行圆点是当前 Attempt 的下一条气泡。紧挨着本轮 Cycle 回复时不再重复头像和名称。
+  // 必须是同一 Attempt：新的一轮即使发送者仍是 Cycle，也要重新带头像。
+  const runningContinues = Boolean(
+    running &&
+      lastEvent &&
+      !systemTypes.has(lastEvent.type) &&
+      lastEvent.actor_kind !== "human" &&
+      lastEvent.attempt_id === running.value.id &&
+      senderLabel(lastEvent.actor_kind, lastEvent.actor_name) === "Cycle",
+  );
 
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
@@ -519,10 +547,11 @@ export function ConversationView({
           </div>
         )}
         {running && (
-          <div className="mt-3">
+          <div className={runningContinues ? "mt-1.5" : "mt-3"}>
             <ExecutionStatus
               attempts={[running]}
               live={displayLive}
+              showSender={!runningContinues}
               {...actions}
             />
           </div>

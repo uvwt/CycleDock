@@ -1,3 +1,4 @@
+import { DeviceMenu } from "../devices/DeviceMenu";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, CirclePause, Clock3 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -103,29 +104,32 @@ export default function PlanPage() {
             {t("管理长期工作，查看执行结果与自动执行日程。")}
           </p>
         </div>
-        {projectID && (
-          <div className="flex rounded-xl border border-line bg-surface p-1">
-            {filters.map((filter) => (
-              <button
-                key={filter.id}
-                type="button"
-                onClick={() =>
-                  setSearchParams(
-                    filter.id === "all" ? {} : { view: filter.id },
-                    { replace: true },
-                  )
-                }
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  view === filter.id
-                    ? "bg-muted text-heading"
-                    : "text-muted-foreground hover:text-strong"
-                }`}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          {projectID && (
+            <div className="flex rounded-xl border border-line bg-surface p-1">
+              {filters.map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() =>
+                    setSearchParams(
+                      filter.id === "all" ? {} : { view: filter.id },
+                      { replace: true },
+                    )
+                  }
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    view === filter.id
+                      ? "bg-muted text-heading"
+                      : "text-muted-foreground hover:text-strong"
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <DeviceMenu />
+        </div>
       </header>
 
       {!projectID ? (

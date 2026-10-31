@@ -1,3 +1,4 @@
+import { DeviceMenu } from "../devices/DeviceMenu";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -212,7 +213,8 @@ export default function BoardPage() {
             {t("查看任务执行状态，跟踪待办进度。")}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <DeviceMenu />
           {projectID && (
             <Button variant="primary" onClick={() => setCreatingTodo(true)}>
               <ListPlus className="size-4" />

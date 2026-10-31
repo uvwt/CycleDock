@@ -1,3 +1,4 @@
+import { DeviceMenu } from "../devices/DeviceMenu";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, NavLink } from "react-router-dom";
@@ -113,10 +114,11 @@ export default function SettingsPage({ role }: { role: string }) {
           ))}
         </nav>
         <div className="min-w-0 space-y-5">
-          <div className="mb-5 border-b border-line pb-4">
+          <div className="mb-5 flex items-center justify-between gap-3 border-b border-line pb-4">
             <h2 className="text-base font-semibold">
               {t(current?.title || "常规")}
             </h2>
+            <DeviceMenu />
           </div>
           {tab === "general" && (
             <Section

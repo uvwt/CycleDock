@@ -1,3 +1,4 @@
+import { useDeviceSelection } from "../devices/device-selection";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { mcpFormSchema, type MCPFormValues } from "./mcp-form";
@@ -21,6 +22,7 @@ import {
 } from "../../shared/ui/components";
 
 export function NexusSettings() {
+  const { selectTarget } = useDeviceSelection();
   const q = useQuery({ queryKey: keys.nexus, queryFn: api.nexus });
   const connect = useMutation({
     mutationFn: api.nexusConnect,
@@ -31,6 +33,7 @@ export function NexusSettings() {
     mutationFn: api.nexusDisconnect,
     onSuccess: () => {
       toast.success("已断开");
+      selectTarget(null);
       void queryClient.invalidateQueries({ queryKey: keys.nexus });
     },
     onError: (e) => toast.error(String(e)),

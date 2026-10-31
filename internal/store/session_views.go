@@ -12,6 +12,8 @@ import (
 )
 
 type SessionAttemptView struct {
+	DeviceNodeID     string
+	DeviceName       string
 	ID               uuid.UUID
 	TurnID           uuid.UUID
 	SourceEventID    uuid.NullUUID
@@ -32,6 +34,8 @@ type SessionAttemptView struct {
 }
 
 type PendingTurnView struct {
+	DeviceNodeID  string
+	DeviceName    string
 	ID            uuid.UUID
 	SourceEventID uuid.NullUUID
 	Sequence      int64
@@ -49,7 +53,7 @@ func (s *Store) GetAttemptView(
 	var startedAt, finishedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content,
+			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			(
 				a.status IN ('failed','expired','cancelled')
@@ -67,7 +71,7 @@ func (s *Store) GetAttemptView(
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
 		WHERE a.workspace_id=$1 AND a.id=$2
 	`, workspaceID, attemptID).Scan(
-		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content,
+		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content, &out.DeviceNodeID, &out.DeviceName,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
@@ -91,7 +95,7 @@ func (s *Store) CurrentAttemptView(
 	var startedAt, finishedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content,
+			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			false,
 			a.current_stage, a.progress_summary,
@@ -104,7 +108,7 @@ func (s *Store) CurrentAttemptView(
 		ORDER BY a.created_at DESC
 		LIMIT 1
 	`, workspaceID, cardID).Scan(
-		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content,
+		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content, &out.DeviceNodeID, &out.DeviceName,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
@@ -125,7 +129,7 @@ func (s *Store) ListPendingTurns(
 	workspaceID, cardID uuid.UUID,
 ) ([]PendingTurnView, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.id, t.source_event_id, t.sequence, t.source, t.dispatch_mode, t.content, t.created_at
+		SELECT t.id, t.source_event_id, t.sequence, t.source, t.dispatch_mode, t.content, t.device_node_id, t.device_name, t.created_at
 		FROM card_turns t
 		WHERE t.workspace_id=$1 AND t.card_id=$2
 		  AND t.cancelled_at IS NULL
@@ -148,7 +152,7 @@ func (s *Store) ListPendingTurns(
 		var item PendingTurnView
 		if err := rows.Scan(
 			&item.ID, &item.SourceEventID, &item.Sequence, &item.Source, &item.DispatchMode,
-			&item.Content, &item.CreatedAt,
+			&item.Content, &item.DeviceNodeID, &item.DeviceName, &item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -167,7 +171,7 @@ func (s *Store) ListRecentAttempts(
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT
-			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content,
+			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			(
 				a.status IN ('failed','expired','cancelled')
@@ -198,7 +202,7 @@ func (s *Store) ListRecentAttempts(
 		var item SessionAttemptView
 		var startedAt, finishedAt *time.Time
 		if err := rows.Scan(
-			&item.ID, &item.TurnID, &item.SourceEventID, &item.Sequence, &item.Source, &item.Content,
+			&item.ID, &item.TurnID, &item.SourceEventID, &item.Sequence, &item.Source, &item.Content, &item.DeviceNodeID, &item.DeviceName,
 			&item.AttemptNumber, &item.Reason, &item.RetryOfAttemptID, &item.Status, &item.CanRetry,
 			&item.CurrentStage,
 			&item.ProgressSummary, &item.ErrorSummary,

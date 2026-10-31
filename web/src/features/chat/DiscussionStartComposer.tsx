@@ -1,3 +1,5 @@
+import { useDeviceSelection } from "../devices/device-selection";
+import type { DeviceTarget } from "../../shared/api/types";
 import { ComposerInput } from "../../shared/ui/ComposerInput";
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
@@ -11,6 +13,7 @@ const STORAGE_KEY = "cycledock.new-discussion.drafts.v2";
 
 type SavedDraft = {
   content: string;
+  deviceTarget?: DeviceTarget | null;
   pendingCardID?: string;
   idempotencyKey?: string;
 };
@@ -42,6 +45,7 @@ function writeDraft(projectID: string, draft?: SavedDraft) {
 }
 
 export function DiscussionStartComposer({ projectID }: { projectID: string }) {
+  const { target } = useDeviceSelection();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const initial = readDraft(projectID);
@@ -57,7 +61,13 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   }, [content, pending, projectID]);
 
   async function finish(cardID: string, draft: SavedDraft) {
-    await api.send(cardID, draft.content, "enqueue", draft.idempotencyKey);
+    await api.send(
+      cardID,
+      draft.content,
+      "enqueue",
+      draft.idempotencyKey,
+      draft.deviceTarget,
+    );
     writeDraft(projectID);
     setPending(null);
     setContent("");
@@ -69,11 +79,14 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     const value = content.trim();
     if (!value || sending) return;
     setSending(true);
+    // 发起发送时固定设备选择；创建 Card 的网络等待期间切换设备不改变这条消息。
+    const deviceTarget = target;
     try {
       const card = await api.createDiscussion(projectID);
       await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       const draft: SavedDraft = {
         content: value,
+        deviceTarget,
         pendingCardID: card.id,
         idempotencyKey: crypto.randomUUID(),
       };
@@ -111,59 +124,49 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   const placeholder = t("发送消息，开始讨论…");
 
   return (
-    <div>
-      {pending && (
-        <div className="mb-2 rounded-xl bg-warning-muted px-3 py-2 text-xs leading-5 text-warning">
-          {t(
-            "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card，不会重复创建讨论。",
-          )}
-        </div>
-      )}
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void (pending ? retry() : createAndSend());
+      }}
+      className="mx-auto flex items-end rounded-2xl border border-line bg-surface py-1.5 pr-1.5 pl-3 shadow-sm transition-[border-color,box-shadow] focus-within:border-line-strong"
+    >
+      <ComposerInput
+        value={value}
+        onChange={setContent}
+        placeholder={placeholder}
+        readOnly={Boolean(pending)}
+      />
 
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void (pending ? retry() : createAndSend());
-        }}
-        className="mx-auto flex items-end rounded-2xl border border-line bg-surface py-1.5 pr-1.5 pl-3 shadow-sm transition-[border-color,box-shadow] focus-within:border-line-strong"
-      >
-        <ComposerInput
-          value={value}
-          onChange={setContent}
-          placeholder={placeholder}
-          readOnly={Boolean(pending)}
-        />
-
-        <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
-          {pending?.pendingCardID && (
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() =>
-                navigate(`/chat/${projectID}/${pending.pendingCardID}`)
-              }
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
-            >
-              {t("打开讨论")}
-            </button>
-          )}
+      <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
+        {pending?.pendingCardID && (
           <button
-            type="submit"
-            title={pending ? t("重试发送") : t("发送")}
-            aria-label={pending ? t("重试发送") : t("发送")}
-            disabled={sending || (!pending && !content.trim())}
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
+            type="button"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() =>
+              navigate(`/chat/${projectID}/${pending.pendingCardID}`)
+            }
+            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
-            {sending ? (
-              <LoaderCircle className="size-4 animate-spin" />
-            ) : pending ? (
-              <RotateCcw className="size-4" />
-            ) : (
-              <ArrowUp className="size-4" />
-            )}
+            {t("打开讨论")}
           </button>
-        </div>
-      </form>
-    </div>
+        )}
+        <button
+          type="submit"
+          title={pending ? t("重试发送") : t("发送")}
+          aria-label={pending ? t("重试发送") : t("发送")}
+          disabled={sending || (!pending && !content.trim())}
+          className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
+        >
+          {sending ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : pending ? (
+            <RotateCcw className="size-4" />
+          ) : (
+            <ArrowUp className="size-4" />
+          )}
+        </button>
+      </div>
+    </form>
   );
 }

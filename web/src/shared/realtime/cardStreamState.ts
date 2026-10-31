@@ -6,10 +6,26 @@ export type LiveReply = {
   failed?: boolean;
 };
 
+export type TaskStep = { title: string; status?: string };
+
+export type TaskProgress = {
+  id: string;
+  title: string;
+  status?: string;
+  completed_step_count: number;
+  step_count: number;
+  current_step?: string;
+  summary?: string;
+  blocker?: string;
+  steps?: TaskStep[];
+};
+
 export type LiveAttempt = {
   attemptID: string;
   replies: LiveReply[];
   stage: string;
+  deviceName?: string;
+  task?: TaskProgress;
   startedAt?: string;
   finished?: boolean;
   previous?: { attemptID: string; replies: LiveReply[]; startedAt?: string }[];
@@ -22,6 +38,8 @@ export type CardStreamEvent = {
   text?: string;
   order?: number;
   stage?: string;
+  device_name?: string;
+  task?: TaskProgress;
   started_at?: string;
   replies?: {
     id: string;
@@ -62,6 +80,8 @@ export function applyCardStreamEvent(
         failed: reply.failed,
       })),
       stage: event.stage || "正在执行",
+      deviceName: event.device_name || "",
+      task: event.task,
       startedAt: event.started_at,
     };
   }
@@ -70,6 +90,12 @@ export function applyCardStreamEvent(
   switch (type) {
     case "attempt.stage":
       return { ...live, stage: event.stage || live.stage };
+    case "attempt.device":
+      // 缺省设备名表示这次调用已经结束。阶段轮询不带该字段，因此不能在 attempt.stage 里清设备。
+      return { ...live, deviceName: event.device_name || "" };
+    case "attempt.task":
+      if (!event.task?.id) return live;
+      return { ...live, task: event.task };
     case "reply.preview": {
       if (!event.reply_id || !event.text) return live;
       const existing = live.replies.find(
@@ -116,6 +142,7 @@ export function applyCardStreamEvent(
       return {
         ...live,
         finished: true,
+        deviceName: "",
         replies: live.replies.map((reply) =>
           reply.eventID ? reply : { ...reply, failed: true },
         ),

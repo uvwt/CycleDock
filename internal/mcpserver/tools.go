@@ -563,6 +563,7 @@ func recentEventView(event db.ListRecentCardTimelineRow) EventView {
 
 func pendingTurnView(item store.PendingTurnView) PendingTurnView {
 	view := PendingTurnView{
+		DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
 		ID: item.ID.String(), Sequence: item.Sequence, Source: string(item.Source),
 		DispatchMode: string(item.DispatchMode), Content: item.Content,
 		CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -575,6 +576,7 @@ func pendingTurnView(item store.PendingTurnView) PendingTurnView {
 
 func attemptView(item store.SessionAttemptView, cardID uuid.UUID) AttemptView {
 	view := AttemptView{
+		DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
 		ID: item.ID.String(), CardID: cardID.String(), TurnID: item.TurnID.String(),
 		AttemptNumber: item.AttemptNumber, Reason: string(item.Reason), Status: string(item.Status),
 		CurrentStage: item.CurrentStage, ProgressSummary: item.ProgressSummary,

@@ -71,6 +71,8 @@ created_at
 - pending Turn 不提前进入 ADK Session。
 - 技术 retry / recovery 不创建新 Turn；它们在 turn_attempts 中形成同一 Turn 的后继 Attempt。
 
+人工 Turn 可保存 `device_node_id` / `device_name`，表示用户发送该输入时选定的外部设备偏好；空字符串表示未指定。该字段不授予设备权限，不影响 Workspace scope，技术重试复用原 Turn 的值。人工 Comment 正文保持原样，设备提示在实际 Claim 后才进入 ADK 用户上下文。
+
 ## 4. turn_attempts
 
 目标字段：

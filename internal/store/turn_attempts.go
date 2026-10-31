@@ -15,6 +15,8 @@ import (
 )
 
 type CardTurn struct {
+	DeviceNodeID      string
+	DeviceName        string
 	ID                uuid.UUID
 	WorkspaceID       uuid.UUID
 	CardID            uuid.UUID
@@ -324,7 +326,7 @@ func (s *Store) ClaimNextTurnAttempt(
 	var turn CardTurn
 	err = tx.QueryRow(ctx, `
 		SELECT
-			t.id, t.workspace_id, t.card_id, t.source, t.content,
+			t.id, t.workspace_id, t.card_id, t.source, t.content, t.device_node_id, t.device_name,
 			t.created_by_source_id, t.source_event_id, t.dispatch_mode, t.schedule_id,
 			t.scheduled_for, t.created_at
 		FROM card_turns t
@@ -357,7 +359,7 @@ func (s *Store) ClaimNextTurnAttempt(
 		LIMIT 1
 		FOR UPDATE OF c SKIP LOCKED
 	`, workspaceID).Scan(
-		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content,
+		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content, &turn.DeviceNodeID, &turn.DeviceName,
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
 		&turn.ScheduledFor, &turn.CreatedAt,
 	)
@@ -1122,6 +1124,8 @@ func (s *Store) GetAttempt(
 }
 
 type insertTurnParams struct {
+	DeviceNodeID      string
+	DeviceName        string
 	WorkspaceID       uuid.UUID
 	CardID            uuid.UUID
 	Source            domain.TurnSource
@@ -1144,14 +1148,14 @@ func insertTurn(ctx context.Context, tx pgx.Tx, p insertTurnParams) (CardTurn, e
 	_, err := tx.Exec(ctx, `
 		INSERT INTO card_turns (
 			id, workspace_id, card_id, source, content, created_by_source_id,
-			source_event_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash
+			source_event_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, device_node_id, device_name
 		)
 		VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),NULLIF($12,'')
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),NULLIF($12,''),$13,$14
 		)
 	`, turnID, p.WorkspaceID, p.CardID, string(p.Source), p.Content,
 		nullUUIDValue(p.CreatedBySourceID), nullUUIDValue(p.SourceEventID), string(p.DispatchMode),
-		nullUUIDValue(p.ScheduleID), scheduledFor, p.IdempotencyKey, p.RequestHash)
+		nullUUIDValue(p.ScheduleID), scheduledFor, p.IdempotencyKey, p.RequestHash, p.DeviceNodeID, p.DeviceName)
 	if err != nil {
 		return CardTurn{}, mapConstraintError(err)
 	}
@@ -1197,12 +1201,12 @@ func loadTurn(ctx context.Context, q interface {
 	var turn CardTurn
 	err := q.QueryRow(ctx, `
 		SELECT
-			id, workspace_id, card_id, source, content, created_by_source_id,
+			id, workspace_id, card_id, source, content, device_node_id, device_name, created_by_source_id,
 			source_event_id, dispatch_mode, schedule_id, scheduled_for, created_at
 		FROM card_turns
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, turnID).Scan(
-		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content,
+		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content, &turn.DeviceNodeID, &turn.DeviceName,
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
 		&turn.ScheduledFor, &turn.CreatedAt,
 	)
@@ -1224,7 +1228,7 @@ func claimQueuedAttempt(
 			a.id, a.workspace_id, a.card_id, a.turn_id, a.attempt_number, a.reason,
 			a.retry_of_attempt_id, a.runner_source_id, a.invocation_id, a.status,
 			a.started_at, a.lease_expires_at, a.finished_at,
-			t.id, t.workspace_id, t.card_id, t.source, t.content,
+			t.id, t.workspace_id, t.card_id, t.source, t.content, t.device_node_id, t.device_name,
 			t.created_by_source_id, t.source_event_id, t.dispatch_mode, t.schedule_id, t.scheduled_for, t.created_at
 		FROM turn_attempts a
 		JOIN card_turns t
@@ -1251,7 +1255,7 @@ func claimQueuedAttempt(
 		&attempt.AttemptNumber, &attempt.Reason, &attempt.RetryOfAttemptID,
 		&attempt.RunnerSourceID, &invocationID, &attempt.Status,
 		&attempt.StartedAt, &attempt.LeaseExpiresAt, &attempt.FinishedAt,
-		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content,
+		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content, &turn.DeviceNodeID, &turn.DeviceName,
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
 		&turn.ScheduledFor, &turn.CreatedAt,
 	)

@@ -1,3 +1,6 @@
+import { useDeviceSelection } from "../devices/device-selection";
+import { DeviceMenu } from "../devices/DeviceMenu";
+import { TaskProgressCard } from "./TaskProgressCard";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -27,6 +30,7 @@ export default function CardPage() {
 }
 
 function CardPageContent() {
+  const { target } = useDeviceSelection();
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
@@ -110,9 +114,9 @@ function CardPageContent() {
         if (!current || current.status !== "waiting_human") {
           return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
         }
-        return api.reply(cardID, comment.trim(), current.id);
+        return api.reply(cardID, comment.trim(), current.id, undefined, target);
       }
-      return api.send(cardID, comment.trim(), mode);
+      return api.send(cardID, comment.trim(), mode, undefined, target);
     },
     onSuccess: async () => {
       setComment("");
@@ -127,7 +131,14 @@ function CardPageContent() {
       value: string;
       attemptID: string;
       messageID: string;
-    }) => api.reply(cardID, choice.value, choice.attemptID, choice.messageID),
+    }) =>
+      api.reply(
+        cardID,
+        choice.value,
+        choice.attemptID,
+        choice.messageID,
+        target,
+      ),
     onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
@@ -273,6 +284,8 @@ function CardPageContent() {
         <section className="relative flex min-h-0 min-w-0 flex-col bg-surface">
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5 sm:right-4">
+            <TaskProgressCard task={stream.live?.task} />
+            <DeviceMenu />
             {!isDiscussion && <CardStatusSwitch card={card} />}
             <CardActions
               card={card}
