@@ -123,7 +123,7 @@ Phase C 的验收包括真实 PostgreSQL 跨 Turn tool-response continuity：第
 - Thought / ThoughtSignature 丢弃、结构化 credential 递归脱敏，以及 Compaction bookkeeping ownership guard。
 - 真实 PostgreSQL 验证：Artifact/History 精确值恢复、不重复真实 MCP 调用、raw Event 不被 compaction 删除、五个核心包 `-race`、migration v12 up/down/up。
 
-Model credential、ordered routes、failover 与普通 MCP/NexusDock 继续通过 ADK adapter 保留；只有在 ADK 原生实现达到同等可靠性时才删除现有 transport/client，不为了框架纯度重写成熟能力。
+Model credential、ordered routes、failover 与普通 MCP 继续通过 ADK adapter 保留；只有在 ADK 原生实现达到同等可靠性时才删除现有 transport/client。NexusDock 第一方对话运行时统一通过 MCP 获取设备上下文、工具定义并执行设备及 Cloud 自有工具，不使用 REST 目录或 Execution API。前端设备在线展示需要的 API 仍为目标态，见 [NexusDock 对话接入与设备展示](nexusdock-capability-directory.md)。
 
 ## 7. Phase E — External MCP / Memory
 

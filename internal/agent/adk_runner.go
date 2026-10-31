@@ -93,7 +93,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	heartbeatErrors := make(chan error, 1)
 	go r.heartbeatAttempt(runCtx, cardContext, heartbeatErrors, cancel)
 
-	mcpSessions, nexusContext, nexusExecution, err := r.openADKMCPSessions(runCtx, cardContext.WorkspaceID)
+	mcpSessions, nexusContext, err := r.openADKMCPSessions(runCtx, cardContext.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,6 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		store:           r.store,
 		context:         cardContext,
 		mcpSessions:     mcpSessions,
-		nexusExecution:  nexusExecution,
 		artifactService: r.artifactService,
 		historyService:  historyService,
 		fatal:           &attemptToolFatal{},
@@ -237,7 +236,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		}
 	}
 	if toolErr := toolRuntime.fatal.get(); toolErr != nil {
-		return fmt.Errorf("MCP tool call failed: %w", toolErr)
+		return fmt.Errorf("external tool call failed: %w", toolErr)
 	}
 
 	select {
@@ -317,16 +316,16 @@ func ensureADKSession(
 func (r *Runner) openADKMCPSessions(
 	ctx context.Context,
 	workspaceID uuid.UUID,
-) (*mcpclient.SessionSet, string, *nexusDockExecutionRouter, error) {
+) (*mcpclient.SessionSet, string, error) {
 	connections, err := r.store.ListEnabledMCPConnections(ctx, workspaceID)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("load MCP connections: %w", err)
+		return nil, "", fmt.Errorf("load MCP connections: %w", err)
 	}
 	mcpConnections := make([]mcpclient.Connection, 0, len(connections)+1)
 	for _, connection := range connections {
 		token, err := r.store.MCPBearerToken(connection)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("decrypt MCP bearer token for %s: %w", connection.Name, err)
+			return nil, "", fmt.Errorf("decrypt MCP bearer token for %s: %w", connection.Name, err)
 		}
 		mcpConnections = append(mcpConnections, mcpclient.Connection{
 			Name:        connection.Name,
@@ -337,13 +336,12 @@ func (r *Runner) openADKMCPSessions(
 	}
 
 	nexusDockMounted := false
-	var nexusDockConnection nexusdock.RuntimeConnection
 	if r.nexusDock != nil {
 		connection, err := r.nexusDock.Runtime(ctx, workspaceID)
 		switch {
 		case errors.Is(err, nexusdock.ErrNotConnected):
 		case err != nil:
-			return nil, "", nil, fmt.Errorf("load NexusDock remote device connection: %w", err)
+			return nil, "", fmt.Errorf("load NexusDock remote device connection: %w", err)
 		default:
 			mcpConnections = append(mcpConnections, mcpclient.Connection{
 				Name:            firstPartyNexusDockServerName,
@@ -355,31 +353,24 @@ func (r *Runner) openADKMCPSessions(
 					"agentdock_context": true,
 				},
 			})
-			nexusDockConnection = connection
 			nexusDockMounted = true
 		}
 	}
 
 	sessions, err := mcpclient.Connect(ctx, mcpConnections)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", err
 	}
 	if !nexusDockMounted {
-		return sessions, "", nil, nil
+		return sessions, "", nil
 	}
-	directory, supported, err := nexusDockDirectoryTargets(ctx, nexusDockConnection)
-	bootstrap := directory.Bootstrap
-	execution := directory.Execution
-	if !supported {
-		// 旧版 Cloud 尚无目录 API 时保留原 MCP 发现流程，执行工具始终走 MCP。
-		bootstrap, err = nexusDockExecutionTargets(ctx, sessions)
-		execution = nil
-	}
+	// 对话所需设备上下文和全部工具统一通过 MCP 获取，REST 只用于前端展示。
+	bootstrap, err := nexusDockExecutionTargets(ctx, sessions)
 	if err != nil {
 		sessions.Close()
-		return nil, "", nil, fmt.Errorf("bootstrap NexusDock remote devices: %w", err)
+		return nil, "", fmt.Errorf("bootstrap NexusDock remote devices: %w", err)
 	}
-	return sessions, bootstrap, execution, nil
+	return sessions, bootstrap, nil
 }
 
 func (r *Runner) heartbeatAttempt(

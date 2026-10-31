@@ -58,10 +58,10 @@ func nexusDockExecutionTargets(ctx context.Context, sessions *mcpclient.SessionS
 		if nodeContext, ok := node["context"].(map[string]any); ok {
 			target.Skills = append(
 				target.Skills,
-				namedItems(nodeContext["skills"], 10)...,
+				namedItems(nodeContext["skills"], 50)...,
 			)
 			if common, ok := nodeContext["common_skills"].(map[string]any); ok {
-				target.Skills = appendUniqueLimited(target.Skills, namedItems(common["items"], 10), 14)
+				target.Skills = appendUniqueLimited(target.Skills, namedItems(common["items"], 30), 80)
 			}
 			target.DynamicMCP = namedItems(nodeContext["dynamic_mcp"], 10)
 		}

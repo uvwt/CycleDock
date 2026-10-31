@@ -279,6 +279,8 @@ func publicRunError(err error) string {
 		return "Built-in Agent model account refresh failed."
 	case errors.Is(err, modelauth.ErrUnavailable):
 		return "Built-in Agent model account authentication is not configured."
+	case strings.Contains(err.Error(), "NexusDock"):
+		return "Built-in Agent NexusDock connection or tool call failed."
 	case strings.Contains(err.Error(), "MCP"):
 		return "Built-in Agent MCP connection or tool call failed."
 	default:

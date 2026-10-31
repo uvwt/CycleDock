@@ -37,7 +37,6 @@ type attemptToolRuntime struct {
 	store           *store.Store
 	context         store.AgentCardContext
 	mcpSessions     *mcpclient.SessionSet
-	nexusExecution  *nexusDockExecutionRouter
 	artifactService artifact.Service
 	historyService  *agentsession.PostgresService
 	fatal           *attemptToolFatal
@@ -100,27 +99,9 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	if runtime.mcpSessions != nil {
 		for _, definition := range runtime.mcpSessions.ToolDefinitions() {
 			name := definition.Function.Name
-			mcpTool, _ := runtime.mcpSessions.Tool(name)
 			converted, err := definitionToADKTool(
 				definition,
 				func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-					if runtime.nexusExecution != nil {
-						raw, handled, err := runtime.nexusExecution.Call(
-							ctx,
-							runtime.context.AttemptID,
-							ctx.FunctionCallID(),
-							mcpTool,
-							args,
-						)
-						if handled {
-							if err != nil {
-								runtime.fatal.set(err)
-								ctx.Actions().SkipSummarization = true
-								return map[string]any{"error": err.Error()}, nil
-							}
-							return runtime.prepareMCPResult(ctx, name, raw)
-						}
-					}
 					raw, err := runtime.mcpSessions.Call(ctx, name, args)
 					if err != nil {
 						runtime.fatal.set(err)
@@ -138,6 +119,7 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 			out = append(out, converted)
 		}
 	}
+
 	return out, nil
 }
 

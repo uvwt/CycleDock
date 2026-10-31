@@ -1,12 +1,22 @@
-# NexusDock 能力目录接入
+# NexusDock 对话接入与设备展示
 
-CycleDock 第一方连接仍使用 NexusDock MCP OAuth，Token 的 resource 为 `/mcp`。Agent 每次建立 MCP Session 后，优先用同一 Bearer Token 请求 NexusDock Cloud 的只读 HTTP 目录：
+## 当前实现：对话统一使用 MCP
 
-1. `GET /v1/integrations/devices` 获取设备和实时在线标记。
-2. `GET /v1/integrations/capabilities` 获取服务端已缓存的 Skill、MCP、Plugin、Tool 名称。
-3. 将设备、能力索引（最多 20 台设备，每类最多 14 项）作为非可信元数据追加到本轮上下文。
-4. 新版 Cloud 提供 Execution API 时，能精确映射到节点 Tool capability 的实际调用走持久 Execution；MCP 仍负责模型 Tool Schema、NexusDock 自有工具和旧 Cloud 回退。执行可靠性细节见 [nexusdock-execution-api.md](nexusdock-execution-api.md)。
+CycleDock 第一方连接使用 NexusDock MCP OAuth，Token 的 resource 为 `/mcp`。每次 Attempt 建立授权 MCP Session：
 
-Cloud 老版本没有该 API（404）或目录服务暂时不可用时，沿用现有 `agentdock_context` 发现方法。目录明确标注“元数据不等于可执行权限”；在线状态由设备接口决定。拒绝 HTTP 重定向（防止 Bearer 泄漏），响应大小上限 2 MiB；401/403 等授权错误不会静默回退。
+1. 使用 MCP 工具目录获取名称、说明和参数 Schema；多设备的同名工具契约由 NexusDock 聚合和校验。
+2. 通过 MCP 调用内部 `agentdock_context`，将设备、在线状态和能力摘要作为不可信元数据注入本轮上下文。摘要最多保留 20 台设备，不作为执行权限保证。
+3. 设备工具和 Cloud 自有 Recall / Workflow 工具均通过同一 MCP Session 调用，使用 NexusDock 原生工具名称。设备路由参数由 NexusDock 校验和处理。
+4. 返回结果经过统一脱敏，持久化为 ADK Session FunctionResponse；大结果进入 Artifact。
 
-新接口支持的 REST 发现流程不再主动调用 `agentdock_context`，但该 MCP 工具保留为旧版本兼容入口。未来若需要增量更新，可另行扩展，不在 CycleDock 自建第二套设备注册表。
+`agentdock_context` 在 bootstrap 后不重复暴露给模型。后续按任务需要调用 MCP 提供的工作区、Skill、动态 MCP 等工具。对话运行时不请求 REST 能力目录或详情，不在 CycleDock 合并另一份 Schema，也不通过 Execution API 分流设备执行。
+
+OAuth discovery、授权、refresh 和 Workspace scope 继续由 CycleDock 管理。认证凭据不交给模型或浏览器。普通第三方 MCP 连接与第一方连接分别管理。
+
+## 目标态：前端通过 API 展示设备
+
+目前设置页只展示 NexusDock 连接状态，尚未实现设备在线列表。
+
+前端需要展示设备在线状态时，应请求 CycleDock 自己的认证 API，由后端复用当前 Workspace 的 NexusDock 授权调用 `GET /v1/integrations/devices`，只返回展示所需的设备摘要。能力摘要有实际展示需求时再接入 `GET /v1/integrations/capabilities`。
+
+前端不建立 MCP Session，不直接持有 NexusDock Token。展示数据与对话工具调用独立，页面刷新或轮询不触发模型工具调用，也不修改 Card / Turn / Attempt 状态。

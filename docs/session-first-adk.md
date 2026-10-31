@@ -283,10 +283,10 @@ ADK experimental model routing 不作为唯一故障转移保证。
 NexusDock 继续作为 first-party integration：
 
 - CycleDock 管授权；
-- runtime bootstrap agentdock_context；
-- 隐藏内部 bootstrap tool；
-- 设备目录注入；
-- native tool names；
+- MCP `agentdock_context` bootstrap 和设备上下文注入；
+- 隐藏已完成的内部 bootstrap tool；
+- MCP 提供工具 Schema、原生工具名称和设备 / Cloud 工具执行；
+- 对话运行时不使用 REST 目录或 Execution API；
 - 按 Workspace 权限过滤。
 
 MCP 连接恢复属于每次 invocation/runtime 的技术职责；Session 持久化不意味着持久保存活动网络连接。
