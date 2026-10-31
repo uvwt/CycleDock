@@ -61,6 +61,13 @@ type Client struct {
 	CreatedAt    time.Time
 }
 
+type AuthorizedClient struct {
+	ClientID     string
+	Name         string
+	SourceID     uuid.UUID
+	AuthorizedAt time.Time
+}
+
 type AuthorizeRequest struct {
 	ClientID      string
 	RedirectURI   string
@@ -199,6 +206,27 @@ func (s *Service) GetClient(ctx context.Context, clientID string) (Client, error
 		RedirectURIs: append([]string(nil), row.RedirectUris...),
 		CreatedAt:    row.CreatedAt.Time,
 	}, nil
+}
+
+func (s *Service) ListAuthorizedClients(
+	ctx context.Context,
+	workspaceID, humanAccountID uuid.UUID,
+) ([]AuthorizedClient, error) {
+	rows, err := s.queries.ListAuthorizedOAuthClients(ctx, db.ListAuthorizedOAuthClientsParams{
+		WorkspaceID: workspaceID, HumanAccountID: humanAccountID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list authorized oauth clients: %w", err)
+	}
+	clients := make([]AuthorizedClient, 0, len(rows))
+	for _, row := range rows {
+		clients = append(clients, AuthorizedClient{
+			ClientID: row.ClientID, Name: row.ClientName,
+			SourceID:     row.SourceID,
+			AuthorizedAt: row.AuthorizedAt.Time,
+		})
+	}
+	return clients, nil
 }
 
 func (s *Service) ValidateAuthorizationRequest(ctx context.Context, request AuthorizeRequest) (Client, error) {

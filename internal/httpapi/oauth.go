@@ -46,6 +46,13 @@ type oauthErrorResponse struct {
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
+type authorizedAIClientResponse struct {
+	ClientID     string    `json:"client_id"`
+	Name         string    `json:"name"`
+	SourceID     string    `json:"source_id"`
+	AuthorizedAt time.Time `json:"authorized_at"`
+}
+
 type oauthAuthorizationServerMetadataResponse struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
@@ -88,6 +95,29 @@ h1{font-size:22px;margin:0 0 10px}p{color:#94a3b8;line-height:1.6}strong{color:#
 <div class="actions"><button class="approve" name="decision" value="approve">Authorize</button><button class="deny" name="decision" value="deny">Deny</button></div>
 </form>
 </main></body></html>`))
+
+func (api *API) listAuthorizedAIClients(w http.ResponseWriter, r *http.Request) {
+	if api.oauth == nil {
+		writeJSON(w, http.StatusOK, []authorizedAIClientResponse{})
+		return
+	}
+	identity := identityFromRequest(r)
+	clients, err := api.oauth.ListAuthorizedClients(
+		r.Context(), identity.WorkspaceID, identity.HumanAccountID,
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	response := make([]authorizedAIClientResponse, 0, len(clients))
+	for _, client := range clients {
+		response = append(response, authorizedAIClientResponse{
+			ClientID: client.ClientID, Name: client.Name,
+			SourceID: client.SourceID.String(), AuthorizedAt: client.AuthorizedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
 
 func (api *API) oauthAuthorizationServerMetadata(w http.ResponseWriter, _ *http.Request) {
 	if api.oauth == nil {

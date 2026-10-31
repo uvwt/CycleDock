@@ -156,7 +156,7 @@ export default function NexusDockPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-semibold tracking-tight text-heading">
-              {t("NexusDock")}
+              {t("远程设备")}
             </h1>
             {isConnected ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -170,9 +170,7 @@ export default function NexusDockPage() {
             )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {isConnected && connection.data?.authorized_subject
-              ? `${t("已授权账号")}: ${connection.data.authorized_subject}`
-              : t("管理连接的本地与远程设备节点，查看动态加载的 Skill 与 MCP 工具能力。")}
+            {t("连接并管理你的远程设备，让 Agent 在授权范围内使用设备上的 Skill、MCP 与工具能力。")}
           </p>
         </div>
 
@@ -234,7 +232,7 @@ export default function NexusDockPage() {
       {/* 主体内容区 */}
       {connection.isPending ? (
         <div className="grid place-items-center py-20">
-          <Spinner text={t("正在检查 NexusDock 连接状态…")} />
+          <Spinner text={t("正在检查远程设备连接状态…")} />
         </div>
       ) : connection.error ? (
         <ErrorView error={connection.error} onRetry={() => void connection.refetch()} />
@@ -246,7 +244,7 @@ export default function NexusDockPage() {
               <Cpu className="size-7" />
             </div>
             <h2 className="mt-4 text-lg font-semibold text-foreground">
-              {t("连接 NexusDock 远程设备")}
+              {t("连接你的远程设备")}
             </h2>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {t("通过第一方设备授权，CycleDock 可直接发现并调用您设备上的 Skill 技能、动态 MCP 服务与本地运行能力，无需手动配置 Token 或 MCP URL。")}
@@ -270,7 +268,7 @@ export default function NexusDockPage() {
       ) : fleet.isPending && !devices.length ? (
         /* 加载设备快照中 */
         <div className="grid place-items-center py-20">
-          <Spinner text={t("正在连接 NexusDock 并拉取各设备能力快照…")} />
+          <Spinner text={t("正在连接远程设备并拉取能力快照…")} />
         </div>
       ) : fleet.error ? (
         <div className="mx-auto max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xs">

@@ -7,6 +7,7 @@ import {
   GripVertical,
   LogOut,
   Plus,
+  Search,
   TestTube2,
   Trash2,
 } from "lucide-react";
@@ -143,7 +144,12 @@ function SortableRouteEditor({
 
   // 当账号模型目录加载完成且当前未选择模型时，默认选中第一项
   useEffect(() => {
-    if (subscription && !route.model && catalog.data && catalog.data.length > 0) {
+    if (
+      subscription &&
+      !route.model &&
+      catalog.data &&
+      catalog.data.length > 0
+    ) {
       onChange({
         ...route,
         model: catalog.data[0].id,
@@ -186,8 +192,13 @@ function SortableRouteEditor({
             <GripVertical className="size-4" />
           </button>
           <div className="flex items-center gap-1.5">
-            <ProviderLogo provider={route.provider_type} className="size-4 shrink-0 text-foreground" />
-            <p className="text-sm font-semibold">{names[route.provider_type]}</p>
+            <ProviderLogo
+              provider={route.provider_type}
+              className="size-4 shrink-0 text-foreground"
+            />
+            <p className="text-sm font-semibold">
+              {names[route.provider_type]}
+            </p>
           </div>
         </div>
 
@@ -248,9 +259,7 @@ function SortableRouteEditor({
               onChange={(event) =>
                 onChange({ ...route, model: event.target.value })
               }
-              placeholder={
-                !route.credential_id ? "先选择账号" : "模型 ID"
-              }
+              placeholder={!route.credential_id ? "先选择账号" : "模型 ID"}
               aria-label="模型"
             />
           )}
@@ -392,6 +401,14 @@ export function ModelsSettings() {
   const [addingOpenAI, setAddingOpenAI] = useState(false);
   const [newBaseURL, setNewBaseURL] = useState("");
   const [newAPIKeyEnv, setNewAPIKeyEnv] = useState("");
+  const customModels = useMutation({
+    mutationFn: () =>
+      api.providerModels({
+        provider_base_url: newBaseURL.trim(),
+        api_key_env: newAPIKeyEnv.trim(),
+      }),
+    onError: (error) => toast.error(String(error)),
+  });
 
   const configuredOpenAIProviders = useMemo(() => {
     const map = new Map<
@@ -400,15 +417,17 @@ export function ModelsSettings() {
     >();
     for (const route of draft?.routes ?? []) {
       if (route.provider_type === "openai_compatible") {
-        const key = route.provider_base_url.trim();
-        if (!key) continue;
+        const baseURL = route.provider_base_url.trim();
+        const apiKeyEnv = route.api_key_env.trim();
+        if (!baseURL) continue;
+        const key = `${baseURL}\n${apiKeyEnv}`;
         const existing = map.get(key);
         if (existing) {
           existing.routeCount += 1;
         } else {
           map.set(key, {
-            baseURL: key,
-            apiKeyEnv: route.api_key_env.trim(),
+            baseURL,
+            apiKeyEnv,
             routeCount: 1,
           });
         }
@@ -417,22 +436,47 @@ export function ModelsSettings() {
     return Array.from(map.values());
   }, [draft?.routes]);
 
-  const addRouteForOpenAIProvider = (baseURL: string, apiKeyEnv: string) => {
+  const addRouteForOpenAIProvider = (
+    baseURL: string,
+    apiKeyEnv: string,
+    model = "",
+  ) => {
     if (!draft) return;
+    const normalizedBaseURL = baseURL.trim();
+    const normalizedEnv = apiKeyEnv.trim();
+    const normalizedModel = model.trim();
+    const alreadyExists =
+      normalizedModel &&
+      draft.routes.some(
+        (route) =>
+          route.provider_type === "openai_compatible" &&
+          route.provider_base_url.trim() === normalizedBaseURL &&
+          route.api_key_env.trim() === normalizedEnv &&
+          route.model.trim() === normalizedModel,
+      );
+    if (alreadyExists) {
+      toast.message("这个模型已经在路由中");
+      return;
+    }
+
     const newRouteItem: ModelRoute = {
       id: crypto.randomUUID(),
       enabled: true,
       provider_type: "openai_compatible",
       credential_id: "",
-      provider_base_url: baseURL,
-      model: "",
-      api_key_env: apiKeyEnv,
+      provider_base_url: normalizedBaseURL,
+      model: normalizedModel,
+      api_key_env: normalizedEnv,
     };
     setDraft({
       ...draft,
       routes: [...draft.routes, newRouteItem],
     });
-    toast.success("已添加模型 Route，请在下方填写模型 ID");
+    toast.success(
+      normalizedModel
+        ? `已添加 ${normalizedModel} 到模型路由`
+        : "已添加模型 Route，请在下方填写模型 ID",
+    );
   };
 
   const sensors = useSensors(
@@ -494,9 +538,9 @@ export function ModelsSettings() {
       );
       if (newAccounts.length > 0 && draft) {
         const appendedRoutes: ModelRoute[] = newAccounts.map((account) => {
-          const cached = queryClient.getQueryData<{ id: string; name: string }[]>(
-            keys.models("chatgpt", account.id),
-          );
+          const cached = queryClient.getQueryData<
+            { id: string; name: string }[]
+          >(keys.models("chatgpt", account.id));
           return {
             id: crypto.randomUUID(),
             enabled: true,
@@ -553,9 +597,9 @@ export function ModelsSettings() {
         );
         if (newAccounts.length > 0 && draft) {
           const appendedRoutes: ModelRoute[] = newAccounts.map((account) => {
-            const cached = queryClient.getQueryData<{ id: string; name: string }[]>(
-              keys.models("grok", account.id),
-            );
+            const cached = queryClient.getQueryData<
+              { id: string; name: string }[]
+            >(keys.models("grok", account.id));
             return {
               id: crypto.randomUUID(),
               enabled: true,
@@ -613,7 +657,10 @@ export function ModelsSettings() {
     const oldIndex = draft.routes.findIndex((r) => r.id === active.id);
     const newIndex = draft.routes.findIndex((r) => r.id === over.id);
     if (oldIndex !== -1 && newIndex !== -1) {
-      setDraft({ ...draft, routes: arrayMove(draft.routes, oldIndex, newIndex) });
+      setDraft({
+        ...draft,
+        routes: arrayMove(draft.routes, oldIndex, newIndex),
+      });
     }
   };
 
@@ -651,8 +698,13 @@ export function ModelsSettings() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <ProviderLogo provider={provider} className="size-4 shrink-0 text-foreground" />
-                        <p className="text-sm font-semibold">{names[provider]}</p>
+                        <ProviderLogo
+                          provider={provider}
+                          className="size-4 shrink-0 text-foreground"
+                        />
+                        <p className="text-sm font-semibold">
+                          {names[provider]}
+                        </p>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {accounts.length
@@ -663,8 +715,8 @@ export function ModelsSettings() {
                       </p>
                       {status?.warning && (
                         <p className="mt-2 text-xs text-warning">
-                          Hosted DEV 临时登录测试模式；正式使用仍需要批准的 OAuth
-                          Client ID。
+                          Hosted DEV 临时登录测试模式；正式使用仍需要批准的
+                          OAuth Client ID。
                         </p>
                       )}
                     </div>
@@ -789,14 +841,19 @@ export function ModelsSettings() {
             );
           })}
 
-          {/* 第三个并列卡片：自定义 OpenAI 的 API */}
+          {/* 第三个并列卡片：兼容 OpenAI 接口的自定义服务商 */}
           <div className="flex flex-col justify-between rounded-xl border border-line bg-surface p-4">
             <div>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <ProviderLogo provider="openai_compatible" className="size-4 shrink-0 text-foreground" />
-                    <p className="text-sm font-semibold">{names.openai_compatible}</p>
+                    <ProviderLogo
+                      provider="openai_compatible"
+                      className="size-4 shrink-0 text-foreground"
+                    />
+                    <p className="text-sm font-semibold">
+                      {names.openai_compatible}
+                    </p>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {configuredOpenAIProviders.length
@@ -804,7 +861,14 @@ export function ModelsSettings() {
                       : "自建 API、DeepSeek、Ollama 等"}
                   </p>
                 </div>
-                <Button onClick={() => setAddingOpenAI(true)}>
+                <Button
+                  onClick={() => {
+                    setNewBaseURL("");
+                    setNewAPIKeyEnv("");
+                    customModels.reset();
+                    setAddingOpenAI(true);
+                  }}
+                >
                   <Plus className="size-4" />
                   添加 API
                 </Button>
@@ -813,20 +877,25 @@ export function ModelsSettings() {
               <div className="mt-4 space-y-2">
                 {configuredOpenAIProviders.length === 0 ? (
                   <div className="rounded-lg bg-canvas px-3 py-2.5 text-xs text-muted-foreground">
-                    点击右上角“添加 API”填写服务商 Base URL 与环境变量，再在服务商旁点击加号添加模型 Route。
+                    配置服务商接口后可读取可用模型，点击模型即可加入路由。
                   </div>
                 ) : (
                   configuredOpenAIProviders.map((item) => (
                     <div
-                      key={item.baseURL}
+                      key={`${item.baseURL}\n${item.apiKeyEnv}`}
                       className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium" title={item.baseURL}>
+                        <p
+                          className="truncate text-sm font-medium"
+                          title={item.baseURL}
+                        >
                           {item.baseURL}
                         </p>
                         <p className="truncate text-[11px] text-muted-foreground">
-                          {item.apiKeyEnv ? `环境变量: ${item.apiKeyEnv} · ` : ""}
+                          {item.apiKeyEnv
+                            ? `环境变量: ${item.apiKeyEnv} · `
+                            : ""}
                           {item.routeCount > 0
                             ? `已配置 ${item.routeCount} 条模型 Route`
                             : "可用于模型 Route"}
@@ -835,13 +904,16 @@ export function ModelsSettings() {
                       <div className="flex items-center gap-1.5">
                         <Button
                           className="px-2"
-                          title="为此服务商添加一条模型 Route"
-                          aria-label="为此服务商添加一条模型 Route"
-                          onClick={() =>
-                            addRouteForOpenAIProvider(item.baseURL, item.apiKeyEnv)
-                          }
+                          title="查看可用模型"
+                          aria-label="查看可用模型"
+                          onClick={() => {
+                            setNewBaseURL(item.baseURL);
+                            setNewAPIKeyEnv(item.apiKeyEnv);
+                            customModels.reset();
+                            setAddingOpenAI(true);
+                          }}
                         >
-                          <Plus className="size-4" />
+                          <Search className="size-4" />
                         </Button>
                         <Button
                           className="px-2"
@@ -851,9 +923,11 @@ export function ModelsSettings() {
                             setDraft({
                               ...draft,
                               routes: draft.routes.filter(
-                                (r) =>
-                                  r.provider_type !== "openai_compatible" ||
-                                  r.provider_base_url.trim() !== item.baseURL,
+                                (route) =>
+                                  route.provider_type !== "openai_compatible" ||
+                                  route.provider_base_url.trim() !==
+                                    item.baseURL ||
+                                  route.api_key_env.trim() !== item.apiKeyEnv,
                               ),
                             });
                             toast.success("已移除该服务商及其模型 Route");
@@ -952,50 +1026,111 @@ export function ModelsSettings() {
           if (!open) {
             setNewBaseURL("");
             setNewAPIKeyEnv("");
+            customModels.reset();
           }
         }}
         title="配置服务商接口"
-        description="配置兼容 OpenAI 规范的自定义模型服务商 Endpoint 与环境变量。"
+        description="填写兼容 OpenAI 规范的服务地址后，可读取 /models 目录并直接把模型加入路由。"
       >
         <div className="space-y-4 pt-1">
           <Field label="Base URL">
             <TextInput
               value={newBaseURL}
-              onChange={(e) => setNewBaseURL(e.target.value)}
+              onChange={(event) => {
+                setNewBaseURL(event.target.value);
+                customModels.reset();
+              }}
               placeholder="Base URL，如 https://api.deepseek.com/v1"
             />
           </Field>
-          <Field label="API Key 环境变量名">
+          <Field
+            label="API Key 环境变量名"
+            hint="CycleDock 只在服务端读取这个环境变量，不会把密钥返回浏览器。"
+          >
             <TextInput
               value={newAPIKeyEnv}
-              onChange={(e) => setNewAPIKeyEnv(e.target.value)}
-              placeholder="API Key 环境变量名，如 DEEPSEEK_API_KEY"
+              onChange={(event) => {
+                setNewAPIKeyEnv(event.target.value);
+                customModels.reset();
+              }}
+              placeholder="如 DEEPSEEK_API_KEY；无鉴权服务可留空"
             />
           </Field>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setAddingOpenAI(false);
-                setNewBaseURL("");
-                setNewAPIKeyEnv("");
-              }}
-            >
-              取消
-            </Button>
+
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="primary"
-              disabled={!newBaseURL.trim()}
-              onClick={() => {
-                const url = newBaseURL.trim();
-                const env = newAPIKeyEnv.trim();
-                addRouteForOpenAIProvider(url, env);
-                setAddingOpenAI(false);
-                setNewBaseURL("");
-                setNewAPIKeyEnv("");
-              }}
+              disabled={!newBaseURL.trim() || customModels.isPending}
+              onClick={() => customModels.mutate()}
             >
-              保存并添加 Route
+              <Search className="size-4" />
+              查看可用模型
+            </Button>
+            <Button
+              disabled={!newBaseURL.trim()}
+              onClick={() =>
+                addRouteForOpenAIProvider(
+                  newBaseURL.trim(),
+                  newAPIKeyEnv.trim(),
+                )
+              }
+            >
+              <Plus className="size-4" />
+              手动添加模型 Route
+            </Button>
+          </div>
+
+          {customModels.isPending && <Spinner text="正在读取可用模型…" />}
+
+          {customModels.data && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-secondary-foreground">
+                可用模型
+              </p>
+              <div className="max-h-72 space-y-1.5 overflow-y-auto rounded-xl border border-line bg-canvas p-2">
+                {customModels.data.map((model) => {
+                  const added = draft.routes.some(
+                    (route) =>
+                      route.provider_type === "openai_compatible" &&
+                      route.provider_base_url.trim() === newBaseURL.trim() &&
+                      route.api_key_env.trim() === newAPIKeyEnv.trim() &&
+                      route.model.trim() === model.id,
+                  );
+                  return (
+                    <button
+                      key={model.id}
+                      type="button"
+                      disabled={added}
+                      onClick={() =>
+                        addRouteForOpenAIProvider(
+                          newBaseURL,
+                          newAPIKeyEnv,
+                          model.id,
+                        )
+                      }
+                      className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-muted disabled:cursor-default disabled:opacity-60"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-foreground">
+                          {model.name}
+                        </span>
+                        <span className="block truncate font-mono text-[11px] text-faint">
+                          {model.id}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs font-medium text-primary">
+                        {added ? "已添加" : "添加到路由"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end border-t border-line pt-3">
+            <Button variant="ghost" onClick={() => setAddingOpenAI(false)}>
+              完成
             </Button>
           </div>
         </div>

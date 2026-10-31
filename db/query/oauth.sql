@@ -8,6 +8,24 @@ SELECT *
 FROM oauth_clients
 WHERE client_id = sqlc.arg(client_id);
 
+-- name: ListAuthorizedOAuthClients :many
+SELECT
+    g.client_id,
+    c.client_name,
+    g.source_id,
+    s.name AS source_name,
+    g.updated_at AS authorized_at
+FROM oauth_grants g
+JOIN oauth_clients c ON c.client_id = g.client_id
+JOIN sources s
+  ON s.workspace_id = g.workspace_id
+ AND s.id = g.source_id
+WHERE g.workspace_id = sqlc.arg(workspace_id)
+  AND g.human_account_id = sqlc.arg(human_account_id)
+  AND g.revoked_at IS NULL
+  AND s.kind = 'oauth_client'
+ORDER BY g.updated_at DESC, g.client_id;
+
 -- name: GetOAuthHumanMembership :one
 SELECT
     m.workspace_id,

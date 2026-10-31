@@ -11,7 +11,10 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
-import { ConversationView, type QuotedMessage } from "../timeline/ConversationView";
+import {
+  ConversationView,
+  type QuotedMessage,
+} from "../timeline/ConversationView";
 import { CardActions } from "./CardActions";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { PendingTurnQueue } from "./PendingTurnQueue";
@@ -22,7 +25,7 @@ import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
-import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
+import { ProjectSwitcherWithSettings } from "../projects/ProjectSwitcherWithSettings";
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -341,7 +344,7 @@ function CardPageContent() {
             >
               <PanelLeft className="size-4" />
             </button>
-            <ProjectSwitcher
+            <ProjectSwitcherWithSettings
               compact
               projects={projects}
               projectID={actualProjectID}
@@ -351,7 +354,6 @@ function CardPageContent() {
                   `/board/${encodeURIComponent(actualProjectID)}?new=project`,
                 )
               }
-              onManage={() => navigate("/settings/projects")}
             />
           </div>
 

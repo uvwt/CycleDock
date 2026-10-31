@@ -190,6 +190,12 @@ export type ModelAuthStart = {
   authorization_url: string;
   manual_callback?: boolean;
 };
+export type AuthorizedAIClient = {
+  client_id: string;
+  name: string;
+  source_id: string;
+  authorized_at: string;
+};
 export type GrokStart = {
   flow_id: string;
   verification_url: string;

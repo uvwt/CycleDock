@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
-import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
+import { ProjectSwitcherWithSettings } from "../features/projects/ProjectSwitcherWithSettings";
 import { ContextSidebarVisibility } from "../app/context-sidebar";
 import { HintTooltip } from "../shared/ui/components";
 import { MainChatDock } from "../features/chat/MainChatDock";
@@ -139,11 +139,6 @@ export function Shell({ children }: { children: ReactNode }) {
     );
   }
 
-  function manageProjects() {
-    if (projectID) setProjectID(projectID);
-    navigate("/settings/projects");
-  }
-
   const logo = (
     <img
       src="/cycledock-logo.png"
@@ -171,7 +166,11 @@ export function Shell({ children }: { children: ReactNode }) {
           className="mt-6 flex w-full flex-col items-center gap-1.5"
         >
           {primaryNav.map((item) => (
-            <HintTooltip key={item.activePath} content={item.label} side="right">
+            <HintTooltip
+              key={item.activePath}
+              content={item.label}
+              side="right"
+            >
               <NavLink
                 to={item.to}
                 aria-label={item.label}
@@ -205,13 +204,12 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="mt-auto flex flex-col items-center gap-1.5">
-          <ProjectSwitcher
+          <ProjectSwitcherWithSettings
             compact
             projects={projects}
             projectID={projectID}
             onChange={switchProject}
             onCreate={createProject}
-            onManage={manageProjects}
           />
           <HintTooltip content={t("设置")} side="right">
             <NavLink
@@ -269,13 +267,12 @@ export function Shell({ children }: { children: ReactNode }) {
                   <item.icon className="size-[18px]" />
                 </NavLink>
               ))}
-              <ProjectSwitcher
+              <ProjectSwitcherWithSettings
                 compact
                 projects={projects}
                 projectID={projectID}
                 onChange={switchProject}
                 onCreate={createProject}
-                onManage={manageProjects}
               />
               <NavLink
                 to="/settings/general"

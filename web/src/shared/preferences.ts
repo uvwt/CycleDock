@@ -113,6 +113,8 @@ const en = {
     "Get notified of new messages when viewing another card or working in the background.",
   暂不开启: "Not now",
   浏览器通知: "Browser notifications",
+  已开启: "On",
+  未开启: "Off",
   开启通知: "Enable notifications",
   关闭通知: "Disable notifications",
   卡片有更新: "Card updated",
@@ -154,7 +156,10 @@ const en = {
   模型服务: "Model providers",
   "Agent 设置": "Agent settings",
   "MCP 服务": "MCP services",
+  "AI 客户端": "AI clients",
   项目设置: "Project settings",
+  "修改当前项目的名称、描述与 Agent 指令。Project Instructions 只作用于这个项目。":
+    "Edit this project's name, description, and Agent instructions. Project Instructions apply only to this project.",
   个人: "Personal",
   "AI 配置": "AI configuration",
   外部连接: "External connections",
@@ -170,6 +175,9 @@ const en = {
     "Choose your language and appearance. Preferences are saved in this browser.",
   显示名称: "Display name",
   邮箱: "Email",
+  当前账号: "Current account",
+  "查看当前登录邮箱，或安全退出 CycleDock。":
+    "View the signed-in email address or safely sign out of CycleDock.",
   账号与工作空间: "Account & workspace",
   未提供: "Not provided",
   "Hosted 身份在 NexusDock 管理；模型授权不属于登录身份。":
@@ -177,6 +185,12 @@ const en = {
   需要所有者权限: "Owner access required",
   "这些设置只允许 Workspace owner 修改。":
     "Only workspace owners can change these settings.",
+  "已授权的 AI 客户端": "Authorized AI clients",
+  "这些 AI 客户端已通过 CycleDock OAuth 获得当前工作空间的 MCP 访问权限。":
+    "These AI clients have access to this workspace's MCP tools through CycleDock OAuth.",
+  "已授权访问 CycleDock MCP": "Authorized for CycleDock MCP",
+  "还没有已授权的 AI 客户端。完成 MCP OAuth 授权后会显示在这里。":
+    "No AI clients are authorized yet. Clients will appear here after MCP OAuth authorization.",
   未找到设置页面: "Settings page not found",
   "请选择左侧的设置分类。": "Choose a category from the navigation.",
   "没有项目，请先创建项目。": "No projects yet. Create one first.",
@@ -331,6 +345,13 @@ const en = {
   发现: "Finding",
   结果: "Result",
   "NexusDock 远程设备": "NexusDock remote devices",
+  远程设备: "Remote devices",
+  "连接并管理你的远程设备，让 Agent 在授权范围内使用设备上的 Skill、MCP 与工具能力。":
+    "Connect and manage your remote devices so Agents can use their Skills, MCP services, and tools within the permissions you grant.",
+  连接你的远程设备: "Connect your remote devices",
+  "正在检查远程设备连接状态…": "Checking remote device connection…",
+  "正在连接远程设备并拉取能力快照…":
+    "Connecting to remote devices and loading capabilities…",
   模型提供商: "Model provider",
   "内置 Agent": "Built-in Agent",
   主导航: "Main navigation",

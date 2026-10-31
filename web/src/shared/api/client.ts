@@ -1,5 +1,6 @@
 import type {
   AgentSettings,
+  AuthorizedAIClient,
   DeviceTarget,
   Card,
   CardDetail,
@@ -215,6 +216,16 @@ export const api = {
     request<{ id: string; name: string }[]>(
       `/agent/models?provider=${p}${credentialID ? `&credential_id=${encodeURIComponent(credentialID)}` : ""}`,
     ),
+  providerModels: (value: { provider_base_url: string; api_key_env: string }) =>
+    request<{ id: string; name: string }[]>(
+      "/agent/provider-models",
+      "POST",
+      value,
+      undefined,
+      35_000,
+    ),
+  authorizedAIClients: () =>
+    request<AuthorizedAIClient[]>("/agent/oauth-clients"),
   chatgptStart: () =>
     request<ModelAuthStart>("/agent/model-auth/chatgpt/start", "POST", {}),
   chatgptComplete: (url: string) =>

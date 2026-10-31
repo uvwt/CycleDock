@@ -202,6 +202,24 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 		t.Fatalf("OAuth token response incomplete: %+v", tokens)
 	}
 
+	authorizedClientsResponse, err := browser.Get(publicURL + "/api/v1/agent/oauth-clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizedClientsResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(authorizedClientsResponse.Body)
+		t.Fatalf("authorized clients status=%d body=%s", authorizedClientsResponse.StatusCode, body)
+	}
+	var authorizedClients []authorizedAIClientResponse
+	decodeHTTPBody(t, authorizedClientsResponse, &authorizedClients)
+	if len(authorizedClients) != 1 ||
+		authorizedClients[0].ClientID != registration.ClientID ||
+		authorizedClients[0].Name != registration.ClientName ||
+		authorizedClients[0].SourceID == "" ||
+		authorizedClients[0].AuthorizedAt.IsZero() {
+		t.Fatalf("authorized clients=%+v", authorizedClients)
+	}
+
 	mcpHTTPClient := &http.Client{Transport: bearerRoundTripper{
 		base: http.DefaultTransport, token: tokens.AccessToken,
 	}}
