@@ -46,7 +46,7 @@ VALUES (
     $11, $12,
     $13, $14
 )
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 `
 
 type CreateAgentCardParams struct {
@@ -101,6 +101,7 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 		&i.UpdatedAt,
 		&i.CreateIdempotencyKey,
 		&i.CreateRequestHash,
+		&i.PinnedAt,
 	)
 	return i, err
 }
@@ -204,7 +205,7 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 }
 
 const getCreatedCardRequest = `-- name: GetCreatedCardRequest :one
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 FROM cards
 WHERE workspace_id = $1
   AND created_by_source_id = $2
@@ -237,6 +238,7 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 		&i.UpdatedAt,
 		&i.CreateIdempotencyKey,
 		&i.CreateRequestHash,
+		&i.PinnedAt,
 	)
 	return i, err
 }
@@ -322,10 +324,11 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 
 const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     (
         SELECT count(*)
         FROM card_turns t
@@ -355,6 +358,14 @@ LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
 WHERE c.workspace_id = $1
 ORDER BY p.created_at, c.created_at, c.id
 `
@@ -376,9 +387,11 @@ type ListWorkspaceCardSummariesRow struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
+	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ProjectName           string             `json:"project_name"`
 	Health                string             `json:"health"`
 	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus   string             `json:"latest_attempt_status"`
 	PendingTurnCount      int64              `json:"pending_turn_count"`
 }
 
@@ -408,9 +421,11 @@ func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uu
 			&i.UpdatedAt,
 			&i.CreateIdempotencyKey,
 			&i.CreateRequestHash,
+			&i.PinnedAt,
 			&i.ProjectName,
 			&i.Health,
 			&i.CurrentAttemptStatus,
+			&i.LatestAttemptStatus,
 			&i.PendingTurnCount,
 		); err != nil {
 			return nil, err

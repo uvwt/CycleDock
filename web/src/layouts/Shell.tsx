@@ -4,13 +4,16 @@ import {
   Activity,
   BriefcaseBusiness,
   CalendarClock,
+  Cpu,
   MessageCircle,
   Settings,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
-import { ProjectSwitcher } from "../shared/ui/ProjectSwitcher";
+import { ProjectSwitcherWithSettings } from "../features/projects/ProjectSwitcherWithSettings";
 import { ContextSidebarVisibility } from "../app/context-sidebar";
+import { HintTooltip } from "../shared/ui/components";
+import { MainChatDock } from "../features/chat/MainChatDock";
 
 export function Shell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
@@ -63,6 +66,12 @@ export function Shell({ children }: { children: ReactNode }) {
       label: t("活动"),
       icon: Activity,
     },
+    {
+      to: "/nexusdock",
+      activePath: "/nexusdock",
+      label: "NexusDock",
+      icon: Cpu,
+    },
   ];
 
   function primaryActive(activePath: string, routerActive: boolean) {
@@ -78,6 +87,9 @@ export function Shell({ children }: { children: ReactNode }) {
     }
     if (activePath === "/activity") {
       return routerActive || location.pathname.startsWith("/activity");
+    }
+    if (activePath === "/nexusdock") {
+      return routerActive || location.pathname.startsWith("/nexusdock");
     }
     return routerActive || location.pathname.startsWith("/chat");
   }
@@ -127,11 +139,6 @@ export function Shell({ children }: { children: ReactNode }) {
     );
   }
 
-  function manageProjects() {
-    if (projectID) setProjectID(projectID);
-    navigate("/settings/projects");
-  }
-
   const logo = (
     <img
       src="/cycledock-logo.png"
@@ -143,68 +150,90 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-canvas text-strong md:flex">
-      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line bg-surface py-3 md:flex">
+      <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line/70 bg-surface/90 py-3.5 backdrop-blur-md md:flex">
         <button
           type="button"
           onClick={() => navigate("/chat")}
           title="CycleDock"
           aria-label="CycleDock"
-          className="grid size-10 place-items-center rounded-xl transition hover:bg-canvas"
+          className="grid size-10 place-items-center rounded-xl transition hover:bg-muted/70 active:scale-95"
         >
           {logo}
         </button>
 
         <nav
           aria-label={t("主导航")}
-          className="mt-6 flex w-full flex-col items-center gap-1"
+          className="mt-6 flex w-full flex-col items-center gap-1.5"
         >
           {primaryNav.map((item) => (
-            <NavLink
+            <HintTooltip
               key={item.activePath}
-              to={item.to}
-              title={item.label}
-              aria-label={item.label}
-              aria-expanded={
-                item.activePath === listSection ? listVisible : undefined
-              }
-              onClick={(event) => selectPrimary(event, item.activePath)}
-              className={({ isActive }) =>
-                `grid size-10 place-items-center rounded-xl transition ${
-                  primaryActive(item.activePath, isActive)
-                    ? "bg-muted text-heading"
-                    : "text-faint hover:bg-canvas hover:text-strong"
-                }`
-              }
+              content={item.label}
+              side="right"
             >
-              <item.icon className="size-5" />
-            </NavLink>
+              <NavLink
+                to={item.to}
+                aria-label={item.label}
+                aria-expanded={
+                  item.activePath === listSection ? listVisible : undefined
+                }
+                onClick={(event) => selectPrimary(event, item.activePath)}
+                className={({ isActive }) => {
+                  const active = primaryActive(item.activePath, isActive);
+                  return `group relative grid size-10 place-items-center rounded-xl transition-all duration-150 active:scale-95 ${
+                    active
+                      ? "bg-primary/10 text-primary font-semibold shadow-2xs"
+                      : "text-muted-foreground/70 hover:bg-muted/70 hover:text-foreground"
+                  }`;
+                }}
+              >
+                {({ isActive }) => {
+                  const active = primaryActive(item.activePath, isActive);
+                  return (
+                    <>
+                      {active && (
+                        <span className="absolute -left-3 top-2.5 bottom-2.5 w-1 rounded-r-full bg-primary transition-all" />
+                      )}
+                      <item.icon className="size-5 transition-transform duration-150 group-hover:scale-105" />
+                    </>
+                  );
+                }}
+              </NavLink>
+            </HintTooltip>
           ))}
         </nav>
 
-        <div className="mt-auto flex flex-col items-center gap-1">
-          <ProjectSwitcher
+        <div className="mt-auto flex flex-col items-center gap-1.5">
+          <ProjectSwitcherWithSettings
             compact
             projects={projects}
             projectID={projectID}
             onChange={switchProject}
             onCreate={createProject}
-            onManage={manageProjects}
           />
-          <NavLink
-            to="/settings/general"
-            onClick={() => projectID && setProjectID(projectID)}
-            title={t("设置")}
-            aria-label={t("设置")}
-            className={({ isActive }) =>
-              `grid size-10 place-items-center rounded-xl transition ${
-                isActive
-                  ? "bg-muted text-heading"
-                  : "text-faint hover:bg-canvas hover:text-strong"
-              }`
-            }
-          >
-            <Settings className="size-5" />
-          </NavLink>
+          <HintTooltip content={t("设置")} side="right">
+            <NavLink
+              to="/settings/general"
+              onClick={() => projectID && setProjectID(projectID)}
+              aria-label={t("设置")}
+              className={({ isActive }) =>
+                `group relative grid size-10 place-items-center rounded-xl transition-all duration-150 active:scale-95 ${
+                  isActive
+                    ? "bg-primary/10 text-primary font-semibold shadow-2xs"
+                    : "text-muted-foreground/70 hover:bg-muted/70 hover:text-foreground"
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <span className="absolute -left-3 top-2.5 bottom-2.5 w-1 rounded-r-full bg-primary transition-all" />
+                  )}
+                  <Settings className="size-5 transition-transform duration-150 group-hover:scale-105" />
+                </>
+              )}
+            </NavLink>
+          </HintTooltip>
         </div>
       </aside>
 
@@ -238,13 +267,12 @@ export function Shell({ children }: { children: ReactNode }) {
                   <item.icon className="size-[18px]" />
                 </NavLink>
               ))}
-              <ProjectSwitcher
+              <ProjectSwitcherWithSettings
                 compact
                 projects={projects}
                 projectID={projectID}
                 onChange={switchProject}
                 onCreate={createProject}
-                onManage={manageProjects}
               />
               <NavLink
                 to="/settings/general"
@@ -266,6 +294,7 @@ export function Shell({ children }: { children: ReactNode }) {
           {children}
         </ContextSidebarVisibility.Provider>
       </div>
+      <MainChatDock />
     </div>
   );
 }

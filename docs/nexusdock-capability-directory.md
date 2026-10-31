@@ -1,12 +1,28 @@
-# NexusDock 能力目录接入
+# NexusDock 对话接入与设备展示
 
-CycleDock 第一方连接仍使用 NexusDock MCP OAuth，Token 的 resource 为 `/mcp`。Agent 每次建立 MCP Session 后，优先用同一 Bearer Token 请求 NexusDock Cloud 的只读 HTTP 目录：
+## 当前实现：对话统一使用 MCP
 
-1. `GET /v1/integrations/devices` 获取设备和实时在线标记。
-2. `GET /v1/integrations/capabilities` 获取服务端已缓存的 Skill、MCP、Plugin、Tool 名称。
-3. 将设备、能力索引（最多 20 台设备，每类最多 14 项）作为非可信元数据追加到本轮上下文。
-4. 新版 Cloud 提供 Execution API 时，能精确映射到节点 Tool capability 的实际调用走持久 Execution；MCP 仍负责模型 Tool Schema、NexusDock 自有工具和旧 Cloud 回退。执行可靠性细节见 [nexusdock-execution-api.md](nexusdock-execution-api.md)。
+CycleDock 第一方连接使用 NexusDock MCP OAuth，Token 的 resource 为 `/mcp`。每次 Attempt 建立授权 MCP Session：
 
-Cloud 老版本没有该 API（404）或目录服务暂时不可用时，沿用现有 `agentdock_context` 发现方法。目录明确标注“元数据不等于可执行权限”；在线状态由设备接口决定。拒绝 HTTP 重定向（防止 Bearer 泄漏），响应大小上限 2 MiB；401/403 等授权错误不会静默回退。
+1. 使用 MCP 工具目录获取名称、说明和参数 Schema；多设备的同名工具契约由 NexusDock 聚合和校验。
+2. 通过 MCP 调用内部 `agentdock_context`，将设备、在线状态和能力摘要作为不可信元数据注入本轮上下文。摘要最多保留 20 台设备，不作为执行权限保证。
+3. 设备工具和 Cloud 自有 Recall / Workflow 工具均通过同一 MCP Session 调用，使用 NexusDock 原生工具名称。设备路由参数由 NexusDock 校验和处理。
+4. 返回结果经过统一脱敏，持久化为 ADK Session FunctionResponse；大结果进入 Artifact。
 
-新接口支持的 REST 发现流程不再主动调用 `agentdock_context`，但该 MCP 工具保留为旧版本兼容入口。未来若需要增量更新，可另行扩展，不在 CycleDock 自建第二套设备注册表。
+`agentdock_context` 在 bootstrap 后不重复暴露给模型。后续按任务需要调用 MCP 提供的工作区、Skill、动态 MCP 等工具。对话运行时不请求 REST 能力目录或详情，不在 CycleDock 合并另一份 Schema，也不通过 Execution API 分流设备执行。
+
+OAuth discovery、授权、refresh 和 Workspace scope 继续由 CycleDock 管理。认证凭据不交给模型或浏览器。普通第三方 MCP 连接与第一方连接分别管理。
+
+## 当前实现：前端通过 API 展示和选择设备
+
+聊天、卡片、工作、计划、活动和设置页面右上角提供设备菜单。按钮显示在线数量，展开后按在线优先列出设备名称、系统和架构，并提供刷新和连接设置入口。菜单展开时每 10 秒刷新，收起时每 30 秒更新，后台标签页不轮询；错误不伪装成零台在线。未启用、未连接、空列表和授权过期分别提示。
+
+前端请求 `GET /api/v1/agent/nexusdock/devices`，后端复用认证 Workspace 的 OAuth 授权调用同 origin 的 `GET /v1/integrations/devices`。只返回 `available`、`connected` 和设备摘要，Bearer 不进入浏览器；请求上限 12 秒、响应上限 2 MiB，拒绝重定向。401/403 映射为重新授权提示。成员可只读设备列表，Owner 才能管理连接。
+
+用户可以选择在线设备，或保持默认的“不指定设备”。选择在当前 Workspace 的页面间共享，切换 Workspace 或刷新页面后重置。断开连接时也清除选择；已选设备暂时不可用时保留偏好并提示，不静默切换目标。
+
+发送消息时，`device_target` 的节点 ID 和名称快照随 Turn 保存为 `device_node_id` / `device_name`，纳入请求幂等校验。选择只影响之后发送的输入，不修改当前 Attempt 或已排队 Turn；编辑排队正文不改变目标，技术重试沿用原 Turn 的选择。新讨论首次发送失败后的重试也保留原目标，排队列表显示已选设备。
+
+Built-in Agent 在 Claim 后才将该选择作为本轮用户输入的一句上下文追加到 ADK Session；不指定时明确清除历史设备偏好。外部 Agent 可在 Attempt / Pending Turn 响应中读取目标。选择仅表达用户意图，不授予设备权限或强制隔离工具；实际执行继续由 MCP 校验授权。
+
+前端不建立 MCP Session，不直接持有 NexusDock Token。页面刷新和设备选择不触发模型工具调用，不制造新的业务 Turn。能力详情展示仍未接入，有实际需求时再扩展。

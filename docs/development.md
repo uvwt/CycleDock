@@ -39,7 +39,7 @@ make migrate
 
 模型 API Key 等可按需加入 .env.local；该文件已被 Git 忽略。
 如需订阅模型账号或带 Token 的 MCP，分别配置 CYCLEDOCK_MODEL_SECRET_KEY 和 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY，
-每个密钥独立使用 `openssl rand -base64 32` 生成并持久保留。完整变量说明见 .env.example 与 install.md。
+每个密钥独立使用 `openssl rand -base64 32` 生成并持久保留。关闭页面后的通知另需 VAPID 密钥，见 install.md。完整变量说明见 .env.example 与 install.md。
 日常开发不需要设置 WEB_DIR，也不需要执行前端 build；生产构建仍按 Dockerfile 执行。
 
 ## 1. 当前目标
@@ -123,7 +123,7 @@ Phase C 的验收包括真实 PostgreSQL 跨 Turn tool-response continuity：第
 - Thought / ThoughtSignature 丢弃、结构化 credential 递归脱敏，以及 Compaction bookkeeping ownership guard。
 - 真实 PostgreSQL 验证：Artifact/History 精确值恢复、不重复真实 MCP 调用、raw Event 不被 compaction 删除、五个核心包 `-race`、migration v12 up/down/up。
 
-Model credential、ordered routes、failover 与普通 MCP/NexusDock 继续通过 ADK adapter 保留；只有在 ADK 原生实现达到同等可靠性时才删除现有 transport/client，不为了框架纯度重写成熟能力。
+Model credential、ordered routes、failover 与普通 MCP 继续通过 ADK adapter 保留；只有在 ADK 原生实现达到同等可靠性时才删除现有 transport/client。NexusDock 第一方对话运行时统一通过 MCP 获取设备上下文、工具定义并执行设备及 Cloud 自有工具，不使用 REST 目录或 Execution API。前端已通过独立认证 API 展示设备在线列表并支持可选设备偏好，偏好随 Turn 固定，见 [NexusDock 对话接入与设备展示](nexusdock-capability-directory.md)。
 
 ## 7. Phase E — External MCP / Memory
 

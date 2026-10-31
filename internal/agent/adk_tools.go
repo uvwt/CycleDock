@@ -23,6 +23,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -37,42 +38,16 @@ type attemptToolRuntime struct {
 	store           *store.Store
 	context         store.AgentCardContext
 	mcpSessions     *mcpclient.SessionSet
-	nexusExecution  *nexusDockExecutionRouter
 	artifactService artifact.Service
 	historyService  *agentsession.PostgresService
-	fatal           *attemptToolFatal
 	replies         *replyState
+	live            *realtime.Hub
 }
 
 type replyState struct {
 	mu         sync.Mutex
 	ended      bool
 	previewIDs map[string]string
-}
-
-type attemptToolFatal struct {
-	mu  sync.Mutex
-	err error
-}
-
-func (f *attemptToolFatal) set(err error) {
-	if f == nil || err == nil {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err == nil {
-		f.err = err
-	}
-}
-
-func (f *attemptToolFatal) get() error {
-	if f == nil {
-		return nil
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.err
 }
 
 func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
@@ -100,34 +75,17 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	if runtime.mcpSessions != nil {
 		for _, definition := range runtime.mcpSessions.ToolDefinitions() {
 			name := definition.Function.Name
-			mcpTool, _ := runtime.mcpSessions.Tool(name)
 			converted, err := definitionToADKTool(
 				definition,
 				func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-					if runtime.nexusExecution != nil {
-						raw, handled, err := runtime.nexusExecution.Call(
-							ctx,
-							runtime.context.AttemptID,
-							ctx.FunctionCallID(),
-							mcpTool,
-							args,
-						)
-						if handled {
-							if err != nil {
-								runtime.fatal.set(err)
-								ctx.Actions().SkipSummarization = true
-								return map[string]any{"error": err.Error()}, nil
-							}
-							return runtime.prepareMCPResult(ctx, name, raw)
-						}
-					}
 					raw, err := runtime.mcpSessions.Call(ctx, name, args)
 					if err != nil {
-						runtime.fatal.set(err)
-						// Persist the FunctionResponse and make it the terminal event.
-						// Runner will turn the recorded fatal into an Attempt failure.
-						ctx.Actions().SkipSummarization = true
+						// 通道错误是这一次调用的结果，交回模型用白话说明。
+						// 标成整轮失败会停在上一条进度，用户看不到这次为什么没做成。
 						return map[string]any{"error": err.Error()}, nil
+					}
+					if decoded, err := decodeADKToolResult(raw); err == nil {
+						runtime.publishNexusTask(name, decoded)
 					}
 					return runtime.prepareMCPResult(ctx, name, raw)
 				},
@@ -138,6 +96,7 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 			out = append(out, converted)
 		}
 	}
+
 	return out, nil
 }
 
@@ -178,6 +137,14 @@ func (r attemptToolRuntime) internalHandler(
 	name string,
 ) (func(adkagent.Context, map[string]any) (map[string]any, error), error) {
 	switch name {
+	case "cycledock_list_schedules":
+		return r.listSchedulesTool, nil
+	case "cycledock_create_schedule":
+		return r.createScheduleTool, nil
+	case "cycledock_update_schedule":
+		return r.updateScheduleTool, nil
+	case "cycledock_delete_schedule":
+		return r.deleteScheduleTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。

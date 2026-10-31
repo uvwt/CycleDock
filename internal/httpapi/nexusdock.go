@@ -50,6 +50,52 @@ func (api *API) getNexusDockConnection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+type nexusDockDevicesResponse struct {
+	Available bool               `json:"available"`
+	Connected bool               `json:"connected"`
+	Devices   []nexusdock.Device `json:"devices"`
+}
+
+func (api *API) listNexusDockDevices(w http.ResponseWriter, r *http.Request) {
+	// 成员可以查看设备摘要；授权管理仍由独立的 Owner 接口负责。
+	response := nexusDockDevicesResponse{Available: api.nexusDock != nil, Devices: []nexusdock.Device{}}
+	if api.nexusDock == nil {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	devices, err := api.nexusDock.Devices(r.Context(), identityFromRequest(r).WorkspaceID)
+	if errors.Is(err, nexusdock.ErrNotConnected) {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	if err != nil {
+		api.handleNexusDockError(w, err)
+		return
+	}
+	response.Connected, response.Devices = true, devices
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) getNexusDockFleet(w http.ResponseWriter, r *http.Request) {
+	// 成员可以只读查看 NexusDock 设备及其 Skill、MCP 能力全貌。
+	response := nexusdock.FleetResponse{Available: api.nexusDock != nil, Connected: false, Devices: []nexusdock.FleetDevice{}}
+	if api.nexusDock == nil {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	forceRefresh := r.URL.Query().Get("refresh") == "true" || r.URL.Query().Get("refresh") == "1"
+	fleet, err := api.nexusDock.Fleet(r.Context(), identityFromRequest(r).WorkspaceID, forceRefresh)
+	if errors.Is(err, nexusdock.ErrNotConnected) {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	if err != nil {
+		api.handleNexusDockError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fleet)
+}
+
 func (api *API) connectNexusDock(w http.ResponseWriter, r *http.Request) {
 	identity := identityFromRequest(r)
 	if !requireWorkspaceOwner(w, identity.Role) {

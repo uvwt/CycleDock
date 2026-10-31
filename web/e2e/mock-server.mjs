@@ -26,6 +26,7 @@ const secondProject = {
   updated_at: new Date().toISOString(),
 };
 const projects = [project, secondProject];
+let nexusConnected = true;
 const now = () => new Date().toISOString();
 const hoursAgo = (hours) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -488,6 +489,33 @@ http
               ),
           );
         }
+        const mainDiscussion = route.match(
+          /^\/projects\/([^/]+)\/main-discussion$/,
+        );
+        if (mainDiscussion && (req.method === "GET" || req.method === "POST")) {
+          const projectID = decodeURIComponent(mainDiscussion[1]);
+          let card = cards.find(
+            (item) => item.project_id === projectID && item.main_chat,
+          );
+          if (!card && req.method === "POST") {
+            card = {
+              id: "main-" + projectID,
+              project_id: projectID,
+              kind: "discussion",
+              title: "主聊天",
+              description: "这个项目的新消息会汇总到这里。",
+              discussion_state: "active",
+              pinned_at: now(),
+              main_chat: true,
+              created_at: now(),
+              updated_at: now(),
+            };
+            cards.unshift(card);
+            events[card.id] = [];
+          }
+          if (!card) return failure(res);
+          return data(res, card, req.method === "POST" ? 201 : 200);
+        }
         const projectCards = route.match(/^\/projects\/([^/]+)\/cards$/);
         if (projectCards && req.method === "GET") {
           return data(
@@ -713,8 +741,16 @@ http
               accounts: [],
             },
           ]);
-        if (route === "/agent/nexusdock")
-          return data(res, { available: true, connected: false });
+        if (route === "/agent/nexusdock/devices")
+          return data(res, { available: true, connected: nexusConnected, devices: nexusConnected ? [
+            { id: "node-rn", name: "RN Server", online: true, os: "linux", arch: "amd64", agent_version: "1.1.1" },
+            { id: "node-mac", name: "MacBook Pro", online: true, os: "darwin", arch: "arm64", agent_version: "1.1.1" },
+            { id: "node-win", name: "Office PC", online: false, os: "windows", arch: "amd64", agent_version: "1.1.0" },
+          ] : [] });
+        if (route === "/agent/nexusdock") {
+          if (req.method === "DELETE") nexusConnected = false;
+          return data(res, { available: true, connected: nexusConnected });
+        }
         if (route === "/agent/mcp-connections") {
           if (req.method === "GET") return data(res, mcp);
           if (req.method === "POST") {

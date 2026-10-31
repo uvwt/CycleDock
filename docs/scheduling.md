@@ -154,6 +154,8 @@ Card 当前 Health = 最新 Check-in，不单独维护可写的 `card.health`。
 
 ## 11. 外部 Scheduler / Agent
 
+内置 Cycle Agent 和 Remote MCP 提供查询、创建、修改及删除 Schedule 的工具。工具只管理规则，不会绕过 Turn → Claim → Attempt；模型只有在工具成功返回后才能告知用户设置成功。创建请求结果不明时先查询现有日程，避免重复规则。
+
 CycleDock 原生 Schedule 不排斥 ChatGPT Automations、AgentDock、Cron、GitHub Actions 等外部系统。
 
 无论内部还是外部调度，真正执行都进入同一模型：

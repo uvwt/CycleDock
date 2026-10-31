@@ -1,5 +1,7 @@
 import type {
   AgentSettings,
+  AuthorizedAIClient,
+  DeviceTarget,
   Card,
   CardDetail,
   GrokStart,
@@ -10,6 +12,8 @@ import type {
   ModelAuth,
   ModelAuthStart,
   NexusConnection,
+  NexusDevices,
+  NexusFleetResponse,
   Project,
   ProjectActivity,
   ActivityAgent,
@@ -80,6 +84,19 @@ export const api = {
   login: (password: string) =>
     request<Identity>("/auth/login", "POST", { password }),
   logout: () => request<void>("/auth/logout", "POST", {}),
+  pushConfig: () => request<{ public_key: string }>("/notifications/push"),
+  savePushSubscription: (value: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+  }) => request<void>("/notifications/push/subscription", "PUT", value),
+  deletePushSubscription: (endpoint: string) =>
+    request<void>("/notifications/push/subscription", "DELETE", { endpoint }),
+  pushPresence: (endpoint: string) =>
+    request<void>("/notifications/push/presence", "POST", { endpoint }),
+  idlePushSubscription: (endpoint: string) =>
+    request<void>("/notifications/push/inactive", "POST", { endpoint }),
+  ackPushCards: (cards: { id: string; revision: string }[]) =>
+    request<void>("/notifications/push/seen", "POST", { cards }),
   me: () => request<Identity>("/me"),
   workspaces: () => request<Workspace[]>("/workspaces"),
   switchWorkspace: (id: string) =>
@@ -105,14 +122,32 @@ export const api = {
     ),
   createDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/discussions`, "POST", {}),
+  mainDiscussion: async (project: string) => {
+    try {
+      return await request<Card>(`/projects/${project}/main-discussion`);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 404) return null;
+      throw error;
+    }
+  },
+  openMainDiscussion: (project: string) =>
+    request<Card>(`/projects/${project}/main-discussion`, "POST", {}),
   createTodo: (project: string, title: string, description: string) =>
     request<Card>(`/projects/${project}/todos`, "POST", {
       title,
       description,
     }),
   card: (id: string) => request<CardDetail>(`/cards/${id}`),
+  markCardRead: (id: string) =>
+    request<{ last_read_message_sequence: number }>(
+      `/cards/${id}/read`,
+      "POST",
+      {},
+    ),
   updateCard: (id: string, title: string, description: string) =>
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
+  pinCard: (id: string, pinned: boolean) =>
+    request<Card>(`/cards/${id}/pin`, "POST", { pinned }),
   moveTodo: (id: string, state: TodoState) =>
     request<Card>(`/cards/${id}/move`, "POST", { state }),
   archiveDiscussion: (id: string) =>
@@ -127,18 +162,30 @@ export const api = {
     content: string,
     dispatch_mode: "enqueue" | "interrupt",
     idempotencyKey?: string,
+    device_target?: DeviceTarget | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
       "POST",
-      { content, dispatch_mode },
+      { content, dispatch_mode, device_target: device_target ?? undefined },
       idempotencyKey || true,
     ),
-  reply: (id: string, content: string, attemptID: string, messageID?: string) =>
+  reply: (
+    id: string,
+    content: string,
+    attemptID: string,
+    messageID?: string,
+    device_target?: DeviceTarget | null,
+  ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
       "POST",
-      { content, attempt_id: attemptID, message_id: messageID },
+      {
+        content,
+        attempt_id: attemptID,
+        message_id: messageID,
+        device_target: device_target ?? undefined,
+      },
       true,
     ),
   cancelAttempt: (id: string, attemptID: string) =>
@@ -169,6 +216,16 @@ export const api = {
     request<{ id: string; name: string }[]>(
       `/agent/models?provider=${p}${credentialID ? `&credential_id=${encodeURIComponent(credentialID)}` : ""}`,
     ),
+  providerModels: (value: { provider_base_url: string; api_key_env: string }) =>
+    request<{ id: string; name: string }[]>(
+      "/agent/provider-models",
+      "POST",
+      value,
+      undefined,
+      35_000,
+    ),
+  authorizedAIClients: () =>
+    request<AuthorizedAIClient[]>("/agent/oauth-clients"),
   chatgptStart: () =>
     request<ModelAuthStart>("/agent/model-auth/chatgpt/start", "POST", {}),
   chatgptComplete: (url: string) =>
@@ -202,6 +259,11 @@ export const api = {
       125_000,
     ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
+  nexusDevices: () => request<NexusDevices>("/agent/nexusdock/devices"),
+  nexusFleet: (refresh = false) =>
+    request<NexusFleetResponse>(
+      `/agent/nexusdock/fleet${refresh ? "?refresh=true" : ""}`,
+    ),
   nexusConnect: () =>
     request<{ authorization_url: string }>(
       "/agent/nexusdock/connect",

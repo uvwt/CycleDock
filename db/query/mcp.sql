@@ -4,6 +4,7 @@ SELECT
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     (
         SELECT count(*)
         FROM card_turns t
@@ -33,6 +34,14 @@ LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
 ORDER BY p.created_at, c.created_at, c.id;
 

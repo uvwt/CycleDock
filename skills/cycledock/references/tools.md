@@ -11,6 +11,20 @@ Lists Cards with Project state, Ongoing health, `current_attempt_status` and `pe
 ### get_card
 Returns one Card plus durable Timeline, `pending_turns`, `current_attempt` and `attempt_history`. Raw model/tool traces and chain-of-thought are not product Timeline data.
 
+## Schedule management
+
+### list_schedules
+Returns the recurring rules for one Ongoing Card, including next_trigger_at, enabled and last_triggered_at.
+
+### create_schedule
+Creates an enabled schedule with card_id and rule (frequency daily/weekly/monthly; hour, minute, IANA timezone; day_of_week for weekly, day_of_month for monthly). List first to avoid duplicates; create is not retry-idempotent.
+
+### update_schedule
+Pass card_id, schedule_id, the full rule, and enabled; set enabled=false to pause without deleting history. Read the rule from list_schedules before changing it.
+
+### delete_schedule
+Deletes only before there is any Schedule Turn history; otherwise use update_schedule to disable.
+
 ## Card writes
 
 ### create_discussion

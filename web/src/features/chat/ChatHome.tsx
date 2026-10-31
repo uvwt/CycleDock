@@ -62,7 +62,7 @@ export default function ChatHome() {
   }
 
   return (
-    <main className="h-[calc(100dvh-3.5rem)] min-h-0 bg-surface md:h-dvh">
+    <main className="relative h-[calc(100dvh-3.5rem)] min-h-0 bg-canvas md:h-dvh">
       {projectID ? (
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
@@ -90,8 +90,8 @@ export default function ChatHome() {
 
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-6">
               <div className="w-full max-w-3xl">
-                <div className="mb-10 text-center">
-                  <h1 className="text-2xl font-semibold tracking-tight text-heading sm:text-3xl">
+                <div className="mb-6 text-center">
+                  <h1 className="text-xl font-semibold tracking-tight text-heading sm:text-2xl">
                     {t("今天想推进什么？")}
                   </h1>
                 </div>

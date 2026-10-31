@@ -53,6 +53,8 @@ const (
 	EventTypeConfirm      EventType = "confirm"
 	EventTypeReject       EventType = "reject"
 	EventTypeStatusChange EventType = "status_change"
+	// Notice 是主聊天时间线上的跨卡片摘要，不是新的工作输入。
+	EventTypeNotice EventType = "notice"
 )
 
 type CheckinStatus string

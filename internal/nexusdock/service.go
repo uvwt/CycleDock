@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,8 @@ type Service struct {
 	callbackURL string
 	aead        cipher.AEAD
 	client      *http.Client
+	fleetMu     sync.RWMutex
+	fleetCache  map[uuid.UUID]fleetCacheEntry
 }
 
 type Status struct {
@@ -151,6 +154,7 @@ func New(pool *pgxpool.Pool, config Config) (*Service, error) {
 		pool: pool, queries: db.New(pool), mcpURL: config.MCPURL, webURL: config.WebURL,
 		callbackURL: config.PublicURL + "/auth/nexusdock-device/callback",
 		aead:        aead, client: client,
+		fleetCache:  make(map[uuid.UUID]fleetCacheEntry),
 	}, nil
 }
 

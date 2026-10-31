@@ -212,7 +212,7 @@ export default function BoardPage() {
             {t("查看任务执行状态，跟踪待办进度。")}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {projectID && (
             <Button variant="primary" onClick={() => setCreatingTodo(true)}>
               <ListPlus className="size-4" />

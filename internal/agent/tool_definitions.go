@@ -15,7 +15,58 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 	stringField := func(description string) map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
+	scheduleRule := object(map[string]any{
+		"frequency":    map[string]any{"type": "string", "enum": []string{"daily", "weekly", "monthly"}},
+		"day_of_week":  map[string]any{"type": "integer", "minimum": 0, "maximum": 6, "description": "Weekly only; Sunday=0."},
+		"day_of_month": map[string]any{"type": "integer", "minimum": 1, "maximum": 28, "description": "Monthly only."},
+		"hour":         map[string]any{"type": "integer", "minimum": 0, "maximum": 23, "description": "Hour in plan timezone."},
+		"minute":       map[string]any{"type": "integer", "minimum": 0, "maximum": 59, "description": "Minute in plan timezone."},
+		"timezone":     stringField("IANA timezone such as Asia/Shanghai; not a UTC offset."),
+	}, "frequency", "hour", "minute", "timezone")
 	return []modelclient.ToolDefinition{
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_list_schedules",
+				Description: "List recurring schedules and next execution times on an Ongoing Card. Inspect before creating or changing a schedule.",
+				Parameters:  object(map[string]any{"card_id": stringField("Ongoing Card UUID, usually the current Card.")}, "card_id"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_create_schedule",
+				Description: "Create a recurring schedule on an Ongoing Card (including a Card newly generated from Discussion). List existing schedules first to avoid duplicates. Creation is not retry-idempotent.",
+				Parameters: object(map[string]any{
+					"card_id": stringField("Ongoing Card UUID."),
+					"rule":    scheduleRule,
+				}, "card_id", "rule"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_update_schedule",
+				Description: "Update an Ongoing Card schedule. Supply the entire rule from cycledock_list_schedules, keeping unchanged fields; enabled=false pauses without destroying execution history.",
+				Parameters: object(map[string]any{
+					"card_id":     stringField("Ongoing Card UUID."),
+					"schedule_id": stringField("Schedule UUID from cycledock_list_schedules."),
+					"rule":        scheduleRule,
+					"enabled":     map[string]any{"type": "boolean", "description": "Whether the schedule is enabled."},
+				}, "card_id", "schedule_id", "rule", "enabled"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_delete_schedule",
+				Description: "Delete a schedule only before it produces any Turn; if there is history, pause with cycledock_update_schedule instead.",
+				Parameters: object(map[string]any{
+					"card_id":     stringField("Ongoing Card UUID."),
+					"schedule_id": stringField("Schedule UUID."),
+				}, "card_id", "schedule_id"),
+			},
+		},
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{

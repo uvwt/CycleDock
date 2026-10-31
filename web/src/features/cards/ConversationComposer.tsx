@@ -1,12 +1,14 @@
-import { ComposerInput } from "../../shared/ui/ComposerInput";
-import { ArrowUp, ListPlus, LoaderCircle, Square } from "lucide-react";
+import { ChatInput, ChatReplyBar } from "../../shared/ui/chat";
+import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import type { QuotedMessage } from "../timeline/ConversationView";
 
 export function ConversationComposer({
   comment,
   setComment,
+  replyTo,
+  onCancelReply,
   blocked,
-  waiting,
   hasCurrent,
   sendPending,
   streamConnected,
@@ -17,10 +19,12 @@ export function ConversationComposer({
 }: {
   comment: string;
   setComment: (value: string) => void;
+  replyTo?: QuotedMessage | null;
+  onCancelReply?: () => void;
   expanded?: boolean;
   setExpanded?: (value: boolean) => void;
   blocked: boolean;
-  waiting: boolean;
+  waiting?: boolean;
   hasCurrent: boolean;
   sendPending: boolean;
   streamConnected: boolean;
@@ -32,17 +36,11 @@ export function ConversationComposer({
   const { t } = useTranslation();
   const placeholder = blocked
     ? t("讨论已归档")
-    : waiting
-      ? t("回复 Agent，继续执行…")
-      : t("发送消息，继续推进任务…");
+    : t("发送消息，继续推进任务…");
 
   const sendDisabled = sendPending || !comment.trim() || blocked;
-  const showStop = hasCurrent && !waiting && !comment.trim();
-  const actionLabel = showStop
-    ? t("中止")
-    : waiting
-      ? t("回复并继续")
-      : t("发送");
+  const showStop = hasCurrent && !comment.trim();
+  const actionLabel = showStop ? t("中止") : t("发送");
 
   return (
     <form
@@ -50,46 +48,53 @@ export function ConversationComposer({
         event.preventDefault();
         if (!sendDisabled && !cancelPending) onSubmit();
       }}
-      className="relative flex items-end rounded-2xl border border-line bg-surface py-1.5 pr-1.5 pl-3 shadow-sm transition-[border-color,box-shadow] focus-within:border-line-strong"
+      className="relative flex flex-col rounded-2xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-primary/60"
     >
-      <ComposerInput
-        value={comment}
-        onChange={setComment}
-        placeholder={placeholder}
-        readOnly={blocked}
-      />
-      <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
-        {waiting && (
-          <span className="text-xs text-warning mr-1">{t("等待人工回复")}</span>
-        )}
-        {!streamConnected && (
-          <span title={streamError} className="text-[11px] text-faint mr-1">
-            {t("正在连接…")}
-          </span>
-        )}
-        <button
-          type={showStop ? "button" : "submit"}
-          title={actionLabel}
-          aria-label={actionLabel}
-          onClick={showStop ? onCancel : undefined}
-          disabled={cancelPending || (!showStop && sendDisabled)}
-          className={`inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full transition disabled:opacity-30 ${waiting ? "px-3" : "w-9"} bg-action text-action-foreground hover:bg-action-hover`}
-        >
-          {showStop ? (
-            cancelPending ? (
+      {replyTo && onCancelReply && (
+        <ChatReplyBar
+          sender={replyTo.sender}
+          text={replyTo.text}
+          onClose={onCancelReply}
+        />
+      )}
+
+      <div className="flex items-end gap-2">
+        <div className="flex min-w-0 flex-1 items-end pl-1.5">
+          <ChatInput
+            value={comment}
+            onChange={setComment}
+            placeholder={placeholder}
+            readOnly={blocked}
+          />
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
+          {!streamConnected && (
+            <span title={streamError} className="mr-1 text-[11px] text-faint">
+              {t("正在连接…")}
+            </span>
+          )}
+          <button
+            type={showStop ? "button" : "submit"}
+            title={actionLabel}
+            aria-label={actionLabel}
+            onClick={showStop ? onCancel : undefined}
+            disabled={cancelPending || (!showStop && sendDisabled)}
+            className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full shadow-sm transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35 ${
+              showStop
+                ? "size-9 bg-danger text-white hover:bg-danger/90"
+                : "size-9 bg-action text-action-foreground hover:bg-action-hover"
+            }`}
+          >
+            {cancelPending ? (
               <LoaderCircle className="size-4 animate-spin" />
-            ) : (
+            ) : showStop ? (
               <Square className="size-3.5 fill-current" />
-            )
-          ) : waiting ? (
-            <ListPlus className="size-4" />
-          ) : (
-            <ArrowUp className="size-4" />
-          )}
-          {waiting && (
-            <span className="text-xs font-medium">{t("回复并继续")}</span>
-          )}
-        </button>
+            ) : (
+              <ArrowUp className="size-4" />
+            )}
+          </button>
+        </div>
       </div>
     </form>
   );

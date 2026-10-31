@@ -4,7 +4,7 @@ import { mcpFormSchema, type MCPFormValues } from "./mcp-form";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Cable, ExternalLink, Plus, Trash2, TestTube2 } from "lucide-react";
+import { Plus, Trash2, TestTube2 } from "lucide-react";
 import { api } from "../../shared/api/client";
 import type { MCPConnection, MCPInput } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
@@ -20,94 +20,6 @@ import {
   TextInput,
 } from "../../shared/ui/components";
 
-export function NexusSettings() {
-  const q = useQuery({ queryKey: keys.nexus, queryFn: api.nexus });
-  const connect = useMutation({
-    mutationFn: api.nexusConnect,
-    onSuccess: (r) => window.location.assign(r.authorization_url),
-    onError: (e) => toast.error(String(e)),
-  });
-  const disconnect = useMutation({
-    mutationFn: api.nexusDisconnect,
-    onSuccess: () => {
-      toast.success("已断开");
-      void queryClient.invalidateQueries({ queryKey: keys.nexus });
-    },
-    onError: (e) => toast.error(String(e)),
-  });
-  return (
-    <Section
-      title="NexusDock 远程设备"
-      description="第一方设备授权，不需要手动添加 MCP URL、Token 或设备 ID。"
-    >
-      {q.isPending ? (
-        <Spinner />
-      ) : q.error ? (
-        <ErrorView error={q.error} />
-      ) : !q.data?.available ? (
-        <p className="text-sm text-muted-foreground">
-          当前部署尚未启用 NexusDock 第一方连接。
-        </p>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 rounded-xl border border-line bg-canvas p-4">
-            <Cable className="size-6 text-sky-700" />
-            <div>
-              <p className="font-semibold">NexusDock</p>
-              <p className="text-xs text-muted-foreground">
-                {q.data.connected
-                  ? "已授权 Cycle Agent 使用此账号下的设备"
-                  : "尚未连接"}
-              </p>
-              {q.data.connected && (
-                <p className="mt-1 break-all text-xs text-muted-foreground">
-                  {q.data.authorized_subject
-                    ? "NexusDock 授权账号 ID：" + q.data.authorized_subject
-                    : "授权账号未知，重新连接后可显示"}
-                </p>
-              )}
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            登录账号和设备授权账号可以不同；连接时请确认授权账号。
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {q.data.connected ? (
-              <>
-                <Button
-                  variant="danger"
-                  disabled={disconnect.isPending}
-                  onClick={() => disconnect.mutate()}
-                >
-                  断开设备连接
-                </Button>
-                {q.data.manage_url && (
-                  <a
-                    href={q.data.manage_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-sm"
-                  >
-                    <ExternalLink className="size-4" />
-                    前往 NexusDock 管理设备
-                  </a>
-                )}
-              </>
-            ) : (
-              <Button
-                variant="primary"
-                disabled={connect.isPending}
-                onClick={() => connect.mutate()}
-              >
-                连接 NexusDock 设备
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
-    </Section>
-  );
-}
 const blank: MCPInput = {
   name: "",
   url: "",

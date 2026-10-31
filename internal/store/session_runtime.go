@@ -15,6 +15,8 @@ import (
 )
 
 type AgentCardContext struct {
+	DeviceNodeID          string
+	DeviceName            string
 	WorkspaceID           uuid.UUID
 	WorkspaceName         string
 	ProjectID             uuid.UUID
@@ -62,7 +64,7 @@ func (s *Store) LoadAgentCardContext(
 			c.id, c.kind, c.title, c.description,
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
-			t.id, t.source, t.content, t.dispatch_mode, t.created_at,
+			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name,
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
 				SELECT count(*)
@@ -98,7 +100,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.ProjectID, &out.ProjectName, &out.ProjectDescription, &out.ProjectInstructions,
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
-		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt,
+		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName,
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,
 	)

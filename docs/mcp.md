@@ -112,6 +112,17 @@ MCP tool input 不接受 `workspace_id` 或 `source_id`。
 
 External MCP 不提供 interrupt tool；立即转向仍是 Human Web 的显式人工决策。
 
+### 定时计划工具
+
+- list_schedules(card_id)：读取 Ongoing Card 的周期规则、启用状态与下一次触发时间。
+- create_schedule(card_id, rule)：创建启用的每日、每周或每月周期规则。
+- update_schedule(card_id, schedule_id, rule, enabled)：完整替换规则，或将 enabled 设置为 false 暂停。
+- delete_schedule(card_id, schedule_id)：只有未产生 Schedule Turn 历史的规则可删除；已有历史应暂停。
+
+rule 包含 frequency（daily/weekly/monthly）、hour、minute、timezone（IANA 名称，如 Asia/Shanghai）。weekly 另需 day_of_week（周日=0、周六=6），monthly 另需 day_of_month（1~28）。不支持 Cron 或一次性定时。
+
+修改前先 list_schedules；更新须携带完整规则和 enabled，避免意外改变其他字段。创建没有重试幂等键；调用结果不明时先列出日程再决定是否重试。所有读写都使用 OAuth Workspace scope。
+
 ### Attempt
 
 - `claim_attempt`

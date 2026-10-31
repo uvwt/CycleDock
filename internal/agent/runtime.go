@@ -99,6 +99,9 @@ func isRetryableModelRouteError(ctx context.Context, err error) bool {
 	var apiErr *modelclient.APIError
 	if errors.As(err, &apiErr) {
 		return apiErr.StatusCode == 401 ||
+			// 402 在订阅型模型供应商中通常表示当前账号额度/计费不可用，
+			// 属于 Route 自身故障；后续 Route 可能使用另一账号或供应商，应继续切换。
+			apiErr.StatusCode == 402 ||
 			apiErr.StatusCode == 403 ||
 			apiErr.StatusCode == 404 ||
 			apiErr.StatusCode == 408 ||

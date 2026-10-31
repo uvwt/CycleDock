@@ -139,26 +139,28 @@ export default function ActivityPage() {
             {t("查看 Agent 正在做什么，以及最近发生了什么。")}
           </p>
         </div>
-        {projectID && (
-          <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-1">
-            {filters.map((filter) => (
-              <button
-                key={filter.id}
-                type="button"
-                onClick={() =>
-                  setFilter("view", filter.id === "all" ? "" : filter.id)
-                }
-                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  view === filter.id
-                    ? "bg-muted text-heading"
-                    : "text-muted-foreground hover:text-strong"
-                }`}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex max-w-full flex-wrap items-center gap-2">
+          {projectID && (
+            <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-line bg-surface p-1">
+              {filters.map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() =>
+                    setFilter("view", filter.id === "all" ? "" : filter.id)
+                  }
+                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    view === filter.id
+                      ? "bg-muted text-heading"
+                      : "text-muted-foreground hover:text-strong"
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="grid items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">

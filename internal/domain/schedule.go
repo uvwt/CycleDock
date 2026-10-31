@@ -29,7 +29,7 @@ func (r ScheduleRule) Validate() error {
 			return fmt.Errorf("daily schedule cannot include day fields")
 		}
 	case ScheduleWeekly:
-		if r.DayOfWeek == nil || r.DayOfMonth != nil {
+		if r.DayOfWeek == nil || *r.DayOfWeek < time.Sunday || *r.DayOfWeek > time.Saturday || r.DayOfMonth != nil {
 			return fmt.Errorf("weekly schedule requires day_of_week only")
 		}
 	case ScheduleMonthly:

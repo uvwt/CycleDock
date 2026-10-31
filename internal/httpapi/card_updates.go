@@ -28,14 +28,21 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
  SELECT c.id::text, c.project_id::text, c.kind, c.title,
  md5(concat_ws('|', c.updated_at::text, e.sequence::text, a.id::text, a.status,
    t.sequence::text, t.cancelled_at::text, s.updated_at::text, s.count::text)),
- COALESCE(e.sequence::text, '0'), COALESCE(e.preview, ''), COALESCE(a.status, '')
+ COALESCE(m.sequence::text, '0'), COALESCE(m.preview, ''), COALESCE(a.status, '')
  FROM cards c
+ LEFT JOIN LATERAL (
+   SELECT sequence
+   FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
+   ORDER BY sequence DESC LIMIT 1
+ ) e ON true
+ -- 通知只认用户可见的消息。置顶、标题、进度和状态变更仍通过上面的 revision 刷新页面。
  LEFT JOIN LATERAL (
    SELECT sequence, left(COALESCE(NULLIF(btrim(content), ''), message->'widget'->>'question',
      NULLIF(message->>'alt', ''), message->>'url', ''), 181) AS preview
    FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
+     AND event_type IN ('comment', 'message')
    ORDER BY sequence DESC LIMIT 1
- ) e ON true
+ ) m ON true
  LEFT JOIN LATERAL (
    SELECT id, status FROM turn_attempts WHERE workspace_id=c.workspace_id AND card_id=c.id
    ORDER BY created_at DESC, id DESC LIMIT 1

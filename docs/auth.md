@@ -154,7 +154,7 @@ Hosted 登录身份和设备控制授权是两个独立安全边界：
 - `issuer + sub` 只回答“谁登录了 CycleDock”。
 - NexusDock MCP OAuth grant 回答“这个 CycleDock Workspace 是否被用户允许调用对应 NexusDock Workspace 的 MCP/device 能力”。
 
-第一方设备连接复用 NexusDock 标准 MCP OAuth：
+第一方设备连接复用 NexusDock 标准 MCP OAuth；对话运行时通过授权 MCP Session 获取工具定义、设备上下文并执行调用：
 
 1. CycleDock 自动读取 NexusDock Protected Resource / Authorization Server Metadata。
 2. CycleDock 自动注册或复用一个 public OAuth client。

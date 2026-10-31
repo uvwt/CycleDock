@@ -451,6 +451,64 @@ func (q *Queries) GetOAuthRefreshTokenForUpdate(ctx context.Context, refreshToke
 	return i, err
 }
 
+const listAuthorizedOAuthClients = `-- name: ListAuthorizedOAuthClients :many
+SELECT
+    g.client_id,
+    c.client_name,
+    g.source_id,
+    s.name AS source_name,
+    g.updated_at AS authorized_at
+FROM oauth_grants g
+JOIN oauth_clients c ON c.client_id = g.client_id
+JOIN sources s
+  ON s.workspace_id = g.workspace_id
+ AND s.id = g.source_id
+WHERE g.workspace_id = $1
+  AND g.human_account_id = $2
+  AND g.revoked_at IS NULL
+  AND s.kind = 'oauth_client'
+ORDER BY g.updated_at DESC, g.client_id
+`
+
+type ListAuthorizedOAuthClientsParams struct {
+	WorkspaceID    uuid.UUID `json:"workspace_id"`
+	HumanAccountID uuid.UUID `json:"human_account_id"`
+}
+
+type ListAuthorizedOAuthClientsRow struct {
+	ClientID     string             `json:"client_id"`
+	ClientName   string             `json:"client_name"`
+	SourceID     uuid.UUID          `json:"source_id"`
+	SourceName   string             `json:"source_name"`
+	AuthorizedAt pgtype.Timestamptz `json:"authorized_at"`
+}
+
+func (q *Queries) ListAuthorizedOAuthClients(ctx context.Context, arg ListAuthorizedOAuthClientsParams) ([]ListAuthorizedOAuthClientsRow, error) {
+	rows, err := q.db.Query(ctx, listAuthorizedOAuthClients, arg.WorkspaceID, arg.HumanAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAuthorizedOAuthClientsRow{}
+	for rows.Next() {
+		var i ListAuthorizedOAuthClientsRow
+		if err := rows.Scan(
+			&i.ClientID,
+			&i.ClientName,
+			&i.SourceID,
+			&i.SourceName,
+			&i.AuthorizedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const refreshOAuthGrantApproval = `-- name: RefreshOAuthGrantApproval :one
 UPDATE oauth_grants
 SET human_account_id = $1,

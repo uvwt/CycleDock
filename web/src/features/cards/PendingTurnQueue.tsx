@@ -70,6 +70,14 @@ export function PendingTurnQueue({
               >
                 {turn.content}
               </button>
+              {turn.device_node_id && (
+                <span
+                  className="max-w-20 truncate text-[11px] text-faint"
+                  title={turn.device_name || turn.device_node_id}
+                >
+                  {turn.device_name || turn.device_node_id}
+                </span>
+              )}
               {turn.source === "human" && (
                 <button
                   type="button"

@@ -71,6 +71,15 @@ type Card struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
+	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
+}
+
+type CardReadCursor struct {
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	SourceID                uuid.UUID          `json:"source_id"`
+	CardID                  uuid.UUID          `json:"card_id"`
+	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CardSchedule struct {
@@ -107,6 +116,8 @@ type CardTurn struct {
 	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
 	CancelReason        string             `json:"cancel_reason"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	DeviceNodeID        string             `json:"device_node_id"`
+	DeviceName          string             `json:"device_name"`
 }
 
 type Event struct {
@@ -227,13 +238,37 @@ type OidcIdentity struct {
 }
 
 type Project struct {
-	ID           uuid.UUID          `json:"id"`
-	WorkspaceID  uuid.UUID          `json:"workspace_id"`
-	Name         string             `json:"name"`
-	Description  string             `json:"description"`
-	Instructions string             `json:"instructions"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	Instructions     string             `json:"instructions"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	MainDiscussionID uuid.NullUUID      `json:"main_discussion_id"`
+}
+
+type PushCardRevision struct {
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	CardID         uuid.UUID          `json:"card_id"`
+	Revision       string             `json:"revision"`
+	EventSequence  string             `json:"event_sequence"`
+	MessagePreview string             `json:"message_preview"`
+	AttemptStatus  string             `json:"attempt_status"`
+	Title          string             `json:"title"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PushSubscription struct {
+	ID          uuid.UUID          `json:"id"`
+	WorkspaceID uuid.UUID          `json:"workspace_id"`
+	UserID      uuid.UUID          `json:"user_id"`
+	Endpoint    string             `json:"endpoint"`
+	P256dh      string             `json:"p256dh"`
+	AuthSecret  string             `json:"auth_secret"`
+	ActiveUntil pgtype.Timestamptz `json:"active_until"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Source struct {

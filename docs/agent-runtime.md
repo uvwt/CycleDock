@@ -189,7 +189,7 @@ ADK experimental model routing 可以辅助，但不替代已有更强的产品�
 
 每次 invocation 按需建立 MCP connection；Session 恢复不意味着复用失效 socket。
 
-NexusDock first-party integration 继续负责 runtime OAuth、bootstrap execution targets、hidden bootstrap tool、tool filtering、native names。
+NexusDock first-party integration 由 CycleDock 管理 OAuth、refresh 和 Workspace scope。每次 Attempt 建立 MCP Session，通过 `agentdock_context` 获取设备上下文；工具定义和设备 / Recall / Workflow 调用统一使用 MCP。对话运行时不请求 REST 目录，也不分流至 Execution API。前端通过独立认证 API 展示和选择设备；选择快照随 Turn 保存，Claim 后作为本轮用户上下文追加到 Session。不指定时不沿用历史选择；排队输入和技术重试不受后续切换影响。
 
 ## 15. Security
 
@@ -234,7 +234,7 @@ Phase C 已完成 Built-in Runtime cutover：
 - Dispatcher 正式以 Turn / Attempt 为 Built-in Agent 调度入口。
 - ADK Runner 以 Card ID 恢复同一个持久 Session。
 - CycleDock model routes / ChatGPT / Grok / OpenAI-compatible 通过 ADK model.LLM adapter 接入，并保留 ordered failover / streaming reset。
-- 普通 MCP 与 NexusDock 工具通过 ADK FunctionTool 参与 tool loop；tool call / FunctionResponse 持久化到 Session Events。
+- 普通 MCP 与 NexusDock 工具统一通过 MCP Session 接入 ADK FunctionTool，参与 tool loop；tool call / FunctionResponse 持久化到 Session Events。
 - Human Comment / reply / cancel / retry HTTP API 已切到 Turn / Attempt。
 - Web Card detail 已切到 current_attempt / pending_turns / attempt_history，并用 source_event_id 稳定关联 Human Comment。
 - Schedule occurrence 已改为创建 Turn，同一 Ongoing Card 继续使用同一 Session。

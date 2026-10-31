@@ -202,6 +202,24 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 		t.Fatalf("OAuth token response incomplete: %+v", tokens)
 	}
 
+	authorizedClientsResponse, err := browser.Get(publicURL + "/api/v1/agent/oauth-clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizedClientsResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(authorizedClientsResponse.Body)
+		t.Fatalf("authorized clients status=%d body=%s", authorizedClientsResponse.StatusCode, body)
+	}
+	var authorizedClients []authorizedAIClientResponse
+	decodeHTTPBody(t, authorizedClientsResponse, &authorizedClients)
+	if len(authorizedClients) != 1 ||
+		authorizedClients[0].ClientID != registration.ClientID ||
+		authorizedClients[0].Name != registration.ClientName ||
+		authorizedClients[0].SourceID == "" ||
+		authorizedClients[0].AuthorizedAt.IsZero() {
+		t.Fatalf("authorized clients=%+v", authorizedClients)
+	}
+
 	mcpHTTPClient := &http.Client{Transport: bearerRoundTripper{
 		base: http.DefaultTransport, token: tokens.AccessToken,
 	}}
@@ -220,6 +238,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	}
 	requiredTools := map[string]bool{
 		"list_projects": false, "list_cards": false, "get_card": false,
+		"list_schedules": false, "create_schedule": false, "update_schedule": false, "delete_schedule": false,
 		"create_discussion": false, "generate_work": false, "update_card": false, "move_card": false,
 		"add_comment": false, "create_turn": false, "claim_attempt": false,
 		"heartbeat_attempt": false, "reply_message": false,
@@ -260,6 +279,97 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if created.Card.ID == "" || created.Card.ProjectID != project.ID.String() ||
 		created.Card.SourceDiscussionID != discussion.Card.ID {
 		t.Fatalf("generate_work output: %+v", created)
+	}
+	ongoing := callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "generate_work", map[string]any{
+		"discussion_id": discussion.Card.ID, "kind": "ongoing", "title": "MCP recurring work",
+		"description": "Check server health daily", "idempotency_key": "mcp-e2e-ongoing",
+	})
+	if ongoing.Card.Kind != "ongoing" {
+		t.Fatalf("generated Ongoing Card: %+v", ongoing)
+	}
+	initialSchedules := callMCPTool[mcpserver.ListSchedulesOutput](t, ctx, clientSession, "list_schedules", map[string]any{
+		"card_id": ongoing.Card.ID,
+	})
+	if len(initialSchedules.Schedules) != 0 {
+		t.Fatalf("new Ongoing Card should have no schedules: %+v", initialSchedules)
+	}
+	rule := mcpserver.ScheduleRuleInput{Frequency: "daily", Hour: 9, Minute: 0, Timezone: "Asia/Shanghai"}
+	createdSchedule := callMCPTool[mcpserver.ScheduleOutput](t, ctx, clientSession, "create_schedule", map[string]any{
+		"card_id": ongoing.Card.ID, "rule": rule,
+	})
+	if !createdSchedule.Schedule.Enabled || createdSchedule.Schedule.ID == "" ||
+		createdSchedule.Schedule.Rule.Timezone != rule.Timezone {
+		t.Fatalf("create_schedule result: %+v", createdSchedule)
+	}
+	pausedSchedule := callMCPTool[mcpserver.ScheduleOutput](t, ctx, clientSession, "update_schedule", map[string]any{
+		"card_id": ongoing.Card.ID, "schedule_id": createdSchedule.Schedule.ID,
+		"rule": rule, "enabled": false,
+	})
+	if pausedSchedule.Schedule.Enabled {
+		t.Fatalf("update_schedule did not pause: %+v", pausedSchedule)
+	}
+	listedSchedules := callMCPTool[mcpserver.ListSchedulesOutput](t, ctx, clientSession, "list_schedules", map[string]any{
+		"card_id": ongoing.Card.ID,
+	})
+	if len(listedSchedules.Schedules) != 1 || listedSchedules.Schedules[0].Enabled ||
+		listedSchedules.Schedules[0].Rule.Hour != 9 {
+		t.Fatalf("paused schedule not persisted: %+v", listedSchedules)
+	}
+	deleted := callMCPTool[mcpserver.DeleteScheduleOutput](t, ctx, clientSession, "delete_schedule", map[string]any{
+		"card_id": ongoing.Card.ID, "schedule_id": createdSchedule.Schedule.ID,
+	})
+	if !deleted.Deleted {
+		t.Fatalf("delete_schedule result: %+v", deleted)
+	}
+	auditedSchedule := callMCPTool[mcpserver.ScheduleOutput](t, ctx, clientSession, "create_schedule", map[string]any{
+		"card_id": ongoing.Card.ID, "rule": rule,
+	})
+	_, err = dataStore.CreateScheduleTurn(ctx, workspaceID,
+		uuid.MustParse(auditedSchedule.Schedule.ID), time.Now().UTC(), "scheduled test execution")
+	if err != nil {
+		t.Fatalf("create audited Schedule Turn: %v", err)
+	}
+	rejectedDelete, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "delete_schedule", Arguments: map[string]any{
+			"card_id": ongoing.Card.ID, "schedule_id": auditedSchedule.Schedule.ID,
+		},
+	})
+	if err != nil || !rejectedDelete.IsError {
+		t.Fatalf("deleting audited schedule should be refused: result=%+v err=%v", rejectedDelete, err)
+	}
+	rejectedWrongKind, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "create_schedule", Arguments: map[string]any{"card_id": created.Card.ID, "rule": rule},
+	})
+	if err != nil || !rejectedWrongKind.IsError {
+		t.Fatalf("Todo Card should reject schedules: result=%+v err=%v", rejectedWrongKind, err)
+	}
+	foreignWorkspace, err := dataStore.CreateWorkspace(ctx, "MCP foreign workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignSource, err := dataStore.CreateSource(ctx, foreignWorkspace.ID, domain.SourceKindHuman, "Foreign Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Foreign Project", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignCard, err := dataStore.CreateOngoingCard(ctx, foreignWorkspace.ID, foreignProject.ID, foreignSource.ID, "Foreign Schedule", "", uuid.NullUUID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"list_schedules", map[string]any{"card_id": foreignCard.ID.String()}},
+		{"create_schedule", map[string]any{"card_id": foreignCard.ID.String(), "rule": rule}},
+	} {
+		response, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: operation.name, Arguments: operation.args})
+		if err != nil || !response.IsError {
+			t.Fatalf("%s accessed foreign Workspace: result=%+v err=%v", operation.name, response, err)
+		}
 	}
 	callMCPTool[mcpserver.CardOutput](t, ctx, clientSession, "move_card", map[string]any{
 		"card_id": created.Card.ID, "state": "working",

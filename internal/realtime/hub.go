@@ -11,20 +11,41 @@ import (
 )
 
 type Event struct {
-	Type      string         `json:"-"`
-	AttemptID string         `json:"attempt_id,omitempty"`
-	Text      string         `json:"text,omitempty"`
-	Stage     string         `json:"stage,omitempty"`
-	StartedAt string         `json:"started_at,omitempty"`
-	Order     int            `json:"order,omitempty"`
-	ReplyID   string         `json:"reply_id,omitempty"`
-	EventID   string         `json:"event_id,omitempty"`
-	Replies   []ReplyPreview `json:"replies,omitempty"`
+	Type      string `json:"-"`
+	AttemptID string `json:"attempt_id,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Stage     string `json:"stage,omitempty"`
+	// DeviceName 只描述当前工具正在操作的设备。空值表示该次调用已结束。
+	DeviceName string         `json:"device_name,omitempty"`
+	Task       *TaskProgress  `json:"task,omitempty"`
+	StartedAt  string         `json:"started_at,omitempty"`
+	Order      int            `json:"order,omitempty"`
+	ReplyID    string         `json:"reply_id,omitempty"`
+	EventID    string         `json:"event_id,omitempty"`
+	Replies    []ReplyPreview `json:"replies,omitempty"`
 }
 
 type Subscriber struct {
 	Events <-chan Event
 	Close  func()
+}
+
+// TaskProgress 是 NexusDock task_create / task_manage 返回的紧凑进度，只用于当前会话展示。
+type TaskProgress struct {
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	Status      string     `json:"status,omitempty"`
+	Completed   int        `json:"completed_step_count"`
+	Total       int        `json:"step_count"`
+	CurrentStep string     `json:"current_step,omitempty"`
+	Summary     string     `json:"summary,omitempty"`
+	Blocker     string     `json:"blocker,omitempty"`
+	Steps       []TaskStep `json:"steps,omitempty"`
+}
+
+type TaskStep struct {
+	Title  string `json:"title"`
+	Status string `json:"status,omitempty"`
 }
 
 type ReplyPreview struct {
@@ -36,10 +57,12 @@ type ReplyPreview struct {
 }
 
 type liveState struct {
-	attemptID string
-	replies   []ReplyPreview
-	stage     string
-	startedAt string
+	attemptID  string
+	replies    []ReplyPreview
+	stage      string
+	deviceName string
+	task       *TaskProgress
+	startedAt  string
 }
 
 type Hub struct {
@@ -70,11 +93,13 @@ func (h *Hub) Subscribe(cardID uuid.UUID) (Subscriber, *Event) {
 	var snapshot *Event
 	if st, ok := h.live[cardID]; ok {
 		snapshot = &Event{
-			Type:      "attempt.snapshot",
-			AttemptID: st.attemptID,
-			Replies:   append([]ReplyPreview(nil), st.replies...),
-			Stage:     st.stage,
-			StartedAt: st.startedAt,
+			Type:       "attempt.snapshot",
+			AttemptID:  st.attemptID,
+			Replies:    append([]ReplyPreview(nil), st.replies...),
+			Stage:      st.stage,
+			DeviceName: st.deviceName,
+			Task:       cloneTaskProgress(st.task),
+			StartedAt:  st.startedAt,
 		}
 	}
 	return Subscriber{
@@ -175,6 +200,25 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 		}
 		st.stage = event.Stage
 		h.live[cardID] = st
+	case "attempt.device":
+		// 与 current_stage 分开保存。数据库轮询发出的 attempt.stage 不带设备，不能把正在操作的设备清掉。
+		st, active := h.live[cardID]
+		if !active || st.attemptID != event.AttemptID {
+			return
+		}
+		if len(event.DeviceName) > 200 {
+			return
+		}
+		st.deviceName = event.DeviceName
+		h.live[cardID] = st
+	case "attempt.task":
+		// 任务进度来自工具结果，调用结束后仍保留，直到这次 Attempt 结束。阶段轮询不改它。
+		st, active := h.live[cardID]
+		if !active || st.attemptID != event.AttemptID || !validTaskProgress(event.Task) {
+			return
+		}
+		st.task = cloneTaskProgress(event.Task)
+		h.live[cardID] = st
 	case "attempt.finished", "attempt.failed":
 		// A stale Attempt terminal event cannot delete or clear a newer Attempt.
 		if st, ok := h.live[cardID]; ok {
@@ -193,6 +237,22 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			close(ch)
 		}
 	}
+}
+
+func validTaskProgress(task *TaskProgress) bool {
+	if task == nil || task.ID == "" || task.Title == "" {
+		return false
+	}
+	return len(task.ID) <= 200 && len(task.Title) <= 200 && len(task.Steps) <= 12
+}
+
+func cloneTaskProgress(task *TaskProgress) *TaskProgress {
+	if task == nil {
+		return nil
+	}
+	copied := *task
+	copied.Steps = append([]TaskStep(nil), task.Steps...)
+	return &copied
 }
 
 func Encode(event Event) ([]byte, error) { return json.Marshal(event) }

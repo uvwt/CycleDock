@@ -1,3 +1,6 @@
+import { useDeviceSelection } from "../devices/device-selection";
+import { DeviceMenu } from "../devices/DeviceMenu";
+import { TaskProgressCard } from "./TaskProgressCard";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -8,7 +11,10 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
-import { ConversationView } from "../timeline/ConversationView";
+import {
+  ConversationView,
+  type QuotedMessage,
+} from "../timeline/ConversationView";
 import { CardActions } from "./CardActions";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { PendingTurnQueue } from "./PendingTurnQueue";
@@ -19,7 +25,7 @@ import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
-import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
+import { ProjectSwitcherWithSettings } from "../projects/ProjectSwitcherWithSettings";
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -27,6 +33,7 @@ export default function CardPage() {
 }
 
 function CardPageContent() {
+  const { target } = useDeviceSelection();
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
@@ -57,6 +64,11 @@ function CardPageContent() {
   );
 
   const isDiscussion = card?.kind === "discussion";
+  const mainDiscussion = useQuery({
+    queryKey: keys.mainDiscussion(actualProjectID),
+    queryFn: () => api.mainDiscussion(actualProjectID),
+    enabled: Boolean(actualProjectID) && isDiscussion,
+  });
   const isOngoing = card?.kind === "ongoing";
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
@@ -69,6 +81,7 @@ function CardPageContent() {
 
   const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
   const [comment, setComment] = useState("");
+  const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
@@ -106,16 +119,21 @@ function CardPageContent() {
 
   const send = useMutation({
     mutationFn: (mode: "enqueue" | "reply") => {
+      const text = comment.trim();
+      const content = replyTo
+        ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
+        : text;
       if (mode === "reply") {
         if (!current || current.status !== "waiting_human") {
           return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
         }
-        return api.reply(cardID, comment.trim(), current.id);
+        return api.reply(cardID, content, current.id, undefined, target);
       }
-      return api.send(cardID, comment.trim(), mode);
+      return api.send(cardID, content, mode, undefined, target);
     },
     onSuccess: async () => {
       setComment("");
+      setReplyTo(null);
       await sync();
     },
     onError: (error) =>
@@ -127,7 +145,14 @@ function CardPageContent() {
       value: string;
       attemptID: string;
       messageID: string;
-    }) => api.reply(cardID, choice.value, choice.attemptID, choice.messageID),
+    }) =>
+      api.reply(
+        cardID,
+        choice.value,
+        choice.attemptID,
+        choice.messageID,
+        target,
+      ),
     onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
@@ -228,11 +253,18 @@ function CardPageContent() {
     );
   }
 
+  const activeAttemptStatus = stream.live
+    ? stream.live.finished
+      ? "completed"
+      : "running"
+    : detail.data?.current_attempt?.status;
+
   const discussionSidebar =
     isDiscussion && actualProjectID ? (
       <DiscussionSidebar
         discussions={discussions}
         activeCardID={cardID}
+        activeAttemptStatus={activeAttemptStatus}
         onSelect={openDiscussion}
         onCreate={startDiscussion}
       />
@@ -270,12 +302,17 @@ function CardPageContent() {
           {contextSidebar}
         </div>
 
-        <section className="relative flex min-h-0 min-w-0 flex-col bg-surface">
+        <section
+          className={`relative flex min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+        >
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5 sm:right-4">
+            <TaskProgressCard task={stream.live?.task} />
+            <DeviceMenu />
             {!isDiscussion && <CardStatusSwitch card={card} />}
             <CardActions
               card={card}
+              preserve={card.id === mainDiscussion.data?.id}
               taskDetails={{
                 detail: detail.data,
                 projectCards: projectCards.data || [],
@@ -307,7 +344,7 @@ function CardPageContent() {
             >
               <PanelLeft className="size-4" />
             </button>
-            <ProjectSwitcher
+            <ProjectSwitcherWithSettings
               compact
               projects={projects}
               projectID={actualProjectID}
@@ -317,7 +354,6 @@ function CardPageContent() {
                   `/board/${encodeURIComponent(actualProjectID)}?new=project`,
                 )
               }
-              onManage={() => navigate("/settings/projects")}
             />
           </div>
 
@@ -334,10 +370,17 @@ function CardPageContent() {
             onChoose={(choice) => choose.mutate(choice)}
             retryingAttemptID={retryingAttemptID}
             onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+            onReply={(quote) => setReplyTo(quote)}
           />
 
-          <div className="shrink-0 bg-surface px-3 pt-0 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
-            <div className="mx-auto max-w-3xl">
+          <div
+            className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end bg-gradient-to-t ${
+              isDiscussion
+                ? "from-canvas via-canvas/90"
+                : "from-surface via-surface/90"
+            } to-transparent pt-10 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}
+          >
+            <div className="pointer-events-auto mx-auto w-full max-w-3xl px-4 sm:px-6">
               {blocked && (
                 <p className="mb-2 text-center text-xs text-faint">
                   {t("此讨论已归档，不能继续发送消息")}
@@ -357,6 +400,8 @@ function CardPageContent() {
               <ConversationComposer
                 comment={comment}
                 setComment={setComment}
+                replyTo={replyTo}
+                onCancelReply={() => setReplyTo(null)}
                 blocked={blocked}
                 waiting={waiting}
                 hasCurrent={hasCurrent}

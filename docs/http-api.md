@@ -26,7 +26,11 @@ Web Session Cookie 名为 `cycledock_session`，HttpOnly + SameSite=Lax；Hosted
 - `PATCH /api/v1/projects/{projectID}`
 - `GET /api/v1/projects/{projectID}/cards`
 - `POST /api/v1/projects/{projectID}/discussions`：创建空白 active Discussion；首条输入持久化后，后端独立异步生成标题与摘要。
+- `GET /api/v1/projects/{projectID}/main-discussion`：返回这个项目的主聊天 Discussion。还没有时 404。
+- `POST /api/v1/projects/{projectID}/main-discussion`：打开主聊天。还没有时创建一张置顶的 active Discussion，标题为「主聊天」。重复打开返回同一张卡。
 - `POST /api/v1/projects/{projectID}/todos`：Human 直接创建 Todo；请求只接受 `title + description`，Human Source / Workspace 来自 Web Session，`source_discussion_id` 为空且初始状态固定为 `todo`。
+
+主聊天仍是普通 Discussion。其他卡片落库一条用户可见的 Comment 或 Message 时，主聊天追加一条 `notice`：正文是来源类型、标题、摘要和打开路径，用单元分隔符拼接。`notice` 不创建 Turn，不写入来源卡或主聊天的 Agent Session。主聊天自己的消息不会再写一条通知。归档或删除主聊天返回 409。
 
 Project 即 Board，不存在独立 Board API。
 
@@ -44,8 +48,8 @@ Project 即 Board，不存在独立 Board API。
 - `GET /api/v1/cards/{cardID}/stream`：Human Session 认证的 SSE，按 Card/Workspace 权限隔离。推送 `attempt.started / attempt.stage / attempt.text.delta / attempt.text.reset / attempt.text.snapshot / attempt.finished / attempt.failed / event.created`，payload 使用 `attempt_id`；模型增量是短暂状态，永久历史仍以 Timeline REST 为准。SSE 断线后重新拉取 Card，服务端单实例 Hub 支持在途流快照；提交新的任务不会从 SSE 发起。
 - `PATCH /api/v1/cards/{cardID}`
 - `POST /api/v1/cards/{cardID}/move`：仅 Todo 状态移动。
-- `POST /api/v1/cards/{cardID}/discussion-state`：当前只允许 Human 将 Discussion 归档。
-- `DELETE /api/v1/cards/{cardID}`：当前只允许 Human 删除 Discussion；已生成的 Todo / Ongoing 保留，来源引用置空。
+- `POST /api/v1/cards/{cardID}/discussion-state`：当前只允许 Human 将 Discussion 归档。项目主聊天不能归档。
+- `DELETE /api/v1/cards/{cardID}`：当前只允许 Human 删除 Discussion；已生成的 Todo / Ongoing 保留，来源引用置空。项目主聊天不能删除。
 - `POST /api/v1/cards/{cardID}/ongoing-state`
 
 Discussion 不能转换为 Todo / Ongoing。Human 直接新建 Todo 与 Discussion 的 Generate work 是两条独立创建路径；AI Generate work 仍只能从 Discussion 发起。Todo 的 Review → Done 仍由 Store 的 Human-only 规则保证，HTTP Handler 不复制状态机。

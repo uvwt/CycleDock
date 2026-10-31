@@ -13,7 +13,14 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
+// DeviceTarget 是用户的执行偏好，不授予设备权限；实际调用始终由 MCP 校验授权。
+type DeviceTarget struct {
+	NodeID string `json:"node_id"`
+	Name   string `json:"name"`
+}
+
 type SubmitSessionCommentParams struct {
+	DeviceTarget   *DeviceTarget
 	WorkspaceID    uuid.UUID
 	CardID         uuid.UUID
 	AuthorSourceID uuid.UUID
@@ -67,6 +74,15 @@ func (s *Store) submitSessionComment(
 		return SubmitSessionCommentResult{}, fmt.Errorf("invalid dispatch mode %q", p.DispatchMode)
 	}
 
+	var deviceNodeID, deviceName string
+	if p.DeviceTarget != nil {
+		deviceNodeID = strings.TrimSpace(p.DeviceTarget.NodeID)
+		deviceName = strings.TrimSpace(p.DeviceTarget.Name)
+		if deviceNodeID == "" || len([]rune(deviceNodeID)) > 200 || len([]rune(deviceName)) > 200 {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: invalid device target", domain.ErrConflict)
+		}
+	}
+
 	requestHash := stableRequestHash(
 		"session_comment",
 		p.WorkspaceID.String(),
@@ -75,6 +91,10 @@ func (s *Store) submitSessionComment(
 		string(p.DispatchMode),
 		p.Content,
 	)
+
+	if deviceNodeID != "" {
+		requestHash = stableRequestHash(requestHash, "device_target", deviceNodeID, deviceName)
+	}
 
 	if requireWaitingHuman {
 		requestHash = stableRequestHash(requestHash, "reply", p.ReplyToAttemptID.String(), p.ChoiceMessageID.String())
@@ -178,6 +198,7 @@ func (s *Store) submitSessionComment(
 	}
 
 	turn, err := insertTurn(ctx, tx, insertTurnParams{
+		DeviceNodeID: deviceNodeID, DeviceName: deviceName,
 		WorkspaceID:       p.WorkspaceID,
 		CardID:            p.CardID,
 		Source:            domain.TurnSourceHuman,
@@ -194,6 +215,9 @@ func (s *Store) submitSessionComment(
 	if err := supersedeAttemptForHumanTurn(
 		ctx, tx, p.WorkspaceID, p.CardID, p.DispatchMode, turn.CreatedAt,
 	); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if err := relayVisibleMessage(ctx, tx, p.WorkspaceID, p.CardID, eventID, p.Content); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

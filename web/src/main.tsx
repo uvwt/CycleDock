@@ -22,7 +22,7 @@ createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <App />
         </BrowserRouter>
-        <Toaster richColors position="bottom-right" />
+        <Toaster richColors position="top-right" />
       </TooltipProvider>
     </QueryClientProvider>
   </React.StrictMode>,

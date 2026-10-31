@@ -9,6 +9,7 @@ export const keys = {
   workspaces: ["workspaces"] as const,
   projects: ["projects"] as const,
   cards: (id: string) => ["cards", id] as const,
+  mainDiscussion: (id: string) => ["main-discussion", id] as const,
   card: (id: string) => ["card", id] as const,
   schedules: (id: string) => ["project-schedules", id] as const,
   activity: (id: string, sourceID = "") =>
@@ -16,8 +17,12 @@ export const keys = {
   activityAgents: (id: string) => ["activity-agents", id] as const,
   agent: ["agent-settings"] as const,
   auth: ["model-auth"] as const,
+  authorizedAIClients: ["authorized-ai-clients"] as const,
   models: (provider: string, credentialID = "") =>
     ["models", provider, credentialID] as const,
   mcp: ["mcp"] as const,
   nexus: ["nexus"] as const,
+  nexusDevices: (workspaceID: string) =>
+    ["nexus", "devices", workspaceID] as const,
+  nexusFleet: (workspaceID: string) => ["nexus", "fleet", workspaceID] as const,
 };

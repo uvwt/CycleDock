@@ -176,17 +176,6 @@ func (s *SessionSet) HasTool(modelName string) bool {
 	return ok && !tool.Hidden
 }
 
-// Tool 返回模型工具背后的真实 MCP server/name 元数据。
-// Built-in Agent 用它识别 NexusDock 第一方设备工具，并在不重做 MCP Tool Schema 合并的前提下
-// 把真实执行切到 NexusDock Execution API；普通 MCP 调用继续走 SessionSet.Call。
-func (s *SessionSet) Tool(modelName string) (Tool, bool) {
-	tool, ok := s.tools[modelName]
-	if !ok || tool.Hidden {
-		return Tool{}, false
-	}
-	return tool, true
-}
-
 func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[string]any) (string, error) {
 	tool, ok := s.tools[modelName]
 	if !ok {

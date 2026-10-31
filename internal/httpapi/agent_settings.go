@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -169,6 +171,53 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (api *API) listAgentProviderModels(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	var request struct {
+		ProviderBaseURL string `json:"provider_base_url"`
+		APIKeyEnv       string `json:"api_key_env"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+
+	baseURL := strings.TrimSpace(request.ProviderBaseURL)
+	if err := agentconfig.ValidateEndpoint(baseURL); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_endpoint", err.Error())
+		return
+	}
+	envName := strings.TrimSpace(request.APIKeyEnv)
+	if envName != "" && !agentconfig.ValidEnvName(envName) {
+		writeError(w, http.StatusBadRequest, "invalid_secret_env", "Model API key environment variable name is invalid.")
+		return
+	}
+
+	apiKey := ""
+	if envName != "" {
+		value, ok := os.LookupEnv(envName)
+		if !ok || strings.TrimSpace(value) == "" {
+			writeError(w, http.StatusBadRequest, "secret_env_missing", "Configured model API key environment variable is not set.")
+			return
+		}
+		apiKey = value
+	}
+
+	models, err := api.model.ListModels(r.Context(), modelclient.Config{
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		api.logger.Warn("list custom provider models failed", "error", err)
+		writeError(w, http.StatusBadGateway, "model_catalog_unavailable", "Could not load models from the provider.")
+		return
+	}
+	writeJSON(w, http.StatusOK, models)
 }
 
 func (api *API) testAgentMCP(w http.ResponseWriter, r *http.Request) {

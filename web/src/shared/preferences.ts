@@ -79,18 +79,63 @@ export function useTheme(): [Theme, (next: Theme) => void] {
 }
 
 const en = {
-  开启卡片更新通知: "Enable card update notifications",
-  "离开卡片或切到后台，也能及时看到模型回复与卡片更新。":
-    "See model replies and card updates when viewing another card or working in the background.",
+  不指定设备: "No device preference",
+  "选择仅作用于之后发送的消息。":
+    "Your selection applies to future messages only.",
+  "所选设备当前不可用，可以切换或取消指定。":
+    "The selected device is unavailable. Choose another or clear the selection.",
+  设备在线列表: "Device status",
+  设备: "Devices",
+  "NexusDock 设备": "NexusDock devices",
+  "{{online}} / {{total}} 在线": "{{online}} / {{total}} online",
+  "正在读取设备…": "Loading devices…",
+  "设备授权已过期，请重新连接。":
+    "Device authorization has expired. Please reconnect.",
+  "设备状态暂时不可用，请重试。":
+    "Device status is temporarily unavailable. Please retry.",
+  "当前部署尚未启用 NexusDock 设备连接。":
+    "NexusDock device connections are not enabled on this deployment.",
+  "连接 NexusDock，查看设备在线状态。":
+    "Connect NexusDock to view device status.",
+  "请联系工作空间所有者连接 NexusDock。":
+    "Ask your workspace owner to connect NexusDock.",
+  "此授权账号下暂无设备。":
+    "There are no devices under this authorized account.",
+  设备列表: "Device list",
+  系统未知: "Unknown system",
+  在线: "Online",
+  离线: "Offline",
+  刷新设备状态: "Refresh devices",
+  连接设备: "Connect devices",
+  设备连接设置: "Device connection settings",
+  开启新消息通知: "Enable message notifications",
+  "离开卡片或切到后台，有新消息时通知。":
+    "Get notified of new messages when viewing another card or working in the background.",
   暂不开启: "Not now",
   浏览器通知: "Browser notifications",
+  已开启: "On",
+  未开启: "Off",
   开启通知: "Enable notifications",
   关闭通知: "Disable notifications",
   卡片有更新: "Card updated",
+  新消息: "New message",
+  讨论: "Discussion",
+  主聊天: "Main chat",
+  主讨论始终置顶: "Main discussion is always pinned",
+  打开主聊天: "Open main chat",
+  关闭主聊天: "Close main chat",
+  在完整页面打开: "Open full page",
+  打开这张卡: "Open this card",
   "卡片有更新，点击查看": "Card updated. Click to view.",
   浏览器通知启动失败: "Failed to start browser notifications",
-  "切到后台或离开当前卡片后，卡片有更新时通知。网页需保持打开。":
-    "Notify on card updates when in the background or viewing another card. Keep the page open.",
+  "切到后台或离开当前卡片后，有新消息时通知。网页需保持打开。":
+    "Notify on new messages when in the background or viewing another card. Keep the page open.",
+  "切到后台、离开当前卡片，或关闭页面后，有新消息时通知。":
+    "Notify on new messages in the background, on another card, or after the page is closed.",
+  "iPhone 和 iPad 需要先通过分享菜单把 CycleDock 添加到主屏幕，再用主屏幕图标打开并开启通知。Safari 标签页不能接收推送。":
+    "On iPhone and iPad, add CycleDock to the Home Screen from the share menu, then open that icon and enable notifications. A Safari tab cannot receive push.",
+  "关闭页面后的推送尚未配置，当前只在网页打开时通知。":
+    "Push after the page is closed is not configured. Notifications work only while the page is open.",
   "当前环境不支持浏览器通知，请使用 HTTPS 或本机浏览器。":
     "Notifications are unavailable. Use HTTPS or localhost in a supported browser.",
   "通知权限已被阻止，请在浏览器的网站设置中允许通知。":
@@ -111,7 +156,10 @@ const en = {
   模型服务: "Model providers",
   "Agent 设置": "Agent settings",
   "MCP 服务": "MCP services",
+  "AI 客户端": "AI clients",
   项目设置: "Project settings",
+  "修改当前项目的名称、描述与 Agent 指令。Project Instructions 只作用于这个项目。":
+    "Edit this project's name, description, and Agent instructions. Project Instructions apply only to this project.",
   个人: "Personal",
   "AI 配置": "AI configuration",
   外部连接: "External connections",
@@ -127,6 +175,9 @@ const en = {
     "Choose your language and appearance. Preferences are saved in this browser.",
   显示名称: "Display name",
   邮箱: "Email",
+  当前账号: "Current account",
+  "查看当前登录邮箱，或安全退出 CycleDock。":
+    "View the signed-in email address or safely sign out of CycleDock.",
   账号与工作空间: "Account & workspace",
   未提供: "Not provided",
   "Hosted 身份在 NexusDock 管理；模型授权不属于登录身份。":
@@ -134,6 +185,12 @@ const en = {
   需要所有者权限: "Owner access required",
   "这些设置只允许 Workspace owner 修改。":
     "Only workspace owners can change these settings.",
+  "已授权的 AI 客户端": "Authorized AI clients",
+  "这些 AI 客户端已通过 CycleDock OAuth 获得当前工作空间的 MCP 访问权限。":
+    "These AI clients have access to this workspace's MCP tools through CycleDock OAuth.",
+  "已授权访问 CycleDock MCP": "Authorized for CycleDock MCP",
+  "还没有已授权的 AI 客户端。完成 MCP OAuth 授权后会显示在这里。":
+    "No AI clients are authorized yet. Clients will appear here after MCP OAuth authorization.",
   未找到设置页面: "Settings page not found",
   "请选择左侧的设置分类。": "Choose a category from the navigation.",
   "没有项目，请先创建项目。": "No projects yet. Create one first.",
@@ -251,6 +308,14 @@ const en = {
   返回: "Back",
   生成任务: "Generate task",
   正在执行: "Running",
+  正在操作: "Operating",
+  任务进度: "Task progress",
+  关闭任务进度: "Close task progress",
+  当前步骤: "Current step",
+  已阻塞: "Blocked",
+  未开始: "Not started",
+  已通过: "Passed",
+  未通过: "Failed",
   排队中: "Queued",
   等待回复: "Waiting for reply",
   运行中: "Running",
@@ -280,6 +345,13 @@ const en = {
   发现: "Finding",
   结果: "Result",
   "NexusDock 远程设备": "NexusDock remote devices",
+  远程设备: "Remote devices",
+  "连接并管理你的远程设备，让 Agent 在授权范围内使用设备上的 Skill、MCP 与工具能力。":
+    "Connect and manage your remote devices so Agents can use their Skills, MCP services, and tools within the permissions you grant.",
+  连接你的远程设备: "Connect your remote devices",
+  "正在检查远程设备连接状态…": "Checking remote device connection…",
+  "正在连接远程设备并拉取能力快照…":
+    "Connecting to remote devices and loading capabilities…",
   模型提供商: "Model provider",
   "内置 Agent": "Built-in Agent",
   主导航: "Main navigation",
@@ -301,8 +373,6 @@ const en = {
   "新讨论发送失败，草稿已保留":
     "Failed to send the new discussion. Draft saved.",
   "重试失败，草稿仍已保留": "Retry failed. Draft remains saved.",
-  "讨论已创建，但首条消息还未确认送达。重试会复用同一 Card，不会重复创建讨论。":
-    "The discussion was created, but the first message is not confirmed. Retry reuses the same Card and will not create a duplicate.",
   打开讨论: "Open discussion",
   重试发送: "Retry send",
   中止: "Stop",
