@@ -71,6 +71,7 @@ type Card struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
+	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 }
 
 type CardSchedule struct {
@@ -229,13 +230,37 @@ type OidcIdentity struct {
 }
 
 type Project struct {
-	ID           uuid.UUID          `json:"id"`
-	WorkspaceID  uuid.UUID          `json:"workspace_id"`
-	Name         string             `json:"name"`
-	Description  string             `json:"description"`
-	Instructions string             `json:"instructions"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	Instructions     string             `json:"instructions"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	MainDiscussionID uuid.NullUUID      `json:"main_discussion_id"`
+}
+
+type PushCardRevision struct {
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	CardID         uuid.UUID          `json:"card_id"`
+	Revision       string             `json:"revision"`
+	EventSequence  string             `json:"event_sequence"`
+	MessagePreview string             `json:"message_preview"`
+	AttemptStatus  string             `json:"attempt_status"`
+	Title          string             `json:"title"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PushSubscription struct {
+	ID          uuid.UUID          `json:"id"`
+	WorkspaceID uuid.UUID          `json:"workspace_id"`
+	UserID      uuid.UUID          `json:"user_id"`
+	Endpoint    string             `json:"endpoint"`
+	P256dh      string             `json:"p256dh"`
+	AuthSecret  string             `json:"auth_secret"`
+	ActiveUntil pgtype.Timestamptz `json:"active_until"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Source struct {

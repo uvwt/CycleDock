@@ -26,6 +26,7 @@ import (
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/webpush"
 )
 
 func main() {
@@ -104,6 +105,15 @@ func main() {
 	}
 	modelClient := modelclient.New()
 	live := realtime.NewHub()
+	pushSubject := strings.TrimSpace(os.Getenv("CYCLEDOCK_VAPID_SUBJECT"))
+	if pushSubject == "" && strings.HasPrefix(strings.ToLower(publicURL), "https://") {
+		pushSubject = publicURL
+	}
+	pushSender, err := webpush.New(os.Getenv("CYCLEDOCK_VAPID_PUBLIC_KEY"), os.Getenv("CYCLEDOCK_VAPID_PRIVATE_KEY"), pushSubject)
+	if err != nil {
+		logger.Error("configure web push", "error", err)
+		os.Exit(1)
+	}
 
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
@@ -126,6 +136,7 @@ func main() {
 		ModelAuth:    modelAuthService,
 		ModelClient:  modelClient,
 		Live:         live,
+		Push:         pushSender,
 	})
 
 	server := &http.Server{
@@ -146,6 +157,9 @@ func main() {
 		Live:            live,
 	})
 	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
+	if pushSender != nil {
+		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, logger)
+	}
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("Cycle Agent dispatcher stopped", "error", err)

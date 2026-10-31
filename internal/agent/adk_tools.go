@@ -40,7 +40,6 @@ type attemptToolRuntime struct {
 	mcpSessions     *mcpclient.SessionSet
 	artifactService artifact.Service
 	historyService  *agentsession.PostgresService
-	fatal           *attemptToolFatal
 	replies         *replyState
 	live            *realtime.Hub
 }
@@ -49,31 +48,6 @@ type replyState struct {
 	mu         sync.Mutex
 	ended      bool
 	previewIDs map[string]string
-}
-
-type attemptToolFatal struct {
-	mu  sync.Mutex
-	err error
-}
-
-func (f *attemptToolFatal) set(err error) {
-	if f == nil || err == nil {
-		return
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err == nil {
-		f.err = err
-	}
-}
-
-func (f *attemptToolFatal) get() error {
-	if f == nil {
-		return nil
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.err
 }
 
 func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
@@ -106,10 +80,8 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 				func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 					raw, err := runtime.mcpSessions.Call(ctx, name, args)
 					if err != nil {
-						runtime.fatal.set(err)
-						// Persist the FunctionResponse and make it the terminal event.
-						// Runner will turn the recorded fatal into an Attempt failure.
-						ctx.Actions().SkipSummarization = true
+						// 通道错误是这一次调用的结果，交回模型用白话说明。
+						// 标成整轮失败会停在上一条进度，用户看不到这次为什么没做成。
 						return map[string]any{"error": err.Error()}, nil
 					}
 					if decoded, err := decodeADKToolResult(raw); err == nil {

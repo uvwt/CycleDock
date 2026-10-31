@@ -218,14 +218,14 @@ export function DeviceMenu() {
         </DropdownMenuItem>
         {owner && devices.data?.available !== false && (
           <DropdownMenuItem
-            onSelect={() => navigate("/settings/nexusdock")}
+            onSelect={() => navigate("/nexusdock")}
             className="cursor-pointer rounded-lg px-2.5 py-2 text-xs"
           >
             <Settings className="size-3.5" />
             {t(
               reconnect || !devices.data?.connected
                 ? "连接设备"
-                : "设备连接设置",
+                : "设备管理与连接",
             )}
           </DropdownMenuItem>
         )}

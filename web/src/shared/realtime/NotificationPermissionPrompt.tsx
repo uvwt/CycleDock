@@ -58,10 +58,10 @@ export function NotificationPermissionPrompt() {
     >
       <div className="flex items-center gap-2 font-medium text-heading">
         <Bell className="size-4 text-sky-600" />
-        <h2>{t("开启卡片更新通知")}</h2>
+        <h2>{t("开启新消息通知")}</h2>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
-        {t("离开卡片或切到后台，也能及时看到模型回复与卡片更新。")}
+        {t("离开卡片或切到后台，有新消息时通知。")}
       </p>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={dismiss} disabled={pending}>

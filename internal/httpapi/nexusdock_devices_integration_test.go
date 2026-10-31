@@ -55,6 +55,9 @@ func TestNexusDockDevices_按认证Workspace读取并允许成员查看(t *testi
 				return
 			}
 			respondUnified(t, w, map[string]any{"devices": []any{map[string]any{"id": "node-a", "name": "RN", "online": true, "os": "linux", "arch": "amd64"}}})
+		case "/mcp":
+			// 后台 Attempt Runner 建立 MCP 连接探测
+			w.WriteHeader(http.StatusOK)
 		default:
 			t.Errorf("页面设备列表不应调用 MCP 或其他接口: %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -76,8 +79,14 @@ func TestNexusDockDevices_按认证Workspace读取并允许成员查看(t *testi
 	if got := requestDevices(nil, "/api/v1/agent/nexusdock/devices"); got.Code != 401 {
 		t.Fatalf("未登录应拒绝: %d", got.Code)
 	}
+	if got := requestDevices(nil, "/api/v1/agent/nexusdock/fleet"); got.Code != 401 {
+		t.Fatalf("未登录查看 fleet 应拒绝: %d", got.Code)
+	}
 	if got := requestDevices(cookie, "/api/v1/agent/nexusdock/devices"); got.Code != 200 || !strings.Contains(got.Body.String(), `"connected":false`) || directoryCalls.Load() != 0 {
 		t.Fatalf("未连接不应请求 Cloud: %d %s", got.Code, got.Body.String())
+	}
+	if got := requestDevices(cookie, "/api/v1/agent/nexusdock/fleet"); got.Code != 200 || !strings.Contains(got.Body.String(), `"connected":false`) {
+		t.Fatalf("未连接 fleet 应返回 connected:false: %d %s", got.Code, got.Body.String())
 	}
 	ctx := context.Background()
 	start, err := svc.BeginAuthorization(ctx, workspaceID, humanID, sourceID)
@@ -123,6 +132,9 @@ func TestNexusDockDevices_按认证Workspace读取并允许成员查看(t *testi
 	}
 	if got := requestDevices(cookie, "/api/v1/agent/nexusdock/devices"); got.Code != 200 {
 		t.Fatalf("成员应能查看设备: %d %s", got.Code, got.Body.String())
+	}
+	if got := requestDevices(cookie, "/api/v1/agent/nexusdock/fleet"); got.Code != 200 {
+		t.Fatalf("成员应能查看 fleet: %d %s", got.Code, got.Body.String())
 	}
 	if got := requestDevices(cookie, "/api/v1/agent/nexusdock"); got.Code != 403 {
 		t.Fatalf("成员仍不能读取连接管理: %d", got.Code)

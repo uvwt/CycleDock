@@ -98,6 +98,9 @@ func (s *Store) SubmitAgentTurn(
 	if err != nil {
 		return SubmitAgentTurnResult{}, err
 	}
+	if err := relayVisibleMessage(ctx, tx, workspaceID, cardID, eventID, content); err != nil {
+		return SubmitAgentTurnResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SubmitAgentTurnResult{}, err
 	}

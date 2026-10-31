@@ -217,6 +217,9 @@ func (s *Store) submitSessionComment(
 	); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}
+	if err := relayVisibleMessage(ctx, tx, p.WorkspaceID, p.CardID, eventID, p.Content); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}

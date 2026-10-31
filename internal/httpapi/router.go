@@ -34,6 +34,7 @@ type Config struct {
 	ModelClient  *modelclient.Client
 	NexusDock    *nexusdock.Service
 	Live         *realtime.Hub
+	Push         pushSender
 }
 
 type API struct {
@@ -45,6 +46,7 @@ type API struct {
 	model        *modelclient.Client
 	nexusDock    *nexusdock.Service
 	live         *realtime.Hub
+	push         pushSender
 	secureCookie bool
 	logger       *slog.Logger
 }
@@ -61,7 +63,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
 		oauth: config.OAuth, modelAuth: config.ModelAuth, model: model, nexusDock: config.NexusDock,
-		secureCookie: config.SecureCookie, logger: logger, live: config.Live,
+		secureCookie: config.SecureCookie, logger: logger, live: config.Live, push: config.Push,
 	}
 
 	router := chi.NewRouter()

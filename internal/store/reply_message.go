@@ -223,6 +223,13 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 			return uuid.Nil, false, domain.ErrAttemptNotCurrent
 		}
 	}
+	preview := strings.TrimSpace(p.Message.Content)
+	if preview == "" && p.Message.Widget != nil {
+		preview = p.Message.Widget.Question
+	}
+	if err := relayVisibleMessage(ctx, tx, p.WorkspaceID, p.CardID, id, preview); err != nil {
+		return uuid.Nil, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, false, err
 	}

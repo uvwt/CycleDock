@@ -61,6 +61,14 @@ ChatGPT Plan 的远程 / Hosted 正式接入需要 OpenAI 批准的 CYCLEDOCK_CH
 
 Grok device-code 使用 xAI Grok Build 的公开 OAuth client，不需要本地 Grok CLI。
 
+关闭页面后仍接收卡片通知时，配置一对 Web Push VAPID 密钥。留空则只在网页打开时通知。Subject 填 `mailto:` 邮箱；留空且 `CYCLEDOCK_PUBLIC_URL` 为 https 时，用该 URL 作为 Subject。iPhone 和 iPad 还要用户把站点添加到主屏幕，并用那个图标打开后才能订阅。
+
+```env
+CYCLEDOCK_VAPID_PUBLIC_KEY=<base64url-public-key>
+CYCLEDOCK_VAPID_PRIVATE_KEY=<base64url-private-key>
+CYCLEDOCK_VAPID_SUBJECT=mailto:ops@example.com
+```
+
 ## 4. 启动
 
 ```bash

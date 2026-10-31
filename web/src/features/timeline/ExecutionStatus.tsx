@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Bot, LoaderCircle, Monitor, RotateCcw } from "lucide-react";
+import { LoaderCircle, Monitor, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Attempt } from "../../shared/api/types";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import type { ExecutionAttempt } from "./execution";
 import { RichText } from "./RichText";
-import { RunningDots } from "./RunningDots";
+import { ChatBubbleMessage, MessageLoading } from "../../shared/ui/chat";
 import { Button, HintTooltip } from "../../shared/ui/components";
 
 const attemptLabels: Record<string, string> = {
@@ -50,16 +50,18 @@ export function RunDuration({
   );
 }
 
-/** 跟在执行时长右侧，和名称、耗时同一行，位于气泡上方。 */
+/** 位于气泡右侧的操作设备状态徽章。 */
 export function OperatingDevice({ name }: { name: string }) {
   const { t } = useTranslation();
   return (
     <span
       data-operating-device={name}
-      className="inline-flex items-center gap-1 text-[11px] font-normal text-sky-700"
+      className="inline-flex select-none items-center gap-1.5 rounded-full border border-sky-200/80 bg-sky-50/80 px-2.5 py-0.5 text-[11px] font-normal text-sky-700 shadow-2xs dark:border-sky-800/60 dark:bg-sky-950/40 dark:text-sky-300 shrink-0"
     >
-      <Monitor className="size-3 shrink-0" />
-      {t("正在操作")} {name}
+      <Monitor className="size-3 shrink-0 text-sky-600 dark:text-sky-400" />
+      <span>
+        {t("正在操作")} <strong className="font-semibold">{name}</strong>
+      </span>
     </span>
   );
 }
@@ -67,12 +69,10 @@ export function OperatingDevice({ name }: { name: string }) {
 /** 正文上方共用的执行元信息，不用错误块替代已输出的内容。 */
 export function AttemptMetadata({
   attempt,
-  deviceName,
   retryingAttemptID,
   onRetryAttempt,
 }: {
   attempt: Attempt;
-  deviceName?: string;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
 }) {
@@ -80,22 +80,23 @@ export function AttemptMetadata({
   const humanReplied =
     attempt.status === "superseded" &&
     attempt.error_summary === "superseded by human reply";
+  const isRunning = attempt.status === "running";
   return (
     <span
       data-execution-id={attempt.id}
       className="inline-flex items-center gap-2 text-[11px] font-normal text-faint"
     >
-      {t(
-        humanReplied
-          ? "已收到回复"
-          : attemptLabels[attempt.status] || attempt.status,
-      )}
+      {!isRunning &&
+        t(
+          humanReplied
+            ? "已收到回复"
+            : attemptLabels[attempt.status] || attempt.status,
+        )}
       <RunDuration
         startedAt={attempt.started_at}
         finishedAt={attempt.finished_at}
-        active={attempt.status === "running"}
+        active={isRunning}
       />
-      {deviceName && <OperatingDevice name={deviceName} />}
       {attempt.retry_of_attempt_id || attempt.reason === "retry"
         ? " · " + t("重试")
         : ""}
@@ -157,13 +158,11 @@ function AgentAttempt({
       live?.deviceName &&
       !live.finished,
   );
-  // 续在上一条气泡后面时，没有耗时、设备和重试标记就不留空的名称行。
+  // 续在上一条气泡后面时，执行耗时挂在组首（第一个气泡），本气泡不单独展示孤立时间行。
   const showRunningHeader =
-    status !== "running" ||
-    showSender ||
-    retried ||
-    Boolean(runningStartedAt) ||
-    showRunningDevice;
+    status === "running"
+      ? showSender
+      : showSender || retried || Boolean(runningStartedAt);
 
   if (
     ["cancelled", "superseded", "waiting_human"].includes(status) &&
@@ -171,24 +170,21 @@ function AgentAttempt({
   ) {
     return (
       <article
-        className="flex min-w-0 gap-3.5"
+        className="group flex min-w-0"
         data-attempt-question={attempt.question ? id : undefined}
       >
-        <span
-          aria-hidden
-          className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
-        >
-          <Bot className="size-4" />
-        </span>
         <div className="min-w-0 max-w-[78%]">
-          <p className="mb-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-semibold text-muted-foreground">
-            <span>Cycle</span>
-            <AttemptMetadata
-              attempt={execution}
-              retryingAttemptID={retryingAttemptID}
-              onRetryAttempt={onRetryAttempt}
-            />
-          </p>
+          <div className="mb-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground/80">Cycle</span>
+            <div className="inline-flex items-center gap-x-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+              <span className="select-none text-[10px] text-muted-foreground/40">•</span>
+              <AttemptMetadata
+                attempt={execution}
+                retryingAttemptID={retryingAttemptID}
+                onRetryAttempt={onRetryAttempt}
+              />
+            </div>
+          </div>
           <div className="w-fit max-w-full rounded-2xl bg-muted px-4 py-2.5">
             {attempt.question ? (
               <RichText content={attempt.question} />
@@ -206,13 +202,7 @@ function AgentAttempt({
   return (
     <>
       {attempt.question && (
-        <article className="flex gap-3" data-attempt-question={id}>
-          <span
-            aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
-          >
-            <Bot className="size-4" />
-          </span>
+        <article className="flex min-w-0" data-attempt-question={id}>
           <div className="min-w-0 max-w-[78%]">
             <p className="mb-1.5 text-xs font-semibold text-muted-foreground">
               Cycle
@@ -226,27 +216,17 @@ function AgentAttempt({
       <article
         className={
           status === "running"
-            ? showSender
-              ? "flex min-w-0 gap-3"
-              : "min-w-0 pl-[46px]"
-            : "ml-12 min-w-0 border-l-2 border-line py-1 pl-3"
+            ? "flex min-w-0"
+            : "min-w-0 border-l-2 border-line py-1 pl-3"
         }
         data-execution-id={id}
       >
-        {status === "running" && showSender && (
-          <span
-            aria-hidden
-            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-secondary-foreground"
-          >
-            <Bot className="size-4" />
-          </span>
-        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               {showRunningHeader && (
-                <p
-                  className={`text-xs font-medium ${
+                <div
+                  className={`flex flex-wrap items-center gap-x-2 text-xs font-medium ${
                     failed
                       ? "text-danger"
                       : status === "running"
@@ -256,36 +236,46 @@ function AgentAttempt({
                 >
                   {status === "running" ? (
                     showSender ? (
-                      <span className="font-semibold text-muted-foreground">
-                        Cycle
-                      </span>
+                      <>
+                        <span className="font-semibold text-muted-foreground">
+                          Cycle
+                        </span>
+                        <span className="select-none text-[10px] text-muted-foreground/40">
+                          •
+                        </span>
+                      </>
                     ) : null
                   ) : (
-                    t(attemptLabels[status] || status)
+                    <span>{t(attemptLabels[status] || status)}</span>
                   )}
-                  {retried ? " · " + t("重试") : ""}
-                  <span
-                    className={`${status !== "running" || showSender ? "ml-2 " : ""}inline-flex items-center gap-2`}
-                  >
+                  {retried ? <span> · {t("重试")}</span> : null}
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-normal text-faint">
                     <RunDuration
                       startedAt={runningStartedAt}
                       finishedAt={execution?.finished_at}
                       active={status === "running"}
                     />
-                    {showRunningDevice && live?.deviceName && (
-                      <OperatingDevice name={live.deviceName} />
-                    )}
                   </span>
-                </p>
+                </div>
               )}
               {status === "running" ? (
                 <div
-                  className={`${showRunningHeader ? "mt-1.5 " : ""}w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5 text-muted-foreground`}
+                  className={`${showRunningHeader ? "mt-1.5 " : ""}flex flex-wrap items-end gap-2.5`}
                 >
-                  <RunningDots />
-                  {summary && (
-                    <div className="mt-1 text-sm leading-6 text-secondary-foreground">
-                      <RichText content={summary} />
+                  <ChatBubbleMessage
+                    variant="received"
+                    className="w-fit max-w-full"
+                  >
+                    <MessageLoading />
+                    {summary && (
+                      <div className="mt-1.5 border-t border-line/60 pt-1.5 text-sm leading-relaxed text-secondary-foreground">
+                        <RichText content={summary} />
+                      </div>
+                    )}
+                  </ChatBubbleMessage>
+                  {showRunningDevice && live?.deviceName && (
+                    <div className="self-end pb-1 shrink-0">
+                      <OperatingDevice name={live.deviceName} />
                     </div>
                   )}
                 </div>

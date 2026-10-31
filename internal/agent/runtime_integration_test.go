@@ -236,7 +236,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 			writeModelResponse(t, w, "late response", nil)
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, time.Second, "")
+		status, summary, _, _ := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, time.Second, "")
 		if status != string(domain.AttemptStatusFailed) || summary != "Built-in Agent operation timed out." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -248,7 +248,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 			_, _ = w.Write([]byte("{not-json"))
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
+		status, summary, _, _ := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
 		if status != string(domain.AttemptStatusFailed) || summary != "Model provider returned an invalid response." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -263,7 +263,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 			}})
 		}))
 		defer modelHTTP.Close()
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
+		status, summary, _, _ := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, "")
 		if status != string(domain.AttemptStatusFailed) ||
 			summary != "Built-in Agent stopped an unusually long tool loop before completion." {
 			t.Fatalf("status=%q summary=%q", status, summary)
@@ -281,7 +281,7 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 		}))
 		defer mcpHTTP.Close()
 
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
+		status, summary, _, _ := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
 		if status != string(domain.AttemptStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
 			t.Fatalf("status=%q summary=%q", status, summary)
 		}
@@ -317,18 +317,43 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 		}))
 		defer mcpHTTP.Close()
 
+		var modelCalls int
 		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			modelCalls++
+			if modelCalls == 1 {
+				writeModelResponse(t, w, "", []modelclient.ToolCall{{
+					ID: "external-failure", Type: "function",
+					Function: modelclient.ToolFunction{Name: "mcp_failtool_boom", Arguments: `{"value":"x"}`},
+				}})
+				return
+			}
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
-				ID: "external-failure", Type: "function",
-				Function: modelclient.ToolFunction{Name: "mcp_failtool_boom", Arguments: `{"value":"x"}`},
+				ID: "explain-failure", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "reply_message",
+					Arguments: `{"type":"text","content":"这次没做成，工具连接中断了。","end_turn":true,"idempotency_key":"explain-mcp-failure"}`,
+				},
 			}})
 		}))
 		defer modelHTTP.Close()
 
-		status, summary := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
-		if status != string(domain.AttemptStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
+		status, summary, workspaceID, cardID := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
+		if status != string(domain.AttemptStatusCompleted) || summary != "" {
 			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+		events, err := dataStore.ListCardEvents(ctx, workspaceID, cardID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var explained bool
+		for _, event := range events {
+			if strings.Contains(event.Content, "这次没做成，工具连接中断了。") {
+				explained = true
+			}
+		}
+		if !explained {
+			t.Fatal("transport failure was not explained in a reply")
 		}
 	})
 }
@@ -340,7 +365,7 @@ func runFailureScenario(
 	modelURL string,
 	modelTimeout time.Duration,
 	mcpURL string,
-) (string, string) {
+) (string, string, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	workspace, err := dataStore.CreateWorkspace(ctx, "Failure "+uuid.NewString())
 	if err != nil {
@@ -400,7 +425,7 @@ func runFailureScenario(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(attempt.Status), attempt.ErrorSummary
+	return string(attempt.Status), attempt.ErrorSummary, workspace.ID, card.ID
 }
 
 type modelRequest struct {

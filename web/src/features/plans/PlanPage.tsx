@@ -1,4 +1,3 @@
-import { DeviceMenu } from "../devices/DeviceMenu";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, CirclePause, Clock3 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -128,7 +127,6 @@ export default function PlanPage() {
               ))}
             </div>
           )}
-          <DeviceMenu />
         </div>
       </header>
 

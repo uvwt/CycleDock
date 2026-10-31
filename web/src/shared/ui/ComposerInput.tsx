@@ -35,7 +35,7 @@ export function ComposerInput({
       readOnly={readOnly}
       placeholder={placeholder}
       rows={1}
-      className={`min-w-0 flex-1 resize-none bg-transparent py-1.5 px-2 text-base outline-none read-only:text-secondary-foreground overflow-y-auto ${className}`}
+      className={`min-w-0 flex-1 resize-none bg-transparent py-1.5 px-2 text-[15px] outline-none read-only:text-secondary-foreground overflow-y-auto ${className}`}
       onKeyDown={(event) => {
         // 中文输入法确认候选词和 Shift+Enter 均不触发发送。
         if (

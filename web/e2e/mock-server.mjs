@@ -489,6 +489,33 @@ http
               ),
           );
         }
+        const mainDiscussion = route.match(
+          /^\/projects\/([^/]+)\/main-discussion$/,
+        );
+        if (mainDiscussion && (req.method === "GET" || req.method === "POST")) {
+          const projectID = decodeURIComponent(mainDiscussion[1]);
+          let card = cards.find(
+            (item) => item.project_id === projectID && item.main_chat,
+          );
+          if (!card && req.method === "POST") {
+            card = {
+              id: "main-" + projectID,
+              project_id: projectID,
+              kind: "discussion",
+              title: "主聊天",
+              description: "这个项目的新消息会汇总到这里。",
+              discussion_state: "active",
+              pinned_at: now(),
+              main_chat: true,
+              created_at: now(),
+              updated_at: now(),
+            };
+            cards.unshift(card);
+            events[card.id] = [];
+          }
+          if (!card) return failure(res);
+          return data(res, card, req.method === "POST" ? 201 : 200);
+        }
         const projectCards = route.match(/^\/projects\/([^/]+)\/cards$/);
         if (projectCards && req.method === "GET") {
           return data(

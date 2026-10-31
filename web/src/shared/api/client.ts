@@ -12,6 +12,7 @@ import type {
   ModelAuthStart,
   NexusConnection,
   NexusDevices,
+  NexusFleetResponse,
   Project,
   ProjectActivity,
   ActivityAgent,
@@ -82,6 +83,19 @@ export const api = {
   login: (password: string) =>
     request<Identity>("/auth/login", "POST", { password }),
   logout: () => request<void>("/auth/logout", "POST", {}),
+  pushConfig: () => request<{ public_key: string }>("/notifications/push"),
+  savePushSubscription: (value: {
+    endpoint: string;
+    keys: { p256dh: string; auth: string };
+  }) => request<void>("/notifications/push/subscription", "PUT", value),
+  deletePushSubscription: (endpoint: string) =>
+    request<void>("/notifications/push/subscription", "DELETE", { endpoint }),
+  pushPresence: (endpoint: string) =>
+    request<void>("/notifications/push/presence", "POST", { endpoint }),
+  idlePushSubscription: (endpoint: string) =>
+    request<void>("/notifications/push/inactive", "POST", { endpoint }),
+  ackPushCards: (cards: { id: string; revision: string }[]) =>
+    request<void>("/notifications/push/seen", "POST", { cards }),
   me: () => request<Identity>("/me"),
   workspaces: () => request<Workspace[]>("/workspaces"),
   switchWorkspace: (id: string) =>
@@ -107,6 +121,16 @@ export const api = {
     ),
   createDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/discussions`, "POST", {}),
+  mainDiscussion: async (project: string) => {
+    try {
+      return await request<Card>(`/projects/${project}/main-discussion`);
+    } catch (error) {
+      if (error instanceof APIError && error.status === 404) return null;
+      throw error;
+    }
+  },
+  openMainDiscussion: (project: string) =>
+    request<Card>(`/projects/${project}/main-discussion`, "POST", {}),
   createTodo: (project: string, title: string, description: string) =>
     request<Card>(`/projects/${project}/todos`, "POST", {
       title,
@@ -115,6 +139,8 @@ export const api = {
   card: (id: string) => request<CardDetail>(`/cards/${id}`),
   updateCard: (id: string, title: string, description: string) =>
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
+  pinCard: (id: string, pinned: boolean) =>
+    request<Card>(`/cards/${id}/pin`, "POST", { pinned }),
   moveTodo: (id: string, state: TodoState) =>
     request<Card>(`/cards/${id}/move`, "POST", { state }),
   archiveDiscussion: (id: string) =>
@@ -217,6 +243,10 @@ export const api = {
     ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
   nexusDevices: () => request<NexusDevices>("/agent/nexusdock/devices"),
+  nexusFleet: (refresh = false) =>
+    request<NexusFleetResponse>(
+      `/agent/nexusdock/fleet${refresh ? "?refresh=true" : ""}`,
+    ),
   nexusConnect: () =>
     request<{ authorization_url: string }>(
       "/agent/nexusdock/connect",

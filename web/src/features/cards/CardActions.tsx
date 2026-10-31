@@ -5,6 +5,8 @@ import {
   FileText,
   MoreHorizontal,
   Pencil,
+  Pin,
+  PinOff,
   Save,
   Trash2,
 } from "lucide-react";
@@ -30,11 +32,14 @@ export function CardActions({
   taskDetails,
   onDeleted,
   menuSide = "bottom",
+  preserve = false,
 }: {
   card: Card;
   taskDetails?: { detail: CardDetail; projectCards: Card[] };
   onDeleted: () => void;
   menuSide?: "bottom" | "right";
+  // 主聊天跟着项目走，不能从讨论列表里归档或删除。
+  preserve?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -58,6 +63,15 @@ export function CardActions({
       await sync();
       setEditOpen(false);
       toast.success("已保存");
+    },
+    onError: showError,
+  });
+
+  const togglePin = useMutation({
+    mutationFn: (pinned: boolean) => api.pinCard(card.id, pinned),
+    onSuccess: async (updated) => {
+      await sync();
+      toast.success(updated.pinned_at ? "已置顶" : "已取消置顶");
     },
     onError: showError,
   });
@@ -116,7 +130,24 @@ export function CardActions({
           编辑信息
         </MenuItem>
 
-        {card.kind === "discussion" && (
+        <MenuItem
+          disabled={togglePin.isPending}
+          onSelect={() => togglePin.mutate(!card.pinned_at)}
+        >
+          {card.pinned_at ? (
+            <>
+              <PinOff className="size-4" />
+              取消置顶
+            </>
+          ) : (
+            <>
+              <Pin className="size-4" />
+              置顶讨论
+            </>
+          )}
+        </MenuItem>
+
+        {card.kind === "discussion" && !preserve && (
           <>
             {card.discussion_state === "active" && (
               <MenuItem

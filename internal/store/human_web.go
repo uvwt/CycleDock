@@ -127,6 +127,26 @@ func (s *Store) UpdateCardText(
 	return card, err
 }
 
+func (s *Store) SetCardPinned(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	pinned bool,
+) (db.Card, error) {
+	var pinnedAt pgtype.Timestamptz
+	if pinned {
+		pinnedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	}
+	card, err := s.queries.SetCardPinned(ctx, db.SetCardPinnedParams{
+		PinnedAt:    pinnedAt,
+		WorkspaceID: workspaceID,
+		ID:          cardID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, domain.ErrNotFound
+	}
+	return card, err
+}
+
 func (s *Store) ListSchedules(ctx context.Context, workspaceID, cardID uuid.UUID) ([]db.CardSchedule, error) {
 	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
 		return nil, err

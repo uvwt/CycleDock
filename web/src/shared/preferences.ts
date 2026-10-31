@@ -108,18 +108,31 @@ const en = {
   刷新设备状态: "Refresh devices",
   连接设备: "Connect devices",
   设备连接设置: "Device connection settings",
-  开启卡片更新通知: "Enable card update notifications",
-  "离开卡片或切到后台，也能及时看到模型回复与卡片更新。":
-    "See model replies and card updates when viewing another card or working in the background.",
+  开启新消息通知: "Enable message notifications",
+  "离开卡片或切到后台，有新消息时通知。":
+    "Get notified of new messages when viewing another card or working in the background.",
   暂不开启: "Not now",
   浏览器通知: "Browser notifications",
   开启通知: "Enable notifications",
   关闭通知: "Disable notifications",
   卡片有更新: "Card updated",
+  新消息: "New message",
+  讨论: "Discussion",
+  主聊天: "Main chat",
+  打开主聊天: "Open main chat",
+  关闭主聊天: "Close main chat",
+  在完整页面打开: "Open full page",
+  打开这张卡: "Open this card",
   "卡片有更新，点击查看": "Card updated. Click to view.",
   浏览器通知启动失败: "Failed to start browser notifications",
-  "切到后台或离开当前卡片后，卡片有更新时通知。网页需保持打开。":
-    "Notify on card updates when in the background or viewing another card. Keep the page open.",
+  "切到后台或离开当前卡片后，有新消息时通知。网页需保持打开。":
+    "Notify on new messages when in the background or viewing another card. Keep the page open.",
+  "切到后台、离开当前卡片，或关闭页面后，有新消息时通知。":
+    "Notify on new messages in the background, on another card, or after the page is closed.",
+  "iPhone 和 iPad 需要先通过分享菜单把 CycleDock 添加到主屏幕，再用主屏幕图标打开并开启通知。Safari 标签页不能接收推送。":
+    "On iPhone and iPad, add CycleDock to the Home Screen from the share menu, then open that icon and enable notifications. A Safari tab cannot receive push.",
+  "关闭页面后的推送尚未配置，当前只在网页打开时通知。":
+    "Push after the page is closed is not configured. Notifications work only while the page is open.",
   "当前环境不支持浏览器通知，请使用 HTTPS 或本机浏览器。":
     "Notifications are unavailable. Use HTTPS or localhost in a supported browser.",
   "通知权限已被阻止，请在浏览器的网站设置中允许通知。":

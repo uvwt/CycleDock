@@ -28,12 +28,21 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/projects/{projectID}/activity", api.listProjectActivity)
 	r.Get("/projects/{projectID}/activity/agents", api.listProjectActivityAgents)
 	r.Post("/projects/{projectID}/discussions", api.createDiscussion)
+	r.Get("/projects/{projectID}/main-discussion", api.getMainDiscussion)
+	r.Post("/projects/{projectID}/main-discussion", api.openMainDiscussion)
 	r.Post("/projects/{projectID}/todos", api.createTodo)
 
 	r.Get("/cards/updates/stream", api.streamCardUpdates)
+	r.Get("/notifications/push", api.getPushConfig)
+	r.Put("/notifications/push/subscription", api.savePushSubscription)
+	r.Delete("/notifications/push/subscription", api.deletePushSubscription)
+	r.Post("/notifications/push/presence", api.touchPushPresence)
+	r.Post("/notifications/push/inactive", api.idlePushSubscription)
+	r.Post("/notifications/push/seen", api.ackPushCards)
 	r.Get("/cards/{cardID}", api.getCard)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
 	r.Patch("/cards/{cardID}", api.updateCard)
+	r.Post("/cards/{cardID}/pin", api.togglePinCard)
 	r.Post("/cards/{cardID}/move", api.moveCard)
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteDiscussion)
@@ -68,6 +77,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Delete("/agent/mcp-connections/{connectionID}", api.deleteAgentMCPConnection)
 	r.Get("/agent/nexusdock", api.getNexusDockConnection)
 	r.Get("/agent/nexusdock/devices", api.listNexusDockDevices)
+	r.Get("/agent/nexusdock/fleet", api.getNexusDockFleet)
 	r.Post("/agent/nexusdock/connect", api.connectNexusDock)
 	r.Delete("/agent/nexusdock", api.disconnectNexusDock)
 }
@@ -82,19 +92,21 @@ type projectResponse struct {
 }
 
 type cardResponse struct {
-	ID                   string    `json:"id"`
-	ProjectID            string    `json:"project_id"`
-	Kind                 string    `json:"kind"`
-	Title                string    `json:"title"`
-	Description          string    `json:"description"`
-	DiscussionState      string    `json:"discussion_state,omitempty"`
-	TodoState            string    `json:"todo_state,omitempty"`
-	OngoingState         string    `json:"ongoing_state,omitempty"`
-	SourceDiscussionID   string    `json:"source_discussion_id,omitempty"`
-	Health               string    `json:"health,omitempty"`
-	CurrentAttemptStatus string    `json:"current_attempt_status,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	ID                   string     `json:"id"`
+	ProjectID            string     `json:"project_id"`
+	Kind                 string     `json:"kind"`
+	Title                string     `json:"title"`
+	Description          string     `json:"description"`
+	DiscussionState      string     `json:"discussion_state,omitempty"`
+	TodoState            string     `json:"todo_state,omitempty"`
+	OngoingState         string     `json:"ongoing_state,omitempty"`
+	SourceDiscussionID   string     `json:"source_discussion_id,omitempty"`
+	Health               string     `json:"health,omitempty"`
+	CurrentAttemptStatus string     `json:"current_attempt_status,omitempty"`
+	LatestAttemptStatus  string     `json:"latest_attempt_status,omitempty"`
+	PinnedAt             *time.Time `json:"pinned_at,omitempty"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type attemptResponse struct {
@@ -443,6 +455,40 @@ func (api *API) createDiscussion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, cardToResponse(card))
 }
 
+func (api *API) getMainDiscussion(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	card, err := api.store.MainDiscussion(r.Context(), identity.WorkspaceID, projectID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) openMainDiscussion(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	card, created, err := api.store.EnsureMainDiscussion(
+		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, cardToResponse(card))
+}
+
 func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := parseUUIDParam(w, r, "projectID")
 	if !ok {
@@ -543,6 +589,9 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		response.CurrentAttempt = &attempt
 		response.Card.CurrentAttemptStatus = string(currentAttempt.Status)
 	}
+	if len(attemptHistory) > 0 {
+		response.Card.LatestAttemptStatus = string(attemptHistory[0].Status)
+	}
 	if lastCheckin != nil {
 		for i := len(response.Timeline) - 1; i >= 0; i-- {
 			if response.Timeline[i].ID == lastCheckin.ID.String() {
@@ -580,6 +629,26 @@ func (api *API) updateCard(w http.ResponseWriter, r *http.Request) {
 		r.Context(), identity.WorkspaceID, cardID,
 		request.Title, strings.TrimSpace(request.Description),
 	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) togglePinCard(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Pinned bool `json:"pinned"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	identity := identityFromRequest(r)
+	card, err := api.store.SetCardPinned(r.Context(), identity.WorkspaceID, cardID, request.Pinned)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -1073,6 +1142,10 @@ func cardToResponse(card db.Card) cardResponse {
 	if card.SourceDiscussionID.Valid {
 		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
 	}
+	if card.PinnedAt.Valid {
+		pinnedAt := card.PinnedAt.Time.UTC()
+		response.PinnedAt = &pinnedAt
+	}
 	return response
 }
 
@@ -1096,6 +1169,13 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	}
 	if card.CurrentAttemptStatus.Valid {
 		response.CurrentAttemptStatus = card.CurrentAttemptStatus.String
+	}
+	if card.LatestAttemptStatus != "" {
+		response.LatestAttemptStatus = card.LatestAttemptStatus
+	}
+	if card.PinnedAt.Valid {
+		pinnedAt := card.PinnedAt.Time.UTC()
+		response.PinnedAt = &pinnedAt
 	}
 	return response
 }

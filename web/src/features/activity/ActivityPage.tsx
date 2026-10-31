@@ -1,4 +1,3 @@
-import { DeviceMenu } from "../devices/DeviceMenu";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -161,7 +160,6 @@ export default function ActivityPage() {
               ))}
             </div>
           )}
-          <DeviceMenu />
         </div>
       </header>
 

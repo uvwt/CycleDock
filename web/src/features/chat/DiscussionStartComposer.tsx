@@ -1,6 +1,6 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import type { DeviceTarget } from "../../shared/api/types";
-import { ComposerInput } from "../../shared/ui/ComposerInput";
+import { ChatInput } from "../../shared/ui/chat";
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -129,16 +129,18 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         event.preventDefault();
         void (pending ? retry() : createAndSend());
       }}
-      className="mx-auto flex items-end rounded-2xl border border-line bg-surface py-1.5 pr-1.5 pl-3 shadow-sm transition-[border-color,box-shadow] focus-within:border-line-strong"
+      className="mx-auto flex items-end gap-2 rounded-2xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-primary/60"
     >
-      <ComposerInput
-        value={value}
-        onChange={setContent}
-        placeholder={placeholder}
-        readOnly={Boolean(pending)}
-      />
+      <div className="flex min-w-0 flex-1 items-end pl-1.5">
+        <ChatInput
+          value={value}
+          onChange={setContent}
+          placeholder={placeholder}
+          readOnly={Boolean(pending)}
+        />
+      </div>
 
-      <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
+      <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
         {pending?.pendingCardID && (
           <button
             type="button"
@@ -156,7 +158,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
           title={pending ? t("重试发送") : t("发送")}
           aria-label={pending ? t("重试发送") : t("发送")}
           disabled={sending || (!pending && !content.trim())}
-          className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground transition hover:bg-action-hover disabled:opacity-30"
+          className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground shadow-sm transition hover:bg-action-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
         >
           {sending ? (
             <LoaderCircle className="size-4 animate-spin" />

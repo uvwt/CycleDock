@@ -307,6 +307,9 @@ func (s *Store) AddAgentComment(
 	if err != nil {
 		return uuid.Nil, false, mapConstraintError(err)
 	}
+	if err := relayVisibleMessage(ctx, tx, workspaceID, cardID, event.ID, content); err != nil {
+		return uuid.Nil, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, false, err
 	}

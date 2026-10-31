@@ -19,7 +19,7 @@ INSERT INTO cards (
     required_confirmations, created_by_source_id
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 `
 
 type CreateCardParams struct {
@@ -70,6 +70,7 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		&i.UpdatedAt,
 		&i.CreateIdempotencyKey,
 		&i.CreateRequestHash,
+		&i.PinnedAt,
 	)
 	return i, err
 }
@@ -77,7 +78,7 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (id, workspace_id, name, description, instructions)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, name, description, instructions, created_at, updated_at
+RETURNING id, workspace_id, name, description, instructions, created_at, updated_at, main_discussion_id
 `
 
 type CreateProjectParams struct {
@@ -105,6 +106,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Instructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.MainDiscussionID,
 	)
 	return i, err
 }
@@ -165,7 +167,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 }
 
 const getCard = `-- name: GetCard :one
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 FROM cards
 WHERE workspace_id = $1 AND id = $2
 `
@@ -195,6 +197,7 @@ func (q *Queries) GetCard(ctx context.Context, arg GetCardParams) (Card, error) 
 		&i.UpdatedAt,
 		&i.CreateIdempotencyKey,
 		&i.CreateRequestHash,
+		&i.PinnedAt,
 	)
 	return i, err
 }

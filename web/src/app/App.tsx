@@ -13,6 +13,7 @@ import { keys, queryClient } from "./query";
 import { ErrorView, Spinner } from "../shared/ui/components";
 import { NotificationPermissionPrompt } from "../shared/realtime/NotificationPermissionPrompt";
 import { useCardNotifications } from "../shared/realtime/useCardNotifications";
+import { loadPushPublicKey } from "../shared/realtime/notifications";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
 import { ProjectProvider } from "./ProjectContext";
@@ -24,6 +25,9 @@ const PlanPage = lazy(() => import("../features/plans/PlanPage"));
 const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
 const CardPage = lazy(() => import("../features/cards/CardPage"));
 const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
+const NexusDockPage = lazy(
+  () => import("../features/nexusdock/NexusDockPage"),
+);
 
 function Authenticated() {
   const { t } = useTranslation();
@@ -31,6 +35,9 @@ function Authenticated() {
   const location = useLocation();
   const navigate = useNavigate();
   useCardNotifications(me.data?.workspace.id || "");
+  useEffect(() => {
+    if (me.data) void loadPushPublicKey().catch(() => undefined);
+  }, [me.data]);
   useEffect(() => {
     if (!me.data) return;
     const params = new URLSearchParams(location.search);
@@ -42,13 +49,13 @@ function Authenticated() {
     } else if (connection === "nexusdock-invalid-state") {
       toast.warning("设备授权已过期或重复使用，请重新发起授权。");
     } else if (connection === "nexusdock-denied") {
-      toast.info("已取消 NexusDock 设备授权，可随时在设置中重新连接。");
+      toast.info("已取消 NexusDock 设备授权，可随时在 NexusDock 页面中重新连接。");
     } else if (model || connection) {
       toast.warning("授权未完成，请检查连接状态");
     }
     void queryClient.invalidateQueries({ queryKey: keys.auth });
     void queryClient.invalidateQueries({ queryKey: keys.nexus });
-    navigate("/settings/" + (connection ? "nexusdock" : "models"), {
+    navigate(connection ? "/nexusdock" : "/settings/models", {
       replace: true,
     });
   }, [me.data, location.search, navigate]);
@@ -89,6 +96,7 @@ function Authenticated() {
               <Route path="/plans/:projectID/:cardID" element={<CardPage />} />
               <Route path="/activity" element={<ActivityPage />} />
               <Route path="/activity/:projectID" element={<ActivityPage />} />
+              <Route path="/nexusdock" element={<NexusDockPage />} />
               <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
               <Route
                 path="/settings/*"

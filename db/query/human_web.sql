@@ -31,7 +31,8 @@ ORDER BY created_at, id;
 SELECT
     c.*,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
-    current_attempt.status AS current_attempt_status
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT e.checkin_status
@@ -46,9 +47,17 @@ LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
-ORDER BY c.created_at, c.id;
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
 
 -- name: ListProjectSchedules :many
 SELECT
@@ -264,3 +273,11 @@ SELECT EXISTS (
       AND card_id = sqlc.arg(card_id)
       AND schedule_id = sqlc.arg(schedule_id)::uuid
 );
+
+-- name: SetCardPinned :one
+UPDATE cards
+SET pinned_at = sqlc.arg(pinned_at),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;

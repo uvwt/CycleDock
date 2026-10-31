@@ -39,6 +39,8 @@ export type Card = {
   source_discussion_id?: string;
   health?: string;
   current_attempt_status?: string;
+  latest_attempt_status?: string;
+  pinned_at?: string;
   created_at: string;
   updated_at: string;
 };
@@ -55,7 +57,8 @@ export type TimelineEvent = {
     | "checkin"
     | "confirm"
     | "reject"
-    | "status_change";
+    | "status_change"
+    | "notice";
   actor_kind: string;
   actor_name: string;
   content: string;
@@ -211,6 +214,36 @@ export type NexusDevice = {
   os: string;
   arch: string;
   agent_version: string;
+};
+export type DeviceSkill = {
+  name: string;
+  description: string;
+  source_type?: string;
+};
+export type DeviceDynamicMCP = {
+  name: string;
+  display_name?: string;
+  description?: string;
+  status?: string;
+  tool_count?: number;
+  source_type?: string;
+};
+export type NexusFleetDevice = {
+  id: string;
+  name: string;
+  online: boolean;
+  os?: string;
+  arch?: string;
+  agent_version?: string;
+  capabilities?: string[];
+  skills: DeviceSkill[];
+  dynamic_mcp: DeviceDynamicMCP[];
+  error?: string;
+};
+export type NexusFleetResponse = {
+  available: boolean;
+  connected: boolean;
+  devices: NexusFleetDevice[];
 };
 export type NexusDevices = {
   available: boolean;

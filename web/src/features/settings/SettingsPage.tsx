@@ -1,4 +1,3 @@
-import { DeviceMenu } from "../devices/DeviceMenu";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, NavLink } from "react-router-dom";
@@ -7,7 +6,6 @@ import {
   UserRound,
   BrainCircuit,
   Bot,
-  Monitor,
   Plug,
   FolderKanban,
   LogOut,
@@ -32,10 +30,11 @@ import {
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
+import { clearPushSubscription } from "../../shared/realtime/notifications";
 import { NotificationSettings } from "./NotificationSettings";
 import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
-import { MCPSettings, NexusSettings } from "./ConnectionsSettings";
+import { MCPSettings } from "./ConnectionsSettings";
 import type { Project } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { ProjectSwitcher } from "../../shared/ui/ProjectSwitcher";
@@ -58,7 +57,6 @@ const menus = [
   {
     group: "外部连接",
     items: [
-      { id: "nexusdock", title: "NexusDock", icon: Monitor },
       { id: "mcp", title: "MCP 服务", icon: Plug },
     ],
   },
@@ -76,7 +74,10 @@ export default function SettingsPage({ role }: { role: string }) {
   const me = useQuery({ queryKey: keys.me, queryFn: api.me });
   const isOwner = role === "owner";
   const logout = useMutation({
-    mutationFn: api.logout,
+    mutationFn: async () => {
+      await clearPushSubscription();
+      await api.logout();
+    },
     onSuccess: () => {
       queryClient.clear();
       window.location.assign("/");
@@ -114,12 +115,6 @@ export default function SettingsPage({ role }: { role: string }) {
           ))}
         </nav>
         <div className="min-w-0 space-y-5">
-          <div className="mb-5 flex items-center justify-between gap-3 border-b border-line pb-4">
-            <h2 className="text-base font-semibold">
-              {t(current?.title || "常规")}
-            </h2>
-            <DeviceMenu />
-          </div>
           {tab === "general" && (
             <Section
               title={t("显示与偏好")}
@@ -196,7 +191,7 @@ export default function SettingsPage({ role }: { role: string }) {
               </div>
             </Section>
           )}
-          {["models", "agent", "nexusdock", "mcp"].includes(tab) &&
+          {["models", "agent", "mcp"].includes(tab) &&
             !isOwner && (
               <Section title={t("需要所有者权限")}>
                 <p className="text-sm text-muted-foreground">
@@ -206,7 +201,6 @@ export default function SettingsPage({ role }: { role: string }) {
             )}
           {tab === "models" && isOwner && <ModelsSettings />}
           {tab === "agent" && isOwner && <AgentSettings />}
-          {tab === "nexusdock" && isOwner && <NexusSettings />}
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "projects" && <ProjectSettings />}
           {!current && (

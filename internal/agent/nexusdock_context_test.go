@@ -74,7 +74,7 @@ func TestNexusDockConversation_设备和Cloud工具全部通过MCP执行(t *test
 	if err != nil || bootstrapCalls != 1 || names["node_a"] != "RN" || !strings.Contains(bootstrap, "node_a") || strings.Contains(bootstrap, "oauth-token") {
 		t.Fatalf("MCP bootstrap 失败: calls=%d err=%v names=%v context=%s", bootstrapCalls, err, names, bootstrap)
 	}
-	tools, err := buildADKTools(attemptToolRuntime{mcpSessions: sessions, fatal: &attemptToolFatal{}})
+	tools, err := buildADKTools(attemptToolRuntime{mcpSessions: sessions})
 	if err != nil {
 		t.Fatal(err)
 	}

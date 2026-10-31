@@ -69,7 +69,7 @@ func (q *Queries) GetCardSchedule(ctx context.Context, arg GetCardScheduleParams
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, workspace_id, name, description, instructions, created_at, updated_at
+SELECT id, workspace_id, name, description, instructions, created_at, updated_at, main_discussion_id
 FROM projects
 WHERE workspace_id = $1
   AND id = $2
@@ -91,6 +91,7 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 		&i.Instructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.MainDiscussionID,
 	)
 	return i, err
 }
@@ -443,9 +444,10 @@ func (q *Queries) ListProjectActivity(ctx context.Context, arg ListProjectActivi
 
 const listProjectCardSummaries = `-- name: ListProjectCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
-    current_attempt.status AS current_attempt_status
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT e.checkin_status
@@ -460,9 +462,17 @@ LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
 WHERE c.workspace_id = $1
   AND c.project_id = $2
-ORDER BY c.created_at, c.id
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
 `
 
 type ListProjectCardSummariesParams struct {
@@ -487,8 +497,10 @@ type ListProjectCardSummariesRow struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
+	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	Health                string             `json:"health"`
 	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus   string             `json:"latest_attempt_status"`
 }
 
 func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectCardSummariesParams) ([]ListProjectCardSummariesRow, error) {
@@ -517,8 +529,10 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.UpdatedAt,
 			&i.CreateIdempotencyKey,
 			&i.CreateRequestHash,
+			&i.PinnedAt,
 			&i.Health,
 			&i.CurrentAttemptStatus,
+			&i.LatestAttemptStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -531,7 +545,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 }
 
 const listProjectCards = `-- name: ListProjectCards :many
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 FROM cards
 WHERE workspace_id = $1
   AND project_id = $2
@@ -569,6 +583,7 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 			&i.UpdatedAt,
 			&i.CreateIdempotencyKey,
 			&i.CreateRequestHash,
+			&i.PinnedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -676,7 +691,7 @@ func (q *Queries) ListProjectSchedules(ctx context.Context, arg ListProjectSched
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, workspace_id, name, description, instructions, created_at, updated_at
+SELECT id, workspace_id, name, description, instructions, created_at, updated_at, main_discussion_id
 FROM projects
 WHERE workspace_id = $1
 ORDER BY created_at, id
@@ -699,6 +714,7 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 			&i.Instructions,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.MainDiscussionID,
 		); err != nil {
 			return nil, err
 		}
@@ -731,6 +747,46 @@ func (q *Queries) ScheduleHasTurns(ctx context.Context, arg ScheduleHasTurnsPara
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const setCardPinned = `-- name: SetCardPinned :one
+UPDATE cards
+SET pinned_at = $1,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND id = $3
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
+`
+
+type SetCardPinnedParams struct {
+	PinnedAt    pgtype.Timestamptz `json:"pinned_at"`
+	WorkspaceID uuid.UUID          `json:"workspace_id"`
+	ID          uuid.UUID          `json:"id"`
+}
+
+func (q *Queries) SetCardPinned(ctx context.Context, arg SetCardPinnedParams) (Card, error) {
+	row := q.db.QueryRow(ctx, setCardPinned, arg.PinnedAt, arg.WorkspaceID, arg.ID)
+	var i Card
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Description,
+		&i.DiscussionState,
+		&i.TodoState,
+		&i.OngoingState,
+		&i.SourceDiscussionID,
+		&i.RequiredConfirmations,
+		&i.CreatedBySourceID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CreateIdempotencyKey,
+		&i.CreateRequestHash,
+		&i.PinnedAt,
+	)
+	return i, err
 }
 
 const updateCardSchedule = `-- name: UpdateCardSchedule :execrows
@@ -787,7 +843,7 @@ SET title = $1,
     updated_at = now()
 WHERE workspace_id = $3
   AND id = $4
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at
 `
 
 type UpdateCardTextParams struct {
@@ -822,6 +878,7 @@ func (q *Queries) UpdateCardText(ctx context.Context, arg UpdateCardTextParams) 
 		&i.UpdatedAt,
 		&i.CreateIdempotencyKey,
 		&i.CreateRequestHash,
+		&i.PinnedAt,
 	)
 	return i, err
 }
@@ -834,7 +891,7 @@ SET name = $1,
     updated_at = now()
 WHERE workspace_id = $4
   AND id = $5
-RETURNING id, workspace_id, name, description, instructions, created_at, updated_at
+RETURNING id, workspace_id, name, description, instructions, created_at, updated_at, main_discussion_id
 `
 
 type UpdateProjectParams struct {
@@ -862,6 +919,7 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.Instructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.MainDiscussionID,
 	)
 	return i, err
 }

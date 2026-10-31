@@ -115,6 +115,9 @@ func (s *Store) ArchiveDiscussion(
 	if kind != string(domain.CardKindDiscussion) {
 		return fmt.Errorf("%w: discussion card required", domain.ErrInvalidTransition)
 	}
+	if err := rejectMainDiscussionMutation(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
 	if state == string(domain.DiscussionStateArchived) {
 		return tx.Commit(ctx)
 	}
@@ -203,6 +206,9 @@ func (s *Store) DeleteDiscussion(
 		return err
 	}
 	if err := requireHumanSource(ctx, tx, workspaceID, actorSourceID); err != nil {
+		return err
+	}
+	if err := rejectMainDiscussionMutation(ctx, tx, workspaceID, cardID); err != nil {
 		return err
 	}
 	command, err := tx.Exec(ctx, `

@@ -39,7 +39,7 @@ make migrate
 
 模型 API Key 等可按需加入 .env.local；该文件已被 Git 忽略。
 如需订阅模型账号或带 Token 的 MCP，分别配置 CYCLEDOCK_MODEL_SECRET_KEY 和 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY，
-每个密钥独立使用 `openssl rand -base64 32` 生成并持久保留。完整变量说明见 .env.example 与 install.md。
+每个密钥独立使用 `openssl rand -base64 32` 生成并持久保留。关闭页面后的通知另需 VAPID 密钥，见 install.md。完整变量说明见 .env.example 与 install.md。
 日常开发不需要设置 WEB_DIR，也不需要执行前端 build；生产构建仍按 Dockerfile 执行。
 
 ## 1. 当前目标

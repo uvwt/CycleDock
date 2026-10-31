@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 
 export function RichText({
   content,
-  className = "text-base",
+  className = "text-[15px] leading-relaxed",
 }: {
   content: string;
   className?: string;
@@ -18,6 +18,11 @@ export function RichText({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          blockquote: ({ children }) => (
+            <div className="my-2 flex overflow-hidden rounded-lg border-l-3 border-primary bg-surface/80 dark:bg-surface/50 px-3 py-1.5 text-xs text-muted-foreground shadow-2xs">
+              <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
+            </div>
+          ),
           pre: ({ children }) => (
             <div className="relative">
               <button
