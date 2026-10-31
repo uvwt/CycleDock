@@ -49,8 +49,10 @@ func TestRetryableModelRouteErrorClassification(t *testing.T) {
 		want bool
 	}{
 		{name: "rate limit", err: &modelclient.APIError{StatusCode: 429}, want: true},
+		{name: "provider payment or quota", err: &modelclient.APIError{StatusCode: 402}, want: true},
 		{name: "provider unavailable", err: &modelclient.APIError{StatusCode: 503}, want: true},
 		{name: "bad request", err: &modelclient.APIError{StatusCode: 400}, want: false},
+		{name: "task error", err: domain.ErrInvalidTransition, want: false},
 		{name: "model auth unavailable", err: modelauth.ErrUnavailable, want: true},
 		{name: "reauth", err: modelauth.ErrReauthRequired, want: true},
 		{name: "malformed response", err: modelclient.ErrMalformedResponse, want: true},
