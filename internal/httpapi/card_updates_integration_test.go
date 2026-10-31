@@ -191,7 +191,8 @@ func TestWorkspaceCardStreamDeliversUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dataStore.CreateDiscussion(ctx, other.ID, otherProject.ID, otherSource.ID); err != nil {
+	otherCard, err := dataStore.CreateDiscussion(ctx, other.ID, otherProject.ID, otherSource.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(handler)
@@ -223,10 +224,23 @@ func TestWorkspaceCardStreamDeliversUpdates(t *testing.T) {
 				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &updates); err != nil {
 					t.Fatal(err)
 				}
-				if len(updates) != 1 || updates[0].ID != card.ID.String() {
-					t.Fatalf("SSE scope: %+v", updates)
+				var selected *cardUpdate
+				for i := range updates {
+					if updates[i].ID == otherCard.ID.String() || updates[i].ProjectID != project.ID.String() {
+						t.Fatalf("SSE leaked another workspace: %+v", updates)
+					}
+					if updates[i].ID == card.ID.String() {
+						if selected != nil {
+							t.Fatalf("SSE returned the same Card twice: %+v", updates)
+						}
+						selected = &updates[i]
+					}
 				}
-				return updates
+				if selected == nil {
+					t.Fatalf("SSE did not contain the target Card: %+v", updates)
+				}
+				// 当前项目可能包含自动创建的主聊天，不应以 Card 总数判断租户隔离。
+				return []cardUpdate{*selected}
 			}
 		}
 	}

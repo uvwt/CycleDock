@@ -9,6 +9,57 @@ type GetCardInput struct {
 	EventLimit int32  `json:"event_limit,omitempty" jsonschema:"Recent durable timeline events to return, 1-100; default 50"`
 }
 
+type ListSchedulesInput struct {
+	CardID string `json:"card_id" jsonschema:"Ongoing Card UUID"`
+}
+
+type ScheduleRuleInput struct {
+	Frequency  string `json:"frequency" jsonschema:"daily, weekly, or monthly"`
+	DayOfWeek  *int   `json:"day_of_week,omitempty" jsonschema:"Required for weekly; Sunday=0 through Saturday=6"`
+	DayOfMonth *int   `json:"day_of_month,omitempty" jsonschema:"Required for monthly; day 1 through 28"`
+	Hour       int    `json:"hour" jsonschema:"Local hour 0 through 23"`
+	Minute     int    `json:"minute" jsonschema:"Local minute 0 through 59"`
+	Timezone   string `json:"timezone" jsonschema:"IANA timezone, e.g. Asia/Shanghai; never a UTC offset"`
+}
+
+type CreateScheduleInput struct {
+	CardID string            `json:"card_id" jsonschema:"Ongoing Card UUID"`
+	Rule   ScheduleRuleInput `json:"rule" jsonschema:"Full recurring schedule rule"`
+}
+
+type UpdateScheduleInput struct {
+	CardID     string            `json:"card_id" jsonschema:"Ongoing Card UUID"`
+	ScheduleID string            `json:"schedule_id" jsonschema:"Schedule UUID from list_schedules"`
+	Rule       ScheduleRuleInput `json:"rule" jsonschema:"Full rule from list_schedules, including unchanged fields"`
+	Enabled    bool              `json:"enabled" jsonschema:"Whether the schedule should trigger; false pauses without deleting history"`
+}
+
+type DeleteScheduleInput struct {
+	CardID     string `json:"card_id" jsonschema:"Ongoing Card UUID"`
+	ScheduleID string `json:"schedule_id" jsonschema:"Schedule UUID from list_schedules"`
+}
+
+type ScheduleView struct {
+	ID              string            `json:"id"`
+	CardID          string            `json:"card_id"`
+	Rule            ScheduleRuleInput `json:"rule"`
+	Enabled         bool              `json:"enabled"`
+	NextTriggerAt   string            `json:"next_trigger_at"`
+	LastTriggeredAt string            `json:"last_triggered_at,omitempty"`
+}
+
+type ListSchedulesOutput struct {
+	Schedules []ScheduleView `json:"schedules"`
+}
+
+type ScheduleOutput struct {
+	Schedule ScheduleView `json:"schedule"`
+}
+
+type DeleteScheduleOutput struct {
+	Deleted bool `json:"deleted"`
+}
+
 type CreateDiscussionInput struct {
 	ProjectID      string `json:"project_id" jsonschema:"Project UUID"`
 	IdempotencyKey string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`

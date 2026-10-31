@@ -87,6 +87,8 @@ Ongoing lifecycle is `Active / Paused / Archived`. Health comes from the latest 
 
 CycleDock Ongoing schedules create Schedule Turns; they do not directly execute a model.
 
+Use list_schedules(card_id) to inspect existing times, then create_schedule(card_id, rule) to add one or update_schedule(card_id, schedule_id, rule, enabled) to change/disable it. Use delete_schedule only before any Turn history exists; otherwise disable it. A rule contains daily/weekly/monthly frequency, local hour/minute and IANA timezone. Weekly rules require day_of_week (Sunday=0); monthly rules require day_of_month (1-28). Updates supply the complete rule and an explicit enabled value. Create is not retry-idempotent: if the reply is lost, list schedules before deciding whether to retry.
+
 Before adding external recurring automation, inspect the Card's `pending_turns` and `current_attempt` to avoid duplicate work. External agents claim Schedule Turns with `claim_attempt` like any other pending Turn.
 
 ## Tool reference

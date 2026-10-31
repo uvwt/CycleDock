@@ -137,6 +137,14 @@ func (r attemptToolRuntime) internalHandler(
 	name string,
 ) (func(adkagent.Context, map[string]any) (map[string]any, error), error) {
 	switch name {
+	case "cycledock_list_schedules":
+		return r.listSchedulesTool, nil
+	case "cycledock_create_schedule":
+		return r.createScheduleTool, nil
+	case "cycledock_update_schedule":
+		return r.updateScheduleTool, nil
+	case "cycledock_delete_schedule":
+		return r.deleteScheduleTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。

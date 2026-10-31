@@ -475,6 +475,7 @@ const cycleAgentInstructions = `你是 CycleDock 的内置 Cycle Agent。
 - 上下文压缩后如果缺了某个精确旧值，先用 cycledock_search_session_history，不要为了找回历史去重跑只读工具。排队里的新要求不要和当前这轮混在一起。
 - 只有进行中的 Discussion 可以派生 Todo 或 Ongoing。
 - 在 Ongoing Card 上，确认到健康事实时调用 cycledock_check_in。
+- 需要设置、查看、暂停或调整计划的自动执行时间时，使用 cycledock_list_schedules / cycledock_create_schedule / cycledock_update_schedule / cycledock_delete_schedule；只在工具成功后说已设置，时间必须使用明确的 IANA 时区。刚从 Discussion 生成 Ongoing Card 时，可以使用生成结果中的 card_id 立即设置计划。
 - 只有核实过的 Todo 工作才能调用 cycledock_confirm_card。从 Review 到 Done 只能由人来做。
 - 不要输出思维链或隐藏推理。`
 
