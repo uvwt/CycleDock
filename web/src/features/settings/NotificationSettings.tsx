@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button, Field } from "../../shared/ui/components";
@@ -6,7 +6,6 @@ import {
   disableNotifications,
   enableNotifications,
   homeScreenRequired,
-  loadPushPublicKey,
   notificationsSupported,
   useNotificationsEnabled,
 } from "../../shared/realtime/notifications";
@@ -18,15 +17,8 @@ export function NotificationSettings() {
   const [permission, setPermission] = useState(() =>
     notificationsSupported() ? Notification.permission : "denied",
   );
-  const [pushConfigured, setPushConfigured] = useState(false);
   const supported = notificationsSupported();
   const needsHomeScreen = supported && homeScreenRequired();
-  useEffect(() => {
-    if (!supported) return;
-    void loadPushPublicKey()
-      .then((key) => setPushConfigured(key !== ""))
-      .catch(() => setPushConfigured(false));
-  }, [supported]);
   async function toggle() {
     setPending(true);
     try {
@@ -46,23 +38,11 @@ export function NotificationSettings() {
   return (
     <Field label={t("浏览器通知")}>
       <div className="space-y-2">
-        <p className="text-sm text-muted-foreground">
-          {t(
-            pushConfigured
-              ? "切到后台、离开当前卡片，或关闭页面后，有新消息时通知。"
-              : "切到后台或离开当前卡片后，有新消息时通知。网页需保持打开。",
-          )}
-        </p>
         {needsHomeScreen && (
           <p className="text-sm text-muted-foreground">
             {t(
               "iPhone 和 iPad 需要先通过分享菜单把 CycleDock 添加到主屏幕，再用主屏幕图标打开并开启通知。Safari 标签页不能接收推送。",
             )}
-          </p>
-        )}
-        {supported && !pushConfigured && !needsHomeScreen && (
-          <p className="text-sm text-muted-foreground">
-            {t("关闭页面后的推送尚未配置，当前只在网页打开时通知。")}
           </p>
         )}
         <Button

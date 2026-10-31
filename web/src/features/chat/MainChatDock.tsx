@@ -36,10 +36,24 @@ export function MainChatDock() {
   const navigate = useNavigate();
   const { projectID } = useProject();
   const { target } = useDeviceSelection();
-  const focused = /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(
-    location.pathname,
-  );
-  const hidden = focused || location.pathname.startsWith("/chat");
+
+  const main = useQuery({
+    queryKey: keys.mainDiscussion(projectID),
+    queryFn: () => api.mainDiscussion(projectID),
+    enabled: Boolean(projectID),
+  });
+  const cardID = main.data?.id || "";
+
+  // 仅在当前主区域正处于主聊天自身详情页时隐藏，避免在主聊天全屏视图中重叠小浮窗；
+  // 在聊天首页（/chat）、子讨论聊天、看板与计划详情等所有页面均保持可用
+  const isViewingMainDiscussion =
+    Boolean(cardID) &&
+    (location.pathname === `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}` ||
+      location.pathname === `/chat/${projectID}/${cardID}` ||
+      location.pathname.endsWith(`/${cardID}`) ||
+      location.pathname.endsWith(`/${cardID}/`));
+  const hidden = isViewingMainDiscussion;
+
   const [open, setOpen] = useState(false);
   const [peek, setPeek] = useState("");
   const [unread, setUnread] = useState(0);
@@ -48,13 +62,6 @@ export function MainChatDock() {
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
-
-  const main = useQuery({
-    queryKey: keys.mainDiscussion(projectID),
-    queryFn: () => api.mainDiscussion(projectID),
-    enabled: Boolean(projectID),
-  });
-  const cardID = main.data?.id || "";
   const detail = useQuery({
     queryKey: keys.card(cardID),
     queryFn: () => api.card(cardID),

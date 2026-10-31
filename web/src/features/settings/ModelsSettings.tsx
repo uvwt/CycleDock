@@ -37,13 +37,13 @@ import type {
 import { keys, queryClient } from "../../app/query";
 import {
   Button,
-  Checkbox,
   ErrorView,
   Field,
   Modal,
   Section,
   Select,
   Spinner,
+  TextArea,
   TextInput,
 } from "../../shared/ui/components";
 
@@ -205,15 +205,6 @@ function SortableRouteEditor({
             <TestTube2 className="size-3.5" />
             测试此 Route
           </Button>
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary-foreground">
-            <Checkbox
-              checked={route.enabled}
-              onCheckedChange={(checked) =>
-                onChange({ ...route, enabled: Boolean(checked) })
-              }
-            />
-            启用
-          </label>
           <Button
             aria-label="删除模型 Route"
             onClick={onRemove}
@@ -461,12 +452,13 @@ export function ModelsSettings() {
       const { configured: unused, source_id: unusedSource, ...input } = draft;
       void unused;
       void unusedSource;
-      return api.saveAgent(input);
+      const routes = (input.routes || []).map((r) => ({ ...r, enabled: true }));
+      return api.saveAgent({ ...input, routes });
     },
     onSuccess: (result) => {
       queryClient.setQueryData(keys.agent, result);
       setDraft(result);
-      toast.success("模型路由已保存");
+      toast.success("配置已保存");
     },
     onError: (error) => toast.error(String(error)),
   });
@@ -920,6 +912,36 @@ export function ModelsSettings() {
           >
             保存模型路由
           </Button>
+        </div>
+      </Section>
+
+      <Section
+        title="Agent全局指令"
+        description="整个工作空间的默认全局指令，与单个项目的指令分开保存，对所有 Agent 会话生效。"
+      >
+        <div className="space-y-4">
+          <Field
+            label="Workspace Agent Instructions"
+            hint="设定工作区内 Agent 的通用行为准则、协作风格或基础角色上下文。"
+          >
+            <TextArea
+              rows={8}
+              value={draft.system_instructions}
+              onChange={(e) =>
+                setDraft({ ...draft, system_instructions: e.target.value })
+              }
+              placeholder="输入工作区 Agent 全局指令，例如设定 Agent 的行为准则、回答语言风格或上下文规则…"
+            />
+          </Field>
+          <div className="flex justify-start">
+            <Button
+              variant="primary"
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+            >
+              保存全局指令
+            </Button>
+          </div>
         </div>
       </Section>
 

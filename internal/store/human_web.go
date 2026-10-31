@@ -116,6 +116,14 @@ func (s *Store) UpdateCardText(
 	workspaceID, cardID uuid.UUID,
 	title, description string,
 ) (db.Card, error) {
+	// 主讨论标题与描述固定，禁止修改信息。
+	isMain, err := isMainDiscussion(ctx, s.pool, workspaceID, cardID)
+	if err != nil {
+		return db.Card{}, err
+	}
+	if isMain {
+		return db.Card{}, fmt.Errorf("%w: main discussion text cannot be modified", domain.ErrConflict)
+	}
 	card, err := s.queries.UpdateCardText(ctx, db.UpdateCardTextParams{
 		Title:       title,
 		Description: description,
@@ -133,6 +141,16 @@ func (s *Store) SetCardPinned(
 	workspaceID, cardID uuid.UUID,
 	pinned bool,
 ) (db.Card, error) {
+	// 主讨论始终置顶，禁止取消置顶。
+	if !pinned {
+		isMain, err := isMainDiscussion(ctx, s.pool, workspaceID, cardID)
+		if err != nil {
+			return db.Card{}, err
+		}
+		if isMain {
+			return db.Card{}, fmt.Errorf("%w: main discussion is always pinned", domain.ErrConflict)
+		}
+	}
 	var pinnedAt pgtype.Timestamptz
 	if pinned {
 		pinnedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}

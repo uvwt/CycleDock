@@ -71,5 +71,24 @@ func TestCardPin_置顶与取消置顶(t *testing.T) {
 		t.Fatalf("取消置顶后 pinned_at 必须为空: %+v", unpinnedCard.PinnedAt)
 	}
 
+	// 4. 主讨论始终置顶，禁止取消置顶
+	mainDiscussion, _, err := dataStore.EnsureMainDiscussion(ctx, workspaceID, project.ID, sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpinMainRec := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+mainDiscussion.ID.String()+"/pin", map[string]any{"pinned": false}, cookie, nil)
+	if unpinMainRec.Code != http.StatusConflict {
+		t.Fatalf("主讨论取消置顶应返回 409 Conflict，实际: %d %s", unpinMainRec.Code, unpinMainRec.Body.String())
+	}
+
+	// 5. 主讨论禁止编辑标题与信息
+	updateMainRec := doJSON(t, handler, http.MethodPatch, "/api/v1/cards/"+mainDiscussion.ID.String(), map[string]any{
+		"title":       "修改主聊天标题",
+		"description": "修改主聊天描述",
+	}, cookie, nil)
+	if updateMainRec.Code != http.StatusConflict {
+		t.Fatalf("主讨论修改文本信息应返回 409 Conflict，实际: %d %s", updateMainRec.Code, updateMainRec.Body.String())
+	}
+
 	_ = pool
 }

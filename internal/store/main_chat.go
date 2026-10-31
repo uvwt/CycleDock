@@ -247,17 +247,23 @@ func ensureCycleAgentSource(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUI
 	return id, err
 }
 
-func rejectMainDiscussionMutation(ctx context.Context, tx pgx.Tx, workspaceID, cardID uuid.UUID) error {
-	var kept bool
-	if err := tx.QueryRow(ctx, `
+func isMainDiscussion(ctx context.Context, q db.DBTX, workspaceID, cardID uuid.UUID) (bool, error) {
+	var isMain bool
+	err := q.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM projects
 			WHERE workspace_id = $1 AND main_discussion_id = $2
 		)
-	`, workspaceID, cardID).Scan(&kept); err != nil {
+	`, workspaceID, cardID).Scan(&isMain)
+	return isMain, err
+}
+
+func rejectMainDiscussionMutation(ctx context.Context, q db.DBTX, workspaceID, cardID uuid.UUID) error {
+	isMain, err := isMainDiscussion(ctx, q, workspaceID, cardID)
+	if err != nil {
 		return err
 	}
-	if kept {
+	if isMain {
 		return fmt.Errorf("%w: main discussion stays with the project", domain.ErrConflict)
 	}
 	return nil

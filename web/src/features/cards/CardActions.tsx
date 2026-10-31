@@ -102,6 +102,11 @@ export function CardActions({
     setEditOpen(true);
   }
 
+  // 主讨论不允许编辑信息、置顶切换、归档或删除，无需渲染空操作菜单
+  if (preserve && card.kind === "discussion") {
+    return null;
+  }
+
   return (
     <>
       <Menu
@@ -125,27 +130,32 @@ export function CardActions({
             任务详情
           </MenuItem>
         )}
-        <MenuItem onSelect={openEditor}>
-          <Pencil className="size-4" />
-          编辑信息
-        </MenuItem>
+        {!preserve && (
+          <MenuItem onSelect={openEditor}>
+            <Pencil className="size-4" />
+            编辑信息
+          </MenuItem>
+        )}
 
-        <MenuItem
-          disabled={togglePin.isPending}
-          onSelect={() => togglePin.mutate(!card.pinned_at)}
-        >
-          {card.pinned_at ? (
-            <>
-              <PinOff className="size-4" />
-              取消置顶
-            </>
-          ) : (
-            <>
-              <Pin className="size-4" />
-              置顶讨论
-            </>
-          )}
-        </MenuItem>
+        {/* 主讨论始终置顶，不提供切换置顶操作 */}
+        {!preserve && (
+          <MenuItem
+            disabled={togglePin.isPending}
+            onSelect={() => togglePin.mutate(!card.pinned_at)}
+          >
+            {card.pinned_at ? (
+              <>
+                <PinOff className="size-4" />
+                取消置顶
+              </>
+            ) : (
+              <>
+                <Pin className="size-4" />
+                置顶讨论
+              </>
+            )}
+          </MenuItem>
+        )}
 
         {card.kind === "discussion" && !preserve && (
           <>

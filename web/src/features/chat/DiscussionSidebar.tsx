@@ -224,72 +224,85 @@ export function DiscussionSidebar({
     >
       {filtered.length ? (
         <div className="space-y-1">
-          {filtered.map((card) => (
-            <ContextSidebarItem
-              key={card.id}
-              active={card.id === activeCardID}
-              onClick={() => handleSelect(card)}
-              icon={
-                <DiscussionStatusDot
-                  status={getDiscussionStatus(
-                    card,
-                    card.id === activeCardID,
-                    activeAttemptStatus,
-                  )}
-                />
-              }
-              title={card.title || t("新讨论")}
-              actions={
-                <div className="flex items-center gap-0.5">
-                  {/* 时间：悬浮时展示，与置顶按钮水平排列不冲突 */}
-                  <span className="mr-0.5 hidden select-none text-[11px] font-normal tabular-nums text-faint group-hover:inline-block group-focus-within:inline-block">
-                    {formatRelativeTime(card.updated_at)}
-                  </span>
+          {filtered.map((card) => {
+            const isMain = card.id === mainDiscussionID;
+            return (
+              <ContextSidebarItem
+                key={card.id}
+                active={card.id === activeCardID}
+                onClick={() => handleSelect(card)}
+                icon={
+                  <DiscussionStatusDot
+                    status={getDiscussionStatus(
+                      card,
+                      card.id === activeCardID,
+                      activeAttemptStatus,
+                    )}
+                  />
+                }
+                title={card.title || t("新讨论")}
+                actions={
+                  <div className="flex items-center gap-0.5">
+                    {/* 时间：悬浮时展示，与置顶按钮水平排列不冲突 */}
+                    <span className="mr-0.5 hidden select-none text-[11px] font-normal tabular-nums text-faint group-hover:inline-block group-focus-within:inline-block">
+                      {formatRelativeTime(card.updated_at)}
+                    </span>
 
-                  {/* 置顶标识与置顶按钮统一在一个位置：置顶时常显（作为标识），未置顶时悬浮显（作为按钮） */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      pinMutation.mutate({
-                        id: card.id,
-                        pinned: !card.pinned_at,
-                      });
-                    }}
-                    title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                    aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                    className={`grid size-6 place-items-center rounded-lg transition-all ${
-                      card.pinned_at
-                        ? "text-primary hover:text-primary/80 hover:bg-muted"
-                        : "hidden text-muted-foreground/60 hover:text-foreground hover:bg-muted group-hover:grid group-focus-within:grid"
-                    }`}
-                  >
-                    <Pin
-                      className={`size-3.5 ${
-                        card.pinned_at ? "fill-primary/20 rotate-45" : ""
-                      }`}
-                    />
-                  </button>
+                    {/* 置顶标识与置顶按钮统一在一个位置：主讨论始终置顶且不可取消；普通讨论置顶时常显，未置顶时悬浮显 */}
+                    {isMain ? (
+                      <span
+                        title={t("主讨论始终置顶")}
+                        aria-label={t("主讨论始终置顶")}
+                        className="grid size-6 place-items-center rounded-lg text-primary select-none cursor-default"
+                      >
+                        <Pin className="size-3.5 fill-primary/20 rotate-45" />
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          pinMutation.mutate({
+                            id: card.id,
+                            pinned: !card.pinned_at,
+                          });
+                        }}
+                        title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
+                        aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
+                        className={`grid size-6 place-items-center rounded-lg transition-all ${
+                          card.pinned_at
+                            ? "text-primary hover:text-primary/80 hover:bg-muted"
+                            : "hidden text-muted-foreground/60 hover:text-foreground hover:bg-muted group-hover:grid group-focus-within:grid"
+                        }`}
+                      >
+                        <Pin
+                          className={`size-3.5 ${
+                            card.pinned_at ? "fill-primary/20 rotate-45" : ""
+                          }`}
+                        />
+                      </button>
+                    )}
 
-                  {/* 更多操作菜单：悬浮时显 */}
-                  <div className="hidden group-hover:block group-focus-within:block has-[[data-state=open]]:block">
-                    <CardActions
-                      card={card}
-                      menuSide="right"
-                      preserve={card.id === mainDiscussionID}
-                      onDeleted={() => {
-                        if (card.id === activeCardID) {
-                          navigate(
-                            `/chat?project=${encodeURIComponent(card.project_id)}`,
-                          );
-                        }
-                      }}
-                    />
+                    {/* 更多操作菜单：悬浮时显 */}
+                    <div className="hidden group-hover:block group-focus-within:block has-[[data-state=open]]:block">
+                      <CardActions
+                        card={card}
+                        menuSide="right"
+                        preserve={isMain}
+                        onDeleted={() => {
+                          if (card.id === activeCardID) {
+                            navigate(
+                              `/chat?project=${encodeURIComponent(card.project_id)}`,
+                            );
+                          }
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
-              }
-            />
-          ))}
+                }
+              />
+            );
+          })}
         </div>
       ) : (
         <div className="px-4 py-10 text-center text-sm text-faint">

@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useLocation, NavLink } from "react-router-dom";
+import { useLocation, NavLink, Navigate } from "react-router-dom";
 import {
   Settings,
   UserRound,
   BrainCircuit,
-  Bot,
   Plug,
   FolderKanban,
   LogOut,
@@ -32,7 +31,6 @@ import {
 } from "../../shared/ui/components";
 import { clearPushSubscription } from "../../shared/realtime/notifications";
 import { NotificationSettings } from "./NotificationSettings";
-import { AgentSettings } from "./AgentSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { MCPSettings } from "./ConnectionsSettings";
 import type { Project } from "../../shared/api/types";
@@ -51,7 +49,6 @@ const menus = [
     group: "AI 配置",
     items: [
       { id: "models", title: "模型服务", icon: BrainCircuit },
-      { id: "agent", title: "Agent 设置", icon: Bot },
     ],
   },
   {
@@ -200,7 +197,7 @@ export default function SettingsPage({ role }: { role: string }) {
               </Section>
             )}
           {tab === "models" && isOwner && <ModelsSettings />}
-          {tab === "agent" && isOwner && <AgentSettings />}
+          {tab === "agent" && <Navigate to="/settings/models" replace />}
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "projects" && <ProjectSettings />}
           {!current && (

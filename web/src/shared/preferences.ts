@@ -119,6 +119,7 @@ const en = {
   新消息: "New message",
   讨论: "Discussion",
   主聊天: "Main chat",
+  主讨论始终置顶: "Main discussion is always pinned",
   打开主聊天: "Open main chat",
   关闭主聊天: "Close main chat",
   在完整页面打开: "Open full page",
