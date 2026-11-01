@@ -24,6 +24,7 @@ export function ProjectSwitcher({
   onCreate,
   onManage,
   compact = false,
+  compactSize = "md",
 }: {
   projects: Project[];
   projectID: string;
@@ -31,6 +32,7 @@ export function ProjectSwitcher({
   onCreate?: () => void;
   onManage?: () => void;
   compact?: boolean;
+  compactSize?: "sm" | "md";
 }) {
   const { t } = useTranslation();
   const current = projects.find((project) => project.id === projectID);
@@ -45,12 +47,16 @@ export function ProjectSwitcher({
           disabled={!projects.length && !onCreate}
           className={
             compact
-              ? "grid size-10 place-items-center rounded-xl text-faint transition hover:bg-canvas hover:text-strong data-[state=open]:bg-muted data-[state=open]:text-heading disabled:opacity-40"
+              ? `${
+                  compactSize === "sm" ? "size-9" : "size-10"
+                } inline-flex shrink-0 items-center justify-center rounded-xl text-faint transition hover:bg-canvas hover:text-strong data-[state=open]:bg-muted data-[state=open]:text-heading disabled:opacity-40`
               : "flex min-h-10 w-full items-center justify-between gap-2.5 rounded-xl border border-line bg-surface px-3 text-left text-sm text-foreground shadow-xs transition hover:border-line-strong hover:bg-canvas data-[state=open]:border-line-strong disabled:opacity-40"
           }
         >
           {compact ? (
-            <FolderKanban className="size-5" />
+            <FolderKanban
+              className={compactSize === "sm" ? "size-[18px]" : "size-5"}
+            />
           ) : (
             <>
               <span className="flex min-w-0 items-center gap-2 truncate font-medium">
@@ -66,7 +72,7 @@ export function ProjectSwitcher({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent
-        side={compact ? "right" : "bottom"}
+        side={compact && compactSize !== "sm" ? "right" : "bottom"}
         align={compact ? "end" : "start"}
         sideOffset={8}
         collisionPadding={12}
