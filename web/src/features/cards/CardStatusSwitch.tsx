@@ -62,7 +62,7 @@ export function CardStatusSwitch({ card }: { card: Card }) {
           type="button"
           aria-label={t("切换任务状态")}
           title={t("切换任务状态")}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface/90 px-2.5 text-xs leading-none font-medium text-foreground shadow-sm backdrop-blur transition hover:border-line-strong hover:bg-muted data-[state=open]:border-line-strong data-[state=open]:bg-muted"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs leading-none font-medium text-foreground shadow-sm transition hover:border-line-strong hover:bg-muted data-[state=open]:border-line-strong data-[state=open]:bg-muted"
         >
           <span
             aria-hidden

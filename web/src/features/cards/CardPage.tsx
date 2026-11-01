@@ -365,7 +365,7 @@ function CardPageContent() {
 
   return (
     <main
-      className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+      className={`h-dvh min-h-0 overflow-hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
     >
       <div
         className={`flex h-full min-h-0 w-full overflow-hidden`}
@@ -377,15 +377,90 @@ function CardPageContent() {
         </div>
 
         <section
-          className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
+          {/* 手机端固定顶部栏：常驻视口顶部，作为独立 Flex 头部不再覆盖裁切下方聊天内容 */}
           <div
-            aria-hidden="true"
             data-mobile-top-surface
-            className={`pointer-events-none fixed inset-x-0 top-0 z-10 h-14 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
-          />
-          {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
-          <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
+            className={`sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          >
+            <div className="flex items-center gap-1.5">
+              <MobileGlobalNavMenu />
+              <button
+                type="button"
+                title={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                aria-label={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                onClick={() => setContextSidebarOpen(true)}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+              >
+                <PanelLeft className="size-4" />
+              </button>
+            </div>
+
+            <div className="relative flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-expanded={infoOpen}
+                aria-label={t("任务详情")}
+                title={t("任务详情")}
+                onClick={() => setInfoOpen((prev) => !prev)}
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-sm transition ${
+                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
+                } ${
+                  infoOpen
+                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
+                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <Info className="size-4 sm:size-3.5" />
+                <span className="hidden sm:inline">{t("任务详情")}</span>
+                {liveTaskTotal > 0 && (
+                  <span className="tabular-nums text-[11px] opacity-80">
+                    {liveTaskCompleted}/{liveTaskTotal}
+                  </span>
+                )}
+              </button>
+              {!isDiscussion && <CardStatusSwitch card={card} />}
+              <CardActions
+                card={card}
+                variant="toolbar"
+                preserve={card.id === mainDiscussion.data?.id}
+                taskDetails={{
+                  detail: detail.data,
+                  projectCards: projectCards.data || [],
+                }}
+                onDeleted={back}
+              />
+
+              {/* 手机端窄屏：点击按钮后直接在右上角按钮下方展开圆角卡片（无叉号、非全高抽屉） */}
+              {infoOpen && (
+                <div className="absolute top-10 right-0 z-30">
+                  <CardHeaderInfoCard
+                    card={card}
+                    detail={detail.data}
+                    projectCards={projectCards.data || []}
+                    task={stream.live?.task}
+                    onSync={sync}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 平板/桌面端：移除整块占位导航栏，操作按钮悬浮在右上角 */}
+          <div className="hidden md:flex absolute top-3 right-3 z-20 max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -423,7 +498,6 @@ function CardPageContent() {
               />
             </div>
 
-            {/* 手机端窄屏：点击按钮后直接在右上角按钮下方展开圆角卡片（无叉号、非全高抽屉） */}
             {infoOpen && (
               <div className="lg:hidden">
                 <CardHeaderInfoCard
@@ -437,9 +511,8 @@ function CardPageContent() {
             )}
           </div>
 
-          {/* 移动端呼出侧边栏悬浮在左上角 */}
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 sm:left-4 lg:hidden">
-            <MobileGlobalNavMenu />
+          {/* 平板端（md 到 lg 之间）呼出侧边栏悬浮在左上角 */}
+          <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
             <button
               type="button"
               title={
