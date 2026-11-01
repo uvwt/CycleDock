@@ -59,7 +59,7 @@ export function MobileGlobalNavMenu() {
           type="button"
           aria-label={t("切换页面")}
           title={t("切换页面")}
-          className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur hover:bg-muted hover:text-foreground"
+          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground md:hidden"
         >
           <Compass className="size-4" />
         </button>

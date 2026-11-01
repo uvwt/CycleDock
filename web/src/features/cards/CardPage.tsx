@@ -25,7 +25,6 @@ import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
-import { ProjectSwitcherWithSettings } from "../projects/ProjectSwitcherWithSettings";
 import { MobileGlobalNavMenu } from "../../shared/ui/MobileGlobalNavMenu";
 
 export default function CardPage() {
@@ -40,7 +39,7 @@ function CardPageContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const listVisible = useContextSidebarVisible();
-  const { projects, projectID: activeProjectID, setProjectID } = useProject();
+  const { projectID: activeProjectID, setProjectID } = useProject();
 
   const detail = useQuery({
     queryKey: keys.card(cardID),
@@ -298,16 +297,6 @@ function CardPageContent() {
     );
   }
 
-  function switchProject(nextProjectID: string) {
-    setProjectID(nextProjectID);
-    setContextSidebarOpen(false);
-    navigate(
-      isDiscussion
-        ? `/chat?project=${encodeURIComponent(nextProjectID)}`
-        : `/${isOngoing ? "plans" : "board"}/${encodeURIComponent(nextProjectID)}`,
-    );
-  }
-
   if (detail.isPending) {
     return (
       <main className="grid h-dvh place-items-center bg-surface">
@@ -389,7 +378,7 @@ function CardPageContent() {
           className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
-          <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-2 sm:right-4 max-w-[calc(100vw-1.5rem)]">
+          <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -397,13 +386,15 @@ function CardPageContent() {
                 aria-label={t("任务详情")}
                 title={t("任务详情")}
                 onClick={() => setInfoOpen((prev) => !prev)}
-                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs shadow-sm backdrop-blur transition ${
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-sm backdrop-blur transition ${
+                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
+                } ${
                   infoOpen
                     ? "border-primary/40 bg-primary/10 text-primary font-medium"
                     : "border-line bg-surface/90 text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
-                <Info className="size-3.5" />
+                <Info className="size-4 sm:size-3.5" />
                 <span className="hidden sm:inline">{t("任务详情")}</span>
                 {liveTaskTotal > 0 && (
                   <span className="tabular-nums text-[11px] opacity-80">
@@ -411,10 +402,11 @@ function CardPageContent() {
                   </span>
                 )}
               </button>
-              <DeviceMenu />
+              <DeviceMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
               <CardActions
                 card={card}
+                variant="toolbar"
                 preserve={card.id === mainDiscussion.data?.id}
                 taskDetails={{
                   detail: detail.data,
@@ -439,7 +431,7 @@ function CardPageContent() {
           </div>
 
           {/* 移动端呼出侧边栏悬浮在左上角 */}
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-2 lg:hidden">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 sm:left-4 lg:hidden">
             <MobileGlobalNavMenu />
             <button
               type="button"
@@ -458,21 +450,10 @@ function CardPageContent() {
                     : t("打开工作列表")
               }
               onClick={() => setContextSidebarOpen(true)}
-              className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur hover:bg-muted"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground"
             >
               <PanelLeft className="size-4" />
             </button>
-            <ProjectSwitcherWithSettings
-              compact
-              projects={projects}
-              projectID={actualProjectID}
-              onChange={switchProject}
-              onCreate={() =>
-                navigate(
-                  `/board/${encodeURIComponent(actualProjectID)}?new=project`,
-                )
-              }
-            />
           </div>
 
           <div className="flex flex-1 min-h-0 min-w-0">

@@ -1040,6 +1040,42 @@ class CycleDockSmoke(unittest.TestCase):
             "dark",
         )
 
+    def test_mobile_topbar_buttons_aligned_and_simplified(self):
+        self.page.set_viewport_size({"width": 375, "height": 812})
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        self.page.get_by_role("button", name="切换页面").wait_for()
+
+        # 手机端卡片页顶部不展示项目切换和设备在线列表按钮
+        self.assertEqual(
+            self.page.locator('button[aria-label="选择项目"]:visible').count(), 0
+        )
+        self.assertEqual(
+            self.page.locator('button[aria-label="设备在线列表"]:visible').count(), 0
+        )
+
+        # 左右两侧保留的顶部按钮高度必须一致（32px）且处于同一条水平中心线上
+        labels = ["切换页面", "打开工作列表", "任务详情", "切换任务状态", "更多操作"]
+        boxes = {}
+        for label in labels:
+            btn = self.page.locator(
+                f'main section > div.absolute button[aria-label="{label}"]:visible'
+            )
+            self.assertEqual(btn.count(), 1, f"expected visible top button: {label}")
+            boxes[label] = btn.bounding_box()
+
+        first = boxes[labels[0]]
+        first_center = first["y"] + first["height"] / 2
+        for label, box in boxes.items():
+            self.assertAlmostEqual(
+                box["height"], 32, delta=0.5, msg=f"{label} height={box['height']}"
+            )
+            self.assertAlmostEqual(
+                box["y"] + box["height"] / 2,
+                first_center,
+                delta=0.5,
+                msg=f"{label} vertical center misaligned: {box}",
+            )
+
     def test_agent_settings_hide_runtime_controls(self):
         self.page.goto(BASE + "/settings/models")
         self.page.get_by_text("Agent全局指令", exact=True).wait_for()

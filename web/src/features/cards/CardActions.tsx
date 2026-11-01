@@ -33,6 +33,7 @@ export function CardActions({
   onDeleted,
   menuSide = "bottom",
   preserve = false,
+  variant = "inline",
 }: {
   card: Card;
   taskDetails?: { detail: CardDetail; projectCards: Card[] };
@@ -40,6 +41,7 @@ export function CardActions({
   menuSide?: "bottom" | "right";
   // 主聊天跟着项目走，不能从讨论列表里归档或删除。
   preserve?: boolean;
+  variant?: "inline" | "toolbar";
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -120,15 +122,26 @@ export function CardActions({
         side={menuSide}
         align={menuSide === "right" ? "start" : "end"}
         trigger={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            title="更多操作"
-            aria-label="更多操作"
-            className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
-          >
-            <MoreHorizontal className="size-4" />
-          </Button>
+          variant === "toolbar" ? (
+            <button
+              type="button"
+              title="更多操作"
+              aria-label="更多操作"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+            >
+              <MoreHorizontal className="size-4" />
+            </button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              title="更多操作"
+              aria-label="更多操作"
+              className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          )
         }
       >
         {taskDetails && card.kind !== "discussion" && (
