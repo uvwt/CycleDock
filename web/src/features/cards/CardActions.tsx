@@ -214,6 +214,7 @@ export function CardActions({
         <Modal
           open={detailsOpen}
           onOpenChange={setDetailsOpen}
+          preventOutsideClose
           title="任务详情"
           description="查看任务目标、来源关系，以及计划的健康状态和定时日程。"
         >
