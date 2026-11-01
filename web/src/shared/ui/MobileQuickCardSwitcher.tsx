@@ -120,13 +120,7 @@ export function MobileQuickCardSwitcher({
           return;
         }
       }
-      if (reviewCards.length > 0) {
-        setActiveTab("review");
-      } else if (workingCards.length > 0) {
-        setActiveTab("working");
-      } else {
-        setActiveTab("discussion");
-      }
+      setActiveTab("discussion");
     }
     setOpen(nextOpen);
   };
@@ -163,6 +157,13 @@ export function MobileQuickCardSwitcher({
     colorClasses: string;
   }[] = [
     {
+      id: "discussion",
+      label: t("讨论"),
+      icon: MessageSquare,
+      count: discussionCards.length,
+      colorClasses: "data-[state=active]:text-indigo-600 dark:data-[state=active]:text-indigo-400",
+    },
+    {
       id: "working",
       label: t("进行中"),
       icon: PlayCircle,
@@ -175,13 +176,6 @@ export function MobileQuickCardSwitcher({
       icon: ShieldCheck,
       count: reviewCards.length,
       colorClasses: "data-[state=active]:text-amber-600 dark:data-[state=active]:text-amber-400",
-    },
-    {
-      id: "discussion",
-      label: t("讨论"),
-      icon: MessageSquare,
-      count: discussionCards.length,
-      colorClasses: "data-[state=active]:text-indigo-600 dark:data-[state=active]:text-indigo-400",
     },
     {
       id: "done",
