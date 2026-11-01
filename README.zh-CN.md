@@ -85,7 +85,7 @@ CYCLEDOCK_MODEL_SECRET_KEY=<32字节base64密钥>
 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<32字节base64密钥>
 ```
 
-2. 启动数据库、自动迁移与应用服务（默认自动拉取 `ghcr.io/uvwt/cycledock-oss:latest` 镜像；如需锁定版本可在 `.env` 中设置 `CYCLEDOCK_IMAGE=ghcr.io/uvwt/cycledock-oss:v0.1.0`）：
+2. 启动数据库、自动迁移与应用服务（默认自动拉取 `ghcr.io/uvwt/cycledock:latest` 镜像；如需锁定版本可在 `.env` 中设置 `CYCLEDOCK_IMAGE=ghcr.io/uvwt/cycledock:v0.1.0`）：
 
 ```bash
 docker compose up -d

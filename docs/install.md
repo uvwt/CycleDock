@@ -71,7 +71,7 @@ CYCLEDOCK_VAPID_SUBJECT=mailto:ops@example.com
 
 ## 4. 启动
 
-默认拉取 GHCR 发布的 `ghcr.io/uvwt/cycledock-oss:latest` 镜像（可通过环境变量 `CYCLEDOCK_IMAGE` 指定固定版本 Tag，如 `ghcr.io/uvwt/cycledock-oss:v0.1.0` 或不可变摘要 `ghcr.io/uvwt/cycledock-oss:sha-<commit>`）：
+默认拉取 GHCR 发布的 `ghcr.io/uvwt/cycledock:latest` 镜像（可通过环境变量 `CYCLEDOCK_IMAGE` 指定固定版本 Tag，如 `ghcr.io/uvwt/cycledock:v0.1.0` 或不可变摘要 `ghcr.io/uvwt/cycledock:sha-<commit>`）：
 
 ```bash
 docker compose up -d
