@@ -123,18 +123,32 @@ test("页面上报正在查看时，Worker 把窗口看成隐藏也不通知", a
   assert.equal(w.shown.length, 0);
 });
 
-test("页面关闭后的推送会显示，正在查看时不重复显示", async () => {
+test("Web Push 唤醒时始终展示可见通知，避免 iOS WebKit 因残留查看态吞通知或收回权限", async () => {
   const closed = worker();
   await closed.push(closed.update);
   assert.equal(closed.shown.length, 1);
-  const open = worker();
-  open.windows.push({
+
+  // iOS 锁屏或切主屏幕瞬间，PWA 窗口仍存在且 viewingByClient 可能残留 visible:true；
+  // push 事件必须无条件 showNotification，同时记录 revision 防止回前台后 SSE 重复弹窗。
+  const suspended = worker();
+  suspended.windows.push({
+    id: "ios-pwa",
     url: "https://cycledock.test/chat/project/card",
     focused: false,
-    visibilityState: "visible",
+    visibilityState: "hidden",
   });
-  await open.push(open.update);
-  assert.equal(open.shown.length, 0);
+  await suspended.view({ cardID: "card", visible: true }, "ios-pwa");
+  await suspended.push(suspended.update);
+  assert.equal(suspended.shown.length, 1);
+  await suspended.view({ cardID: "", visible: false }, "ios-pwa");
+  await suspended.send(suspended.update);
+  assert.equal(suspended.shown.length, 1);
+
+  // push 载荷地址异常时回退到同源根路径并照常展示通知。
+  const invalidURL = worker();
+  await invalidURL.push({ ...invalidURL.update, url: "https://external.test/x" });
+  assert.equal(invalidURL.shown.length, 1);
+  assert.equal(invalidURL.shown[0].data.url, "https://cycledock.test/");
 });
 
 test("后台或查看其他卡片时通知，多标签页的同一更新只通知一次", async () => {

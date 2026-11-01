@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { api, APIError } from "../api/client";
 
 const preferenceKey = "cycledock.card-notifications";
+const endpointStorageKey = "cycledock.push-endpoint";
 const changedEvent = "cycledock:notifications-changed";
 
 export function notificationsSupported() {
@@ -36,30 +37,93 @@ export function useNotificationsEnabled() {
   }, enabled);
 }
 
-export async function notificationWorker() {
-  await navigator.serviceWorker.register("/notifications-sw.js");
-  return navigator.serviceWorker.ready;
+let cachedRegistration: ServiceWorkerRegistration | undefined;
+let workerRequest: Promise<ServiceWorkerRegistration> | undefined;
+let cachedPublicKey: string | undefined;
+let pushKeyRequest: Promise<string> | undefined;
+let pushEndpoint = readStoredPushEndpoint();
+
+function readStoredPushEndpoint() {
+  try {
+    return localStorage.getItem(endpointStorageKey) ?? "";
+  } catch {
+    return "";
+  }
 }
 
-let pushKeyRequest: Promise<string> | undefined;
-let pushEndpoint = "";
-
 function rememberPushEndpoint(endpoint: string) {
-  if (endpoint) pushEndpoint = endpoint;
+  if (!endpoint) return;
+  pushEndpoint = endpoint;
+  try {
+    localStorage.setItem(endpointStorageKey, endpoint);
+  } catch {
+    // 隐私模式禁止写入时仍保留内存缓存。
+  }
+}
+
+function forgetPushEndpoint() {
+  pushEndpoint = "";
+  try {
+    localStorage.removeItem(endpointStorageKey);
+  } catch {
+    // 忽略存储清理失败。
+  }
+}
+
+export function notificationWorker() {
+  if (!workerRequest) {
+    workerRequest = navigator.serviceWorker
+      .register("/notifications-sw.js")
+      .then(() => navigator.serviceWorker.ready)
+      .then((registration) => {
+        cachedRegistration = registration;
+        return registration;
+      })
+      .catch((error: unknown) => {
+        workerRequest = undefined;
+        throw error;
+      });
+  }
+  return workerRequest;
 }
 
 export function loadPushPublicKey() {
   if (!pushKeyRequest) {
     pushKeyRequest = api
       .pushConfig()
-      .then((config) => config.public_key)
+      .then((config) => {
+        cachedPublicKey = config.public_key;
+        window.dispatchEvent(new Event(changedEvent));
+        return config.public_key;
+      })
       .catch((error: unknown) => {
         pushKeyRequest = undefined;
-        if (error instanceof APIError && error.status === 401) return "";
+        if (error instanceof APIError && error.status === 401) {
+          cachedPublicKey = "";
+          return "";
+        }
         throw error;
       });
   }
   return pushKeyRequest;
+}
+
+export function usePushPublicKey() {
+  return useSyncExternalStore(
+    (listener) => {
+      window.addEventListener(changedEvent, listener);
+      return () => window.removeEventListener(changedEvent, listener);
+    },
+    () => cachedPublicKey,
+  );
+}
+
+// 在设置页或权限提示出现时预先拉好 VAPID 公钥并激活 Service Worker，
+// 让 iOS WebKit 点击开启时无需跨越网络等待即可直接进入权限与订阅调用。
+export function warmPushNotifications() {
+  if (!notificationsSupported() || homeScreenRequired()) return;
+  void loadPushPublicKey().catch(() => undefined);
+  void notificationWorker().catch(() => undefined);
 }
 
 export function homeScreenRequired() {
@@ -80,52 +144,115 @@ function subscriptionKeys(subscription: PushSubscription) {
   return { endpoint: subscription.endpoint, keys: { p256dh, auth } };
 }
 
-// 点击开启时要尽快调用 subscribe。VAPID 公钥在进入页面时预先取好，避免打断用户手势。
+function sameApplicationServerKey(
+  subscription: PushSubscription,
+  expected: Uint8Array,
+) {
+  const current = subscription.options?.applicationServerKey;
+  if (!current) return true;
+  const actual = new Uint8Array(current);
+  if (actual.byteLength !== expected.byteLength) return false;
+  for (let index = 0; index < actual.byteLength; index += 1) {
+    if (actual[index] !== expected[index]) return false;
+  }
+  return true;
+}
+
+async function subscribeAndSave(
+  registration: ServiceWorkerRegistration,
+  publicKey: string,
+) {
+  const applicationServerKey = decodeBase64Url(publicKey);
+  let subscription: PushSubscription;
+  try {
+    // 直接调用 subscribe，避免前置 getSubscription() 额外异步跳数消耗 iOS 用户手势；
+    // 同公钥下标准实现会幂等返回已有订阅。
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey,
+    });
+    if (!sameApplicationServerKey(subscription, applicationServerKey)) {
+      await subscription.unsubscribe();
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "InvalidStateError") {
+      const existing = await registration.pushManager.getSubscription();
+      await existing?.unsubscribe();
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    } else {
+      throw error;
+    }
+  }
+  const body = subscriptionKeys(subscription);
+  if (!body) {
+    throw new Error("Push subscription keys are unavailable");
+  }
+  rememberPushEndpoint(body.endpoint);
+  await api.savePushSubscription(body);
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    markPushIdle();
+  }
+}
+
+// 点击开启时第一时间请求系统权限，并优先复用已预热的 Worker 与 VAPID 公钥直接调用 subscribe。
 export async function enableNotifications(): Promise<NotificationPermission> {
-  const keyRequest = loadPushPublicKey();
   const permission =
     Notification.permission === "granted"
       ? "granted"
       : await Notification.requestPermission();
   if (permission !== "granted") return permission;
-  const registration = await notificationWorker();
-  setNotificationsEnabled(true);
-  const publicKey = await keyRequest;
+  const registration = cachedRegistration ?? (await notificationWorker());
+  const publicKey =
+    cachedPublicKey !== undefined ? cachedPublicKey : await loadPushPublicKey();
   if (publicKey && registration.pushManager) {
-    const existing = await registration.pushManager.getSubscription();
-    const subscription =
-      existing ??
-      (await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: decodeBase64Url(publicKey),
-      }));
-    const body = subscriptionKeys(subscription);
-    if (body) {
-      rememberPushEndpoint(body.endpoint);
-      await api.savePushSubscription(body);
-    }
+    await subscribeAndSave(registration, publicKey);
   }
+  setNotificationsEnabled(true);
   return permission;
 }
 
 export async function syncPushSubscription() {
   try {
     if (!notificationsSupported() || Notification.permission !== "granted") return;
-    const publicKey = await loadPushPublicKey().catch(() => "");
+    const publicKey =
+      cachedPublicKey !== undefined
+        ? cachedPublicKey
+        : await loadPushPublicKey().catch(() => "");
     if (!publicKey) return;
-    const registration = await notificationWorker();
+    const registration = cachedRegistration ?? (await notificationWorker());
     if (!registration.pushManager) return;
-    // 已经允许过通知的浏览器可以在页面加载时补订阅。没有手势时失败则保持页面内通知。
+    const applicationServerKey = decodeBase64Url(publicKey);
+    let existing = await registration.pushManager.getSubscription();
+    if (existing && !sameApplicationServerKey(existing, applicationServerKey)) {
+      await api.deletePushSubscription(existing.endpoint).catch(() => undefined);
+      await existing.unsubscribe();
+      forgetPushEndpoint();
+      existing = null;
+    }
+    // 已经允许过通知的浏览器可以在页面加载时补订阅；iOS 无手势时失败则留待设置页点击重试。
     const subscription =
-      (await registration.pushManager.getSubscription()) ??
+      existing ??
       (await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: decodeBase64Url(publicKey),
+        applicationServerKey,
       }));
     const body = subscriptionKeys(subscription);
     if (body) {
       rememberPushEndpoint(body.endpoint);
       await api.savePushSubscription(body);
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        markPushIdle();
+      }
     }
   } catch {
     // 设置页再次开启时会在点击手势里重试。
@@ -133,10 +260,19 @@ export async function syncPushSubscription() {
 }
 
 export async function beatPushPresence() {
-  const registration = await navigator.serviceWorker.getRegistration();
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    markPushIdle();
+    return;
+  }
+  const registration =
+    cachedRegistration ?? (await navigator.serviceWorker.getRegistration());
   const subscription = await registration?.pushManager?.getSubscription();
   if (!subscription) return;
   rememberPushEndpoint(subscription.endpoint);
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    markPushIdle();
+    return;
+  }
   try {
     await api.pushPresence(subscription.endpoint);
   } catch (error) {
@@ -162,9 +298,13 @@ export async function clearPushSubscription() {
   if (!("serviceWorker" in navigator)) return;
   const registration = await navigator.serviceWorker.getRegistration();
   const subscription = await registration?.pushManager?.getSubscription();
-  if (!subscription) return;
+  if (!subscription) {
+    forgetPushEndpoint();
+    return;
+  }
   await api.deletePushSubscription(subscription.endpoint).catch(() => undefined);
   await subscription.unsubscribe();
+  forgetPushEndpoint();
 }
 
 export async function disableNotifications() {

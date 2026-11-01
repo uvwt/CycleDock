@@ -65,10 +65,25 @@ export function useCardNotifications(workspaceID: string) {
     const controller = new AbortController();
     // 页面还开着时由这里收快照并通知。心跳告诉服务端先别推送，避免和这条路径重复，
     // 也避免 Safari 收到一条不展示的推送后收回权限。
+    // iOS 主屏幕应用切回桌面或锁屏只触发 visibilitychange 而不触发 pagehide，
+    // 必须在 hidden 时立刻解除在线抑制，切回 visible 时再恢复心跳。
+    const syncPresenceWithVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void beatPushPresence();
+      } else {
+        markPushIdle();
+      }
+    };
     void syncPushSubscription();
-    void beatPushPresence();
-    const presence = window.setInterval(() => void beatPushPresence(), 20_000);
+    syncPresenceWithVisibility();
+    const presence = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void beatPushPresence();
+      }
+    }, 20_000);
+    document.addEventListener("visibilitychange", syncPresenceWithVisibility);
     window.addEventListener("pagehide", markPushIdle);
+    window.addEventListener("pageshow", syncPresenceWithVisibility);
     let release: (() => void) | undefined;
     let channel: BroadcastChannel | undefined;
     let stream: EventSource | undefined;
@@ -177,7 +192,12 @@ export function useCardNotifications(workspaceID: string) {
       stopReporting();
       stopWatchingLocation();
       window.clearInterval(presence);
+      document.removeEventListener(
+        "visibilitychange",
+        syncPresenceWithVisibility,
+      );
       window.removeEventListener("pagehide", markPushIdle);
+      window.removeEventListener("pageshow", syncPresenceWithVisibility);
       controller.abort();
       stream?.close();
       channel?.close();
