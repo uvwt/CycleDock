@@ -268,7 +268,7 @@ export function Shell({ children }: { children: ReactNode }) {
               onClick={handleLogoClick}
               title="CycleDock"
               aria-label="CycleDock"
-              className="grid size-9 place-items-center rounded-xl"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl"
             >
               {logo}
             </button>
@@ -280,7 +280,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   title={item.label}
                   aria-label={item.label}
                   className={({ isActive }) =>
-                    `grid size-9 place-items-center rounded-xl transition ${
+                    `inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition ${
                       primaryActive(item.activePath, isActive)
                         ? "bg-muted text-heading"
                         : "text-faint"
@@ -292,6 +292,7 @@ export function Shell({ children }: { children: ReactNode }) {
               ))}
               <ProjectSwitcherWithSettings
                 compact
+                compactSize="sm"
                 projects={projects}
                 projectID={projectID}
                 onChange={switchProject}
@@ -303,7 +304,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 title={t("设置")}
                 aria-label={t("设置")}
                 className={({ isActive }) =>
-                  `grid size-9 place-items-center rounded-xl transition ${
+                  `inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition ${
                     isActive ? "bg-muted text-heading" : "text-faint"
                   }`
                 }
