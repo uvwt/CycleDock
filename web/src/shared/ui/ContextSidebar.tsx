@@ -13,7 +13,7 @@ export function ContextSidebar({
 }) {
   return (
     <aside
-      className={`flex h-full min-h-0 w-full flex-col bg-canvas/60 backdrop-blur-sm ${className}`}
+      className={`flex h-full min-h-0 w-full flex-col bg-canvas ${className}`}
       aria-label={ariaLabel}
     >
       {header ? (
