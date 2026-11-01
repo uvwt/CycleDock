@@ -895,20 +895,26 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         stop_btn = self.page.locator('form button[aria-label="中止"]')
         stop_btn.wait_for()
-        self.assertEqual(
-            self.page.locator('button[aria-label="打开主聊天"]:visible').count(),
-            0,
-        )
+        main_chat_btn = self.page.locator('button[aria-label="打开主聊天"]')
+        main_chat_btn.wait_for()
+        self.assertTrue(main_chat_btn.is_visible())
         hit_stop = self.page.evaluate(
             """() => {
                 const ta = document.querySelector('textarea[aria-label="发送消息，继续推进任务…"]');
                 const btn = document.querySelector('form button[aria-label="中止"]');
+                const fab = document.querySelector('button[aria-label="打开主聊天"]');
                 const form = ta.closest('form');
                 const tRect = ta.getBoundingClientRect();
                 const bRect = btn.getBoundingClientRect();
+                const fRect = fab.getBoundingClientRect();
                 const hitTa = document.elementFromPoint(tRect.left + tRect.width / 2, tRect.top + tRect.height / 2);
                 const hitBtn = document.elementFromPoint(bRect.left + bRect.width / 2, bRect.top + bRect.height / 2);
-                return Boolean(hitTa && form.contains(hitTa)) && Boolean(hitBtn && (hitBtn === btn || btn.contains(hitBtn)));
+                const hitFab = document.elementFromPoint(fRect.left + fRect.width / 2, fRect.top + fRect.height / 2);
+                const fabAboveForm = fRect.bottom <= form.getBoundingClientRect().top + 10;
+                return Boolean(hitTa && form.contains(hitTa))
+                    && Boolean(hitBtn && (hitBtn === btn || btn.contains(hitBtn)))
+                    && Boolean(hitFab && (hitFab === fab || fab.contains(hitFab)))
+                    && fabAboveForm;
             }"""
         )
         self.assertTrue(hit_stop)
