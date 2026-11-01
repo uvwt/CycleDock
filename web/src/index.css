@@ -252,3 +252,11 @@ button:disabled {
     scroll-behavior: auto !important;
   }
 }
+
+/* 移动端/触摸屏设备（无 hover 或主指针为粗指针）下禁用悬浮 Tooltip 气泡，避免点击触发后常驻悬浮遮挡 */
+@media (hover: none), (pointer: coarse) {
+  [data-slot="tooltip-content"] {
+    display: none !important;
+  }
+}
+
