@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -16,6 +19,7 @@ import (
 )
 
 type recordedPush struct {
+	endpoint string
 	payload []byte
 }
 
@@ -23,6 +27,7 @@ type recordingSender struct {
 	publicKey string
 	sent      []recordedPush
 	gone      map[string]bool
+	fail      map[string]error
 }
 
 func (s *recordingSender) PublicKey() string { return s.publicKey }
@@ -31,7 +36,10 @@ func (s *recordingSender) Send(_ context.Context, endpoint, _, _, _ string, payl
 	if s.gone[endpoint] {
 		return webpush.ErrGone
 	}
-	s.sent = append(s.sent, recordedPush{payload: append([]byte(nil), payload...)})
+	if err := s.fail[endpoint]; err != nil {
+		return err
+	}
+	s.sent = append(s.sent, recordedPush{endpoint: endpoint, payload: append([]byte(nil), payload...)})
 	return nil
 }
 
@@ -256,5 +264,50 @@ func TestPushSubscriptionRequiresConfiguration(t *testing.T) {
 	}, cookie, nil)
 	if insecure.Code != http.StatusBadRequest {
 		t.Fatalf("http endpoint: %d %s", insecure.Code, insecure.Body.String())
+	}
+}
+
+func TestSendCardPushTruncatesLongPreviewAndIsolatesPartialFailures(t *testing.T) {
+	goodEndpoint := "https://web.push.apple.com/Q123"
+	badEndpoint := "https://fcm.googleapis.com/fcm/send/broken"
+	sender := &recordingSender{
+		publicKey: "test",
+		fail:      map[string]error{badEndpoint: errors.New("push endpoint fcm.googleapis.com returned 500")},
+	}
+	api := &API{push: sender}
+	longBody := strings.Repeat("长消息内容测试", 100)
+	update := cardUpdate{
+		ID:             uuid.NewString(),
+		ProjectID:      uuid.NewString(),
+		Kind:           "todo",
+		Title:          strings.Repeat("标", 120),
+		Revision:       "rev-1",
+		EventSequence:  "2",
+		MessagePreview: longBody,
+	}
+	subs := []store.PushSubscription{
+		{Endpoint: badEndpoint, P256dh: "k1", AuthSecret: "a1"},
+		{Endpoint: goodEndpoint, P256dh: "k2", AuthSecret: "a2"},
+	}
+	if err := api.sendCardPush(context.Background(), uuid.New(), update, subs); err != nil {
+		t.Fatalf("partial success should advance snapshot instead of retrying forever: %v", err)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].endpoint != goodEndpoint {
+		t.Fatalf("unexpected deliveries: %+v", sender.sent)
+	}
+	var decoded pushPayload
+	if err := json.Unmarshal(sender.sent[0].payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(decoded.Title) != maxPushTitleRunes || !strings.HasSuffix(decoded.Title, "…") {
+		t.Fatalf("title not truncated: %q", decoded.Title)
+	}
+	if utf8.RuneCountInString(decoded.Body) != maxPushBodyRunes || !strings.HasSuffix(decoded.Body, "…") {
+		t.Fatalf("body not truncated: len=%d", utf8.RuneCountInString(decoded.Body))
+	}
+
+	// 全部有效订阅都投递失败时仍返回错误，以便下一轮重试。
+	if err := api.sendCardPush(context.Background(), uuid.New(), update, subs[:1]); err == nil {
+		t.Fatal("expected error when every subscription delivery failed")
 	}
 }
