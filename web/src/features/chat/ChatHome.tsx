@@ -10,6 +10,7 @@ import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { DiscussionSidebar } from "./DiscussionSidebar";
+import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
 import { DiscussionStartComposer } from "./DiscussionStartComposer";
 
 export default function ChatHome() {
@@ -78,15 +79,18 @@ export default function ChatHome() {
           </div>
 
           <section className="relative flex min-h-0 min-w-0 flex-col">
-            <button
-              type="button"
-              title={t("打开讨论列表")}
-              aria-label={t("打开讨论列表")}
-              onClick={() => setMobileListOpen(true)}
-              className="absolute top-3 left-3 z-10 grid size-9 place-items-center rounded-xl border border-line bg-surface text-muted-foreground shadow-sm hover:bg-muted md:hidden"
-            >
-              <PanelLeft className="size-5" />
-            </button>
+            <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 md:hidden">
+              <button
+                type="button"
+                title={t("打开讨论列表")}
+                aria-label={t("打开讨论列表")}
+                onClick={() => setMobileListOpen(true)}
+                className="grid size-9 place-items-center rounded-xl border border-line bg-surface text-muted-foreground shadow-sm hover:bg-muted"
+              >
+                <PanelLeft className="size-5" />
+              </button>
+              <MobileQuickCardSwitcher projectID={projectID} />
+            </div>
 
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-6">
               <div className="w-full max-w-3xl">
