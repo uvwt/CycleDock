@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -40,19 +40,26 @@ const labels: Record<TodoState, string> = {
   done: "已完成",
 };
 
-
-const laneAccentMap: Record<TodoState, { badge: string }> = {
+const laneAccentMap: Record<TodoState, { badge: string; activeTab: string; dot: string }> = {
   todo: {
     badge: "border-slate-200 bg-slate-100/80 text-slate-600 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400",
+    activeTab: "border-slate-300 bg-surface text-foreground shadow-xs dark:border-slate-700",
+    dot: "bg-slate-400",
   },
   working: {
     badge: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300",
+    activeTab: "border-sky-300/80 bg-surface text-sky-700 shadow-xs dark:border-sky-700/80 dark:text-sky-300",
+    dot: "bg-sky-500",
   },
   review: {
     badge: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300",
+    activeTab: "border-amber-300/80 bg-surface text-amber-700 shadow-xs dark:border-amber-700/80 dark:text-amber-300",
+    dot: "bg-amber-500",
   },
   done: {
     badge: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300",
+    activeTab: "border-emerald-300/80 bg-surface text-emerald-700 shadow-xs dark:border-emerald-700/80 dark:text-emerald-300",
+    dot: "bg-emerald-500",
   },
 };
 
@@ -76,10 +83,12 @@ function Lane({
   state,
   cards,
   onOpen,
+  className = "",
 }: {
   state: TodoState;
   cards: Card[];
   onOpen: (card: Card) => void;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({ id: state });
@@ -91,8 +100,9 @@ function Lane({
       className={
         "flex min-h-0 flex-col rounded-2xl border p-3.5 transition-colors " +
         (isOver
-          ? "border-sky-300 bg-sky-50/50 dark:bg-sky-950/20"
-          : "border-line bg-muted/40")
+          ? "border-sky-300 bg-sky-50/50 dark:bg-sky-950/20 "
+          : "border-line bg-muted/40 ") +
+        className
       }
     >
       <header className="mb-3 flex shrink-0 items-center justify-between px-1">
@@ -184,6 +194,73 @@ export default function BoardPage() {
     setProjectID,
   } = useProject();
 
+  const cards = useQuery({
+    queryKey: keys.cards(projectID || ""),
+    queryFn: () => api.cards(projectID!),
+    enabled: !!projectID,
+  });
+
+  const cardsByState = useMemo(() => {
+    const map: Record<TodoState, Card[]> = {
+      todo: [],
+      working: [],
+      review: [],
+      done: [],
+    };
+    for (const c of cards.data || []) {
+      if (c.kind === "todo" && c.todo_state && states.includes(c.todo_state)) {
+        map[c.todo_state].push(c);
+      }
+    }
+    return map;
+  }, [cards.data]);
+
+  // 默认激活用户最需要关注的列：working > todo > 首个非空列 > working
+  const [selectedTab, setSelectedTab] = useState<TodoState | null>(null);
+  const activeTab: TodoState = useMemo(() => {
+    if (selectedTab) return selectedTab;
+    if (cardsByState.working.length > 0) return "working";
+    if (cardsByState.todo.length > 0) return "todo";
+    const firstNonEmpty = states.find((s) => cardsByState[s].length > 0);
+    return firstNonEmpty || "working";
+  }, [selectedTab, cardsByState]);
+
+  const mobileContainerRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScrollRef = useRef(false);
+
+  function handleTabSelect(state: TodoState) {
+    setSelectedTab(state);
+    const container = mobileContainerRef.current;
+    if (!container) return;
+    const targetIndex = states.indexOf(state);
+    if (targetIndex >= 0) {
+      isProgrammaticScrollRef.current = true;
+      const targetScrollLeft = targetIndex * container.clientWidth;
+      container.scrollTo({
+        left: targetScrollLeft,
+        behavior: "smooth",
+      });
+      setTimeout(() => {
+        isProgrammaticScrollRef.current = false;
+      }, 400);
+    }
+  }
+
+  function handleMobileScroll() {
+    if (isProgrammaticScrollRef.current) return;
+    const container = mobileContainerRef.current;
+    if (!container || container.clientWidth === 0) return;
+    const scrollLeft = container.scrollLeft;
+    const width = container.clientWidth;
+    const index = Math.round(scrollLeft / width);
+    if (index >= 0 && index < states.length) {
+      const state = states[index];
+      if (state !== activeTab) {
+        setSelectedTab(state);
+      }
+    }
+  }
+
   const creatingFromURL = searchParams.get("new") === "project";
 
   function setCreateProjectOpen(open: boolean) {
@@ -194,11 +271,7 @@ export default function BoardPage() {
     next.delete("new");
     setSearchParams(next, { replace: true });
   }
-  const cards = useQuery({
-    queryKey: keys.cards(projectID || ""),
-    queryFn: () => api.cards(projectID!),
-    enabled: !!projectID,
-  });
+
   const create = useMutation({
     mutationFn: () =>
       api.createProject({
@@ -302,20 +375,90 @@ export default function BoardPage() {
           ) : cards.error ? (
             <ErrorView error={cards.error} />
           ) : (
-            <DndContext sensors={sensors} onDragEnd={dragEnd}>
-              <div className="grid min-h-0 flex-1 auto-cols-[minmax(280px,86vw)] grid-flow-col gap-3.5 overflow-x-auto pb-1 lg:grid-flow-row lg:grid-cols-4 lg:overflow-visible">
-                {states.map((state) => (
-                  <Lane
-                    key={state}
-                    state={state}
-                    cards={(cards.data || []).filter(
-                      (c) => c.kind === "todo" && c.todo_state === state,
-                    )}
-                    onOpen={open}
-                  />
-                ))}
+            <>
+              {/* 移动端 (lg:hidden)：顶部分段 Tabs + 左右平滑滚动单列容器 */}
+              <div className="flex min-h-0 flex-1 flex-col lg:hidden">
+                {/* 顶部吸顶分段器 Tabs */}
+                <div className="shrink-0 pb-3">
+                  <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1.5 scrollbar-none">
+                    {states.map((state) => {
+                      const isActive = activeTab === state;
+                      const count = cardsByState[state].length;
+                      const accent = laneAccentMap[state];
+                      return (
+                        <button
+                          key={state}
+                          type="button"
+                          onClick={() => handleTabSelect(state)}
+                          className={
+                            "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all " +
+                            (isActive
+                              ? accent.activeTab
+                              : "text-muted-foreground hover:bg-muted hover:text-foreground")
+                          }
+                        >
+                          <span
+                            className={
+                              "size-1.5 shrink-0 rounded-full transition-opacity " +
+                              accent.dot +
+                              (isActive ? " opacity-100" : " opacity-40")
+                            }
+                          />
+                          <span>{t(labels[state])}</span>
+                          <span
+                            className={
+                              "ml-0.5 rounded-full px-1.5 py-0.2 text-[10px] tabular-nums " +
+                              (isActive
+                                ? "bg-muted font-semibold text-foreground"
+                                : "bg-muted/70 text-muted-foreground")
+                            }
+                          >
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 移动端左右滑动单列卡片平铺容器 */}
+                <div
+                  ref={mobileContainerRef}
+                  onScroll={handleMobileScroll}
+                  className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth scrollbar-none"
+                >
+                  {states.map((state) => (
+                    <div
+                      key={state}
+                      className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5"
+                    >
+                      <Lane
+                        state={state}
+                        cards={cardsByState[state]}
+                        onOpen={open}
+                        className="h-full"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
-            </DndContext>
+
+              {/* 桌面端 (hidden lg:flex)：成熟的 4 列并行看板与拖拽视图 */}
+              <div className="hidden min-h-0 flex-1 flex-col lg:flex">
+                <DndContext sensors={sensors} onDragEnd={dragEnd}>
+                  <div className="grid min-h-0 flex-1 grid-cols-4 gap-3.5 overflow-visible">
+                    {states.map((state) => (
+                      <Lane
+                        key={state}
+                        state={state}
+                        cards={cardsByState[state]}
+                        onOpen={open}
+                      />
+                    ))}
+                  </div>
+                </DndContext>
+              </div>
+            </>
           )}
         </div>
       )}
