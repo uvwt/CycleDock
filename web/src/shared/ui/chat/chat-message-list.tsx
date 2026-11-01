@@ -21,7 +21,7 @@ export const ChatMessageList = React.forwardRef<
       role="log"
       {...props}
     >
-      <div className="mx-auto flex w-full max-w-3xl flex-col">
+      <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col">
         {children}
       </div>
     </div>

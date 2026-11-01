@@ -890,6 +890,67 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.evaluate("document.documentElement.scrollWidth"), 390
         )
 
+    def test_mobile_chat_composer_and_actions_unobstructed(self):
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        stop_btn = self.page.locator('form button[aria-label="中止"]')
+        stop_btn.wait_for()
+        self.assertEqual(
+            self.page.locator('button[aria-label="打开主聊天"]:visible').count(),
+            0,
+        )
+        hit_stop = self.page.evaluate(
+            """() => {
+                const ta = document.querySelector('textarea[aria-label="发送消息，继续推进任务…"]');
+                const btn = document.querySelector('form button[aria-label="中止"]');
+                const form = ta.closest('form');
+                const tRect = ta.getBoundingClientRect();
+                const bRect = btn.getBoundingClientRect();
+                const hitTa = document.elementFromPoint(tRect.left + tRect.width / 2, tRect.top + tRect.height / 2);
+                const hitBtn = document.elementFromPoint(bRect.left + bRect.width / 2, bRect.top + bRect.height / 2);
+                return Boolean(hitTa && form.contains(hitTa)) && Boolean(hitBtn && (hitBtn === btn || btn.contains(hitBtn)));
+            }"""
+        )
+        self.assertTrue(hit_stop)
+
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.page.locator('textarea[aria-label="发送消息，继续推进任务…"]').wait_for()
+        for idx in range(1, 5):
+            resp = self.page.request.post(
+                BASE + "/api/v1/cards/discussion-1/comments",
+                data={
+                    "content": f"移动端滚动遮挡回归 #{idx}\n```ts\nconst n = {idx};\n```\n尾部文本 #{idx}"
+                },
+            )
+            self.assertTrue(resp.ok)
+        self.page.reload()
+        self.page.get_by_text("尾部文本 #4").wait_for()
+        textarea = self.page.locator('textarea[aria-label="发送消息，继续推进任务…"]')
+        textarea.fill("第一行\n第二行\n第三行\n第四行\n第五行")
+        self.page.wait_for_timeout(120)
+        layout_ok = self.page.evaluate(
+            """() => {
+                const log = document.querySelector('[role="log"]');
+                log.scrollTop = log.scrollHeight;
+                const form = document.querySelector('textarea[aria-label="发送消息，继续推进任务…"]').closest('form');
+                const sendBtn = form.querySelector('button[aria-label="发送"]');
+                const bubbles = Array.from(document.querySelectorAll('[id^="event-"]'));
+                const lastBubble = bubbles[bubbles.length - 1];
+                const fRect = form.getBoundingClientRect();
+                const lbRect = lastBubble.getBoundingClientRect();
+                const sRect = sendBtn.getBoundingClientRect();
+                const hitSend = document.elementFromPoint(sRect.left + sRect.width / 2, sRect.top + sRect.height / 2);
+                const bottomClear = lbRect.bottom <= fRect.top;
+
+                log.scrollTop = Math.max(0, log.scrollHeight - log.clientHeight - 70);
+                const hitSendMid = document.elementFromPoint(sRect.left + sRect.width / 2, sRect.top + sRect.height / 2);
+                return bottomClear
+                    && Boolean(hitSend && (hitSend === sendBtn || sendBtn.contains(hitSend)))
+                    && Boolean(hitSendMid && (hitSendMid === sendBtn || sendBtn.contains(hitSendMid)));
+            }"""
+        )
+        self.assertTrue(layout_ok)
+
     def test_model_routes_can_add_reorder_and_save(self):
         # 测试环境的 mock-server 同进程持久化 settings，重复执行也必须从固定基线开始。
         current = self.page.request.get(BASE + "/api/v1/agent/settings").json()

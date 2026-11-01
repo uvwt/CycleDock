@@ -548,6 +548,7 @@ export function ConversationView({
   currentAttempt,
   attemptHistory,
   bottomSpacerClass = "h-52 shrink-0 sm:h-60",
+  bottomInsetPx,
   compact = false,
   ...actions
 }: {
@@ -559,6 +560,7 @@ export function ConversationView({
   currentAttempt: Attempt | null;
   attemptHistory: Attempt[];
   bottomSpacerClass?: string;
+  bottomInsetPx?: number;
   compact?: boolean;
 } & ExecutionActions) {
   const { t } = useTranslation();
@@ -762,7 +764,7 @@ export function ConversationView({
     }
   };
 
-  // 仅在真实新内容到达（而非用户滚动触发的组件重渲染）时，若处于吸底状态则跟随最新内容滚动
+  // 仅在真实新内容到达或底部避让高度变化（而非用户滚动触发的组件重渲染）时，若处于吸底状态则跟随最新内容滚动
   const contentSignature = [
     sortedEvents.length,
     live?.attemptID,
@@ -772,6 +774,7 @@ export function ConversationView({
     currentAttempt?.id,
     currentAttempt?.status,
     attemptHistory.length,
+    bottomInsetPx ?? "",
   ].join(":");
 
   useEffect(() => {
@@ -781,6 +784,19 @@ export function ConversationView({
       return () => cancelAnimationFrame(raf);
     }
   }, [contentSignature]);
+
+  // 移动端软键盘弹起/收起或容器高度改变时，若原本吸底则自动贴齐底部
+  useEffect(() => {
+    const element = list.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (stick.current) {
+        scrollToBottom(false);
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // 首次挂载或会话切换时，等待富文本和字体渲染稳定后再次对齐底部，防止末尾消息被遮挡
   useEffect(() => {
@@ -807,7 +823,7 @@ export function ConversationView({
   }
 
   return (
-    <div className="relative flex min-h-0 w-full flex-1 flex-col">
+    <div className="relative z-0 flex min-h-0 w-full flex-1 flex-col">
       <ChatMessageList
         ref={list}
         onScroll={onScroll}
@@ -981,11 +997,32 @@ export function ConversationView({
             />
           </div>
         )}
-        <div ref={bottom} className={bottomSpacerClass} />
+        <div
+          ref={bottom}
+          className={
+            bottomInsetPx !== undefined ? "shrink-0" : bottomSpacerClass
+          }
+          style={
+            bottomInsetPx !== undefined
+              ? { height: `${Math.max(16, bottomInsetPx)}px` }
+              : undefined
+          }
+        />
       </ChatMessageList>
 
       <div
-        className={`pointer-events-none absolute bottom-24 inset-x-0 z-20 flex justify-center transition-all duration-200 ${
+        style={
+          bottomInsetPx !== undefined
+            ? { bottom: `${Math.max(88, bottomInsetPx + 8)}px` }
+            : undefined
+        }
+        className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center transition-all duration-200 ${
+          bottomInsetPx !== undefined
+            ? ""
+            : compact
+              ? "bottom-4"
+              : "bottom-24"
+        } ${
           showLatest
             ? "opacity-100 translate-y-0"
             : "opacity-0 translate-y-2 pointer-events-none"
