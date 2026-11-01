@@ -285,7 +285,7 @@ Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题�
 ## Built-in Agent 并发与租户调度
 
 - `CYCLEDOCK_AGENT_MAX_CONCURRENT`：每个后端进程最多同时执行的 Attempt，默认 16。
-- `CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE`：每个 Workspace 跨后端实例共享的运行额度，默认 4。所有实例应使用一致的该配置。
+- `CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE`：每个 Workspace 跨后端实例共享的运行额度，默认 10。所有实例应使用一致的该配置。
 - 两项均为正整数，非法值阻止启动；修改后需重启后端。工作空间额度可以大于单进程额度，多实例可共同提供容量。默认值是资源保护配置，不是经过压测的容量承诺。
 - Dispatcher 优先尝试最久未获得执行机会的 Workspace；顺序使用持久 Attempt 的最近开始时间，空队列、无启用路由、额度已满或正在被其他实例领取的 Workspace 会被跳过。并发领取不承诺严格轮流，但持续有工作时不会固定优先某个 Workspace。
 - 租户调度使用 `workspace_agent_settings` 行锁，并在同一事务内重新检查运行数、领取 Turn / queued Attempt。多个实例不能同时抢占租户的最后一个名额；原有 Card 唯一 current Attempt、interrupt 优先与 FIFO 语义保留。
