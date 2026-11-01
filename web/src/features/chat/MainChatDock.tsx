@@ -246,6 +246,41 @@ export function MainChatDock() {
     };
   }, [open]);
 
+  // 移动端浮窗打开时，锁定底层页面滚动（兼容 iOS Safari / WebKit 与 Android）并拦截未捕获的滚动链
+  useEffect(() => {
+    if (!open) return;
+
+    // 仅在移动端小屏（< 640px）或者具有触摸交互且视口较小时执行底层滚动锁定
+    const isMobile = window.innerWidth < 640 || window.matchMedia("(max-width: 639px)").matches;
+    if (!isMobile) return;
+
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const body = document.body;
+    const documentElement = document.documentElement;
+
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyPosition = body.style.position;
+    const prevBodyTop = body.style.top;
+    const prevBodyWidth = body.style.width;
+    const prevDocOverflow = documentElement.style.overflow;
+
+    // 锁定 body 滚动并保持当前滚动偏移量
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    documentElement.style.overflow = "hidden";
+
+    return () => {
+      body.style.overflow = prevBodyOverflow;
+      body.style.position = prevBodyPosition;
+      body.style.top = prevBodyTop;
+      body.style.width = prevBodyWidth;
+      documentElement.style.overflow = prevDocOverflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [open]);
+
   // 拖拽窗口移动
   function handleDragStart(e: React.MouseEvent<HTMLElement>) {
     if ((e.target as HTMLElement).closest("button, a, input, textarea")) return;
@@ -416,7 +451,7 @@ export function MainChatDock() {
                     }
                   : undefined
           }
-          className={`z-40 flex flex-col overflow-hidden rounded-2xl border border-line bg-canvas shadow-xl select-none ${
+          className={`z-40 flex flex-col overflow-hidden rounded-2xl border border-line bg-canvas shadow-xl select-none overscroll-contain touch-manipulation ${
             position
               ? size
                 ? ""
@@ -460,6 +495,10 @@ export function MainChatDock() {
 
           <header
             onMouseDown={handleDragStart}
+            onTouchMove={(e) => {
+              // 移动端浮窗头部不应拖动页面或触发滚动穿透
+              e.preventDefault();
+            }}
             className="flex h-12 shrink-0 cursor-move items-center gap-2 border-b border-line px-3 select-none"
           >
             <img

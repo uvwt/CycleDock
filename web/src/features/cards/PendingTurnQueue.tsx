@@ -54,7 +54,7 @@ export function PendingTurnQueue({
         aria-label={t("待执行队列")}
         className="mx-3 -mb-3 rounded-t-2xl border border-line bg-surface px-2 pt-1 pb-4"
       >
-        <ul className="max-h-48 overflow-y-auto">
+        <ul className="max-h-48 overflow-y-auto overscroll-contain">
           {ordered.map((turn) => (
             <li
               key={turn.id}
