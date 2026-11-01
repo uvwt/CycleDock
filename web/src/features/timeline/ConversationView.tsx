@@ -547,7 +547,7 @@ export function ConversationView({
   pendingTurns,
   currentAttempt,
   attemptHistory,
-  bottomSpacerClass = "h-52 shrink-0 sm:h-60",
+  bottomSpacerClass = "h-28 shrink-0 sm:h-32",
   bottomInsetPx,
   compact = false,
   ...actions
