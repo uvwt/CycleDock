@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
 import { toast } from "sonner";
@@ -15,6 +16,9 @@ const dismissedKey = "cycledock.notification-prompt-dismissed";
 
 export function NotificationPermissionPrompt() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const isFocusedConversation =
+    /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(location.pathname);
   const enabled = useNotificationsEnabled();
   const [pending, setPending] = useState(false);
   const [dismissed, setDismissed] = useState(() => {
@@ -60,7 +64,11 @@ export function NotificationPermissionPrompt() {
   return (
     <aside
       aria-label={t("浏览器通知")}
-      className="fixed right-4 bottom-4 z-40 w-[calc(100%-2rem)] max-w-sm rounded-xl border border-line bg-surface p-4 shadow-lg"
+      className={`fixed right-4 z-40 w-[calc(100%-2rem)] max-w-sm rounded-xl border border-line bg-surface p-4 shadow-lg ${
+        isFocusedConversation
+          ? "bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4.5rem)] md:bottom-4"
+          : "bottom-4"
+      }`}
     >
       <div className="flex items-center gap-2 font-medium text-heading">
         <Bell className="size-4 text-sky-600" />

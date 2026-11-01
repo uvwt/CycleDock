@@ -1,6 +1,6 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Info, PanelLeft } from "lucide-react";
@@ -86,6 +86,29 @@ function CardPageContent() {
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
+  const composerDockRef = useRef<HTMLDivElement>(null);
+  const [composerDockHeight, setComposerDockHeight] = useState(96);
+
+  useEffect(() => {
+    const el = composerDockRef.current;
+    if (!el) return;
+    const measure = () => {
+      const next = Math.ceil(el.getBoundingClientRect().height);
+      if (next > 0) {
+        setComposerDockHeight((prev) => (prev !== next ? next : prev));
+      }
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [
+    card?.id,
+    blocked,
+    replyTo?.id,
+    detail.data?.pending_turns?.length,
+  ]);
 
   useEffect(() => {
     if (actualProjectID && actualProjectID !== activeProjectID) {
@@ -451,6 +474,7 @@ function CardPageContent() {
                 pendingTurns={detail.data.pending_turns}
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={detail.data.attempt_history}
+                bottomInsetPx={composerDockHeight}
                 waitingAttemptID={waiting ? current?.id : undefined}
                 choicePending={choose.isPending}
                 onChoose={(choice) => choose.mutate(choice)}
@@ -465,13 +489,17 @@ function CardPageContent() {
               />
 
               <div
-                className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end bg-gradient-to-t ${
+                data-composer-dock
+                className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t ${
                   isDiscussion
-                    ? "from-canvas via-canvas/90"
-                    : "from-surface via-surface/90"
-                } to-transparent pt-10 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}
+                    ? "from-canvas via-canvas/95"
+                    : "from-surface via-surface/95"
+                } to-transparent pt-8`}
               >
-                <div className="pointer-events-auto mx-auto w-full max-w-3xl px-3 sm:px-6">
+                <div
+                  ref={composerDockRef}
+                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6"
+                >
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
                       {t("此讨论已归档，不能继续发送消息")}

@@ -44,8 +44,11 @@ export function MainChatDock() {
   });
   const cardID = main.data?.id || "";
 
-  // 仅在当前主区域正处于主聊天自身详情页时隐藏，避免在主聊天全屏视图中重叠小浮窗；
-  // 在聊天首页（/chat）、子讨论聊天、看板与计划详情等所有页面均保持可用
+  const isFocusedConversation =
+    /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(location.pathname);
+
+  // 仅在当前主区域正处于主聊天自身详情页时全局隐藏，避免在主聊天全屏视图中重叠小浮窗；
+  // 手机端窄屏处于任意具体会话详情页（讨论/待办/计划）时也隐藏悬浮球，防止遮挡底部输入框右侧的发送与中止按钮
   const isViewingMainDiscussion =
     Boolean(cardID) &&
     (location.pathname === `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}` ||
@@ -412,7 +415,11 @@ export function MainChatDock() {
   return (
     <>
       {peek && !open && (
-        <div className="fixed right-4 bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)] z-40">
+        <div
+          className={`fixed right-4 bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)] z-40 ${
+            isFocusedConversation ? "hidden md:block" : ""
+          }`}
+        >
           <button
             type="button"
             onClick={show}
@@ -595,7 +602,11 @@ export function MainChatDock() {
       )}
 
       {!open && (
-        <div className="fixed right-4 bottom-[max(1.25rem,env(safe-area-inset-bottom))] z-40">
+        <div
+          className={`fixed right-4 bottom-[max(1.25rem,env(safe-area-inset-bottom))] z-40 ${
+            isFocusedConversation ? "hidden md:block" : ""
+          }`}
+        >
           <button
             ref={triggerRef}
             type="button"
