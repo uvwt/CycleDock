@@ -14,7 +14,7 @@ services:
       - cycledock_postgres:/var/lib/postgresql/data
 
   migrate:
-    image: ${CYCLEDOCK_IMAGE:-ghcr.io/uvwt/cycledock-oss:latest}
+    image: ${CYCLEDOCK_IMAGE:-ghcr.io/uvwt/cycledock:latest}
     environment:
       DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
       MIGRATIONS_DIR: /app/db/migrations
@@ -24,7 +24,7 @@ services:
         condition: service_healthy
 
   app:
-    image: ${CYCLEDOCK_IMAGE:-ghcr.io/uvwt/cycledock-oss:latest}
+    image: ${CYCLEDOCK_IMAGE:-ghcr.io/uvwt/cycledock:latest}
     environment:
       DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
       HTTP_ADDR: :8080
