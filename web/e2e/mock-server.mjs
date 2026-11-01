@@ -816,6 +816,19 @@ http
             duration_ms: 52,
             tool_count: 2,
           });
+        if (route === "/notifications/push" && req.method === "GET")
+          return data(res, { public_key: "" });
+        if (
+          (route === "/notifications/push/subscription" &&
+            (req.method === "PUT" || req.method === "DELETE")) ||
+          ((route === "/notifications/push/presence" ||
+            route === "/notifications/push/inactive" ||
+            route === "/notifications/push/seen") &&
+            req.method === "POST")
+        ) {
+          await body(req).catch(() => ({}));
+          return data(res, {}, 204);
+        }
         return failure(res);
       }
       const dest = path.resolve(root, "." + (p === "/" ? "/index.html" : p));
