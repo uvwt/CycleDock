@@ -26,6 +26,7 @@ import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { MobileGlobalNavMenu } from "../../shared/ui/MobileGlobalNavMenu";
+import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -440,6 +441,11 @@ function CardPageContent() {
           {/* 移动端呼出侧边栏悬浮在左上角 */}
           <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 sm:left-4 lg:hidden">
             <MobileGlobalNavMenu />
+            <MobileQuickCardSwitcher
+              projectID={card.project_id}
+              activeCardID={card.id}
+              activeAttemptStatus={current?.status}
+            />
             <button
               type="button"
               title={
