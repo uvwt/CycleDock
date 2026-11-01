@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { MessageSquareText, Pin, Plus, Search } from "lucide-react";
+import { MessageSquareText, Pin, Plus, Search, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
 } from "../../shared/ui/ContextSidebar";
 import {
   Button,
+  ConfirmDialog,
   HintTooltip,
   TextInput,
 } from "../../shared/ui/components";
@@ -55,6 +56,7 @@ export function DiscussionSidebar({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [term, setTerm] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
   const projectID = discussions[0]?.project_id || "";
   const mainDiscussion = useQuery({
     queryKey: keys.mainDiscussion(projectID),
@@ -78,6 +80,23 @@ export function DiscussionSidebar({
     },
     onError: (err) => {
       toast.error("操作失败：" + String(err));
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (card: Card) => api.deleteCard(card.id),
+    onSuccess: async (_, card) => {
+      await queryClient.invalidateQueries({
+        queryKey: keys.cards(card.project_id),
+      });
+      toast.success("讨论已删除");
+      if (card.id === activeCardID) {
+        navigate(`/chat?project=${encodeURIComponent(card.project_id)}`);
+      }
+      setDeleteTarget(null);
+    },
+    onError: (err) => {
+      toast.error("删除失败：" + (err instanceof Error ? err.message : String(err)));
     },
   });
 
@@ -151,11 +170,40 @@ export function DiscussionSidebar({
         <div className="space-y-1">
           {filtered.map((card) => {
             const isMain = card.id === mainDiscussionID;
+            const swipeActions = [
+              ...(!isMain
+                ? [
+                    {
+                      key: "pin",
+                      label: card.pinned_at ? t("取消置顶") : t("置顶"),
+                      icon: <Pin className="size-4 rotate-45" />,
+                      variant: "primary" as const,
+                      onClick: () => {
+                        pinMutation.mutate({
+                          id: card.id,
+                          pinned: !card.pinned_at,
+                        });
+                      },
+                    },
+                    {
+                      key: "delete",
+                      label: t("删除"),
+                      icon: <Trash2 className="size-4" />,
+                      variant: "danger" as const,
+                      onClick: () => {
+                        setDeleteTarget(card);
+                      },
+                    },
+                  ]
+                : []),
+            ];
+
             return (
               <ContextSidebarItem
                 key={card.id}
                 active={card.id === activeCardID}
                 onClick={() => handleSelect(card)}
+                swipeActions={swipeActions.length ? swipeActions : undefined}
                 icon={
                   <CardStatusDot
                     status={getCardVisualStatus(
@@ -242,6 +290,22 @@ export function DiscussionSidebar({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("删除这个讨论？")}
+        description={t(
+          "已生成的 Todo / Ongoing 不会被删除，但这个讨论及其会话内容将不再保留。",
+        )}
+        confirmLabel={t("删除讨论")}
+        pending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (deleteTarget) {
+            deleteMutation.mutate(deleteTarget);
+          }
+        }}
+      />
     </ContextSidebar>
   );
 }

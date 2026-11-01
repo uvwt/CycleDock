@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Layers,
   MessageSquare,
@@ -11,6 +11,7 @@ import {
   CalendarClock,
   Pin,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import {
   Sheet as UISheet,
@@ -22,6 +23,8 @@ import type { Card } from "../api/types";
 import { api } from "../api/client";
 import { keys } from "../../app/query";
 import { CardStatusDot, getCardVisualStatus } from "./CardStatusDot";
+import { ConfirmDialog } from "./components";
+import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
 import { cn } from "../lib/utils";
 
 type SwitcherTab = "working" | "review" | "discussion" | "done";
@@ -139,6 +142,25 @@ export function MobileQuickCardSwitcher({
       navigate(`/chat/${targetCard.project_id}/${targetCard.id}`);
     }
   };
+
+  const queryClient = useQueryClient();
+  const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+
+  const pinMutation = useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      api.pinCard(id, pinned),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (card: Card) => api.deleteCard(card.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      setDeleteTarget(null);
+    },
+  });
 
   const currentList = useMemo(() => {
     switch (activeTab) {
@@ -282,7 +304,7 @@ export function MobileQuickCardSwitcher({
                 <p className="text-xs">{t("当前分类暂无内容")}</p>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <SwipeActionGroup className="space-y-1.5">
                 {currentList.map((item) => {
                   const isCurrent = item.id === activeCardID;
                   const visualStatus = getCardVisualStatus(
@@ -291,60 +313,107 @@ export function MobileQuickCardSwitcher({
                     isCurrent ? activeAttemptStatus : undefined,
                   );
 
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleSelectCard(item)}
-                      className={cn(
-                        "group flex w-full items-start gap-2.5 rounded-xl border p-2.5 text-left transition active:scale-[0.99]",
-                        isCurrent
-                          ? "border-primary/40 bg-primary/5 shadow-xs"
-                          : "border-transparent bg-canvas/60 hover:border-line hover:bg-muted/60",
-                      )}
-                    >
-                      <div className="mt-0.5 shrink-0">
-                        {item.kind === "discussion" ? (
-                          <MessageSquare className="size-3.5 text-indigo-500" />
-                        ) : item.kind === "ongoing" ? (
-                          <CalendarClock className="size-3.5 text-violet-500" />
-                        ) : (
-                          <CardStatusDot status={visualStatus} className="size-2.5" />
-                        )}
-                      </div>
+                  const swipeActions = [
+                    {
+                      key: "pin",
+                      label: item.pinned_at ? t("取消置顶") : t("置顶"),
+                      icon: <Pin className="size-4 rotate-45" />,
+                      variant: "primary" as const,
+                      onClick: () => {
+                        pinMutation.mutate({
+                          id: item.id,
+                          pinned: !item.pinned_at,
+                        });
+                      },
+                    },
+                    ...(item.kind !== "discussion"
+                      ? [
+                          {
+                            key: "delete",
+                            label: t("删除"),
+                            icon: <Trash2 className="size-4" />,
+                            variant: "danger" as const,
+                            onClick: () => {
+                              setDeleteTarget(item);
+                            },
+                          },
+                        ]
+                      : []),
+                  ];
 
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={cn(
-                              "truncate text-xs font-medium leading-snug",
-                              isCurrent ? "font-semibold text-primary" : "text-foreground",
-                            )}
-                          >
-                            {item.title || t("未命名")}
-                          </span>
-                          {item.pinned_at && (
-                            <Pin className="size-2.5 shrink-0 text-amber-500 fill-amber-500" />
-                          )}
-                          {isCurrent && (
-                            <span className="shrink-0 rounded bg-primary/15 px-1 py-0.2 text-[9px] font-semibold text-primary">
-                              {t("当前")}
-                            </span>
+                  return (
+                    <SwipeableRow
+                      key={item.id}
+                      actions={swipeActions}
+                      className="rounded-xl overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleSelectCard(item)}
+                        className={cn(
+                          "group flex w-full items-start gap-2.5 rounded-xl border p-2.5 text-left transition active:scale-[0.99]",
+                          isCurrent
+                            ? "border-primary/40 bg-primary/5 shadow-xs"
+                            : "border-transparent bg-canvas/60 hover:border-line hover:bg-muted/60",
+                        )}
+                      >
+                        <div className="mt-0.5 shrink-0">
+                          {item.kind === "discussion" ? (
+                            <MessageSquare className="size-3.5 text-indigo-500" />
+                          ) : item.kind === "ongoing" ? (
+                            <CalendarClock className="size-3.5 text-violet-500" />
+                          ) : (
+                            <CardStatusDot status={visualStatus} className="size-2.5" />
                           )}
                         </div>
 
-                        {item.description && (
-                          <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">
-                            {item.description}
-                          </p>
-                        )}
-                      </div>
-                    </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                "truncate text-xs font-medium leading-snug",
+                                isCurrent ? "font-semibold text-primary" : "text-foreground",
+                              )}
+                            >
+                              {item.title || t("未命名")}
+                            </span>
+                            {item.pinned_at && (
+                              <Pin className="size-2.5 shrink-0 text-amber-500 fill-amber-500" />
+                            )}
+                            {isCurrent && (
+                              <span className="shrink-0 rounded bg-primary/15 px-1 py-0.2 text-[9px] font-semibold text-primary">
+                                {t("当前")}
+                              </span>
+                            )}
+                          </div>
+
+                          {item.description && (
+                            <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                    </SwipeableRow>
                   );
                 })}
-              </div>
+              </SwipeActionGroup>
             )}
           </div>
+
+          <ConfirmDialog
+            open={Boolean(deleteTarget)}
+            onOpenChange={(open) => !open && setDeleteTarget(null)}
+            title={t("删除这个卡片？")}
+            description={t("删除卡片将同步清理相关记录，该操作无法撤销。")}
+            confirmLabel={t("删除卡片")}
+            pending={deleteMutation.isPending}
+            onConfirm={() => {
+              if (deleteTarget) {
+                deleteMutation.mutate(deleteTarget);
+              }
+            }}
+          />
         </SheetContent>
       </UISheet>
     </>

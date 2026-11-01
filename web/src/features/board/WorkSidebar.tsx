@@ -2,14 +2,18 @@ import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Pin,
+  Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Card, TodoState } from "../../shared/api/types";
+import { api } from "../../shared/api/client";
 import {
   ContextSidebar,
   ContextSidebarItem,
 } from "../../shared/ui/ContextSidebar";
-import { Badge } from "../../shared/ui/components";
+import { Badge, ConfirmDialog } from "../../shared/ui/components";
 import {
   CardStatusDot,
   getCardVisualStatus,
@@ -92,6 +96,25 @@ export function WorkSidebar({
     }
   };
 
+  const queryClient = useQueryClient();
+  const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+
+  const pinMutation = useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      api.pinCard(id, pinned),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cards"] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (card: Card) => api.deleteCard(card.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cards"] });
+      setDeleteTarget(null);
+    },
+  });
+
   return (
     <ContextSidebar
       ariaLabel={t("工作列表")}
@@ -147,11 +170,36 @@ export function WorkSidebar({
                     groupCards.map((card) => {
                       const active = card.id === activeCardID;
                       const summary = stripMarkdownSummary(card.description);
+                      const swipeActions = [
+                        {
+                          key: "pin",
+                          label: card.pinned_at ? t("取消置顶") : t("置顶"),
+                          icon: <Pin className="size-4 rotate-45" />,
+                          variant: "primary" as const,
+                          onClick: () => {
+                            pinMutation.mutate({
+                              id: card.id,
+                              pinned: !card.pinned_at,
+                            });
+                          },
+                        },
+                        {
+                          key: "delete",
+                          label: t("删除"),
+                          icon: <Trash2 className="size-4" />,
+                          variant: "danger" as const,
+                          onClick: () => {
+                            setDeleteTarget(card);
+                          },
+                        },
+                      ];
+
                       return (
                         <ContextSidebarItem
                           key={card.id}
                           active={active}
                           onClick={() => onSelect(card)}
+                          swipeActions={swipeActions}
                           icon={
                             <CardStatusDot
                               status={getCardVisualStatus(
@@ -177,6 +225,22 @@ export function WorkSidebar({
           );
         })}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("删除这个任务？")}
+        description={t(
+          "删除任务将同步清理其所有执行尝试和产物，该操作无法撤销。",
+        )}
+        confirmLabel={t("删除任务")}
+        pending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (deleteTarget) {
+            deleteMutation.mutate(deleteTarget);
+          }
+        }}
+      />
     </ContextSidebar>
   );
 }
