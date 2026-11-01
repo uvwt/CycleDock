@@ -1,0 +1,108 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { applyCardStreamEvent as apply } from "../src/shared/realtime/cardStreamState.ts";
+
+const event = (data = {}) => ({ attempt_id: "current", ...data });
+const started = () => apply(null, "attempt.started", event());
+
+test("正文快照覆盖临时气泡，多调用交错仍按工具顺序展示", () => {
+  let live = started();
+  live = apply(live, "reply.preview", event({reply_id:"second",order:2,text:"第二条"}));
+  live = apply(live, "reply.preview", event({reply_id:"first",order:1,text:"第"}));
+  live = apply(live, "reply.preview", event({reply_id:"first",order:1,text:"第一条"}));
+  live = apply(live, "reply.preview", event({reply_id:"first",order:1,text:"第一条"}));
+  assert.deepEqual(live.replies.map((reply) => reply.text), ["第一条", "第二条"]);
+});
+
+test("消息提交绑定正式事件 ID，迟到参数不能重新打开气泡", () => {
+  let live = apply(started(), "reply.preview", event({reply_id:"first",text:"正文"}));
+  live = apply(live, "reply.committed", event({reply_id:"first",event_id:"persisted"}));
+  const committed = live;
+  assert.equal(live.replies[0].eventID, "persisted");
+  live = apply(live, "reply.preview", event({reply_id:"first",text:"late"}));
+  assert.equal(live, committed);
+});
+
+test("路由重试保留已显示的正文并关闭旧预览", () => {
+  let live = apply(started(), "reply.preview", event({reply_id:"saved",text:"已发送"}));
+  live = apply(live, "reply.committed", event({reply_id:"saved",event_id:"persisted"}));
+  live = apply(live, "reply.preview", event({reply_id:"draft",text:"未发送"}));
+  live = apply(live, "reply.reset", event());
+  assert.deepEqual(live.replies.map((reply) => reply.id), ["saved", "draft"]);
+  assert.equal(live.replies[1].failed, true);
+});
+
+test("旧 Attempt 的迟到事件不影响当前回复，终止后不再接受参数", () => {
+  let live = apply(started(), "reply.preview", event({reply_id:"draft",text:"正文"}));
+  assert.equal(apply(live,"attempt.failed",event({attempt_id:"old"})), live);
+  live = apply(live,"attempt.failed",event());
+  assert.equal(live.replies[0].failed, true);
+  assert.equal(live.finished, true);
+  assert.equal(apply(live,"reply.preview",event({reply_id:"draft",text:"late"})), live);
+});
+
+test("任务进度在阶段轮询和执行结束后仍然保留", () => {
+  const task = {
+    id: "task-1",
+    title: "部署服务",
+    status: "active",
+    completed_step_count: 2,
+    step_count: 5,
+    current_step: "检查健康检查",
+  };
+  let live = apply(started(), "attempt.task", event({ task }));
+  live = apply(live, "attempt.stage", event({ stage: "正在执行" }));
+  assert.equal(live.task.title, "部署服务");
+  assert.equal(live.task.current_step, "检查健康检查");
+  live = apply(live, "attempt.finished", event());
+  assert.equal(live.finished, true);
+  assert.equal(live.task.title, "部署服务");
+  live = apply(null, "attempt.snapshot", event({ task }));
+  assert.equal(live.task.completed_step_count, 2);
+});
+
+test("阶段轮询保留正在操作的设备，调用结束或执行终止后清除", () => {
+  let live = apply(started(), "attempt.device", event({ device_name: "RN" }));
+  live = apply(live, "attempt.stage", event({ stage: "正在执行" }));
+  assert.equal(live.deviceName, "RN");
+  live = apply(live, "attempt.device", event());
+  assert.equal(live.deviceName, "");
+  live = apply(started(), "attempt.device", event({ device_name: "RN" }));
+  live = apply(live, "attempt.finished", event());
+  assert.equal(live.deviceName, "");
+  live = apply(null, "attempt.snapshot", event({ device_name: "Studio Mac" }));
+  assert.equal(live.deviceName, "Studio Mac");
+});
+
+test("重连快照恢复多个预览和已提交事件身份", () => {
+  const live = apply(null,"attempt.snapshot",event({replies:[
+    {id:"a",order:0,text:"已发送",event_id:"persisted"},
+    {id:"b",order:1,text:"生成中"},
+  ]}));
+  assert.equal(live.replies.length,2);
+  assert.equal(live.replies[0].eventID,"persisted");
+});
+
+test("取消后开始新执行仍保留已显示的正文，迟到的旧事件不能改写正文", () => {
+  let live = apply(
+    started(),
+    "reply.preview",
+    event({ reply_id: "draft", text: "已经显示的正文" }),
+  );
+  live = apply(live, "attempt.failed", event());
+  live = apply(live, "attempt.started", event({ attempt_id: "next" }));
+  assert.equal(live.previous[0].replies[0].text, "已经显示的正文");
+  assert.equal(
+    apply(
+      live,
+      "reply.preview",
+      event({ reply_id: "draft", text: "迟到内容" }),
+    ),
+    live,
+  );
+  assert.equal(
+    apply(live, "attempt.snapshot", event({ attempt_id: "next" })).previous
+      .length,
+    1,
+  );
+});
