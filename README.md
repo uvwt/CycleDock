@@ -71,7 +71,7 @@ CYCLEDOCK_MODEL_SECRET_KEY=<base64-key>
 CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<base64-key>
 ```
 
-2. Start PostgreSQL, database migrations, and the CycleDock server (automatically pulls `ghcr.io/uvwt/cycledock:latest`; set `CYCLEDOCK_IMAGE=ghcr.io/uvwt/cycledock:v0.1.0` in `.env` to pin a version):
+2. Start PostgreSQL, database migrations, and the CycleDock server (automatically pulls `ghcr.io/uvwt/cycledock-oss:latest`; set `CYCLEDOCK_IMAGE=ghcr.io/uvwt/cycledock-oss:v0.1.0` in `.env` to pin a version):
 
 ```bash
 docker compose up -d

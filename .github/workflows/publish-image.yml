@@ -37,15 +37,15 @@ jobs:
         run: |
           {
             echo "tags<<EOF"
-            echo "ghcr.io/uvwt/cycledock:sha-${GITHUB_SHA}"
+            echo "ghcr.io/uvwt/cycledock-oss:sha-${GITHUB_SHA}"
             if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-              echo "ghcr.io/uvwt/cycledock:main"
+              echo "ghcr.io/uvwt/cycledock-oss:main"
             fi
             if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-              echo "ghcr.io/uvwt/cycledock:${GITHUB_REF_NAME}"
+              echo "ghcr.io/uvwt/cycledock-oss:${GITHUB_REF_NAME}"
               case "${GITHUB_REF_NAME}" in
                 *-*) ;;
-                *) echo "ghcr.io/uvwt/cycledock:latest" ;;
+                *) echo "ghcr.io/uvwt/cycledock-oss:latest" ;;
               esac
             fi
             echo "EOF"
