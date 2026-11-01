@@ -10,61 +10,74 @@ const seen = new Map();
 // 在 Edge/Chrome 里会把前台标签报成 hidden 或未聚焦，不能用来决定是否弹通知。
 const viewingByClient = new Map();
 
-function enqueue(update) {
+function enqueue(update, options = {}) {
   const work = delivery
     .catch((error) => console.error("Card notification failed", error))
-    .then(() => deliverCardUpdate(update));
+    .then(() => deliverCardUpdate(update, options));
   delivery = work;
   return work;
 }
 
-async function deliverCardUpdate(update) {
-  const url = new URL(update.url || "/", self.location.origin);
-  if (url.origin !== self.location.origin) return;
-  const key = `${update.workspaceID}:${update.cardID}`;
-  if (update.revision && seen.get(key) === update.revision) return;
-  const windows = await self.clients.matchAll({
-    type: "window",
-    includeUncontrolled: true,
-  });
-  const alive = new Set(windows.map((client) => client.id));
-  for (const id of viewingByClient.keys()) {
-    if (!alive.has(id)) viewingByClient.delete(id);
+function resolveTargetURL(rawURL, fallbackToRoot) {
+  try {
+    const parsed = new URL(rawURL || "/", self.location.origin);
+    if (parsed.origin === self.location.origin) return parsed;
+  } catch {
+    // 非法 URL 时按调用来源决定忽略或回退根路径。
   }
-  const reported = [...viewingByClient.values()].some(
-    (state) => state.visible && state.cardID === update.cardID,
-  );
-  // 没上报过的旧页面仍按窗口地址兜底。matchAll 的 focused 不可靠，这里不再看它。
-  const visibleWindow = windows.some((client) => {
-    const path = new URL(client.url).pathname;
-    const cardID = path.split("/")[3];
-    return (
-      client.visibilityState === "visible" &&
-      cardID &&
-      /^\/(chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(path) &&
-      decodeURIComponent(cardID) === update.cardID
-    );
-  });
-  const viewing = reported || update.viewing === true || visibleWindow;
+  return fallbackToRoot ? new URL("/", self.location.origin) : null;
+}
+
+async function deliverCardUpdate(update, options = {}) {
+  const fromPush = options.fromPush === true;
+  const url = resolveTargetURL(update.url, fromPush);
+  if (!url) return;
+  const key = `${update.workspaceID}:${update.cardID}`;
   // 正在查看时也消费版本，避免另一个标签页稍后把已读更新再次通知。
   const remember = () => {
     if (!update.revision) return;
     seen.set(key, update.revision);
     if (seen.size > 1000) seen.delete(seen.keys().next().value);
   };
-  if (viewing) {
-    remember();
-    return;
-  }
   const tag = `card:${key}`;
-  const existing = await self.registration.getNotifications({ tag });
-  if (
-    update.revision &&
-    existing.some(
-      (notification) => notification.data?.revision === update.revision,
+  if (!fromPush) {
+    if (update.revision && seen.get(key) === update.revision) return;
+    const windows = await self.clients.matchAll({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    const alive = new Set(windows.map((client) => client.id));
+    for (const id of viewingByClient.keys()) {
+      if (!alive.has(id)) viewingByClient.delete(id);
+    }
+    const reported = [...viewingByClient.values()].some(
+      (state) => state.visible && state.cardID === update.cardID,
+    );
+    // 没上报过的旧页面仍按窗口地址兜底。matchAll 的 focused 不可靠，这里不再看它。
+    const visibleWindow = windows.some((client) => {
+      const path = new URL(client.url).pathname;
+      const cardID = path.split("/")[3];
+      return (
+        client.visibilityState === "visible" &&
+        cardID &&
+        /^\/(chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(path) &&
+        decodeURIComponent(cardID) === update.cardID
+      );
+    });
+    const viewing = reported || update.viewing === true || visibleWindow;
+    if (viewing) {
+      remember();
+      return;
+    }
+    const existing = await self.registration.getNotifications({ tag });
+    if (
+      update.revision &&
+      existing.some(
+        (notification) => notification.data?.revision === update.revision,
+      )
     )
-  )
-    return;
+      return;
+  }
   await self.registration.showNotification(update.title || "卡片有更新", {
     body: update.body || "卡片有更新，点击查看",
     icon: "/cycledock-logo.png",
@@ -104,7 +117,7 @@ self.addEventListener("push", (event) => {
   } catch {
     // 无法解析时仍展示一条通知，避免 Safari 收回权限。
   }
-  event.waitUntil(enqueue(update));
+  event.waitUntil(enqueue(update, { fromPush: true }));
 });
 
 self.addEventListener("notificationclick", (event) => {

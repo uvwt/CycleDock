@@ -1051,6 +1051,149 @@ class CycleDockSmoke(unittest.TestCase):
                 f"runtime-only setting is still visible: {removed}",
             )
 
+    def test_ios_pwa_push_subscription_and_background_idle(self):
+        ios_ua = (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
+        )
+        # 1. iPhone Safari 普通标签页（非主屏幕 standalone）：禁用开关并提示添加到主屏幕，且不弹通知卡片。
+        safari_ctx = self.browser.new_context(user_agent=ios_ua)
+        try:
+            safari_page = safari_ctx.new_page()
+            safari_page.add_init_script(
+                """
+                Object.defineProperty(navigator, "standalone", { value: false, configurable: true });
+                window.Notification = Object.assign(function Notification() {}, {
+                  permission: "default",
+                  requestPermission: async () => "granted",
+                });
+                """
+            )
+            safari_page.goto(BASE + "/settings/general")
+            safari_page.get_by_text(
+                "iPhone 和 iPad 需要先通过分享菜单把 CycleDock 添加到主屏幕"
+            ).wait_for()
+            self.assertTrue(
+                safari_page.get_by_role("switch", name="浏览器通知").is_disabled()
+            )
+            self.assertEqual(
+                safari_page.locator('aside[aria-label="浏览器通知"]').count(), 0
+            )
+        finally:
+            safari_ctx.close()
+
+        # 2. iPhone 主屏幕 PWA standalone：预热后点击一次完成 Apple Web Push 订阅，切后台立刻发 /inactive。
+        pwa_ctx = self.browser.new_context(user_agent=ios_ua)
+        try:
+            pwa_page = pwa_ctx.new_page()
+            saved_subscriptions = []
+            inactive_calls = []
+            vapid_pub = (
+                "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U"
+            )
+
+            pwa_page.route(
+                "**/api/v1/notifications/push",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=f'{{"public_key":"{vapid_pub}"}}',
+                ),
+            )
+            pwa_page.route(
+                "**/api/v1/notifications/push/subscription",
+                lambda route: (
+                    saved_subscriptions.append(route.request.post_data_json),
+                    route.fulfill(status=204, body=""),
+                )[1],
+            )
+            pwa_page.route(
+                "**/api/v1/notifications/push/inactive",
+                lambda route: (
+                    inactive_calls.append(route.request.post_data_json),
+                    route.fulfill(status=204, body=""),
+                )[1],
+            )
+
+            pwa_page.add_init_script(
+                """
+                Object.defineProperty(navigator, "standalone", { value: true, configurable: true });
+                let currentSub = null;
+                let gestureActive = false;
+                window.addEventListener("click", () => {
+                  gestureActive = true;
+                  setTimeout(() => { gestureActive = false; }, 30);
+                }, true);
+                const fakePushManager = {
+                  getSubscription: async () => currentSub,
+                  subscribe: async (opts) => {
+                    if (!gestureActive) {
+                      throw new DOMException("User gesture required on iOS WebKit", "NotAllowedError");
+                    }
+                    currentSub = {
+                      endpoint: "https://web.push.apple.com/QTestIosStandaloneEndpoint",
+                      options: { applicationServerKey: opts.applicationServerKey.buffer },
+                      toJSON: () => ({
+                        endpoint: "https://web.push.apple.com/QTestIosStandaloneEndpoint",
+                        keys: { p256dh: "p256dh-ios-test", auth: "auth-ios-test" },
+                      }),
+                      unsubscribe: async () => { currentSub = null; return true; },
+                    };
+                    return currentSub;
+                  },
+                };
+                const fakeReg = { pushManager: fakePushManager, active: { postMessage() {} } };
+                Object.defineProperty(navigator, "serviceWorker", {
+                  configurable: true,
+                  value: {
+                    register: async () => fakeReg,
+                    ready: Promise.resolve(fakeReg),
+                    getRegistration: async () => fakeReg,
+                  },
+                });
+                window.Notification = Object.assign(function Notification() {}, {
+                  permission: "default",
+                  requestPermission: async () => {
+                    if (!gestureActive) return "default";
+                    window.Notification.permission = "granted";
+                    return "granted";
+                  },
+                });
+                """
+            )
+            pwa_page.goto(BASE + "/settings/general")
+            switch = pwa_page.get_by_role("switch", name="浏览器通知")
+            switch.wait_for()
+            pwa_page.wait_for_function("() => true")
+            # 等待预热请求完成，模拟用户在设置页点击开启开关
+            pwa_page.wait_for_timeout(150)
+            switch.click()
+            expect(switch).to_have_attribute("aria-checked", "true")
+            self.assertGreaterEqual(len(saved_subscriptions), 1)
+            self.assertEqual(
+                saved_subscriptions[0]["endpoint"],
+                "https://web.push.apple.com/QTestIosStandaloneEndpoint",
+            )
+
+            # 模拟 iOS 上滑切回主屏幕或锁屏（仅触发 visibilitychange hidden，不触发 pagehide）
+            pwa_page.evaluate(
+                """
+                Object.defineProperty(document, "visibilityState", {
+                  value: "hidden",
+                  configurable: true,
+                });
+                document.dispatchEvent(new Event("visibilitychange"));
+                """
+            )
+            pwa_page.wait_for_timeout(150)
+            self.assertGreaterEqual(len(inactive_calls), 1)
+            self.assertEqual(
+                inactive_calls[0]["endpoint"],
+                "https://web.push.apple.com/QTestIosStandaloneEndpoint",
+            )
+        finally:
+            pwa_ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
