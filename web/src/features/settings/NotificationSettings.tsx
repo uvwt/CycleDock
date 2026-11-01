@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Field } from "../../shared/ui/components";
@@ -8,11 +8,14 @@ import {
   homeScreenRequired,
   notificationsSupported,
   useNotificationsEnabled,
+  usePushPublicKey,
+  warmPushNotifications,
 } from "../../shared/realtime/notifications";
 
 export function NotificationSettings() {
   const { t } = useTranslation();
   const enabled = useNotificationsEnabled();
+  const pushPublicKey = usePushPublicKey();
   const [pending, setPending] = useState(false);
   const [permission, setPermission] = useState(() =>
     notificationsSupported() ? Notification.permission : "denied",
@@ -20,6 +23,18 @@ export function NotificationSettings() {
   const supported = notificationsSupported();
   const needsHomeScreen = supported && homeScreenRequired();
   const canEnable = supported && permission !== "denied" && !needsHomeScreen;
+
+  useEffect(() => {
+    if (!supported || needsHomeScreen) return;
+    warmPushNotifications();
+    const refreshPermission = () => setPermission(Notification.permission);
+    document.addEventListener("visibilitychange", refreshPermission);
+    window.addEventListener("focus", refreshPermission);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshPermission);
+      window.removeEventListener("focus", refreshPermission);
+    };
+  }, [supported, needsHomeScreen]);
 
   async function toggle() {
     setPending(true);
@@ -82,6 +97,14 @@ export function NotificationSettings() {
             {t("通知权限已被阻止，请在浏览器的网站设置中允许通知。")}
           </p>
         )}
+        {supported &&
+          !needsHomeScreen &&
+          enabled &&
+          pushPublicKey === "" && (
+            <p className="text-sm text-muted-foreground">
+              {t("关闭页面后的推送尚未配置，当前只在网页打开时通知。")}
+            </p>
+          )}
       </div>
     </Field>
   );
