@@ -22,11 +22,17 @@ import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { PlanSidebar } from "../plans/PlanSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
-import type { Card } from "../../shared/api/types";
+import type { Card, DeviceTarget, PendingTurn } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { MobileGlobalNavMenu } from "../../shared/ui/MobileGlobalNavMenu";
 import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
+
+type NavigationState = {
+  initialMessage?: string;
+  initialDeviceTarget?: DeviceTarget | null;
+  initialIdempotencyKey?: string;
+};
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -39,6 +45,10 @@ function CardPageContent() {
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const navState = (location.state as NavigationState | null) || null;
+  const [pendingInitialTurn, setPendingInitialTurn] = useState<string | null>(
+    navState?.initialMessage?.trim() || null,
+  );
   const listVisible = useContextSidebarVisible();
   const { projectID: activeProjectID, setProjectID } = useProject();
 
@@ -128,8 +138,9 @@ function CardPageContent() {
       card.project_id +
       "/" +
       card.id;
-    if (location.pathname !== path) navigate(path, { replace: true });
-  }, [card, navigate, location.pathname]);
+    if (location.pathname !== path)
+      navigate(path, { replace: true, state: location.state });
+  }, [card, navigate, location.pathname, location.state]);
 
   const latestVisibleMessageSequence = useMemo(
     () =>
@@ -272,6 +283,36 @@ function CardPageContent() {
     if (!comment.trim() || blocked || send.isPending) return;
     send.mutate(waiting ? "reply" : "enqueue");
   }
+
+  // 当由首页新建讨论快速跳转进入时，承接并在后台自动发送首条消息
+  useEffect(() => {
+    if (!cardID || !pendingInitialTurn) return;
+    const messageToSend = pendingInitialTurn;
+    const initialKey = navState?.initialIdempotencyKey;
+    const initialDevice = navState?.initialDeviceTarget ?? target;
+
+    // 避免重复触发，清理路由 state
+    navigate(location.pathname, { replace: true, state: {} });
+
+    api
+      .send(cardID, messageToSend, "enqueue", initialKey, initialDevice)
+      .then(async () => {
+        setPendingInitialTurn(null);
+        await sync();
+      })
+      .catch((error) => {
+        setPendingInitialTurn(null);
+        // 发送失败时将消息填入输入框，方便用户重试
+        setComment(messageToSend);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t("首条消息发送失败，已保留在输入框"),
+        );
+      });
+    // 仅挂载时根据 initialMessage 触发一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardID]);
 
   function back() {
     navigate(
@@ -485,7 +526,24 @@ function CardPageContent() {
                 events={detail.data.timeline}
                 live={stream.live}
                 cardKind={card.kind}
-                pendingTurns={detail.data.pending_turns}
+                pendingTurns={
+                  pendingInitialTurn &&
+                  !detail.data.pending_turns.some(
+                    (turn) => turn.content === pendingInitialTurn,
+                  )
+                    ? [
+                        {
+                          id: "initial-temp",
+                          sequence: 0,
+                          source: "human",
+                          dispatch_mode: "enqueue",
+                          content: pendingInitialTurn,
+                          created_at: new Date().toISOString(),
+                        } as PendingTurn,
+                        ...detail.data.pending_turns,
+                      ]
+                    : detail.data.pending_turns
+                }
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={detail.data.attempt_history}
                 bottomInsetPx={composerDockHeight}
