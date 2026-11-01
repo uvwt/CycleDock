@@ -247,18 +247,26 @@ export function Modal({
   onOpenChange,
   title,
   description,
+  preventOutsideClose = false,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
+  preventOutsideClose?: boolean;
   children: ReactNode;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         {...(!description ? { "aria-describedby": undefined } : {})}
+        onPointerDownOutside={
+          preventOutsideClose ? (e) => e.preventDefault() : undefined
+        }
+        onInteractOutside={
+          preventOutsideClose ? (e) => e.preventDefault() : undefined
+        }
         className="max-h-[85dvh] overflow-y-auto sm:max-w-[520px]"
       >
         <DialogHeader className="pr-6 text-left">
