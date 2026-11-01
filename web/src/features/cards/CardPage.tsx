@@ -512,7 +512,7 @@ function CardPageContent() {
               >
                 <div
                   ref={composerDockRef}
-                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6"
+                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3"
                 >
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
