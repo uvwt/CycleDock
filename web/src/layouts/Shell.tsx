@@ -172,7 +172,7 @@ export function Shell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen bg-canvas text-strong md:flex">
+    <div className="h-dvh h-screen w-full overflow-hidden bg-canvas text-strong md:flex">
       <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line/70 bg-surface/90 py-3.5 backdrop-blur-md md:flex">
         <button
           type="button"
@@ -260,7 +260,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {!focusedConversation && (
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface px-3 md:hidden">
             <button
