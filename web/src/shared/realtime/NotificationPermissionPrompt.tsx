@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../ui/components";
 import {
   enableNotifications,
+  homeScreenRequired,
   notificationsSupported,
   useNotificationsEnabled,
+  warmPushNotifications,
 } from "./notifications";
 
 const dismissedKey = "cycledock.notification-prompt-dismissed";
@@ -22,14 +24,18 @@ export function NotificationPermissionPrompt() {
       return false;
     }
   });
+  const visible =
+    !dismissed &&
+    !enabled &&
+    notificationsSupported() &&
+    !homeScreenRequired() &&
+    Notification.permission === "default";
 
-  if (
-    dismissed ||
-    enabled ||
-    !notificationsSupported() ||
-    Notification.permission !== "default"
-  )
-    return null;
+  useEffect(() => {
+    if (visible) warmPushNotifications();
+  }, [visible]);
+
+  if (!visible) return null;
 
   function dismiss() {
     setDismissed(true);

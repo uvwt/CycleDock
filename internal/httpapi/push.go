@@ -10,11 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"unicode/utf8"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
+)
+
+const (
+	maxPushTitleRunes = 80
+	maxPushBodyRunes  = 240
+	singlePushTimeout = 15 * time.Second
 )
 
 type pushSender interface {
@@ -294,7 +302,7 @@ func (api *API) ackPushCards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) sendCardPush(ctx context.Context, workspaceID uuid.UUID, update cardUpdate, subs []store.PushSubscription) error {
-	title := update.Title
+	title := truncatePushText(update.Title, maxPushTitleRunes)
 	if title == "" {
 		title = "新消息"
 	}
@@ -304,7 +312,7 @@ func (api *API) sendCardPush(ctx context.Context, workspaceID uuid.UUID, update 
 	}
 	payload, err := json.Marshal(pushPayload{
 		Type: "card.updated", WorkspaceID: workspaceID.String(), CardID: update.ID, Revision: update.Revision,
-		Title: title, Body: cardPushBody(update),
+		Title: title, Body: truncatePushText(cardPushBody(update), maxPushBodyRunes),
 		URL: "/" + section + "/" + url.PathEscape(update.ProjectID) + "/" + url.PathEscape(update.ID),
 	})
 	if err != nil {
@@ -312,19 +320,43 @@ func (api *API) sendCardPush(ctx context.Context, workspaceID uuid.UUID, update 
 	}
 	topic := strings.ReplaceAll(update.ID, "-", "")
 	var sendErr error
+	var deleteErr error
+	delivered := 0
+	failed := 0
 	for _, sub := range subs {
-		err := api.push.Send(ctx, sub.Endpoint, sub.P256dh, sub.AuthSecret, topic, payload)
+		sendCtx, cancel := context.WithTimeout(ctx, singlePushTimeout)
+		err := api.push.Send(sendCtx, sub.Endpoint, sub.P256dh, sub.AuthSecret, topic, payload)
+		cancel()
 		if errors.Is(err, webpush.ErrGone) {
-			if deleteErr := api.store.DeletePushSubscriptionByEndpoint(ctx, sub.Endpoint); deleteErr != nil && sendErr == nil {
-				sendErr = deleteErr
+			if err := api.store.DeletePushSubscriptionByEndpoint(ctx, sub.Endpoint); err != nil && deleteErr == nil {
+				deleteErr = err
 			}
 			continue
 		}
-		if err != nil && sendErr == nil {
-			sendErr = err
+		if err != nil {
+			failed++
+			if sendErr == nil {
+				sendErr = err
+			}
+			if api.logger != nil {
+				api.logger.Warn("card web push delivery failed",
+					"workspace_id", workspaceID,
+					"card_id", update.ID,
+					"endpoint_host", pushEndpointHost(sub.Endpoint),
+					"error", err,
+				)
+			}
+			continue
 		}
+		delivered++
 	}
-	return sendErr
+	if deleteErr != nil {
+		return deleteErr
+	}
+	if delivered == 0 && failed > 0 {
+		return sendErr
+	}
+	return nil
 }
 
 func newCardMessage(current cardUpdate, previous store.PushCardSnapshot) bool {
@@ -333,4 +365,21 @@ func newCardMessage(current cardUpdate, previous store.PushCardSnapshot) bool {
 
 func cardPushBody(current cardUpdate) string {
 	return current.MessagePreview
+}
+
+func truncatePushText(text string, maxRunes int) string {
+	text = strings.TrimSpace(text)
+	if maxRunes <= 0 || utf8.RuneCountInString(text) <= maxRunes {
+		return text
+	}
+	runes := []rune(text)
+	return strings.TrimSpace(string(runes[:maxRunes-1])) + "…"
+}
+
+func pushEndpointHost(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "unknown"
+	}
+	return parsed.Host
 }
