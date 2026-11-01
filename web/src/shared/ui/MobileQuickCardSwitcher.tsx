@@ -200,7 +200,7 @@ export function MobileQuickCardSwitcher({
         aria-label={t("快速切换卡片")}
         onClick={() => handleOpenChange(true)}
         className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground md:hidden",
+          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground md:hidden",
           className,
         )}
       >
