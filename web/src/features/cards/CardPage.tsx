@@ -424,16 +424,24 @@ function CardPageContent() {
               />
             </div>
 
-            {/* 手机端窄屏：点击按钮后直接在右上角按钮下方展开圆角卡片（无叉号、非全高抽屉） */}
+            {/* 手机端窄屏：展开任务详情浮层，配备防止误触穿透遮罩与关闭控制 */}
             {infoOpen && (
               <div className="lg:hidden">
-                <CardHeaderInfoCard
-                  card={card}
-                  detail={detail.data}
-                  projectCards={projectCards.data || []}
-                  task={stream.live?.task}
-                  onSync={sync}
+                <div
+                  className="fixed inset-0 z-30 bg-background/40 backdrop-blur-[1px]"
+                  aria-hidden="true"
+                  onClick={() => setInfoOpen(false)}
                 />
+                <div className="absolute right-0 top-full mt-2 z-40">
+                  <CardHeaderInfoCard
+                    card={card}
+                    detail={detail.data}
+                    projectCards={projectCards.data || []}
+                    task={stream.live?.task}
+                    onSync={sync}
+                    onClose={() => setInfoOpen(false)}
+                  />
+                </div>
               </div>
             )}
           </div>
