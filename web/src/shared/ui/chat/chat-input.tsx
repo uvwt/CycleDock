@@ -47,7 +47,7 @@ export const ChatInput = React.forwardRef<HTMLTextAreaElement, ChatInputProps>(
         readOnly={readOnly}
         onChange={(event) => onChange(event.target.value)}
         className={cn(
-          "max-h-40 min-h-[36px] w-full resize-none bg-transparent py-1.5 px-2 text-[15px] outline-none placeholder:text-muted-foreground focus-visible:outline-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 read-only:text-secondary-foreground overflow-y-auto overscroll-contain",
+          "max-h-40 min-h-[36px] w-full resize-none bg-transparent py-1.5 px-2 text-base md:text-[15px] outline-none placeholder:text-muted-foreground focus-visible:outline-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 read-only:text-secondary-foreground overflow-y-auto overscroll-contain",
           className,
         )}
         onKeyDown={(event) => {

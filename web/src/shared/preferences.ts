@@ -35,6 +35,10 @@ function applyTheme() {
   const dark = theme === "dark" || (theme === "system" && media?.matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  const themeColor = dark ? "#15202e" : "#ffffff";
+  document
+    .querySelectorAll('meta[name="theme-color"]')
+    .forEach((meta) => meta.setAttribute("content", themeColor));
 }
 
 export function initializePreferences() {
