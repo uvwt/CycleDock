@@ -48,7 +48,7 @@ export function MainChatDock() {
     /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(location.pathname);
 
   // 仅在当前主区域正处于主聊天自身详情页时全局隐藏，避免在主聊天全屏视图中重叠小浮窗；
-  // 手机端窄屏处于任意具体会话详情页（讨论/待办/计划）时也隐藏悬浮球，防止遮挡底部输入框右侧的发送与中止按钮
+  // 处于具体会话详情页（讨论/待办/计划）时，上调悬浮球及 Peek 气泡的垂直高度，避免遮挡底部输入框及操作按钮
   const isViewingMainDiscussion =
     Boolean(cardID) &&
     (location.pathname === `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}` ||
@@ -416,8 +416,10 @@ export function MainChatDock() {
     <>
       {peek && !open && (
         <div
-          className={`fixed right-4 bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)] z-40 ${
-            isFocusedConversation ? "hidden md:block" : ""
+          className={`fixed right-4 z-40 transition-all ${
+            isFocusedConversation
+              ? "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+9rem)]"
+              : "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)]"
           }`}
         >
           <button
@@ -603,8 +605,10 @@ export function MainChatDock() {
 
       {!open && (
         <div
-          className={`fixed right-4 bottom-[max(1.25rem,env(safe-area-inset-bottom))] z-40 ${
-            isFocusedConversation ? "hidden md:block" : ""
+          className={`fixed right-4 z-40 transition-all ${
+            isFocusedConversation
+              ? "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)]"
+              : "bottom-[max(1.25rem,env(safe-area-inset-bottom))]"
           }`}
         >
           <button
