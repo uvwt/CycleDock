@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -186,6 +186,21 @@ export default function BoardPage() {
   const [description, setDescription] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
   const [todoDescription, setTodoDescription] = useState("");
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(min-width: 1024px)").matches;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(min-width: 1024px)");
+    const listener = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  }, []);
+
   const {
     projectID,
     isPending: projectsPending,
@@ -377,7 +392,8 @@ export default function BoardPage() {
           ) : (
             <>
               {/* 移动端 (lg:hidden)：顶部分段 Tabs + 左右平滑滚动单列容器 */}
-              <div className="flex min-h-0 flex-1 flex-col lg:hidden">
+              {!isDesktop && (
+                <div className="flex min-h-0 flex-1 flex-col">
                 {/* 顶部吸顶分段器 Tabs */}
                 <div className="shrink-0 pb-3">
                   <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1.5 scrollbar-none">
@@ -442,9 +458,11 @@ export default function BoardPage() {
                   ))}
                 </div>
               </div>
+              )}
 
               {/* 桌面端 (hidden lg:flex)：成熟的 4 列并行看板与拖拽视图 */}
-              <div className="hidden min-h-0 flex-1 flex-col lg:flex">
+              {isDesktop && (
+                <div className="flex min-h-0 flex-1 flex-col">
                 <DndContext sensors={sensors} onDragEnd={dragEnd}>
                   <div className="grid min-h-0 flex-1 grid-cols-4 gap-3.5 overflow-visible">
                     {states.map((state) => (
@@ -458,6 +476,7 @@ export default function BoardPage() {
                   </div>
                 </DndContext>
               </div>
+              )}
             </>
           )}
         </div>
