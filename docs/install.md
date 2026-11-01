@@ -47,6 +47,8 @@ Built-in Cycle Agent 的**模型 API Key** 仍由进程环境注入。默认 Com
 CYCLEDOCK_MODEL_API_KEY=<secret>
 ```
 
+内置 Agent 默认单进程并发上限为 `CYCLEDOCK_AGENT_MAX_CONCURRENT=32`，单工作空间跨实例共享并发上限为 `CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE=10`（均须为正整数，可按宿主机资源与模型配额调整）。
+
 模型设置保存的是环境变量**名称**。普通 MCP 设置直接填写真实 Bearer Token，由后端加密写入 PostgreSQL，不再依赖单独注入 MCP Token 环境变量；无 Token 的 MCP 连接可以直接配置。
 
 若要保存带 Bearer Token 的普通 MCP 连接，在服务端配置固定的 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`（32 字节随机值，base64 或 hex），并确保所有副本使用同一密钥。该密钥仅由服务端读取，不能写入 PostgreSQL、前端或 Git。

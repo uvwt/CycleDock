@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,81 @@ func TestSenderPostsEncryptedRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "certificate") && !strings.Contains(err.Error(), "tls") && !strings.Contains(err.Error(), "x509") {
 		t.Fatalf("send error = %v", err)
+	}
+
+	// 使用信任测试证书的客户端验证完整的加密推送请求头以及 Apple/FCM 响应状态处理。
+	sender.client = server.Client()
+	err = sender.Send(context.Background(), server.URL+"/wpush/v2/secret-token", base64.RawURLEncoding.EncodeToString(browserKey.PublicKey().Bytes()), base64.RawURLEncoding.EncodeToString(auth), "cardtopic01234567890123456789012", []byte(`{"title":"卡片有更新"}`))
+	if err != nil {
+		t.Fatalf("trusted send error = %v", err)
+	}
+	if !strings.HasPrefix(authorization, "vapid t=") || encoding != "aes128gcm" {
+		t.Fatalf("unexpected headers: auth=%q encoding=%q", authorization, encoding)
+	}
+}
+
+func TestSenderClassifiesEndpointErrorsWithoutLeakingToken(t *testing.T) {
+	privateKey, publicKey, err := lib.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := New(publicKey, privateKey, "HTTPS://cycledock.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sender.subject != "https://cycledock.example.com" {
+		t.Fatalf("normalized subject = %q", sender.subject)
+	}
+	browserKey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := make([]byte, 16)
+	if _, err := rand.Read(auth); err != nil {
+		t.Fatal(err)
+	}
+	p256dh := base64.RawURLEncoding.EncodeToString(browserKey.PublicKey().Bytes())
+	authSecret := base64.RawURLEncoding.EncodeToString(auth)
+
+	var status int
+	var body string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+	sender.client = server.Client()
+	endpoint := server.URL + "/wpush/v2/private-capability-token"
+
+	for _, tc := range []struct {
+		status int
+		body   string
+		gone   bool
+	}{
+		{status: http.StatusGone, body: `{"reason":"Unregistered"}`, gone: true},
+		{status: http.StatusBadRequest, body: `{"reason":"BadDeviceToken"}`, gone: true},
+		{status: http.StatusForbidden, body: `{"reason":"VapidPkHashMismatch"}`, gone: true},
+		{status: http.StatusForbidden, body: `{"reason":"BadJwtToken"}`, gone: false},
+	} {
+		status = tc.status
+		body = tc.body
+		err := sender.Send(context.Background(), endpoint, p256dh, authSecret, "cardtopic", []byte(`{"title":"test"}`))
+		if tc.gone {
+			if !errors.Is(err, ErrGone) {
+				t.Fatalf("status %d (%s): got %v, want ErrGone", tc.status, tc.body, err)
+			}
+			continue
+		}
+		if err == nil || errors.Is(err, ErrGone) {
+			t.Fatalf("status %d (%s): got %v, want diagnostic error", tc.status, tc.body, err)
+		}
+		if !strings.Contains(err.Error(), "BadJwtToken") {
+			t.Fatalf("error missing response reason: %v", err)
+		}
+		if strings.Contains(err.Error(), "private-capability-token") {
+			t.Fatalf("error leaked endpoint token: %v", err)
+		}
 	}
 }
 
