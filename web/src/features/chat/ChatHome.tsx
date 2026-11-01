@@ -83,7 +83,7 @@ export default function ChatHome() {
               title={t("打开讨论列表")}
               aria-label={t("打开讨论列表")}
               onClick={() => setMobileListOpen(true)}
-              className="absolute top-3 left-3 z-10 grid size-9 place-items-center rounded-xl border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur hover:bg-muted md:hidden"
+              className="absolute top-3 left-3 z-10 grid size-9 place-items-center rounded-xl border border-line bg-surface text-muted-foreground shadow-sm hover:bg-muted md:hidden"
             >
               <PanelLeft className="size-5" />
             </button>

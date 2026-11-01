@@ -262,7 +262,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <div className="min-w-0 flex-1">
         {!focusedConversation && (
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface/95 px-3 backdrop-blur md:hidden">
+          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface px-3 md:hidden">
             <button
               type="button"
               onClick={handleLogoClick}

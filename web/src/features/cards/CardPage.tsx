@@ -364,7 +364,9 @@ function CardPageContent() {
   );
 
   return (
-    <main className="h-dvh min-h-0 bg-surface">
+    <main
+      className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+    >
       <div
         className={`flex h-full min-h-0 w-full overflow-hidden`}
       >
@@ -377,6 +379,11 @@ function CardPageContent() {
         <section
           className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
+          <div
+            aria-hidden="true"
+            data-mobile-top-surface
+            className={`pointer-events-none fixed inset-x-0 top-0 z-10 h-14 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          />
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
           <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
@@ -391,7 +398,7 @@ function CardPageContent() {
                 } ${
                   infoOpen
                     ? "border-primary/40 bg-primary/10 text-primary font-medium"
-                    : "border-line bg-surface/90 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
                 <Info className="size-4 sm:size-3.5" />
