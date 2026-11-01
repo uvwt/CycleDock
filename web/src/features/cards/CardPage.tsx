@@ -1,6 +1,7 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Info, PanelLeft } from "lucide-react";
@@ -89,6 +90,33 @@ function CardPageContent() {
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
+
+  // 手机端滑动手势：右滑呼出左侧导航/卡片抽屉，左滑呼出右侧任务详情
+  const handleSwipeRight = useCallback(() => {
+    // 仅在移动端屏幕（<1024px，对应 tailwind lg 断点）触发
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (infoOpen) {
+      setInfoOpen(false);
+    } else {
+      setContextSidebarOpen(true);
+    }
+  }, [infoOpen]);
+
+  const handleSwipeLeft = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (contextSidebarOpen) {
+      setContextSidebarOpen(false);
+    } else {
+      setInfoOpen(true);
+    }
+  }, [contextSidebarOpen]);
+
+  const containerRef = useSwipeGesture<HTMLElement>({
+    onSwipeRight: handleSwipeRight,
+    onSwipeLeft: handleSwipeLeft,
+    threshold: 45,
+    horizontalRatio: 1.5,
+  });
 
   useEffect(() => {
     const el = composerDockRef.current;
@@ -366,6 +394,7 @@ function CardPageContent() {
 
   return (
     <main
+      ref={containerRef}
       className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
     >
       <div
@@ -424,15 +453,15 @@ function CardPageContent() {
               />
             </div>
 
-            {/* 手机端窄屏：展开任务详情浮层，配备防止误触穿透遮罩与关闭控制 */}
-            {infoOpen && (
-              <div className="lg:hidden">
-                <div
-                  className="fixed inset-0 z-30 bg-background/40 backdrop-blur-[1px]"
-                  aria-hidden="true"
-                  onClick={() => setInfoOpen(false)}
-                />
-                <div className="absolute right-0 top-full mt-2 z-40">
+            {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
+            <div className="lg:hidden">
+              <Sheet
+                open={infoOpen}
+                onOpenChange={setInfoOpen}
+                side="right"
+                title={t("任务详情")}
+              >
+                <div className="-m-5 p-4">
                   <CardHeaderInfoCard
                     card={card}
                     detail={detail.data}
@@ -442,8 +471,8 @@ function CardPageContent() {
                     onClose={() => setInfoOpen(false)}
                   />
                 </div>
-              </div>
-            )}
+              </Sheet>
+            </div>
           </div>
 
           {/* 移动端呼出侧边栏悬浮在左上角 */}
