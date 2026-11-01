@@ -14,7 +14,7 @@ export const ChatMessageList = React.forwardRef<
     <div
       ref={ref}
       className={cn(
-        "scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-4 pt-16 pb-6 sm:px-6 sm:pt-20",
+        "scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-3 pt-16 pb-6 sm:px-6 sm:pt-20",
         smooth && "scroll-smooth",
         className,
       )}

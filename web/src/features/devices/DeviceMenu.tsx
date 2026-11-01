@@ -68,7 +68,7 @@ export function DeviceMenu() {
           type="button"
           aria-label={t("设备在线列表")}
           title={t("设备在线列表")}
-          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface/90 px-2.5 text-xs text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted data-[state=open]:bg-muted"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs text-muted-foreground shadow-sm transition hover:bg-muted data-[state=open]:bg-muted"
         >
           <Monitor className="size-3.5" />
           <span className="max-w-16 truncate sm:max-w-40">

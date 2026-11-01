@@ -352,7 +352,9 @@ function CardPageContent() {
   );
 
   return (
-    <main className="h-dvh min-h-0 bg-surface">
+    <main
+      className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+    >
       <div
         className={`flex h-full min-h-0 w-full overflow-hidden`}
       >
@@ -365,6 +367,11 @@ function CardPageContent() {
         <section
           className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
+          <div
+            aria-hidden="true"
+            data-mobile-top-surface
+            className={`pointer-events-none fixed inset-x-0 top-0 z-10 h-14 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          />
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
           <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-2 sm:right-4 max-w-[calc(100vw-1.5rem)]">
             <div className="flex items-center gap-1.5">
@@ -374,10 +381,10 @@ function CardPageContent() {
                 aria-label={t("任务详情")}
                 title={t("任务详情")}
                 onClick={() => setInfoOpen((prev) => !prev)}
-                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs shadow-sm backdrop-blur transition ${
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs shadow-sm transition ${
                   infoOpen
                     ? "border-primary/40 bg-primary/10 text-primary font-medium"
-                    : "border-line bg-surface/90 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
                 <Info className="size-3.5" />
@@ -416,7 +423,7 @@ function CardPageContent() {
           </div>
 
           {/* 移动端呼出侧边栏悬浮在左上角 */}
-          <div className="absolute top-3 left-3 z-10 flex items-center gap-2 lg:hidden">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-2 lg:hidden">
             <MobileGlobalNavMenu />
             <button
               type="button"
@@ -435,7 +442,7 @@ function CardPageContent() {
                     : t("打开工作列表")
               }
               onClick={() => setContextSidebarOpen(true)}
-              className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur hover:bg-muted"
+              className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-surface text-muted-foreground shadow-sm hover:bg-muted"
             >
               <PanelLeft className="size-4" />
             </button>
@@ -483,7 +490,7 @@ function CardPageContent() {
                     : "from-surface via-surface/90"
                 } to-transparent pt-10 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}
               >
-                <div className="pointer-events-auto mx-auto w-full max-w-3xl px-4 sm:px-6">
+                <div className="pointer-events-auto mx-auto w-full max-w-3xl px-3 sm:px-6">
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
                       {t("此讨论已归档，不能继续发送消息")}

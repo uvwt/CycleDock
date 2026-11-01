@@ -4,7 +4,7 @@ import { Check, CheckCheck } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 const chatBubbleVariants = cva(
-  "flex gap-2 max-w-[85%] w-fit relative group",
+  "flex gap-2 max-w-[92%] sm:max-w-[85%] w-fit relative group",
   {
     variants: {
       variant: {

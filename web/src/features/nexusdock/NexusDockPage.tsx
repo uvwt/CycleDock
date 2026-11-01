@@ -296,7 +296,7 @@ export default function NexusDockPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("搜索设备、Skill 或 MCP…")}
-                className="h-9 w-full rounded-xl border border-line bg-surface pl-9 pr-3 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-line focus:outline-none focus:ring-1 focus:ring-primary shadow-2xs transition"
+                className="h-9 w-full rounded-xl border border-line bg-surface pl-9 pr-3 text-base md:text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-line focus:outline-none focus:ring-1 focus:ring-primary shadow-2xs transition"
               />
             </div>
 
