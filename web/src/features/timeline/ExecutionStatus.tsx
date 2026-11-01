@@ -173,7 +173,7 @@ function AgentAttempt({
         className="group flex min-w-0"
         data-attempt-question={attempt.question ? id : undefined}
       >
-        <div className="min-w-0 max-w-[78%]">
+        <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             <span className="font-semibold text-foreground/80">Cycle</span>
             <div className="inline-flex items-center gap-x-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
@@ -203,7 +203,7 @@ function AgentAttempt({
     <>
       {attempt.question && (
         <article className="flex min-w-0" data-attempt-question={id}>
-          <div className="min-w-0 max-w-[78%]">
+          <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
             <p className="mb-1.5 text-xs font-semibold text-muted-foreground">
               Cycle
             </p>

@@ -483,7 +483,7 @@ function CardPageContent() {
                     : "from-surface via-surface/90"
                 } to-transparent pt-10 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}
               >
-                <div className="pointer-events-auto mx-auto w-full max-w-3xl px-4 sm:px-6">
+                <div className="pointer-events-auto mx-auto w-full max-w-3xl px-3 sm:px-6">
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
                       {t("此讨论已归档，不能继续发送消息")}

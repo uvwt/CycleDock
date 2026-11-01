@@ -167,7 +167,7 @@ function EventRow({
             data-sequence={event.sequence}
             data-message-group-start={showSender}
             variant="received"
-            className="w-fit max-w-[85%]"
+            className="w-fit max-w-[94%] sm:max-w-[85%]"
           >
             <div className="flex min-w-0 flex-col items-start">
               {showSender && (
@@ -349,7 +349,7 @@ function EventRow({
         data-sequence={event.sequence}
         data-message-group-start={showSender}
         variant={human ? "sent" : "received"}
-        className={`w-fit ${compact ? "max-w-[88%]" : "max-w-[85%]"} ${human ? "ml-auto" : ""}`}
+        className={`w-fit ${compact ? "max-w-[88%]" : "max-w-[92%] sm:max-w-[85%]"} ${human ? "ml-auto" : ""}`}
       >
         <div
           className={`flex min-w-0 flex-col ${human ? "items-end" : "items-start"}`}
@@ -461,7 +461,7 @@ function EventRow({
             className={
               compact
                 ? `pointer-events-none absolute -bottom-3 z-10 pb-0 group-hover:pointer-events-auto group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "right-1" : "left-1"}`
-                : undefined
+                : `max-sm:pointer-events-none max-sm:absolute max-sm:-bottom-3 max-sm:z-10 max-sm:pb-0 max-sm:group-hover:pointer-events-auto max-sm:group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-sm:has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "max-sm:right-1" : "max-sm:left-1"}`
             }
           >
             <ChatBubbleAction
