@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	DefaultMaxConcurrent             = 16
+	DefaultMaxConcurrent             = 32
 	DefaultMaxConcurrentPerWorkspace = 10
 )
 

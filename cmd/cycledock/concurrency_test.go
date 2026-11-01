@@ -15,7 +15,7 @@ func TestConcurrencyEnvironmentRequiresPositiveInteger(t *testing.T) {
 		{
 			envKey:      "CYCLEDOCK_AGENT_MAX_CONCURRENT",
 			defaultVal:  agent.DefaultMaxConcurrent,
-			expectedDef: 16,
+			expectedDef: 32,
 		},
 		{
 			envKey:      "CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE",

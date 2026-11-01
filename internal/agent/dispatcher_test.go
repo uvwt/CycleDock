@@ -8,8 +8,8 @@ import (
 
 func TestNewDispatcherAppliesDefaultConcurrencyLimits(t *testing.T) {
 	dispatcher := NewDispatcher(nil, modelclient.New(), nil, DispatcherConfig{})
-	if dispatcher.maxConcurrent != 16 {
-		t.Fatalf("default maxConcurrent = %d, want 16", dispatcher.maxConcurrent)
+	if dispatcher.maxConcurrent != 32 {
+		t.Fatalf("default maxConcurrent = %d, want 32", dispatcher.maxConcurrent)
 	}
 	if dispatcher.maxConcurrentPerWorkspace != 10 {
 		t.Fatalf("default maxConcurrentPerWorkspace = %d, want 10", dispatcher.maxConcurrentPerWorkspace)
