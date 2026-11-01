@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	DefaultMaxConcurrent             = 16
-	DefaultMaxConcurrentPerWorkspace = 4
+	DefaultMaxConcurrent             = 32
+	DefaultMaxConcurrentPerWorkspace = 10
 )
 
 type DispatcherConfig struct {
