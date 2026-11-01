@@ -20,12 +20,14 @@ export function ProjectSwitcherWithSettings({
   onChange,
   onCreate,
   compact = false,
+  compactSize = "md",
 }: {
   projects: Project[];
   projectID: string;
   onChange: (projectID: string) => void;
   onCreate?: () => void;
   compact?: boolean;
+  compactSize?: "sm" | "md";
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const project = projects.find((item) => item.id === projectID);
@@ -39,6 +41,7 @@ export function ProjectSwitcherWithSettings({
         onCreate={onCreate}
         onManage={project ? () => setSettingsOpen(true) : undefined}
         compact={compact}
+        compactSize={compactSize}
       />
       {project && (
         <ProjectSettingsDialog
