@@ -141,7 +141,7 @@ export function DiscussionSidebar({
                 </span>
               )}
             </div>
-            <HintTooltip content={t("新建讨论")}>
+            <HintTooltip content={t("新建讨论")} side="bottom">
               <Button
                 variant="ghost"
                 size="icon-xs"
