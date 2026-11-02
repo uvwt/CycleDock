@@ -117,13 +117,30 @@ func TestPushWaitsUntilThePageCloses(t *testing.T) {
 		t.Fatalf("user comment was pushed: %+v", sender.sent)
 	}
 
-	// 2. 模型回复消息，当页面还开着时（Touch 活跃状态）不应推送
+	// 2. 模型回复消息：中间进度气泡（end_turn=false）在页面 Idle 时也不应触发推送；
+	// 最终答复（end_turn=true）在页面还开着时（Touch 活跃状态）不应推送，关掉后补推。
 	if _, err := dataStore.CreateHumanTurn(ctx, workspaceID, card.ID, sourceID, "问个问题", uuid.NewString(), domain.DispatchModeEnqueue); err != nil {
 		t.Fatal(err)
 	}
 	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, runner.ID, time.Now(), time.Minute)
 	if err != nil || claim == nil {
 		t.Fatalf("claim turn: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: runner.ID, Message: store.ReplyMessage{Type: "text", Content: "正在排查中…", EndTurn: false},
+		IdempotencyKey: "push-progress-ignored",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dataStore.IdlePushSubscription(ctx, workspaceID, userID, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.deliverPushes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("intermediate progress message was pushed: %+v", sender.sent)
 	}
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
 		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: claim.Attempt.ID,

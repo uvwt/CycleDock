@@ -141,8 +141,25 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	if err != nil || third == nil {
 		t.Fatalf("claim message previews: %v", err)
 	}
+	// 中间过程气泡（end_turn=false）不应进入通知摘要，保持上一轮最终回复摘要不变。
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: third.Attempt.ID,
+		RunnerSourceID: runner.ID, Message: store.ReplyMessage{Type: "text", Content: "正在生成报告…", EndTurn: false},
+		IdempotencyKey: uuid.NewString(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updatesAfterProgress, err := api.cardUpdates(ctx, workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range updatesAfterProgress {
+		if candidate.ID == card.ID.String() && candidate.MessagePreview != update.MessagePreview {
+			t.Fatalf("intermediate progress message should not overwrite notification preview: got %q, want %q", candidate.MessagePreview, update.MessagePreview)
+		}
+	}
 	for _, message := range []store.ReplyMessage{
-		{Type: "attachment", URL: "https://example.com/report.pdf", Alt: "检查报告"},
+		{Type: "attachment", URL: "https://example.com/report.pdf", Alt: "检查报告", EndTurn: true},
 		{Type: "choice", EndTurn: true, Widget: &store.ChoiceWidget{Question: "继续执行吗？", Options: []store.ChoiceOption{
 			{Value: "yes", Label: "继续"}, {Value: "no", Label: "停止"},
 		}}},
