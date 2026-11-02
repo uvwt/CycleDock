@@ -445,7 +445,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         composer = self.page.locator("main form")
         composer.get_by_role("button", name="中止", exact=True).wait_for()
-        self.assertEqual(composer.get_by_role("button").count(), 1)
+        self.assertEqual(composer.get_by_role("button").count(), 2)
         text = composer.get_by_role("textbox")
         text.fill("后续要求")
         self.assertEqual(composer.get_by_role("button", name="中止", exact=True).count(), 0)
@@ -454,7 +454,7 @@ class CycleDockSmoke(unittest.TestCase):
         with self.page.expect_request(lambda request: request.url.endswith("/attempts/attempt-running/cancel")):
             composer.get_by_role("button", name="中止", exact=True).click()
         composer.get_by_role("button", name="发送", exact=True).wait_for()
-        self.assertEqual(composer.get_by_role("button").count(), 1)
+        self.assertEqual(composer.get_by_role("button").count(), 2)
         self.assertEqual(comments, [], "stop must not submit a message")
         self.assertTrue(composer.get_by_role("button", name="发送", exact=True).is_disabled())
 
