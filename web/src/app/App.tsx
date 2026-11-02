@@ -17,6 +17,7 @@ import { loadPushPublicKey } from "../shared/realtime/notifications";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
 import { ProjectProvider } from "./ProjectContext";
+import { useProject } from "./project-context";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 const ChatHome = lazy(() => import("../features/chat/ChatHome"));
@@ -97,6 +98,8 @@ function Authenticated() {
               <Route path="/activity" element={<ActivityPage />} />
               <Route path="/activity/:projectID" element={<ActivityPage />} />
               <Route path="/nexusdock" element={<NexusDockPage />} />
+              <Route path="/cards/:cardID" element={<CardIDRedirect />} />
+              <Route path="/chat/:cardID" element={<CardIDRedirect mode="chat" />} />
               <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
               <Route
                 path="/settings/*"
@@ -128,6 +131,24 @@ function LegacyCardRedirect() {
   const location = useLocation();
   const parts = location.pathname.split("/");
   return <Navigate to={`/cards/${parts[2]}/${parts[4]}`} replace />;
+}
+
+function CardIDRedirect({ mode = "cards" }: { mode?: "cards" | "chat" }) {
+  const location = useLocation();
+  const { projectID } = useProject();
+  const parts = location.pathname.split("/").filter(Boolean);
+  const cardID = parts[1] || "";
+  if (!cardID) {
+    return <Navigate to="/chat" replace />;
+  }
+  if (!projectID) {
+    return <Navigate to="/chat" replace />;
+  }
+  const target =
+    mode === "chat"
+      ? `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`
+      : `/cards/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`;
+  return <Navigate to={`${target}${location.search}${location.hash}`} replace />;
 }
 export function App() {
   return <Authenticated />;
