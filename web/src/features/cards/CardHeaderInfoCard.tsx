@@ -81,7 +81,7 @@ export function CardHeaderInfoCard({
     >
       {/* 标题与类型状态概览 */}
       <div className="space-y-1.5">
-        <div className={`flex items-center justify-between gap-2 ${variant === "sheet" ? "pr-8" : ""}`}>
+        <div className="flex items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
               {kindLabel}

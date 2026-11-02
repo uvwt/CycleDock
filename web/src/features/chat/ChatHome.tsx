@@ -72,7 +72,7 @@ export default function ChatHome() {
 
   if (projectsPending) {
     return (
-      <main className="relative h-[calc(100dvh-3.5rem)] min-h-0 bg-canvas md:h-dvh">
+      <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface md:h-dvh">
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
         >
@@ -100,7 +100,7 @@ export default function ChatHome() {
   }
 
   return (
-    <main className="relative h-[calc(100dvh-3.5rem)] min-h-0 bg-canvas md:h-dvh">
+    <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface md:h-dvh">
       {projectID ? (
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
@@ -169,15 +169,15 @@ export default function ChatHome() {
           open={mobileListOpen}
           onOpenChange={setMobileListOpen}
           side="left"
+          padded={false}
+          className="bg-canvas"
           title={t("讨论列表")}
         >
-          <div className="-m-5 flex h-full flex-col">
-            <DiscussionSidebar
-              discussions={discussions}
-              onSelect={selectDiscussion}
-              onCreate={startDiscussion}
-            />
-          </div>
+          <DiscussionSidebar
+            discussions={discussions}
+            onSelect={selectDiscussion}
+            onCreate={startDiscussion}
+          />
         </Sheet>
       )}
     </main>

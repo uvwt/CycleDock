@@ -84,7 +84,7 @@ export function ConversationSkeleton({
       {/* 底部输入框停靠栏占位（单个灰白容器） */}
       <div
         data-composer-dock
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-4"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center border-t border-line/60 bg-surface/98 backdrop-blur-sm px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] sm:border-t-0 sm:bg-transparent sm:px-6 sm:pb-3"
       >
         <Skeleton className="h-14 w-full max-w-3xl rounded-2xl" />
       </div>

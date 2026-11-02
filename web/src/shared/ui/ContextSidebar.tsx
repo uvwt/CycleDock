@@ -21,7 +21,7 @@ export function ContextSidebar({
       {header ? (
         <div className="space-y-2 px-3 pt-3.5 pb-2">{header}</div>
       ) : null}
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]">
         {children}
       </div>
     </aside>

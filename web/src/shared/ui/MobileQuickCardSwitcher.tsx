@@ -251,6 +251,7 @@ export function MobileQuickCardSwitcher({
         <SheetContent
           side="bottom"
           aria-describedby={undefined}
+          onOpenAutoFocus={(e) => e.preventDefault()}
           className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82vh] h-[70vh] flex-col rounded-t-2xl border-t border-line bg-surface p-0 shadow-2xl focus:outline-none sm:max-w-none"
         >
           {/* 拖动提示条 */}

@@ -135,10 +135,8 @@ export default function CardPage() {
   );
 
   return (
-    <main
-      className="h-dvh min-h-0 bg-surface"
-    >
-      <div className="flex h-full min-h-0 w-full overflow-hidden">
+    <main className="flex flex-1 h-full min-h-0 w-full flex-col bg-surface">
+      <div className="flex flex-1 h-full min-h-0 w-full overflow-hidden">
         {/* 侧边栏：在会话切换或加载过程中始终保持挂载，绝不被遮挡或卸载 */}
         <div
           className={`${listVisible ? "hidden lg:block" : "hidden"} h-full min-h-0 w-[260px] xl:w-[280px] shrink-0 border-r border-line`}
@@ -167,6 +165,8 @@ export default function CardPage() {
           open={contextSidebarOpen}
           onOpenChange={setContextSidebarOpen}
           side="left"
+          padded={false}
+          className="bg-canvas"
           title={
             isDiscussion
               ? t("讨论列表")
@@ -175,7 +175,7 @@ export default function CardPage() {
                 : t("任务列表")
           }
         >
-          <div className="-m-5 flex h-full flex-col">{contextSidebar}</div>
+          {contextSidebar}
         </Sheet>
       )}
     </main>
@@ -700,6 +700,13 @@ function CardPageContent({
                 open={infoOpen}
                 onOpenChange={setInfoOpen}
                 side="right"
+                title={
+                  isDiscussion
+                    ? t("讨论详情")
+                    : isOngoing
+                      ? t("定时详情")
+                      : t("任务详情")
+                }
               >
                 <CardHeaderInfoCard
                   card={card}
@@ -787,11 +794,11 @@ function CardPageContent({
 
               <div
                 data-composer-dock
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t from-surface via-surface/95 to-transparent pt-8"
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end border-t border-line/60 bg-surface/98 backdrop-blur-sm sm:border-t-0 sm:bg-gradient-to-t sm:from-surface sm:via-surface/95 sm:to-transparent sm:pt-6"
               >
                 <div
                   ref={composerDockRef}
-                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3"
+                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] sm:px-6 sm:pb-3"
                 >
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">

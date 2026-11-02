@@ -41,7 +41,7 @@ export function MainChatDock() {
   const isFocusedConversation =
     /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(location.pathname);
 
-  // 仅在当前主区域正处于主聊天自身详情页时全局隐藏，避免在主聊天全屏视图中重叠小浮窗；
+  // 仅在当前主区域正处于主聊天自身详情页或设置页面时全局隐藏，避免在主聊天全屏视图中重叠小浮窗，以及在设置表单页遮挡内容与控件；
   // 处于具体会话详情页（讨论/待办/计划）时，上调悬浮球及 Peek 气泡的垂直高度，避免遮挡底部输入框及操作按钮
   const isViewingMainDiscussion =
     Boolean(cardID) &&
@@ -49,7 +49,8 @@ export function MainChatDock() {
       location.pathname === `/chat/${projectID}/${cardID}` ||
       location.pathname.endsWith(`/${cardID}`) ||
       location.pathname.endsWith(`/${cardID}/`));
-  const hidden = isViewingMainDiscussion;
+  const isSettings = location.pathname.startsWith("/settings");
+  const hidden = isViewingMainDiscussion || isSettings;
 
   const [open, setOpen] = useState(false);
   const [peek, setPeek] = useState("");

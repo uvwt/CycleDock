@@ -55,6 +55,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const focusedConversation = /^\/(?:chat|cards|plans)\/[^/]+\/[^/]+\/?$/.test(
     location.pathname,
   );
+  const isChatHome =
+    location.pathname === "/chat" || location.pathname === "/chat/";
 
   const primaryNav = [
     {
@@ -172,7 +174,11 @@ export function Shell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="h-dvh h-screen w-full overflow-hidden bg-canvas text-strong md:flex">
+    <div
+      className={`flex h-dvh min-h-0 w-full flex-col overflow-hidden text-strong md:flex-row ${
+        focusedConversation ? "bg-surface" : "bg-canvas"
+      }`}
+    >
       <aside className="sticky top-0 hidden h-screen w-16 shrink-0 flex-col items-center border-r border-line/70 bg-surface/90 py-3.5 backdrop-blur-md md:flex">
         <button
           type="button"
@@ -260,9 +266,13 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
         {!focusedConversation && (
-          <header className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top,0px))] items-center justify-between border-b border-line bg-surface px-3 pt-[env(safe-area-inset-top,0px)] md:hidden">
+          <header
+            className={`sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top,0px))] items-center justify-between px-3 pt-[env(safe-area-inset-top,0px)] md:hidden ${
+              isChatHome ? "bg-transparent" : "border-b border-line bg-surface"
+            }`}
+          >
             <button
               type="button"
               onClick={handleLogoClick}
