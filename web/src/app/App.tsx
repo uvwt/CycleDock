@@ -38,7 +38,7 @@ function Authenticated() {
 
   // 监听来自 Service Worker 的通知点击跳转（热启动/前台）以及冷启动拉取（未被消费的 pending intent）
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+    if (!("serviceWorker" in navigator) || !navigator.serviceWorker) return;
 
     const navigateToTarget = (rawURL?: string | null) => {
       if (!rawURL) return;
@@ -65,7 +65,9 @@ function Authenticated() {
       }
     };
 
-    navigator.serviceWorker.addEventListener("message", handleMessage);
+    if (typeof navigator.serviceWorker.addEventListener === "function") {
+      navigator.serviceWorker.addEventListener("message", handleMessage);
+    }
 
     // 冷启动 / 页面加载就绪时，主动向 Service Worker 查询是否有未消费的通知点击意图
     const checkPendingNavigation = async () => {
@@ -73,7 +75,7 @@ function Authenticated() {
         if (!navigator.serviceWorker.ready) return;
         const registration = await navigator.serviceWorker.ready;
         const targetWorker =
-          registration.active || navigator.serviceWorker.controller;
+          registration?.active || navigator.serviceWorker.controller;
         if (!targetWorker || typeof targetWorker.postMessage !== "function") return;
 
         if (typeof MessageChannel !== "undefined") {
@@ -98,7 +100,9 @@ function Authenticated() {
     void checkPendingNavigation();
 
     return () => {
-      navigator.serviceWorker.removeEventListener("message", handleMessage);
+      if (typeof navigator.serviceWorker?.removeEventListener === "function") {
+        navigator.serviceWorker.removeEventListener("message", handleMessage);
+      }
     };
   }, [navigate]);
 
