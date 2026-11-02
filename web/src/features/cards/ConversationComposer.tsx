@@ -57,7 +57,7 @@ export function ConversationComposer({
         event.preventDefault();
         if (!sendDisabled && !cancelPending) onSubmit();
       }}
-      className="relative flex flex-col rounded-2xl border border-line bg-surface p-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-primary/60"
+      className="relative flex flex-col rounded-xl sm:rounded-2xl border border-line/80 sm:border-line bg-muted/25 sm:bg-surface p-1.5 sm:p-2 sm:shadow-xs transition-[border-color,box-shadow,background-color] focus-within:border-primary/60 focus-within:bg-surface"
     >
       {replyTo && onCancelReply && (
         <ChatReplyBar
