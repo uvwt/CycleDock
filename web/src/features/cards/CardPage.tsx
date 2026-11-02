@@ -13,6 +13,7 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
+import type { TimelineEvent } from "../../shared/api/types";
 import {
   ConversationView,
   type QuotedMessage,
@@ -151,6 +152,65 @@ function CardPageContent() {
     replyTo?.id,
     detail.data?.pending_turns?.length,
   ]);
+
+  const [olderEvents, setOlderEvents] = useState<TimelineEvent[]>([]);
+  const [hasMoreBefore, setHasMoreBefore] = useState(false);
+  const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
+
+  // 当切换卡片时重置向前分页状态
+  useEffect(() => {
+    setOlderEvents([]);
+    setHasMoreBefore(false);
+    setLoadingMoreBefore(false);
+  }, [cardID]);
+
+  // detail 首次加载完毕时根据首条 sequence 判断是否还有更早的历史消息
+  useEffect(() => {
+    const timeline = detail.data?.timeline || [];
+    if (timeline.length > 0) {
+      const minSeq = timeline.reduce((min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min), timeline[0].sequence || 0);
+      if (minSeq > 1) {
+        setHasMoreBefore(true);
+      }
+    }
+  }, [detail.data?.timeline]);
+
+  const loadMoreBefore = async () => {
+    if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
+    const allCurrentEvents = [...olderEvents, ...(detail.data?.timeline || [])];
+    const minSeq = allCurrentEvents.reduce((min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min), allCurrentEvents[0]?.sequence || 0);
+    if (!minSeq || minSeq <= 1) {
+      setHasMoreBefore(false);
+      return;
+    }
+    setLoadingMoreBefore(true);
+    try {
+      const res = await api.cardTimelineBefore(cardID, minSeq, 50);
+      if (res.timeline && res.timeline.length > 0) {
+        setOlderEvents((prev) => [...res.timeline, ...prev]);
+      }
+      setHasMoreBefore(res.has_more_before);
+    } catch (err) {
+      console.error("Failed to load older timeline events", err);
+    } finally {
+      setLoadingMoreBefore(false);
+    }
+  };
+
+  const combinedTimeline = useMemo(() => {
+    const rawTimeline = detail.data?.timeline || [];
+    if (!olderEvents.length) return rawTimeline;
+    const seen = new Set<string>();
+    const res: TimelineEvent[] = [];
+    for (const ev of [...olderEvents, ...rawTimeline]) {
+      const key = `${ev.type}-${ev.id || ev.sequence}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        res.push(ev);
+      }
+    }
+    return res;
+  }, [olderEvents, detail.data?.timeline]);
 
   useEffect(() => {
     if (actualProjectID && actualProjectID !== activeProjectID) {
@@ -646,7 +706,7 @@ function CardPageContent() {
               <ConversationView
                 key={cardID}
                 card={card}
-                events={detail.data.timeline}
+                events={combinedTimeline}
                 live={stream.live}
                 cardKind={card.kind}
                 pendingTurns={
@@ -670,6 +730,9 @@ function CardPageContent() {
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={detail.data.attempt_history}
                 bottomInsetPx={composerDockHeight}
+                hasMoreBefore={hasMoreBefore}
+                loadingMoreBefore={loadingMoreBefore}
+                onLoadMoreBefore={loadMoreBefore}
                 waitingAttemptID={waiting ? current?.id : undefined}
                 choicePending={choose.isPending}
                 onChoose={(choice) => choose.mutate(choice)}
