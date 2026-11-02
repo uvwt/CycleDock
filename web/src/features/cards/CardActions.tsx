@@ -127,7 +127,7 @@ export function CardActions({
               type="button"
               title="更多操作"
               aria-label="更多操作"
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
             >
               <MoreHorizontal className="size-4" />
             </button>

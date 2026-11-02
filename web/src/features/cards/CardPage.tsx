@@ -380,10 +380,10 @@ function CardPageContent() {
         <section
           className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
-          <div
+          <header
             aria-hidden="true"
             data-mobile-top-surface
-            className={`pointer-events-none fixed inset-x-0 top-0 z-10 h-14 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+            className="pointer-events-none fixed inset-x-0 top-0 z-10 h-14 bg-transparent md:hidden"
           />
           {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
           <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
@@ -394,7 +394,7 @@ function CardPageContent() {
                 aria-label={t("任务详情")}
                 title={t("任务详情")}
                 onClick={() => setInfoOpen((prev) => !prev)}
-                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-sm backdrop-blur transition ${
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
                   liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
                 } ${
                   infoOpen
@@ -471,7 +471,7 @@ function CardPageContent() {
                     : t("打开工作列表")
               }
               onClick={() => setContextSidebarOpen(true)}
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground shadow-sm backdrop-blur transition hover:bg-muted hover:text-foreground"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
             >
               <PanelLeft className="size-4" />
             </button>
