@@ -100,8 +100,9 @@ export function ContextSidebarItem({
           </div>
         </div>
       </button>
+      {/* 桌面端 hover 时展示 actions，移动端触控屏避免与手势冲突 */}
       {actions ? (
-        <div className="absolute top-1/2 right-1.5 -translate-y-1/2 flex items-center">
+        <div className="hidden [@media(hover:hover)]:flex absolute top-1/2 right-1.5 -translate-y-1/2 items-center">
           {actions}
         </div>
       ) : null}

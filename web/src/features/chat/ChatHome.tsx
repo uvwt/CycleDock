@@ -32,11 +32,14 @@ export default function ChatHome() {
     }
   }, [mobileListOpen]);
 
+// 移动端仅在当前打开了移动端抽屉列表时才激活向左滑关闭手势；
+  // 避免未展开移动抽屉时向左滑与列表项的 SwipeableRow（如向左滑置顶/删除）发生手势冲突
   const containerRef = useSwipeGesture<HTMLElement>({
     onSwipeRight: handleSwipeRight,
-    onSwipeLeft: handleSwipeLeft,
+    onSwipeLeft: mobileListOpen ? handleSwipeLeft : undefined,
     threshold: 45,
-    horizontalRatio: 1.5,
+    horizontalRatio: 1.2,
+    edgeWidth: 60, // 靠近屏幕左侧边缘更易唤起
   });
   const {
     projectID,
