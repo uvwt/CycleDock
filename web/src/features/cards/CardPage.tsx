@@ -15,6 +15,7 @@ import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
+import { CardActions } from "./CardActions";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { PendingTurnQueue } from "./PendingTurnQueue";
@@ -75,6 +76,11 @@ function CardPageContent() {
   );
 
   const isDiscussion = card?.kind === "discussion";
+  const mainDiscussion = useQuery({
+    queryKey: keys.mainDiscussion(actualProjectID),
+    queryFn: () => api.mainDiscussion(actualProjectID),
+    enabled: Boolean(actualProjectID) && isDiscussion,
+  });
   const isOngoing = card?.kind === "ongoing";
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
@@ -346,6 +352,14 @@ function CardPageContent() {
     navigate(`/chat?project=${encodeURIComponent(actualProjectID)}`);
   }
 
+  function back() {
+    navigate(
+      isDiscussion
+        ? "/chat?project=" + encodeURIComponent(actualProjectID)
+        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
+    );
+  }
+
   function openWork(item: Card) {
     setContextSidebarOpen(false);
     navigate(
@@ -477,6 +491,16 @@ function CardPageContent() {
               >
                 <Plus className="size-4" />
               </button>
+              <CardActions
+                card={card}
+                variant="toolbar"
+                preserve={card.id === mainDiscussion.data?.id}
+                taskDetails={{
+                  detail: detail.data,
+                  projectCards: projectCards.data || [],
+                }}
+                onDeleted={back}
+              />
             </div>
 
             {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
