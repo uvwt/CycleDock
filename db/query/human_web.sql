@@ -77,6 +77,117 @@ WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
 
+-- name: ListProjectActiveCardSummaries :many
+SELECT
+    c.*,
+    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT e.checkin_status
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type = 'checkin'
+    ORDER BY e.sequence DESC
+    LIMIT 1
+) latest_checkin ON true
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> sqlc.arg(source_id)
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = sqlc.arg(source_id)
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.project_id = sqlc.arg(project_id)
+  AND c.status <> 'done'
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
+
+-- name: ListProjectDoneCardsPaged :many
+SELECT
+    c.*,
+    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT e.checkin_status
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type = 'checkin'
+    ORDER BY e.sequence DESC
+    LIMIT 1
+) latest_checkin ON true
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> sqlc.arg(source_id)
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = sqlc.arg(source_id)
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.project_id = sqlc.arg(project_id)
+  AND c.status = 'done'
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
+LIMIT sqlc.arg(page_limit)::int
+OFFSET sqlc.arg(page_offset)::int;
+
+-- name: CountProjectDoneCards :one
+SELECT COUNT(*)::bigint
+FROM cards
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND project_id = sqlc.arg(project_id)
+  AND status = 'done';
+
 -- name: MarkCardRead :one
 INSERT INTO card_read_cursors (
     workspace_id, source_id, card_id, last_read_message_sequence, updated_at
@@ -273,6 +384,34 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND event_type = 'checkin'
 ORDER BY sequence DESC
 LIMIT 1;
+
+-- name: ListCardTimelineBefore :many
+WITH scoped_events AS (
+    SELECT
+        e.*,
+        s.name AS actor_name,
+        s.kind AS actor_kind
+    FROM events e
+    JOIN sources s
+      ON s.workspace_id = e.workspace_id
+     AND s.id = e.actor_source_id
+    WHERE e.workspace_id = sqlc.arg(workspace_id)
+      AND e.card_id = sqlc.arg(card_id)
+      AND (sqlc.narg(before_sequence)::bigint IS NULL OR e.sequence < sqlc.narg(before_sequence)::bigint)
+      -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
+      AND NOT EXISTS (
+        SELECT 1 FROM card_turns t
+        WHERE t.workspace_id = e.workspace_id
+          AND t.card_id = e.card_id
+          AND t.source_event_id = e.id
+          AND t.cancelled_at IS NOT NULL
+      )
+    ORDER BY e.sequence DESC
+    LIMIT sqlc.arg(page_limit)::int
+)
+SELECT *
+FROM scoped_events
+ORDER BY sequence ASC;
 
 -- name: ListCardTimeline :many
 SELECT

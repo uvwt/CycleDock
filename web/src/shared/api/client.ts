@@ -24,6 +24,8 @@ import type {
   TestResult,
   TodoState,
   Workspace,
+  DoneCardsPaged,
+  CardTimelinePaged,
 } from "./types";
 
 export class APIError extends Error {
@@ -111,7 +113,12 @@ export const api = {
     id: string,
     value: { name: string; description: string; instructions: string },
   ) => request<Project>(`/projects/${id}`, "PATCH", value),
-  cards: (project: string) => request<Card[]>(`/projects/${project}/cards`),
+  cards: (project: string, all = false) =>
+    request<Card[]>(`/projects/${project}/cards${all ? "?all=true" : ""}`),
+  projectDoneCards: (project: string, limit = 30, offset = 0) =>
+    request<DoneCardsPaged>(
+      `/projects/${project}/cards/done?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+    ),
   projectSchedules: (project: string) =>
     request<ProjectSchedule[]>(`/projects/${project}/schedules`),
   activityAgents: (project: string) =>
@@ -137,7 +144,14 @@ export const api = {
       title,
       description,
     }),
-  card: (id: string) => request<CardDetail>(`/cards/${id}`),
+  card: (id: string, limit = 50, all = false) =>
+    request<CardDetail>(
+      `/cards/${id}?limit=${encodeURIComponent(String(limit))}${all ? "&all=true" : ""}`,
+    ),
+  cardTimelineBefore: (id: string, beforeSequence: number, limit = 50) =>
+    request<CardTimelinePaged>(
+      `/cards/${id}/timeline?before_sequence=${encodeURIComponent(String(beforeSequence))}&limit=${encodeURIComponent(String(limit))}`,
+    ),
   markCardRead: (id: string) =>
     request<{ last_read_message_sequence: number }>(
       `/cards/${id}/read`,

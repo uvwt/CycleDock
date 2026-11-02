@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Bot, Check, Clock, Copy, MoreHorizontal, Reply, RotateCcw, ClipboardCheck, AlertCircle, CornerDownRight } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, Bot, Check, Clock, Copy, MoreHorizontal, Reply, RotateCcw, ClipboardCheck, AlertCircle, CornerDownRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -561,6 +561,9 @@ export function ConversationView({
   bottomSpacerClass = "h-28 shrink-0 sm:h-32",
   bottomInsetPx,
   compact = false,
+  hasMoreBefore = false,
+  loadingMoreBefore = false,
+  onLoadMoreBefore,
   ...actions
 }: {
   card?: Card;
@@ -573,6 +576,9 @@ export function ConversationView({
   bottomSpacerClass?: string;
   bottomInsetPx?: number;
   compact?: boolean;
+  hasMoreBefore?: boolean;
+  loadingMoreBefore?: boolean;
+  onLoadMoreBefore?: () => void;
 } & ExecutionActions) {
   const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
@@ -820,9 +826,33 @@ export function ConversationView({
     return () => window.clearTimeout(timer);
   }, []);
 
+  // 记录向上加载历史前后的滚动位置偏移，精准维持用户视口不跳动
+  const prevScrollHeightRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (prevScrollHeightRef.current !== null && list.current) {
+      const diff = list.current.scrollHeight - prevScrollHeightRef.current;
+      if (diff > 0) {
+        list.current.scrollTop += diff;
+      }
+      prevScrollHeightRef.current = null;
+    }
+  }, [sortedEvents.length]);
+
+  function handleLoadMoreBefore() {
+    if (!hasMoreBefore || loadingMoreBefore || !onLoadMoreBefore) return;
+    if (list.current) {
+      prevScrollHeightRef.current = list.current.scrollHeight;
+    }
+    onLoadMoreBefore();
+  }
+
   function onScroll() {
     const element = list.current;
     if (!element) return;
+    if (element.scrollTop < 60 && hasMoreBefore && !loadingMoreBefore && onLoadMoreBefore) {
+      handleLoadMoreBefore();
+    }
     const distanceToBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
     const nearBottom = distanceToBottom < 100;
@@ -843,6 +873,25 @@ export function ConversationView({
           compact ? "px-3.5 pt-3.5 pb-4 sm:px-3.5 sm:pt-3.5" : undefined
         }
       >
+        {hasMoreBefore && (
+          <div className="flex justify-center py-2">
+            <button
+              type="button"
+              disabled={loadingMoreBefore}
+              onClick={handleLoadMoreBefore}
+              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/80 px-3 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+            >
+              {loadingMoreBefore ? (
+                <>
+                  <Loader2 className="size-3 animate-spin" />
+                  <span>{t("加载历史消息中...")}</span>
+                </>
+              ) : (
+                <span>{t("查看更早的历史消息")}</span>
+              )}
+            </button>
+          </div>
+        )}
         {!sortedEvents.length &&
           !live &&
           !standalone.length &&
