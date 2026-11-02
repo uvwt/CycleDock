@@ -157,6 +157,20 @@ export type CardDetail = {
   schedules: Schedule[];
   health: string;
   last_checkin: TimelineEvent | null;
+  has_more_before?: boolean;
+  oldest_sequence?: number | null;
+};
+
+export type CardTimelinePaged = {
+  timeline: TimelineEvent[];
+  has_more_before: boolean;
+  oldest_sequence?: number | null;
+};
+
+export type DoneCardsPaged = {
+  cards: Card[];
+  total_count: number;
+  has_more: boolean;
 };
 export type Provider = "chatgpt" | "grok" | "openai_compatible";
 export type ModelRoute = {

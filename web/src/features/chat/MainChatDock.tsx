@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Expand, X } from "lucide-react";
@@ -11,6 +11,7 @@ import { useDeviceSelection } from "../devices/device-selection";
 import { ConversationComposer } from "../cards/ConversationComposer";
 import { useModelSelection } from "../models/model-selection";
 import { PendingTurnQueue } from "../cards/PendingTurnQueue";
+import type { TimelineEvent } from "../../shared/api/types";
 import {
   ConversationView,
   type QuotedMessage,
@@ -94,6 +95,69 @@ export function MainChatDock() {
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
   });
+
+  const [olderEvents, setOlderEvents] = useState<TimelineEvent[]>([]);
+  const [hasMoreBefore, setHasMoreBefore] = useState(false);
+  const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
+
+  useEffect(() => {
+    setOlderEvents([]);
+    setHasMoreBefore(false);
+    setLoadingMoreBefore(false);
+  }, [cardID]);
+
+  useEffect(() => {
+    const timeline = detail.data?.timeline || [];
+    if (timeline.length > 0) {
+      const minSeq = timeline.reduce(
+        (min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min),
+        timeline[0].sequence || 0,
+      );
+      if (minSeq > 1) {
+        setHasMoreBefore(true);
+      }
+    }
+  }, [detail.data?.timeline]);
+
+  const loadMoreBefore = async () => {
+    if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
+    const allCurrentEvents = [...olderEvents, ...(detail.data?.timeline || [])];
+    const minSeq = allCurrentEvents.reduce(
+      (min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min),
+      allCurrentEvents[0]?.sequence || 0,
+    );
+    if (!minSeq || minSeq <= 1) {
+      setHasMoreBefore(false);
+      return;
+    }
+    setLoadingMoreBefore(true);
+    try {
+      const res = await api.cardTimelineBefore(cardID, minSeq, 50);
+      if (res.timeline && res.timeline.length > 0) {
+        setOlderEvents((prev) => [...res.timeline, ...prev]);
+      }
+      setHasMoreBefore(res.has_more_before);
+    } catch (err) {
+      console.error("Failed to load older timeline events", err);
+    } finally {
+      setLoadingMoreBefore(false);
+    }
+  };
+
+  const combinedTimeline = useMemo(() => {
+    const rawTimeline = detail.data?.timeline || [];
+    if (!olderEvents.length) return rawTimeline;
+    const seen = new Set<string>();
+    const res: TimelineEvent[] = [];
+    for (const ev of [...olderEvents, ...rawTimeline]) {
+      const key = `${ev.type}-${ev.id || ev.sequence}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        res.push(ev);
+      }
+    }
+    return res;
+  }, [olderEvents, detail.data?.timeline]);
 
   const card = detail.data?.card;
   const current = detail.data?.current_attempt;
@@ -549,12 +613,15 @@ export function MainChatDock() {
               </div>
             ) : (
               <ConversationView
-                events={detail.data?.timeline || []}
+                events={combinedTimeline}
                 live={stream.live}
                 cardKind="discussion"
                 pendingTurns={detail.data?.pending_turns || []}
                 currentAttempt={current || null}
                 attemptHistory={detail.data?.attempt_history || []}
+                hasMoreBefore={hasMoreBefore}
+                loadingMoreBefore={loadingMoreBefore}
+                onLoadMoreBefore={loadMoreBefore}
                 bottomSpacerClass="h-4 shrink-0"
                 compact
                 retryingAttemptID={retryingAttemptID}

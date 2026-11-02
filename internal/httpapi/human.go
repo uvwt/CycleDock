@@ -24,6 +24,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/projects/{projectID}", api.getProject)
 	r.Patch("/projects/{projectID}", api.updateProject)
 	r.Get("/projects/{projectID}/cards", api.listProjectCards)
+	r.Get("/projects/{projectID}/cards/done", api.listProjectDoneCards)
 	r.Get("/projects/{projectID}/schedules", api.listProjectSchedules)
 	r.Get("/projects/{projectID}/activity", api.listProjectActivity)
 	r.Get("/projects/{projectID}/activity/agents", api.listProjectActivityAgents)
@@ -40,6 +41,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/notifications/push/inactive", api.idlePushSubscription)
 	r.Post("/notifications/push/seen", api.ackPushCards)
 	r.Get("/cards/{cardID}", api.getCard)
+	r.Get("/cards/{cardID}/timeline", api.getCardTimeline)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
 	r.Post("/cards/{cardID}/read", api.markCardRead)
 	r.Patch("/cards/{cardID}", api.updateCard)
@@ -222,11 +224,25 @@ type cardDetailResponse struct {
 	Card           cardResponse          `json:"card"`
 	CurrentAttempt *attemptResponse      `json:"current_attempt"`
 	Timeline       []eventResponse       `json:"timeline"`
+	HasMoreBefore  bool                  `json:"has_more_before"`
+	OldestSequence int64                 `json:"oldest_sequence"`
 	PendingTurns   []pendingTurnResponse `json:"pending_turns"`
 	AttemptHistory []attemptResponse     `json:"attempt_history"`
 	Schedules      []scheduleResponse    `json:"schedules"`
 	Health         string                `json:"health"`
 	LastCheckin    *eventResponse        `json:"last_checkin"`
+}
+
+type cardTimelineResponse struct {
+	Timeline       []eventResponse `json:"timeline"`
+	HasMoreBefore  bool            `json:"has_more_before"`
+	OldestSequence int64           `json:"oldest_sequence"`
+}
+
+type doneCardsResponse struct {
+	Cards      []cardResponse `json:"cards"`
+	TotalCount int64          `json:"total_count"`
+	HasMore    bool           `json:"has_more"`
 }
 
 type commentResultResponse struct {
@@ -330,18 +346,105 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	cards, err := api.store.ListProjectCardSummaries(
+
+	// If caller explicitly passes all=true, retain backward-compatible full query.
+	// Otherwise, default to truncated active cards + latest N done cards.
+	if r.URL.Query().Get("all") == "true" {
+		cards, err := api.store.ListProjectCardSummaries(
+			r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+		)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		response := make([]cardResponse, 0, len(cards))
+		for _, card := range cards {
+			response = append(response, cardSummaryToResponse(card))
+		}
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	doneLimit := 30
+	if limitStr := r.URL.Query().Get("done_limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed >= 0 {
+			doneLimit = parsed
+		}
+	}
+
+	activeCards, err := api.store.ListProjectActiveCardSummaries(
 		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
 	)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
-	response := make([]cardResponse, 0, len(cards))
-	for _, card := range cards {
-		response = append(response, cardSummaryToResponse(card))
+
+	response := make([]cardResponse, 0, len(activeCards)+doneLimit)
+	for _, card := range activeCards {
+		response = append(response, activeCardSummaryToResponse(card))
 	}
+
+	if doneLimit > 0 {
+		doneCards, err := api.store.ListProjectDoneCardsPaged(
+			r.Context(), identity.WorkspaceID, projectID, identity.SourceID, int32(doneLimit), 0,
+		)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		for _, card := range doneCards {
+			response = append(response, doneCardSummaryToResponse(card))
+		}
+	}
+
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) listProjectDoneCards(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+
+	limit := 30
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	doneCards, err := api.store.ListProjectDoneCardsPaged(
+		r.Context(), identity.WorkspaceID, projectID, identity.SourceID, int32(limit), int32(offset),
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+
+	totalCount, err := api.store.CountProjectDoneCards(r.Context(), identity.WorkspaceID, projectID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+
+	cards := make([]cardResponse, 0, len(doneCards))
+	for _, card := range doneCards {
+		cards = append(cards, doneCardSummaryToResponse(card))
+	}
+
+	writeJSON(w, http.StatusOK, doneCardsResponse{
+		Cards:      cards,
+		TotalCount: totalCount,
+		HasMore:    int64(offset+len(doneCards)) < totalCount,
+	})
 }
 
 func (api *API) markCardRead(w http.ResponseWriter, r *http.Request) {
@@ -581,10 +684,43 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	timeline, err := api.store.ListCardTimeline(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
-		api.handleError(w, err)
-		return
+	var timelineResp []eventResponse
+	var hasMoreBefore bool
+	var oldestSeq int64
+
+	if r.URL.Query().Get("all") == "true" {
+		timeline, err := api.store.ListCardTimeline(r.Context(), identity.WorkspaceID, cardID)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		timelineResp = timelineToResponse(timeline)
+		if len(timelineResp) > 0 {
+			oldestSeq = timelineResp[0].Sequence
+		}
+	} else {
+		limit := 50
+		if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+			if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		// Pull limit+1 items to determine if has_more_before is true
+		rows, err := api.store.ListCardTimelineBefore(
+			r.Context(), identity.WorkspaceID, cardID, 1<<62-1, int32(limit+1),
+		)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		if len(rows) > limit {
+			hasMoreBefore = true
+			rows = rows[1:] // drop the oldest extra item
+		}
+		timelineResp = timelineBeforeToResponse(rows)
+		if len(timelineResp) > 0 {
+			oldestSeq = timelineResp[0].Sequence
+		}
 	}
 	pendingTurns, err := api.store.ListPendingTurns(r.Context(), identity.WorkspaceID, cardID)
 	if err != nil {
@@ -614,7 +750,9 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 
 	response := cardDetailResponse{
 		Card:           cardToResponse(card),
-		Timeline:       timelineToResponse(timeline),
+		Timeline:       timelineResp,
+		HasMoreBefore:  hasMoreBefore,
+		OldestSequence: oldestSeq,
 		PendingTurns:   pendingTurnsToResponse(pendingTurns),
 		AttemptHistory: attemptsToResponse(attemptHistory),
 		Schedules:      schedulesToResponse(schedules),
@@ -641,6 +779,55 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		response.Card.Health = string(health)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (api *API) getCardTimeline(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+
+	limit := 50
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	var beforeSeq int64 = 1<<62 - 1
+	if seqStr := r.URL.Query().Get("before_sequence"); seqStr != "" {
+		if parsed, err := strconv.ParseInt(seqStr, 10, 64); err == nil && parsed > 0 {
+			beforeSeq = parsed
+		}
+	}
+
+	// Pull limit+1 items to check hasMoreBefore
+	rows, err := api.store.ListCardTimelineBefore(
+		r.Context(), identity.WorkspaceID, cardID, beforeSeq, int32(limit+1),
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+
+	hasMoreBefore := false
+	if len(rows) > limit {
+		hasMoreBefore = true
+		rows = rows[1:] // drop the oldest extra item
+	}
+
+	timelineResp := timelineBeforeToResponse(rows)
+	var oldestSeq int64
+	if len(timelineResp) > 0 {
+		oldestSeq = timelineResp[0].Sequence
+	}
+
+	writeJSON(w, http.StatusOK, cardTimelineResponse{
+		Timeline:       timelineResp,
+		HasMoreBefore:  hasMoreBefore,
+		OldestSequence: oldestSeq,
+	})
 }
 
 func (api *API) updateCard(w http.ResponseWriter, r *http.Request) {
@@ -1253,6 +1440,80 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	return response
 }
 
+func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) cardResponse {
+	latestMessageSequence := card.LatestMessageSequence
+	lastReadMessageSequence := card.LastReadMessageSequence
+	unread := card.Unread
+	response := cardResponse{
+		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
+		Title: card.Title, Description: card.Description,
+		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		LatestMessageSequence:   &latestMessageSequence,
+		LastReadMessageSequence: &lastReadMessageSequence,
+		Unread:                  &unread,
+	}
+	if card.DiscussionState.Valid {
+		response.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		response.TodoState = card.TodoState.String
+	}
+	if card.OngoingState.Valid {
+		response.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
+	}
+	if card.CurrentAttemptStatus.Valid {
+		response.CurrentAttemptStatus = card.CurrentAttemptStatus.String
+	}
+	if card.LatestAttemptStatus != "" {
+		response.LatestAttemptStatus = card.LatestAttemptStatus
+	}
+	if card.PinnedAt.Valid {
+		pinnedAt := card.PinnedAt.Time.UTC()
+		response.PinnedAt = &pinnedAt
+	}
+	return response
+}
+
+func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardResponse {
+	latestMessageSequence := card.LatestMessageSequence
+	lastReadMessageSequence := card.LastReadMessageSequence
+	unread := card.Unread
+	response := cardResponse{
+		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
+		Title: card.Title, Description: card.Description,
+		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		LatestMessageSequence:   &latestMessageSequence,
+		LastReadMessageSequence: &lastReadMessageSequence,
+		Unread:                  &unread,
+	}
+	if card.DiscussionState.Valid {
+		response.DiscussionState = card.DiscussionState.String
+	}
+	if card.TodoState.Valid {
+		response.TodoState = card.TodoState.String
+	}
+	if card.OngoingState.Valid {
+		response.OngoingState = card.OngoingState.String
+	}
+	if card.SourceDiscussionID.Valid {
+		response.SourceDiscussionID = card.SourceDiscussionID.UUID.String()
+	}
+	if card.CurrentAttemptStatus.Valid {
+		response.CurrentAttemptStatus = card.CurrentAttemptStatus.String
+	}
+	if card.LatestAttemptStatus != "" {
+		response.LatestAttemptStatus = card.LatestAttemptStatus
+	}
+	if card.PinnedAt.Valid {
+		pinnedAt := card.PinnedAt.Time.UTC()
+		response.PinnedAt = &pinnedAt
+	}
+	return response
+}
+
 func attemptToResponse(item store.SessionAttemptView) attemptResponse {
 	response := attemptResponse{
 		DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
@@ -1287,6 +1548,34 @@ func attemptsToResponse(items []store.SessionAttemptView) []attemptResponse {
 }
 
 func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
+	response := make([]eventResponse, 0, len(rows))
+	for _, row := range rows {
+		item := eventResponse{
+			ID: row.ID.String(), Sequence: row.Sequence, Type: row.EventType,
+			Content: row.Content, ActorName: row.ActorName, ActorKind: row.ActorKind,
+			CreatedAt: row.CreatedAt.Time,
+		}
+		if row.CheckinStatus.Valid {
+			item.CheckinStatus = row.CheckinStatus.String
+		}
+		if row.EventType == "message" && len(row.Message) > 0 {
+			item.Message = json.RawMessage(row.Message)
+		}
+		if row.AttemptID.Valid {
+			item.AttemptID = row.AttemptID.UUID.String()
+		}
+		if row.SourceCardID.Valid {
+			item.SourceCardID = row.SourceCardID.UUID.String()
+		}
+		if row.SourceCardTitle != "" {
+			item.SourceCardTitle = row.SourceCardTitle
+		}
+		response = append(response, item)
+	}
+	return response
+}
+
+func timelineBeforeToResponse(rows []db.ListCardTimelineBeforeRow) []eventResponse {
 	response := make([]eventResponse, 0, len(rows))
 	for _, row := range rows {
 		item := eventResponse{
