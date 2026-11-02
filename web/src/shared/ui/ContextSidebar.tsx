@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SwipeableRow, type SwipeActionItem } from "./SwipeableRow";
 
 export function ContextSidebar({
   ariaLabel,
@@ -34,6 +35,7 @@ export function ContextSidebarItem({
   meta,
   metaHoverOnly = false,
   actions,
+  swipeActions,
   onClick,
 }: {
   active: boolean;
@@ -43,9 +45,10 @@ export function ContextSidebarItem({
   meta?: ReactNode;
   metaHoverOnly?: boolean;
   actions?: ReactNode;
+  swipeActions?: SwipeActionItem[];
   onClick: () => void;
 }) {
-  return (
+  const content = (
     <div
       className={`group relative flex w-full items-center rounded-xl transition-all duration-150 ${
         active
@@ -104,4 +107,16 @@ export function ContextSidebarItem({
       ) : null}
     </div>
   );
+
+  if (swipeActions && swipeActions.length > 0) {
+    return (
+      <SwipeableRow actions={swipeActions} className="rounded-xl my-0.5" contentClassName="bg-canvas">
+        {content}
+      </SwipeableRow>
+    );
+  }
+
+  return content;
 }
+
+
