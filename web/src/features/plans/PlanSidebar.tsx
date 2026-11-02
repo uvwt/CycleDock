@@ -55,10 +55,10 @@ export function PlanSidebar({
 
   return (
     <ContextSidebar
-      ariaLabel={t("计划列表")}
+      ariaLabel={t("定时任务列表")}
       header={
         <div className="px-1 text-xs font-medium text-muted-foreground">
-          {t("计划")}
+          {t("定时任务")}
         </div>
       }
     >

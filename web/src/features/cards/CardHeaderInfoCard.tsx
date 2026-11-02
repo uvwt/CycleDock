@@ -49,7 +49,7 @@ export function CardHeaderInfoCard({
 
   const kindLabel = useMemo(() => {
     if (card.kind === "discussion") return t("讨论");
-    if (card.kind === "ongoing") return t("计划");
+    if (card.kind === "ongoing") return t("定时任务");
     return t("工作");
   }, [card.kind, t]);
 
@@ -234,7 +234,7 @@ export function CardHeaderInfoCard({
                   </span>
                 </div>
                 <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 h-4">
-                  {dCard.kind === "ongoing" ? t("计划") : t("工作")}
+                  {dCard.kind === "ongoing" ? t("定时任务") : t("工作")}
                 </Badge>
               </button>
             ))}

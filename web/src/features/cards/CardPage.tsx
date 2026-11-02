@@ -481,14 +481,14 @@ function CardPageContent() {
                   isDiscussion
                     ? t("打开讨论列表")
                     : isOngoing
-                      ? t("打开计划列表")
+                      ? t("打开定时任务列表")
                       : t("打开工作列表")
                 }
                 aria-label={
                   isDiscussion
                     ? t("打开讨论列表")
                     : isOngoing
-                      ? t("打开计划列表")
+                      ? t("打开定时任务列表")
                       : t("打开工作列表")
                 }
                 onClick={() => setContextSidebarOpen(true)}
@@ -611,14 +611,14 @@ function CardPageContent() {
                 isDiscussion
                   ? t("打开讨论列表")
                   : isOngoing
-                    ? t("打开计划列表")
+                    ? t("打开定时任务列表")
                     : t("打开工作列表")
               }
               aria-label={
                 isDiscussion
                   ? t("打开讨论列表")
                   : isOngoing
-                    ? t("打开计划列表")
+                    ? t("打开定时任务列表")
                     : t("打开工作列表")
               }
               onClick={() => setContextSidebarOpen(true)}
@@ -742,7 +742,7 @@ function CardPageContent() {
             isDiscussion
               ? t("讨论列表")
               : isOngoing
-                ? t("计划列表")
+                ? t("定时任务列表")
                 : t("工作列表")
           }
         >

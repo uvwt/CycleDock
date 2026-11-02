@@ -1085,11 +1085,11 @@ export function ModelsSettings() {
 
       <Section
         title="默认模型分配"
-        description="针对工作区全局及不同卡片场景设置默认模型。若卡片单轮未手动选定模型，将优先匹配此处设定的场景默认或工作区默认模型。"
+        description="针对看板及不同卡片场景设置默认模型。若卡片单轮未手动选定模型，将优先匹配此处设定的场景默认或看板默认模型。"
       >
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Field
-            label="工作区默认模型"
+            label="看板默认模型"
             hint="未指定场景或未设置特定场景默认模型时的兜底模型。"
           >
             <Select
@@ -1113,7 +1113,7 @@ export function ModelsSettings() {
           </Field>
 
           <Field
-            label="默认讨论模型"
+            label="讨论默认模型"
             hint="讨论卡片 (Discussion) 进行对话沟通与构思方案时的默认优先模型。"
           >
             <Select
@@ -1125,7 +1125,7 @@ export function ModelsSettings() {
                 })
               }
             >
-              <option value="">跟随工作区默认</option>
+              <option value="">跟随看板默认</option>
               {draft.routes
                 .filter((r) => r.enabled && r.id)
                 .map((r) => (
@@ -1137,8 +1137,8 @@ export function ModelsSettings() {
           </Field>
 
           <Field
-            label="默认计划模型"
-            hint="计划与持续监控卡片 (Ongoing/Plan) 执行长期周期任务时的默认优先模型。"
+            label="定时任务默认模型"
+            hint="定时任务与周期监控卡片 (Ongoing) 执行任务时的默认优先模型。"
           >
             <Select
               value={draft.plan_model_route_id ?? ""}
@@ -1149,7 +1149,7 @@ export function ModelsSettings() {
                 })
               }
             >
-              <option value="">跟随工作区默认</option>
+              <option value="">跟随看板默认</option>
               {draft.routes
                 .filter((r) => r.enabled && r.id)
                 .map((r) => (
