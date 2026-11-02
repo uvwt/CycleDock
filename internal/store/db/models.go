@@ -101,25 +101,26 @@ type CardSchedule struct {
 }
 
 type CardTurn struct {
-	ID                  uuid.UUID          `json:"id"`
-	Sequence            int64              `json:"sequence"`
-	WorkspaceID         uuid.UUID          `json:"workspace_id"`
-	CardID              uuid.UUID          `json:"card_id"`
-	Source              string             `json:"source"`
-	Content             string             `json:"content"`
-	CreatedBySourceID   uuid.NullUUID      `json:"created_by_source_id"`
-	SourceEventID       uuid.NullUUID      `json:"source_event_id"`
-	DispatchMode        string             `json:"dispatch_mode"`
-	ScheduleID          uuid.NullUUID      `json:"schedule_id"`
-	ScheduledFor        pgtype.Timestamptz `json:"scheduled_for"`
-	IdempotencyKey      pgtype.Text        `json:"idempotency_key"`
-	RequestHash         pgtype.Text        `json:"request_hash"`
-	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
-	CancelledBySourceID uuid.NullUUID      `json:"cancelled_by_source_id"`
-	CancelReason        string             `json:"cancel_reason"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	DeviceNodeID        string             `json:"device_node_id"`
-	DeviceName          string             `json:"device_name"`
+	ID                    uuid.UUID          `json:"id"`
+	Sequence              int64              `json:"sequence"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	CardID                uuid.UUID          `json:"card_id"`
+	Source                string             `json:"source"`
+	Content               string             `json:"content"`
+	CreatedBySourceID     uuid.NullUUID      `json:"created_by_source_id"`
+	SourceEventID         uuid.NullUUID      `json:"source_event_id"`
+	DispatchMode          string             `json:"dispatch_mode"`
+	ScheduleID            uuid.NullUUID      `json:"schedule_id"`
+	ScheduledFor          pgtype.Timestamptz `json:"scheduled_for"`
+	IdempotencyKey        pgtype.Text        `json:"idempotency_key"`
+	RequestHash           pgtype.Text        `json:"request_hash"`
+	CancelledAt           pgtype.Timestamptz `json:"cancelled_at"`
+	CancelledBySourceID   uuid.NullUUID      `json:"cancelled_by_source_id"`
+	CancelReason          string             `json:"cancel_reason"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	DeviceNodeID          string             `json:"device_node_id"`
+	DeviceName            string             `json:"device_name"`
+	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
 }
 
 type Event struct {
@@ -333,11 +334,14 @@ type Workspace struct {
 }
 
 type WorkspaceAgentSetting struct {
-	WorkspaceID        uuid.UUID          `json:"workspace_id"`
-	SourceID           uuid.UUID          `json:"source_id"`
-	SystemInstructions string             `json:"system_instructions"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceID            uuid.UUID          `json:"workspace_id"`
+	SourceID               uuid.UUID          `json:"source_id"`
+	SystemInstructions     string             `json:"system_instructions"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	DefaultModelRouteID    uuid.NullUUID      `json:"default_model_route_id"`
+	DiscussionModelRouteID uuid.NullUUID      `json:"discussion_model_route_id"`
+	PlanModelRouteID       uuid.NullUUID      `json:"plan_model_route_id"`
 }
 
 type WorkspaceMcpConnection struct {

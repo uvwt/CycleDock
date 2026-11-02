@@ -99,7 +99,7 @@ func (q *Queries) DeleteWorkspaceModelRoutes(ctx context.Context, workspaceID uu
 }
 
 const getWorkspaceAgentSettings = `-- name: GetWorkspaceAgentSettings :one
-SELECT workspace_id, source_id, system_instructions, created_at, updated_at
+SELECT workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
 FROM workspace_agent_settings
 WHERE workspace_id = $1
 `
@@ -113,6 +113,9 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultModelRouteID,
+		&i.DiscussionModelRouteID,
+		&i.PlanModelRouteID,
 	)
 	return i, err
 }
@@ -263,25 +266,40 @@ func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid
 
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
-    workspace_id, source_id, system_instructions
+    workspace_id, source_id, system_instructions,
+    default_model_route_id, discussion_model_route_id, plan_model_route_id
 )
 VALUES (
-    $1, $2, $3
+    $1, $2, $3,
+    $4, $5, $6
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET system_instructions = EXCLUDED.system_instructions,
+    default_model_route_id = EXCLUDED.default_model_route_id,
+    discussion_model_route_id = EXCLUDED.discussion_model_route_id,
+    plan_model_route_id = EXCLUDED.plan_model_route_id,
     updated_at = now()
-RETURNING workspace_id, source_id, system_instructions, created_at, updated_at
+RETURNING workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
 `
 
 type UpsertWorkspaceAgentSettingsParams struct {
-	WorkspaceID        uuid.UUID `json:"workspace_id"`
-	SourceID           uuid.UUID `json:"source_id"`
-	SystemInstructions string    `json:"system_instructions"`
+	WorkspaceID            uuid.UUID     `json:"workspace_id"`
+	SourceID               uuid.UUID     `json:"source_id"`
+	SystemInstructions     string        `json:"system_instructions"`
+	DefaultModelRouteID    uuid.NullUUID `json:"default_model_route_id"`
+	DiscussionModelRouteID uuid.NullUUID `json:"discussion_model_route_id"`
+	PlanModelRouteID       uuid.NullUUID `json:"plan_model_route_id"`
 }
 
 func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWorkspaceAgentSettingsParams) (WorkspaceAgentSetting, error) {
-	row := q.db.QueryRow(ctx, upsertWorkspaceAgentSettings, arg.WorkspaceID, arg.SourceID, arg.SystemInstructions)
+	row := q.db.QueryRow(ctx, upsertWorkspaceAgentSettings,
+		arg.WorkspaceID,
+		arg.SourceID,
+		arg.SystemInstructions,
+		arg.DefaultModelRouteID,
+		arg.DiscussionModelRouteID,
+		arg.PlanModelRouteID,
+	)
 	var i WorkspaceAgentSetting
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -289,6 +307,9 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		&i.SystemInstructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultModelRouteID,
+		&i.DiscussionModelRouteID,
+		&i.PlanModelRouteID,
 	)
 	return i, err
 }

@@ -116,7 +116,7 @@ export function CardActions({
         card.kind === "discussion"
           ? "讨论"
           : card.kind === "ongoing"
-            ? "计划"
+            ? "定时任务"
             : "任务";
       toast.success(`${cardTypeLabel}已删除`);
       onDeleted();
@@ -163,7 +163,7 @@ export function CardActions({
     card.kind === "discussion"
       ? t("讨论")
       : card.kind === "ongoing"
-        ? t("计划")
+        ? t("定时任务")
         : t("任务");
 
   return (
@@ -267,7 +267,7 @@ export function CardActions({
                         {card.kind === "discussion"
                           ? t("删除讨论")
                           : card.kind === "ongoing"
-                            ? t("删除计划")
+                            ? t("删除定时任务")
                             : t("删除任务")}
                       </span>
                     </button>
@@ -342,7 +342,7 @@ export function CardActions({
                 {card.kind === "discussion"
                   ? t("删除讨论")
                   : card.kind === "ongoing"
-                    ? t("删除计划")
+                    ? t("删除定时任务")
                     : t("删除任务")}
               </MenuItem>
             </>
@@ -356,7 +356,7 @@ export function CardActions({
           onOpenChange={setDetailsOpen}
           preventOutsideClose
           title="任务详情"
-          description="查看任务目标、来源关系，以及计划的健康状态和定时日程。"
+          description="查看任务目标、来源关系，以及定时任务的健康状态和定时日程。"
         >
           <TaskDetailsPanel
             detail={taskDetails.detail}
@@ -415,21 +415,21 @@ export function CardActions({
           card.kind === "discussion"
             ? "删除这个讨论？"
             : card.kind === "ongoing"
-              ? "删除这个计划？"
+              ? "删除这个定时任务？"
               : "删除这个任务？"
         }
         description={
           card.kind === "discussion"
             ? "已生成的 Todo / Ongoing 不会被删除，但这个讨论及其会话内容将不再保留。"
             : card.kind === "ongoing"
-              ? "该计划的会话、健康打卡记录与定时计划等所有数据都将被彻底清除。"
+              ? "该定时任务的会话、健康打卡记录与周期规则等所有数据都将被彻底清除。"
               : "该任务的会话、执行记录与确认状态等所有数据都将被彻底清除。"
         }
         confirmLabel={
           card.kind === "discussion"
             ? "删除讨论"
             : card.kind === "ongoing"
-              ? "删除计划"
+              ? "删除定时任务"
               : "删除任务"
         }
         pending={remove.isPending}
