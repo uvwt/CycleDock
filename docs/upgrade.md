@@ -6,7 +6,7 @@
 
 仓库已经重整为单一首次发布 baseline：
 
-- 正式 migration 只有 `db/migrations/000001_initial.sql`。
+- `db/migrations/000001_initial.sql` 是 Session-first baseline，后续变更通过编号 migration 增量应用。
 - 执行模型只有 Card → Turn → Attempt。
 - 不存在旧执行兼容表、兼容 API 或旧 MCP 工具别名。
 - 开发环境中的旧数据库应重新创建；不要尝试把旧 DEV Runtime 数据迁入 final baseline。
@@ -17,6 +17,13 @@ final baseline 已验证：
 - `down-to 0 → up`。
 - PostgreSQL 自定义 `search_path`。
 - 连续 `sqlc generate` 稳定。
+
+### 开发分支版本 18 冲突
+
+分支合并前，`event_source_card` 曾使用版本 18，合并后改为版本 21；当前版本 18 用于 Turn 优先模型路由。
+已经执行旧版本 18 的数据库会跳过新的同号迁移。版本 21 会保留已有 `events.source_card_id` 数据和外键，
+并补齐被跳过的 `card_turns.preferred_model_route_id`。更新代码后执行 `make migrate` 或 `make dev` 即可，
+无需删除字段、重建数据库或手工修改 Goose 版本记录。
 
 ## 2. 首次公开发布后的升级原则
 
