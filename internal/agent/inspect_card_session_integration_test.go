@@ -87,6 +87,7 @@ func TestInspectCardSessionTool(t *testing.T) {
 		Message: store.ReplyMessage{
 			Type:    "choice",
 			Content: "Which mode do you prefer?",
+			EndTurn: true,
 			Widget: &store.ChoiceWidget{
 				Question: "Select one:",
 				Options: []store.ChoiceOption{
