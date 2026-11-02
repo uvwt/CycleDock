@@ -1,8 +1,7 @@
 import { useDeviceSelection } from "../devices/device-selection";
-import type { DeviceTarget } from "../../shared/api/types";
 import { ChatInput } from "../../shared/ui/chat";
 import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
+import { ArrowUp, LoaderCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -13,9 +12,6 @@ const STORAGE_KEY = "cycledock.new-discussion.drafts.v2";
 
 type SavedDraft = {
   content: string;
-  deviceTarget?: DeviceTarget | null;
-  pendingCardID?: string;
-  idempotencyKey?: string;
 };
 
 function readDraft(projectID: string): SavedDraft {
@@ -33,7 +29,7 @@ function writeDraft(projectID: string, draft?: SavedDraft) {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     const drafts = raw ? (JSON.parse(raw) as Record<string, SavedDraft>) : {};
-    if (draft?.content || draft?.pendingCardID) {
+    if (draft?.content) {
       drafts[projectID] = draft;
     } else {
       delete drafts[projectID];
@@ -50,30 +46,11 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   const navigate = useNavigate();
   const initial = readDraft(projectID);
   const [content, setContent] = useState(initial.content);
-  const [pending, setPending] = useState<SavedDraft | null>(
-    initial.pendingCardID ? initial : null,
-  );
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (pending) return;
     writeDraft(projectID, { content });
-  }, [content, pending, projectID]);
-
-  async function finish(cardID: string, draft: SavedDraft) {
-    await api.send(
-      cardID,
-      draft.content,
-      "enqueue",
-      draft.idempotencyKey,
-      draft.deviceTarget,
-    );
-    writeDraft(projectID);
-    setPending(null);
-    setContent("");
-    await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-    navigate(`/chat/${projectID}/${cardID}`);
-  }
+  }, [content, projectID]);
 
   async function createAndSend() {
     const value = content.trim();
@@ -83,87 +60,56 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     const deviceTarget = target;
     try {
       const card = await api.createDiscussion(projectID);
-      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-      const draft: SavedDraft = {
-        content: value,
-        deviceTarget,
-        pendingCardID: card.id,
-        idempotencyKey: crypto.randomUUID(),
-      };
-      // Card 创建成功后先固化 Card ID 与幂等键；首条消息失败时只能重试该 Card，
-      // 不能重新创建第二张 Discussion。
-      writeDraft(projectID, draft);
-      setPending(draft);
-      await finish(card.id, draft);
+      // 清理草稿并后台触发项目卡片列表更新，不阻塞导航跳转
+      writeDraft(projectID);
+      setContent("");
+      void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      navigate(`/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(card.id)}`, {
+        state: {
+          initialMessage: value,
+          initialDeviceTarget: deviceTarget,
+          initialIdempotencyKey: crypto.randomUUID(),
+        },
+      });
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : t("新讨论发送失败，草稿已保留"),
+          : t("新讨论创建失败，草稿已保留"),
       );
-    } finally {
       setSending(false);
     }
   }
 
-  async function retry() {
-    if (!pending?.pendingCardID || !pending.idempotencyKey || sending) return;
-    setSending(true);
-    try {
-      await finish(pending.pendingCardID, pending);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t("重试失败，草稿仍已保留"),
-      );
-    } finally {
-      setSending(false);
-    }
-  }
-
-  const value = pending?.content ?? content;
   const placeholder = t("发送消息，开始讨论…");
 
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        void (pending ? retry() : createAndSend());
+        void createAndSend();
       }}
       className="mx-auto flex items-end gap-2 rounded-2xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-primary/60"
     >
       <div className="flex min-w-0 flex-1 items-end pl-1.5">
         <ChatInput
-          value={value}
+          value={content}
           onChange={setContent}
           placeholder={placeholder}
-          readOnly={Boolean(pending)}
+          disabled={sending}
         />
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
-        {pending?.pendingCardID && (
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() =>
-              navigate(`/chat/${projectID}/${pending.pendingCardID}`)
-            }
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
-          >
-            {t("打开讨论")}
-          </button>
-        )}
         <button
           type="submit"
-          title={pending ? t("重试发送") : t("发送")}
-          aria-label={pending ? t("重试发送") : t("发送")}
-          disabled={sending || (!pending && !content.trim())}
+          title={t("发送")}
+          aria-label={t("发送")}
+          disabled={sending || !content.trim()}
           className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground shadow-sm transition hover:bg-action-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
         >
           {sending ? (
             <LoaderCircle className="size-4 animate-spin" />
-          ) : pending ? (
-            <RotateCcw className="size-4" />
           ) : (
             <ArrowUp className="size-4" />
           )}
@@ -172,3 +118,4 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     </form>
   );
 }
+
