@@ -1308,6 +1308,8 @@ class CycleDockSmoke(unittest.TestCase):
                     register: async () => fakeReg,
                     ready: Promise.resolve(fakeReg),
                     getRegistration: async () => fakeReg,
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
                   },
                 });
                 window.Notification = Object.assign(function Notification() {}, {
