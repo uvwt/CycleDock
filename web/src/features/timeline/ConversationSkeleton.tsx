@@ -6,6 +6,7 @@ import { Skeleton } from "../../shared/ui/skeleton";
  * 保持克制、纯粹的灰白占位条与气泡块，不使用彩色或复杂多层卡片
  */
 export function ConversationSkeleton({
+  isDiscussion,
   onOpenSidebar,
 }: {
   isDiscussion?: boolean;
@@ -48,7 +49,7 @@ export function ConversationSkeleton({
       </div>
 
       {/* 消息时间线灰白气泡流 */}
-      <div className="scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-4 pt-[calc(env(safe-area-inset-top,0px)+4.5rem)] pb-6 sm:px-8 sm:pt-20 sm:pb-32 space-y-7">
+      <div className="scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-4 pt-[calc(env(safe-area-inset-top,0px)+4.5rem)] pb-28 sm:px-8 sm:pt-20 sm:pb-32 space-y-7">
         <div className="mx-auto w-full max-w-3xl space-y-7">
           {/* 用户发言气泡（右对齐，纯灰白块） */}
           <div className="ml-auto w-52 max-w-[70%]">
@@ -84,9 +85,15 @@ export function ConversationSkeleton({
       {/* 底部输入框停靠栏占位（单个灰白容器） */}
       <div
         data-composer-dock
-        className="pointer-events-none z-30 shrink-0 w-full flex justify-center border-t border-line/60 bg-surface px-2.5 pt-1.5 pb-[max(0.375rem,calc(env(safe-area-inset-bottom,0px)*0.35))] sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-transparent sm:px-6 sm:pb-3"
+        className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t ${
+          isDiscussion
+            ? "from-canvas via-canvas/95"
+            : "from-surface via-surface/95"
+        } to-transparent pt-8`}
       >
-        <Skeleton className="h-14 w-full max-w-3xl rounded-2xl" />
+        <div className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pb-[max(0.5rem,calc(env(safe-area-inset-bottom,0px)*0.6))] sm:px-6 sm:pb-3">
+          <Skeleton className="h-20 w-full rounded-2xl" />
+        </div>
       </div>
     </div>
   );

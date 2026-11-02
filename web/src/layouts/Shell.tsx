@@ -175,7 +175,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div
-      className={`flex h-dvh min-h-0 w-full flex-col overflow-hidden text-strong md:flex-row ${
+      className={`flex h-full min-h-0 w-full flex-col overflow-hidden text-strong md:flex-row ${
         focusedConversation ? "bg-surface" : "bg-canvas"
       }`}
     >

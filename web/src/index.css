@@ -128,12 +128,21 @@ html[data-theme="dark"] {
   background: var(--canvas);
   font-synthesis: none;
 }
-html,
+html {
+  width: 100%;
+  height: calc(100% + env(safe-area-inset-top, 0px));
+  height: calc(100dvh + env(safe-area-inset-top, 0px));
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 body,
 #root {
+  width: 100%;
   height: 100%;
-  height: 100dvh;
   margin: 0;
+  padding: 0;
   overflow: hidden;
   overscroll-behavior: none;
 }

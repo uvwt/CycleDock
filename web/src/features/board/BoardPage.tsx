@@ -550,7 +550,7 @@ export default function BoardPage() {
     );
   }
   return (
-    <main className="mx-auto flex h-[calc(100dvh-3.5rem)] w-full min-w-0 max-w-7xl flex-1 flex-col overflow-hidden px-5 py-6 md:h-dvh md:px-8 md:py-8">
+    <main className="mx-auto flex h-full w-full min-w-0 max-w-7xl flex-1 flex-col overflow-hidden px-5 py-6 md:px-8 md:py-8">
       <header className="mb-7 flex shrink-0 flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">

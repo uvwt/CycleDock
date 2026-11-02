@@ -72,7 +72,7 @@ export default function ChatHome() {
 
   if (projectsPending) {
     return (
-      <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface md:h-dvh">
+      <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface">
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
         >
@@ -100,7 +100,7 @@ export default function ChatHome() {
   }
 
   return (
-    <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface md:h-dvh">
+    <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface">
       {projectID ? (
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}

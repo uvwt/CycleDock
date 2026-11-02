@@ -135,7 +135,11 @@ export default function CardPage() {
   );
 
   return (
-    <main className="flex flex-1 h-full min-h-0 w-full flex-col bg-surface">
+    <main
+      className={`flex flex-1 h-full min-h-0 w-full flex-col ${
+        isDiscussion ? "bg-canvas" : "bg-surface"
+      }`}
+    >
       <div className="flex flex-1 h-full min-h-0 w-full overflow-hidden">
         {/* 侧边栏：在会话切换或加载过程中始终保持挂载，绝不被遮挡或卸载 */}
         <div
@@ -543,7 +547,9 @@ function CardPageContent({
     return (
       <section
         ref={containerRef}
-        className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+          isDiscussion ? "bg-canvas" : "bg-surface"
+        }`}
       >
         <ConversationSkeleton
           isDiscussion={isDiscussion}
@@ -557,7 +563,9 @@ function CardPageContent({
     return (
       <section
         ref={containerRef}
-        className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+          isDiscussion ? "bg-canvas" : "bg-surface"
+        }`}
       >
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
@@ -579,7 +587,9 @@ function CardPageContent({
   return (
     <section
       ref={containerRef}
-      className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+      className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+        isDiscussion ? "bg-canvas" : "bg-surface"
+      }`}
     >
           {/* 手机端悬浮顶部栏：透明悬浮在视口顶部，操作按钮带独立实底 */}
           <div
@@ -778,7 +788,7 @@ function CardPageContent({
                 }
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={combinedAttempts}
-                bottomInsetPx={isMobile ? 16 : composerDockHeight}
+                bottomInsetPx={composerDockHeight}
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
@@ -794,11 +804,15 @@ function CardPageContent({
 
               <div
                 data-composer-dock
-                className="z-30 shrink-0 w-full flex flex-col justify-end border-t border-line/60 bg-surface sm:pointer-events-none sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-gradient-to-t sm:from-surface sm:via-surface/95 sm:to-transparent sm:pt-6"
+                className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t ${
+                  isDiscussion
+                    ? "from-canvas via-canvas/95"
+                    : "from-surface via-surface/95"
+                } to-transparent pt-8`}
               >
                 <div
                   ref={composerDockRef}
-                  className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pt-1.5 pb-[max(0.375rem,calc(env(safe-area-inset-bottom,0px)*0.35))] sm:px-6 sm:pt-2 sm:pb-3"
+                  className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pt-2 pb-[max(0.5rem,calc(env(safe-area-inset-bottom,0px)*0.6))] sm:px-6 sm:pb-3"
                 >
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">

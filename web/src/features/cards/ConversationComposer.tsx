@@ -57,7 +57,7 @@ export function ConversationComposer({
         event.preventDefault();
         if (!sendDisabled && !cancelPending) onSubmit();
       }}
-      className="relative flex flex-col rounded-xl sm:rounded-2xl border border-line/80 sm:border-line bg-muted/25 sm:bg-surface p-1.5 sm:p-2 sm:shadow-xs transition-[border-color,box-shadow,background-color] focus-within:border-primary/60 focus-within:bg-surface"
+      className="relative flex flex-col rounded-2xl border border-line bg-surface p-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-primary/60"
     >
       {replyTo && onCancelReply && (
         <ChatReplyBar
@@ -68,6 +68,7 @@ export function ConversationComposer({
       )}
 
       <ModelSetupNotice />
+
       {/* 文本输入区域：占满行宽自适应高度 */}
       <div className="min-w-0 flex-1 px-1">
         <ChatInput
@@ -79,7 +80,7 @@ export function ConversationComposer({
       </div>
 
       {/* 底部操作栏：左侧放置模型切换等上下文控制，右侧放置发送/中止操作 */}
-      <div className="flex items-center justify-between gap-2 px-1 pt-1">
+      <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
         <div className="flex items-center gap-1.5 min-w-0">
           <ModelMenu
             variant="composer"
@@ -103,8 +104,8 @@ export function ConversationComposer({
             disabled={cancelPending || (!showStop && sendDisabled)}
             className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full shadow-sm transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-35 ${
               showStop
-                ? "size-9 bg-danger text-white hover:bg-danger/90"
-                : "size-9 bg-action text-action-foreground hover:bg-action-hover"
+                ? "size-8.5 bg-danger text-white hover:bg-danger/90"
+                : "size-8.5 bg-action text-action-foreground hover:bg-action-hover"
             }`}
           >
             {cancelPending ? (
