@@ -91,7 +91,7 @@ CycleDock 在首次公开发布前完成 Session-first / Google ADK Go v2 Runtim
 - current Attempt 唯一。
 - FIFO pending Turn。
 - heartbeat / lease。
-- waiting_human。
+- 提问完成本轮，回答创建新 Turn。
 - retry = new Attempt。
 - stale invocation write guard。
 

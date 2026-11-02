@@ -11,6 +11,7 @@ import {
   RotateCcw,
   ClipboardCheck,
   AlertCircle,
+  Activity,
   CornerDownRight,
   Loader2,
 } from "lucide-react";
@@ -49,6 +50,7 @@ import {
 } from "./ExecutionStatus";
 import { RichText } from "./RichText";
 import { usePacedTimeline } from "./usePacedTimeline";
+import { cn } from "../../shared/lib/utils";
 import {
   groupExecutionAttempts,
   orderTimelineEvents,
@@ -68,9 +70,138 @@ const labels: Record<string, string> = {
   status_change: "状态变化",
   progress: "阶段进度",
   checkin: "巡检",
-  confirm: "提交审核",
+  confirm: "提交验收",
   reject: "驳回",
 };
+
+/** 状态机状态键名到界面中文名与语义圆点样式的映射 */
+const statusInfoMap: Record<string, { label: string; dot: string }> = {
+  // TodoState
+  todo: { label: "待办", dot: "bg-slate-400 dark:bg-slate-500" },
+  working: { label: "进行中", dot: "bg-sky-500" },
+  review: { label: "待审核", dot: "bg-amber-500" },
+  done: { label: "已完成", dot: "bg-emerald-500" },
+  // OngoingState
+  active: { label: "运行中", dot: "bg-emerald-500" },
+  paused: { label: "已暂停", dot: "bg-amber-500" },
+  archived: { label: "已归档", dot: "bg-slate-400 dark:bg-slate-500" },
+  // DiscussionState & 通用别名
+  open: { label: "进行中", dot: "bg-sky-500" },
+  closed: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
+  resolved: { label: "已完成", dot: "bg-emerald-500" },
+  // 中文别名容错
+  待办: { label: "待办", dot: "bg-slate-400 dark:bg-slate-500" },
+  进行中: { label: "进行中", dot: "bg-sky-500" },
+  待审核: { label: "待审核", dot: "bg-amber-500" },
+  已完成: { label: "已完成", dot: "bg-emerald-500" },
+  运行中: { label: "运行中", dot: "bg-emerald-500" },
+  已暂停: { label: "已暂停", dot: "bg-amber-500" },
+  已归档: { label: "已归档", dot: "bg-slate-400 dark:bg-slate-500" },
+  已关闭: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
+};
+
+/** 解析形如 "review -> working" 或 "待审核 → 进行中" 的状态流转字串 */
+function parseStatusTransition(content?: string) {
+  if (!content) return null;
+  const parts = content.split(/\s*->\s*|\s*→\s*/);
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return {
+      from: parts[0].trim(),
+      to: parts[1].trim(),
+    };
+  }
+  return null;
+}
+
+/** 获取状态对应的展示名（遵循 i18n）与语义圆点色 */
+function getStatusDisplay(
+  raw: string,
+  t: (key: string) => string,
+): { label: string; dot: string } {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  const meta = statusInfoMap[lower] || statusInfoMap[trimmed];
+  if (meta) {
+    return {
+      label: t(meta.label),
+      dot: meta.dot,
+    };
+  }
+  return {
+    label: t(trimmed),
+    dot: "bg-muted-foreground/40",
+  };
+}
+
+/**
+ * 待验收、驳回及巡检等系统卡片事件的视觉样式配置。
+ * 巡检卡片采用与待验收（confirm）一致的结构化卡片气泡呈现，
+ * 并根据健康状态（healthy / warning / critical）动态匹配主题色与图标，
+ * 避免长文本在居中系统胶囊中折行拥挤、排版失衡。
+ */
+function getSystemCardStyle(type: string, checkinStatus?: string) {
+  if (type === "confirm") {
+    return {
+      container:
+        "border-amber-500/30 bg-amber-500/[0.04] dark:border-amber-500/25 dark:bg-amber-500/[0.08]",
+      iconWrap:
+        "bg-amber-500/15 text-amber-600 dark:bg-amber-500/25 dark:text-amber-400",
+      title: "text-amber-700 dark:text-amber-300",
+      icon: <ClipboardCheck className="size-3" />,
+    };
+  }
+  if (type === "reject") {
+    return {
+      container:
+        "border-red-500/30 bg-red-500/[0.04] dark:border-red-500/25 dark:bg-red-500/[0.08]",
+      iconWrap:
+        "bg-red-500/15 text-red-600 dark:bg-red-500/25 dark:text-red-400",
+      title: "text-red-700 dark:text-red-300",
+      icon: <AlertCircle className="size-3" />,
+    };
+  }
+  if (type === "checkin") {
+    if (checkinStatus === "healthy") {
+      return {
+        container:
+          "border-emerald-500/30 bg-emerald-500/[0.04] dark:border-emerald-500/25 dark:bg-emerald-500/[0.08]",
+        iconWrap:
+          "bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400",
+        title: "text-emerald-700 dark:text-emerald-300",
+        icon: <Activity className="size-3" />,
+      };
+    }
+    if (checkinStatus === "warning") {
+      return {
+        container:
+          "border-amber-500/30 bg-amber-500/[0.04] dark:border-amber-500/25 dark:bg-amber-500/[0.08]",
+        iconWrap:
+          "bg-amber-500/15 text-amber-600 dark:bg-amber-500/25 dark:text-amber-400",
+        title: "text-amber-700 dark:text-amber-300",
+        icon: <Activity className="size-3" />,
+      };
+    }
+    if (checkinStatus === "critical") {
+      return {
+        container:
+          "border-rose-500/30 bg-rose-500/[0.04] dark:border-rose-500/25 dark:bg-rose-500/[0.08]",
+        iconWrap:
+          "bg-rose-500/15 text-rose-600 dark:bg-rose-500/25 dark:text-rose-400",
+        title: "text-rose-700 dark:text-rose-300",
+        icon: <Activity className="size-3" />,
+      };
+    }
+    return {
+      container:
+        "border-sky-500/30 bg-sky-500/[0.04] dark:border-sky-500/25 dark:bg-sky-500/[0.08]",
+      iconWrap:
+        "bg-sky-500/15 text-sky-600 dark:bg-sky-500/25 dark:text-sky-400",
+      title: "text-sky-700 dark:text-sky-300",
+      icon: <Activity className="size-3" />,
+    };
+  }
+  return null;
+}
 
 function formatEventContent(event: TimelineEvent): string {
   const message = event.type === "message" ? event.message : undefined;
@@ -106,13 +237,6 @@ export type QuotedMessage = {
 type ExecutionActions = {
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
-  onChoose: (choice: {
-    value: string;
-    attemptID: string;
-    messageID: string;
-  }) => void;
-  choicePending?: boolean;
-  waitingAttemptID?: string;
   onReply?: (quote: QuotedMessage) => void;
   canApproveReview?: boolean;
   approvingReview?: boolean;
@@ -170,7 +294,8 @@ function EventRow({
   const isDelegate = !human && event.type === "comment";
   const message = event.type === "message" ? event.message : undefined;
   if (system) {
-    if (event.type === "confirm" || event.type === "reject") {
+    const cardStyle = getSystemCardStyle(event.type, event.checkin_status);
+    if (cardStyle) {
       const isConfirm = event.type === "confirm";
       const showApproveAction = Boolean(
         isConfirm && actions.canApproveReview && actions.onApproveReview,
@@ -195,35 +320,26 @@ function EventRow({
 
               <ChatBubbleMessage
                 variant="received"
-                className={`w-fit max-w-full rounded-2xl border px-4 py-3 shadow-xs transition-colors ${
-                  isConfirm
-                    ? "border-amber-500/30 bg-amber-500/[0.04] dark:border-amber-500/25 dark:bg-amber-500/[0.08]"
-                    : "border-red-500/30 bg-red-500/[0.04] dark:border-red-500/25 dark:bg-red-500/[0.08]"
-                }`}
+                className={`w-fit max-w-full rounded-2xl border px-4 py-3 shadow-xs transition-colors ${cardStyle.container}`}
               >
                 <div className="mb-2 flex items-center gap-2 border-b border-line/60 pb-2">
                   <span
-                    className={`grid size-5 shrink-0 place-items-center rounded-full ${
-                      isConfirm
-                        ? "bg-amber-500/15 text-amber-600 dark:bg-amber-500/25 dark:text-amber-400"
-                        : "bg-red-500/15 text-red-600 dark:bg-red-500/25 dark:text-red-400"
-                    }`}
+                    className={`grid size-5 shrink-0 place-items-center rounded-full ${cardStyle.iconWrap}`}
                   >
-                    {isConfirm ? (
-                      <ClipboardCheck className="size-3" />
-                    ) : (
-                      <AlertCircle className="size-3" />
-                    )}
+                    {cardStyle.icon}
                   </span>
                   <span
-                    className={`text-xs font-semibold tracking-wide ${
-                      isConfirm
-                        ? "text-amber-700 dark:text-amber-300"
-                        : "text-red-700 dark:text-red-300"
-                    }`}
+                    className={`text-xs font-semibold tracking-wide ${cardStyle.title}`}
                   >
                     {t(labels[event.type] || event.type)}
                   </span>
+                  {event.type === "checkin" && event.checkin_status && (
+                    <OngoingHealthBadge
+                      health={event.checkin_status}
+                      variant="pill"
+                      size="xs"
+                    />
+                  )}
                   {event.created_at && (
                     <span className="ml-auto pl-3 text-[11px] text-faint">
                       {new Date(event.created_at).toLocaleTimeString([], {
@@ -245,13 +361,74 @@ function EventRow({
                       className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Check className="size-3.5" />
-                      <span>{t("通过审核")}</span>
+                      <span>{t("通过验收")}</span>
                     </button>
                   </div>
                 )}
               </ChatBubbleMessage>
             </div>
           </ChatBubble>
+          {attempts.length > 0 && (
+            <div className="mt-3">
+              <ExecutionStatus attempts={attempts} live={live} {...actions} />
+            </div>
+          )}
+        </>
+      );
+    }
+    if (event.type === "status_change") {
+      const transition = parseStatusTransition(event.content);
+      const fromMeta = transition ? getStatusDisplay(transition.from, t) : null;
+      const toMeta = transition ? getStatusDisplay(transition.to, t) : null;
+      return (
+        <>
+          <div
+            id={"event-" + event.id}
+            className="flex justify-center py-0.5 text-xs select-none"
+            data-sequence={event.sequence}
+            data-status-change
+            title={
+              event.created_at
+                ? `${event.actor_name ? senderLabel(event.actor_kind, event.actor_name) + " · " : ""}${new Date(event.created_at).toLocaleString()}`
+                : undefined
+            }
+          >
+            <span className="inline-flex max-w-[90%] items-center gap-1.5 rounded-full border border-line/50 bg-muted/20 dark:bg-muted/10 px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/30">
+              <span className="text-muted-foreground/60 font-normal">
+                {t("状态变化")}
+              </span>
+              <span className="text-muted-foreground/30 font-normal">·</span>
+              {fromMeta && toMeta ? (
+                <>
+                  <span className="inline-flex items-center gap-1 font-medium text-foreground/80">
+                    <span
+                      className={cn(
+                        "size-1.5 rounded-full shrink-0",
+                        fromMeta.dot,
+                      )}
+                    />
+                    <span>{fromMeta.label}</span>
+                  </span>
+                  <span className="text-muted-foreground/40 text-[10px] select-none">
+                    →
+                  </span>
+                  <span className="inline-flex items-center gap-1 font-medium text-foreground/80">
+                    <span
+                      className={cn(
+                        "size-1.5 rounded-full shrink-0",
+                        toMeta.dot,
+                      )}
+                    />
+                    <span>{toMeta.label}</span>
+                  </span>
+                </>
+              ) : (
+                <span className="font-medium text-foreground/80">
+                  {event.content}
+                </span>
+              )}
+            </span>
+          </div>
           {attempts.length > 0 && (
             <div className="mt-3">
               <ExecutionStatus attempts={attempts} live={live} {...actions} />
@@ -267,13 +444,7 @@ function EventRow({
           className="flex justify-center py-1.5"
           data-sequence={event.sequence}
         >
-          <span className="inline-flex max-w-[90%] items-center justify-center gap-1.5 rounded-md border border-line/60 bg-surface px-3 py-1 text-center text-xs shadow-xs text-muted-foreground">
-            {event.checkin_status && (
-              <OngoingHealthBadge
-                health={event.checkin_status}
-                variant="dot"
-              />
-            )}
+          <span className="inline-flex max-w-[90%] items-center justify-center gap-1.5 rounded-md border border-line/60 bg-surface px-3 py-1 text-center text-xs text-muted-foreground">
             <span>
               {t(labels[event.type] || event.type)} · {event.content}
             </span>
@@ -736,7 +907,7 @@ export function ConversationView({
   const displayEvents = rows.map((row) => row.event);
   const displayLive = live ? { ...live, replies: pendingReplies } : null;
   const { byEvent, standalone, statusByReply, running } =
-    groupExecutionAttempts(displayEvents, currentAttempt, attemptHistory);
+    groupExecutionAttempts(orderedEvents, currentAttempt, attemptHistory);
 
   const groupStarts = new Set<string>();
   const statusByHeader = new Map<string, Attempt[]>();
@@ -751,7 +922,6 @@ export function ConversationView({
       !!previous &&
       !systemTypes.has(previous.type) &&
       !systemTypes.has(event.type) &&
-      !byEvent.get(previous.id)?.some((attempt) => attempt.question) &&
       (!(
         previewKeys.has(event.id) ||
         (live && event.attempt_id === live.attemptID)
@@ -958,7 +1128,7 @@ export function ConversationView({
                                 : card.todo_state === "working"
                                   ? t("进行中")
                                   : card.todo_state === "review"
-                                    ? t("待审核")
+                                    ? t("待验收")
                                     : t("已完成")}
                             </span>
                           </span>
@@ -1038,10 +1208,13 @@ export function ConversationView({
               new Date(previous.created_at).getTime() >
               TWO_HOURS_MS;
           const continuesGroup = !groupStarts.has(event.id);
+          const isConsecutiveStatusChange =
+            previous?.type === "status_change" &&
+            event.type === "status_change";
           return (
             <div
               key={key}
-              className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : continuesGroup ? "mt-1" : "mt-2.5"}`}
+              className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : isConsecutiveStatusChange ? "mt-0.5" : continuesGroup ? "mt-1" : "mt-2.5"}`}
             >
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow

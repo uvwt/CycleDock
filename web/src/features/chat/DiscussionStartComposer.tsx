@@ -1,3 +1,5 @@
+import { ModelSetupNotice } from "../models/ModelSetupNotice";
+import { useAgentStatus } from "../models/useAgentStatus";
 import { useDeviceSelection } from "../devices/device-selection";
 import type { DeviceTarget } from "../../shared/api/types";
 import { safeRandomUUID } from "../../shared/lib/utils";
@@ -47,12 +49,12 @@ function writeDraft(projectID: string, draft?: SavedDraft) {
 }
 
 import { ModelMenu } from "../models/ModelMenu";
-import { useModelSelection } from "../models/model-selection";
-
 export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   const { target } = useDeviceSelection();
-  const { selectedRouteId } = useModelSelection();
+  const [draftRouteId, setDraftRouteId] = useState<string | null>(null);
   const { t } = useTranslation();
+  const agentStatus = useAgentStatus();
+  const modelConfigured = agentStatus.data?.model_configured === true;
   const navigate = useNavigate();
   const initial = readDraft(projectID);
   const [content, setContent] = useState(initial.content);
@@ -79,18 +81,20 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     setPending(null);
     setContent("");
     await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-    navigate(`/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`);
+    navigate(
+      `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
+    );
   }
 
   async function createAndSend() {
     const value = content.trim();
-    if (!value || sending) return;
+    if (!value || sending || !modelConfigured) return;
     setSending(true);
     // 发起发送时固定设备选择与模型选择；创建 Card 的网络等待期间切换不改变这条消息。
     const deviceTarget = target;
-    const preferredModelRouteID = selectedRouteId || undefined;
+    const preferredModelRouteID = draftRouteId || undefined;
     try {
-      const card = await api.createDiscussion(projectID);
+      const card = await api.createDiscussion(projectID, preferredModelRouteID);
       await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       const draft: SavedDraft = {
         content: value,
@@ -116,7 +120,13 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   }
 
   async function retry() {
-    if (!pending?.pendingCardID || !pending.idempotencyKey || sending) return;
+    if (
+      !pending?.pendingCardID ||
+      !pending.idempotencyKey ||
+      sending ||
+      !modelConfigured
+    )
+      return;
     setSending(true);
     try {
       await finish(pending.pendingCardID, pending);
@@ -138,9 +148,11 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         event.preventDefault();
         void (pending ? retry() : createAndSend());
       }}
-      className="mx-auto flex items-end gap-2 rounded-2xl border border-line bg-surface p-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-primary/60"
+      className="mx-auto flex flex-col rounded-2xl border border-line bg-surface p-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-primary/60"
     >
-      <div className="flex min-w-0 flex-1 items-end pl-1.5">
+      <ModelSetupNotice />
+      {/* 文本输入区域：占满行宽自适应高度 */}
+      <div className="min-w-0 flex-1 px-1">
         <ChatInput
           value={value}
           onChange={setContent}
@@ -150,39 +162,50 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         />
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
-        <ModelMenu />
-        {pending?.pendingCardID && (
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() =>
-              navigate(
-                `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(pending.pendingCardID!)}`,
-              )
-            }
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
-          >
-            {t("打开讨论")}
-          </button>
-        )}
-        <button
-          type="submit"
-          title={pending ? t("重试发送") : t("发送")}
-          aria-label={pending ? t("重试发送") : t("发送")}
-          disabled={sending || (!pending && !content.trim())}
-          className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground shadow-sm transition hover:bg-action-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
-        >
-          {sending ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : pending ? (
-            <RotateCcw className="size-4" />
-          ) : (
-            <ArrowUp className="size-4" />
+      {/* 底部操作栏：左侧放置模型切换等控制，右侧放置发送/重试 */}
+      <div className="flex items-center justify-between gap-2 px-1 pt-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <ModelMenu
+            variant="composer"
+            selectedRouteId={draftRouteId}
+            onSelectRouteId={setDraftRouteId}
+          />
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          {pending?.pendingCardID && (
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() =>
+                navigate(
+                  `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(pending.pendingCardID!)}`,
+                )
+              }
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
+            >
+              {t("打开讨论")}
+            </button>
           )}
-        </button>
+          <button
+            type="submit"
+            title={pending ? t("重试发送") : t("发送")}
+            aria-label={pending ? t("重试发送") : t("发送")}
+            disabled={
+              sending || !modelConfigured || (!pending && !content.trim())
+            }
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground shadow-sm transition hover:bg-action-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            {sending ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : pending ? (
+              <RotateCcw className="size-4" />
+            ) : (
+              <ArrowUp className="size-4" />
+            )}
+          </button>
+        </div>
       </div>
     </form>
   );
 }
-

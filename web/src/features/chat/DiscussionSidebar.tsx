@@ -11,6 +11,7 @@ import type { Card } from "../../shared/api/types";
 import {
   ContextSidebar,
   ContextSidebarItem,
+  ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import {
   Button,
@@ -44,6 +45,7 @@ export function DiscussionSidebar({
   activeAttemptStatus,
   onSelect,
   onCreate,
+  loading = false,
   className = "",
 }: {
   discussions: Card[];
@@ -51,12 +53,14 @@ export function DiscussionSidebar({
   activeAttemptStatus?: string;
   onSelect: (card: Card) => void;
   onCreate: () => void;
+  loading?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [term, setTerm] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+
   const projectID = discussions[0]?.project_id || "";
   const mainDiscussion = useQuery({
     queryKey: keys.mainDiscussion(projectID),
@@ -127,6 +131,15 @@ export function DiscussionSidebar({
         return b.updated_at.localeCompare(a.updated_at);
       });
   }, [discussions, mainDiscussionID, term]);
+
+  if (loading && discussions.length === 0) {
+    return (
+      <ContextSidebarSkeleton
+        ariaLabel={t("讨论列表")}
+        className={className}
+      />
+    );
+  }
 
   return (
     <ContextSidebar

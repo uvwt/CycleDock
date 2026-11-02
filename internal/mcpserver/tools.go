@@ -31,9 +31,9 @@ func registerTools(server *mcp.Server, dataStore *store.Store) {
 	mcp.AddTool(server, &mcp.Tool{Name: "create_turn", Description: "Create a durable queued Turn on a Card. It never interrupts the current Attempt and is idempotent by source/key."}, createTurnHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "claim_attempt", Description: "Atomically claim/start the oldest pending Turn for this Card. Repeated claim by the same OAuth Source reuses its current Attempt."}, claimAttemptHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "heartbeat_attempt", Description: "Extend the lease of a running Attempt owned by this OAuth Source. Heartbeat never writes Timeline."}, heartbeatAttemptHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "reply_message", Description: "Publish one separate user-visible message bubble for the authenticated Attempt; may be called multiple times. end_turn finishes the Attempt or, with choice, waits for a human."}, replyMessageHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "reply_message", Description: "Publish one separate user-visible message bubble for the authenticated Attempt; may be called multiple times. end_turn finishes the Attempt, including choice messages; a human answer starts a new Turn."}, replyMessageHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "check_in", Description: "Record healthy, warning, or critical status for an Ongoing Card through the current Attempt."}, checkInHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "finish_attempt", Description: "Finish the authenticated Source's current Attempt as completed or failed, or enter waiting_human."}, finishAttemptHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "finish_attempt", Description: "Finish the authenticated Source's current Attempt as completed or failed."}, finishAttemptHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "confirm_card", Description: "Confirm a Working Todo after verification. When required confirmations are reached, CycleDock moves it to Review; only a human can move Review to Done."}, confirmCardHandler(dataStore))
 }
 
@@ -51,7 +51,7 @@ func listProjectsHandler(dataStore *store.Store) mcp.ToolHandlerFor[EmptyInput, 
 		for _, project := range projects {
 			output.Projects = append(output.Projects, ProjectView{
 				ID: project.ID.String(), Name: project.Name,
-				Description: project.Description, Instructions: project.Instructions,
+				Description: project.Description,
 			})
 		}
 		return nil, output, nil
@@ -455,16 +455,8 @@ func finishAttemptHandler(dataStore *store.Store) mcp.ToolHandlerFor[FinishAttem
 				ctx, actor.WorkspaceID, attempt.CardID, attemptID, actor.SourceID,
 				input.Summary, now,
 			)
-		case "waiting_human":
-			if strings.TrimSpace(input.Stage) == "" || strings.TrimSpace(input.Summary) == "" {
-				return nil, FinishAttemptOutput{}, errors.New("INVALID_REQUEST: waiting_human requires stage and summary")
-			}
-			err = dataStore.WaitAttemptForHumanWithPrompt(
-				ctx, actor.WorkspaceID, attempt.CardID, attemptID, actor.SourceID,
-				input.Stage, input.Summary, now,
-			)
 		default:
-			return nil, FinishAttemptOutput{}, errors.New("INVALID_REQUEST: outcome must be completed, failed, or waiting_human")
+			return nil, FinishAttemptOutput{}, errors.New("INVALID_REQUEST: outcome must be completed or failed")
 		}
 		if err != nil {
 			return nil, FinishAttemptOutput{}, stableToolError(err)

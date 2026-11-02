@@ -93,7 +93,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 重试继续按后端 can_retry 判定，创建新 Trigger 并保留旧执行，不能覆盖历史或复用同一 Trigger 创建第二个 Run。
 - 重试可沿同一来源消息展示多个执行尝试；原失败记录可追溯，避免新旧状态互相覆盖。
 - 定时检查等没有用户消息的触发，显示独立执行条目；旧数据缺少稳定关联时也安全回退，不能强挂到最近一句话下。
-- 输入框附近可显示「Agent 正在执行 · 另有 N 条待处理」轻量汇总；按钮区分发送、加入队列、立即转向、回复并继续，遵守 enqueue / interrupt / waiting_human 语义。
+- 输入框附近可显示「Agent 正在执行 · 另有 N 条待处理」轻量汇总；按钮区分发送、加入队列、立即转向，遵守 enqueue / interrupt 语义。
 
 ### 4.2 代码与数据边界
 
@@ -124,7 +124,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - [ ] Ongoing 日程新增 / 编辑与最新健康展示可用；Todo / Ongoing 摘要与来源、Discussion 派生工作链接正确；详情只保留当前对象回复框。
 - [ ] 排队、执行、取消、失败、重试准确关联；同文重复消息、多条排队、多次重试不会错挂。无用户来源触发及旧数据有独立回退展示。
 - [ ] 取消 / Claim 竞态、重复点击、刷新及实时事件不会出现假成功或重复条目；can_retry=false 不误放重试入口，服务端越权操作被拒绝。
-- [ ] enqueue 不打断、interrupt 正确转向、waiting_human 回复接续；Human-only Done 等领域约束不退化。
+- [ ] enqueue 不打断、interrupt 正确转向、普通回复创建新 Turn；Human-only Done 等领域约束不退化。
 - [ ] 状态码转换为用户可读文案，中英文一致；键盘焦点、抽屉关闭、按钮可访问名称可用；悬浮框不遮挡卡片，移动端无横向挤压。
 - [ ] 真实执行前端 build / lint 及相关自动化测试；涉及接口时运行相应后端测试。浏览器验证桌面 / 手机视口与上述关键流程，记录证据和未验证项，不能只用编译通过代替产品验收。
 
@@ -140,7 +140,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 - 整个应用不再常驻全局顶栏，也不恢复旧的 64px 图标主导航 + 第二块聊天侧栏。桌面左侧仅一块导航区域，顶部为 Discussion / Work 模式切换，底部为项目切换与用户/Workspace/设置菜单。移动端使用单个导航抽屉。
 - 讨论模式：左侧是当前 Project 的 Discussion 搜索与列表；主区是独立聊天首页或 Discussion 详情。新讨论首条消息继续复用具备幂等重试与草稿保护的创建组件；关联 Todo/Ongoing 仅作为轻量入口按需展开，不常驻额外「派生工作」横条。
 - Discussion 的信息入口与 Todo / Ongoing 统一：会话标题右侧一个信息图标，点击在按钮下方展示**不占页面布局宽度的紧凑浮层**，点击外部或 Esc 关闭，不使用独立右侧固定栏或原右侧抽屉。讨论摘要在浮层显示，不重复标题、不显示维护规则说明；归档/删除收进 `···` 操作菜单，保留删除确认及服务端权限校验。任务浮层中来源 Discussion 链接用更小的次要文字（11px）呈现，避免抢占主体视觉。
-- 工作模式：左侧按待办状态组织工作视图；主区为四列 Todo 看板或任务详情。Ongoing 统一由「计划」入口承载。**不常驻 Discussion 列表**。Todo/Ongoing 详情改为单栏会话：标题旁使用紧凑状态切换器（Todo: 待办 / 进行中 / 待审核 / 已完成；Ongoing: 运行中 / 已暂停 / 已归档），状态操作仍通过原后端和 Human-only Done 权限约束。原右侧整列信息面板取消，在标题栏右侧使用 `!` 信息按钮打开锚定浮层显示目标、来源及显式编辑；Ongoing 日程和 Check-in 管理功能留在同一浮层，不能因为去掉侧栏而丢失。移动端同样优先轻量浮层，不再为任务占用固定信息列。
+- 工作模式：左侧按待办状态组织工作视图；主区为四列 Todo 看板或任务详情。Ongoing 统一由「计划」入口承载。**不常驻 Discussion 列表**。Todo/Ongoing 详情改为单栏会话：标题旁使用紧凑状态切换器（Todo: 待办 / 进行中 / 待验收 / 已完成；Ongoing: 运行中 / 已暂停 / 已归档），状态操作仍通过原后端和 Human-only Done 权限约束。原右侧整列信息面板取消，在标题栏右侧使用 `!` 信息按钮打开锚定浮层显示目标、来源及显式编辑；Ongoing 日程和 Check-in 管理功能留在同一浮层，不能因为去掉侧栏而丢失。移动端同样优先轻量浮层，不再为任务占用固定信息列。
 - 会话中 Human 评论始终为右侧独立气泡；关联的 Run / Trigger 的排队、运行、失败、重试和结果作为左侧带 Agent 头像的独立消息卡片展现，不塞进 Human 气泡。视觉上以来源 Human 消息为轮次锚点：例如用户连续发送 A、B，A 正在执行而 B 入队，则展示应为 `A → A 的 Agent 状态/结果 → B → B 的 Agent 状态/结果`，而不是 `A → B → Agent A → Agent B`；底层 Event/Trigger/Run 的真实发生顺序不改写。执行时长属于单个正在运行的 Run，放在其对应 Agent 消息头的右侧（使用该 Run 的 `started_at`），不能放在整个 Card 的标题旁；SSE 临时输出与最终 Result 必须合并到相同 Run 的消息位置，避免重复呈现。
 - 视觉基线统一为克制的白 / 灰中性色 + CycleDock 蓝青品牌色：页面主标题约 22–24px、区块标题 15–16px、正文 13–14px、导航与表单控件优先 12–13px、辅助信息约 12px，避免同屏出现明显失衡的大字和微字；卡片和输入框以 8–12px 圆角为主，表单下拉框保持约 13px 字号与紧凑高度，弹层使用紧凑阴影，避免大面积 pill、过度圆角和玻璃拟态。品牌入口、登录页和浏览器 favicon 统一使用 CycleDock 三色几何 C Logo。移动端根布局必须保持 viewport 宽度，横向滚动仅允许发生在明确的局部容器（如看板列、设置标签）。
 - Board 可直接创建独立 Todo；Discussion 生成的工作保留来源 Discussion 的深链接。两种模式分别做适合自身的交互，但无信息孤岛。
@@ -154,7 +154,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 
 - 桌面端恢复 `092f521` 的 **64px 全局图标 rail**。一级工作入口只保留 **Chat** 与 **Work** 两个图标；顶部使用正式 CycleDock Logo，rail 底部只保留 Settings。Account / Workspace 快捷侧栏删除，账户、Workspace 与退出登录统一留在 Settings → Account。
 - Chat 与 Work 是同一 Project 数据上的两种工作入口，不建立新的 Session / Board 领域模型。Chat 使用 Discussion 列表 + 会话主区；Work 使用 Todo 四列 + Ongoing 区域。移动端使用紧凑顶栏与抽屉。
-- 不把 `web/` 简单整体回退到 `092f521`。后端、API 契约及安全边界保持当前 `main`：Workspace membership/switch、Trigger lineage、OAuth、SSE、Human-only Done、enqueue / interrupt / waiting_human 等全部保留。
+- 不把 `web/` 简单整体回退到 `092f521`。后端、API 契约及安全边界保持当前 `main`：Workspace membership/switch、Trigger lineage、OAuth、SSE、Human-only Done、enqueue / interrupt 等全部保留。
 - Card 详情基于 `092f521` 页面结构重新开发。Timeline 继续是对话式：Human 消息在右，Agent / Result 在左，系统事件居中；相邻持久事件间隔严格超过 2 小时才显示时间分隔。
 - SSE 继续使用 Card stream：`run.started` / `run.stage` / `run.text.delta` / `run.text.snapshot` / terminal / `event.created`。SSE 只表示暂态和低延迟输出，REST Timeline 是最终事实源。
 - pending Turn / current Attempt / retry / cancel 通过服务端稳定的 `source_event_id / turn_id / retry_of_attempt_id` 关联到原始 Human Comment；无稳定来源的 Schedule/System Turn 独立展示，不允许按文字或时间猜测。
@@ -167,7 +167,7 @@ CycleDock 是人与 Agent 推进工作的看板，不是聊天产品旁边外挂
 ## 10. 2026-10-22 Work 详情二级列表修订
 
 - Discussion 与 Work 详情统一采用同一套 Context Sidebar 基础骨架：项目选择、侧栏容器、滚动区、选中态列表项共用；Discussion 保持扁平会话列表，Work 保持独立的业务分组，不做“万能侧栏”。
-- Work 列表分为待办、进行中、待审核、已完成四组。进入 Todo 详情时默认只展开当前任务所在组，其余组保持折叠；用户手动展开另一组时使用单组手风琴行为。Ongoing 详情使用独立的计划列表。
+- Work 列表分为待办、进行中、待验收、已完成四组。进入 Todo 详情时默认只展开当前任务所在组，其余组保持折叠；用户手动展开另一组时使用单组手风琴行为。Ongoing 详情使用独立的计划列表。
 - 切换 Work 列表中的任务后继续使用独立 Card URL，新的当前任务自动高亮，其所在分组自动成为默认展开组。Project 切换返回对应 Work 看板，不跨 Project 保留旧任务。
 - 桌面端 Work 列表与 Discussion 列表使用相同宽度和边界；移动端都用左侧 Sheet，不额外挤占会话主区。
 - 标题栏信息图标从标题/状态组中移出，固定在最右侧；标题与状态区域可收缩，信息入口位置不再随标题长度漂移。

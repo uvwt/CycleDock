@@ -73,7 +73,7 @@ func TestADKReplyBatchPreservesOrderAndStopsAfterEndTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Messages", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Messages", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,9 +108,6 @@ func TestADKReplyBatchPreservesOrderAndStopsAfterEndTurn(t *testing.T) {
 			t.Fatal(err)
 		}
 		expected := domain.AttemptStatusCompleted
-		if i == 1 {
-			expected = domain.AttemptStatusWaitingHuman
-		}
 		if attempt.Status != expected {
 			t.Fatalf("attempt %d status=%s want %s", i, attempt.Status, expected)
 		}
@@ -146,7 +143,7 @@ func TestADKReplyBatchPreservesOrderAndStopsAfterEndTurn(t *testing.T) {
 	if bubbles != 3 || results != 0 {
 		t.Fatalf("message bubbles=%d result events=%d", bubbles, results)
 	}
-	// waiting_human 仍是 Attempt 状态，但用户回覆会创建新的 Turn，而非调用旧等待工具。
+	// 选择消息已完成本次 Attempt，回答创建新的 Turn，继续使用同一 Session。
 	reply, err := dataStore.ReplySessionAndContinue(ctx, store.SubmitSessionCommentParams{
 		WorkspaceID: workspace.ID, CardID: card.ID, AuthorSourceID: human.ID,
 		Content: "yes", IdempotencyKey: "choice-answer",
@@ -203,7 +200,7 @@ func TestReplyPreviewStreamsBeforeToolCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Preview", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Preview", "")
 	if err != nil {
 		t.Fatal(err)
 	}

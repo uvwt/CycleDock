@@ -26,7 +26,7 @@ func TestAuthenticatedCardSSEDeliversDurableEvents(t *testing.T) {
 	workspaceID := uuid.MustParse(me.Workspace.ID)
 	sourceID := uuid.MustParse(me.Source.ID)
 
-	project, err := dataStore.CreateProject(context.Background(), workspaceID, "SSE Test", "", "")
+	project, err := dataStore.CreateProject(context.Background(), workspaceID, "SSE Test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestAuthenticatedCardSSEDeliversDurableEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherProject, err := dataStore.CreateProject(context.Background(), other.ID, "Private SSE", "", "")
+	otherProject, err := dataStore.CreateProject(context.Background(), other.ID, "Private SSE", "")
 	if err != nil {
 		t.Fatal(err)
 	}

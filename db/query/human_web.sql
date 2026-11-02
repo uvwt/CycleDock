@@ -14,7 +14,6 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 UPDATE projects
 SET name = sqlc.arg(name),
     description = sqlc.arg(description),
-    instructions = sqlc.arg(instructions),
     updated_at = now()
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id)
@@ -49,7 +48,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -99,7 +98,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -150,7 +149,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -487,6 +486,14 @@ SELECT EXISTS (
 -- name: SetCardPinned :one
 UPDATE cards
 SET pinned_at = sqlc.arg(pinned_at),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;
+
+-- name: SetCardPreferredModelRoute :one
+UPDATE cards
+SET preferred_model_route_id = sqlc.arg(preferred_model_route_id),
     updated_at = now()
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id)

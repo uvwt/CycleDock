@@ -86,7 +86,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "reply_message",
-				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Use choice and end_turn=true to wait for the human; do not send a second final answer.",
+				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Choice messages also complete this Turn; the human answer starts a new Turn. Do not send a second final answer.",
 				Parameters: object(map[string]any{
 					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
 					"content": stringField("Markdown content. Required for text."),
@@ -100,7 +100,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 							"label": stringField("Visible option label."),
 						}, "value", "label"), "minItems": 2, "maxItems": 8},
 					}, "required": []string{"question", "options"}, "additionalProperties": false},
-					"end_turn":        map[string]any{"type": "boolean", "description": "Finish this Turn; choice waits for human."},
+					"end_turn":        map[string]any{"type": "boolean", "description": "Finish this Turn, including choice messages."},
 					"idempotency_key": stringField("Unique stable key for this bubble."),
 				}, "type", "idempotency_key"),
 			},
@@ -144,7 +144,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_inspect_card_session",
-				Description: "Inspect the conversation history/session of a non-discussion Card (todo or ongoing) within the current Workspace. Supports 'simple' mode (visible user messages and reply bubbles, matching what users see) and 'full' mode (detailed turns including thinking/reasoning and tool calls/results).",
+				Description: "Inspect the conversation history/session of a non-discussion Card (todo or ongoing) within the current Workspace. Exclusively available to Discussion cards. Supports 'simple' mode (visible user messages and reply bubbles, matching what users see) and 'full' mode (detailed turns including thinking/reasoning and tool calls/results).",
 				Parameters: object(map[string]any{
 					"card_id": stringField("Target Card UUID. Defaults to the current Card if omitted."),
 					"mode": map[string]any{

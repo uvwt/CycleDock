@@ -43,7 +43,9 @@ export { Input as TextInput } from "./input";
 export { Textarea as TextArea } from "./textarea";
 export { NativeSelect as Select } from "./native-select";
 export { Checkbox } from "./checkbox";
+export { Switch } from "./switch";
 export { Badge } from "./badge";
+export { Skeleton } from "./skeleton";
 export {
   Tooltip,
   TooltipTrigger,
@@ -109,8 +111,8 @@ export function Field({
   error?: string;
 }) {
   return (
-    <Label className="block space-y-1.5 font-normal leading-5 select-auto">
-      <span className="block text-xs font-semibold text-secondary-foreground">
+    <Label className="block min-w-0 space-y-1.5 font-normal leading-5 select-auto">
+      <span className="block truncate text-xs font-semibold text-secondary-foreground" title={label}>
         {label}
       </span>
       {children}
@@ -187,7 +189,7 @@ export function Sheet({
         )}
       >
         {title ? (
-          <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
+          <SheetHeader className="shrink-0 justify-center border-b border-divider px-5 pt-[calc(env(safe-area-inset-top,0px)+0.875rem)] pb-3.5 pr-12">
             <SheetTitle>{title}</SheetTitle>
           </SheetHeader>
         ) : (
@@ -351,7 +353,7 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
+    <section className="min-w-0 rounded-xl border border-line bg-surface p-4 sm:p-5">
       <div className="mb-5">
         <h2 className="text-[15px] font-semibold text-heading">{title}</h2>
         {description && (

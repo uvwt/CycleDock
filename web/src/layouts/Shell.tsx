@@ -68,13 +68,13 @@ export function Shell({ children }: { children: ReactNode }) {
     {
       to: projectID ? `/board/${encodeURIComponent(projectID)}` : "/board",
       activePath: "/board",
-      label: t("工作"),
+      label: t("任务"),
       icon: BriefcaseBusiness,
     },
     {
       to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
       activePath: "/plans",
-      label: t("定时任务"),
+      label: t("定时"),
       icon: CalendarClock,
     },
     {
@@ -262,7 +262,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {!focusedConversation && (
-          <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-surface px-3 md:hidden">
+          <header className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top,0px))] items-center justify-between border-b border-line bg-surface px-3 pt-[env(safe-area-inset-top,0px)] md:hidden">
             <button
               type="button"
               onClick={handleLogoClick}

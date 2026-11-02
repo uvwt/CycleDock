@@ -126,9 +126,21 @@ Artifact 使用 ADK artifact.Service 兼容的 versioned PostgreSQL 实现，sco
 
 ### 8.3 边界与限制
 
+- MCP 按服务独立接入。单个服务初始化、工具发现或 NexusDock bootstrap 失败时，只移除该服务的能力，普通对话与其他已连接工具继续执行。连接故障只记后台日志，不生成对话气泡。模型收到能力限制但不主动或逐轮重复报告；只有用户请求确实依赖故障服务时才说明限制，不得声称完成相关操作。取消或被替代的 Attempt 仍按原有写保护处理，不因降级继续执行。
 - NexusDock 第一方设备操作与记忆工具（`exec_command`、`recall_search` 等）继续作为 Native Tools 直接挂载，不走外部按需发现。
 - CycleDock 内置系统工具（`reply_message`、`cycledock_*`）保持原有直接挂载调用方式。
 - 外部 MCP 工具目录支持连接级与全局刷新，在服务端动态增删工具或本地工具缺失时按需重查，避免使用无限期过期的定义。
+
+### 8.4 跨卡片查阅与委派隔离
+
+在 Session-first 架构下，每个 Card 拥有独立的自治会话：
+
+1. **`cycledock_inspect_card_session` 权限收敛**：
+   - 仅供 **Discussion（主聊天/全局协调）** 会话挂载和调用。
+   - 目标仅限同工作区内的 **Todo** 与 **Ongoing** 卡片（支持 `simple` 消息气泡模式与 `full` 全量轮次/工具调用模式），严禁反查 Discussion。
+   - **Todo 与 Ongoing 等具体执行卡片不挂载此工具**，禁止在具体任务卡片之间互相翻阅底层 Session，避免上下文隐式耦合与 Token 膨胀。
+2. **任务卡片之间的显式委派**：
+   - Todo 与 Ongoing 之间的协同必须通过 `cycledock_send_card_message` 进行显式交接，仅入队结构化消息与必要交接上下文，不共享或复制完整 Session。
 
 ## 9. Turn Queue
 
@@ -168,19 +180,11 @@ Attempt 2 running
 
 如果用户改变了任务意图，应创建新 Turn。
 
-## 11. waiting_human
+## 11. 提问与下一轮输入
 
-Human-in-the-loop 属于同一 Card Session。
+提问和选项属于普通消息。Agent 发出最终消息后结束本次 Attempt，标记为 completed；不保留等待人工回复的执行状态，也不占用 current Attempt。
 
-ADK v2 Event 已有 Human Input / requested input 能力；CycleDock 仍需要把产品状态映射到 Attempt waiting_human，并保证：
-
-- waiting_human 占用 current Attempt。
-- 不维护 lease。
-- Schedule 不越过它。
-- Human 回复后恢复/续跑同一 Session。
-- stale activation 不能写回。
-
-具体采用 ADK workflow pause/resume 还是新 invocation 延续 Session，在 Runner cutover 阶段以最少状态重复为准。
+用户回答创建新的 Human Turn，仍在同一 Card Session 中执行。排队 Turn 与 Schedule 继续遵循 FIFO 和 current Attempt 唯一约束。Built-in Runner 必须先保存本次 invocation 的 FunctionResponse 等尾部 Event，再结算 Attempt；终态执行不能追加迟到事件。
 
 ## 12. SessionService
 
@@ -260,7 +264,7 @@ Phase B 已完成并验证：
 
 - card_turns / turn_attempts。
 - Human / Schedule / System Turn。
-- enqueue / interrupt / waiting_human reply。
+- enqueue / interrupt / 新一轮回复。
 - Attempt retry / recovery / heartbeat / lease。
 - current Attempt 唯一约束。
 - stale invocation write guard。
@@ -275,7 +279,7 @@ Phase C 已完成 Built-in Runtime cutover：
 - Human Comment / reply / cancel / retry HTTP API 已切到 Turn / Attempt。
 - Web Card detail 已切到 current_attempt / pending_turns / attempt_history，并用 source_event_id 稳定关联 Human Comment。
 - Schedule occurrence 已改为创建 Turn，同一 Ongoing Card 继续使用同一 Session。
-- waiting_human 使用 ADK SkipSummarization 在保存 FunctionResponse 后终止当前 invocation。
+- 最终 reply_message 使用 ADK SkipSummarization 在保存 FunctionResponse 后终止当前 invocation，然后完成 Attempt。
 - MCP transport fatal、64 轮 runaway tool-loop guard、stale invocation protection 已恢复并验证。
 - 真实 PostgreSQL 集成测试已证明跨 Turn 可以复用上一轮 tool response，第二 Turn 不需要重复调用只读 MCP 工具。
 
@@ -315,7 +319,7 @@ Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题�
 - 两项均为正整数，非法值阻止启动；修改后需重启后端。工作空间额度可以大于单进程额度，多实例可共同提供容量。默认值是资源保护配置，不是经过压测的容量承诺。
 - Dispatcher 优先尝试最久未获得执行机会的 Workspace；顺序使用持久 Attempt 的最近开始时间，空队列、无启用路由、额度已满或正在被其他实例领取的 Workspace 会被跳过。并发领取不承诺严格轮流，但持续有工作时不会固定优先某个 Workspace。
 - 租户调度使用 `workspace_agent_settings` 行锁，并在同一事务内重新检查运行数、领取 Turn / queued Attempt。多个实例不能同时抢占租户的最后一个名额；原有 Card 唯一 current Attempt、interrupt 优先与 FIFO 语义保留。
-- 只有内置 Agent 的 `running` Attempt 消耗租户额度；queued、waiting_human 和终态不消耗。过期运行由已有 lease recovery 回收后释放额度。等待远程工具仍占用执行名额；引导不会抢占其他卡片。
+- 只有内置 Agent 的 `running` Attempt 消耗租户额度；queued 和终态不消耗。过期运行由已有 lease recovery 回收后释放额度。等待远程工具仍占用执行名额；引导不会抢占其他卡片。
 - 这里的进程额度不是整个集群的总上限。独立的 Discussion 元数据生成和 External MCP Agent 不计入该 Attempt 调度额度。
 - 模型账号级并发 / 请求速率配额仍是目标态；当前保留既有模型限流错误重试与有序路由 failover。
 
@@ -335,11 +339,11 @@ Dispatcher 启动独立后台任务，每 5 秒扫描已有首条 Turn、标题�
 
 ## 产品消息时间线
 
-同一次 Built-in Agent Attempt 可以通过 `reply_message` 产生多条面向用户的 Message 气泡；最终答复不再生成 Result 或 Attempt 结果摘要。选择消息与 `waiting_human` 状态在同一事务中保存，人工回复后问题仍保留。Agent 消息不会创建新的业务 Turn。
+同一次 Built-in Agent Attempt 可以通过 `reply_message` 产生多条面向用户的 Message 气泡；最终答复不再生成 Result 或 Attempt 结果摘要。选择消息同样结束本轮 Attempt，人工回复创建新 Turn，问题正文仍保留。Agent 消息不会创建新的业务 Turn。
 
-前端按事件 `sequence` 展示人工消息与持久 Message 气泡。等待回复、取消、替代和完成状态与耗时显示在对应消息组的名称旁。模型自由文本不自动成为气泡，正常结束且未调用回复工具时才补发最终 Message。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
+前端按事件 `sequence` 展示人工消息与持久 Message 气泡。取消、替代和完成状态与耗时显示在对应消息组的名称旁。模型自由文本不自动成为气泡，正常结束且未调用回复工具时才补发最终 Message。思考内容、上下文压缩摘要及原始工具参数和返回值不作为聊天消息展示。
 
-已有执行若仅在 `progress_summary` 中保存了提问，前端会在等待回复或人工已回复时补充展示问题气泡。同一 Attempt 已有相同正文的 Agent 消息时不重复展示；其他 Attempt 或 Human 的同文消息不会隐藏该问题。该展示回退不写入虚构的持久事件。
+提问正文由持久 Message 保存；执行摘要不再充当问题消息或等待状态的来源。
 
 
 `reply_message` 流式生成时，只提取面向用户的顶层 `content` 正文，先写 PostgreSQL Message 快照再推送 SSE。快照的 `message.preview_id` 用于稳定关联，`message.preview=true` 表示工具尚未提交。完整工具调用在同一事务中原地更新该 Message 并写入幂等键；气泡 ID、sequence、创建时间保持不变。取消、替代或进程重启不会删除已保存正文，刷新直接从产品 Timeline 恢复。预览不是已执行的工具响应，不写入 ADK Session。所有片段保存与取消、替代共用 Card 行锁并校验当前 Attempt / Runner，迟到片段不得继续修改正文。

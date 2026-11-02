@@ -50,11 +50,10 @@ func (s *Store) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]db.P
 	}
 	if len(projects) == 0 {
 		created, err := q.CreateProject(ctx, db.CreateProjectParams{
-			ID:           uuid.New(),
-			WorkspaceID:  workspaceID,
-			Name:         defaultProjectName,
-			Description:  "",
-			Instructions: "",
+			ID:          uuid.New(),
+			WorkspaceID: workspaceID,
+			Name:        defaultProjectName,
+			Description: "",
 		})
 		if err != nil {
 			return nil, err
@@ -78,14 +77,13 @@ func (s *Store) GetProject(ctx context.Context, workspaceID, projectID uuid.UUID
 func (s *Store) UpdateProject(
 	ctx context.Context,
 	workspaceID, projectID uuid.UUID,
-	name, description, instructions string,
+	name, description string,
 ) (db.Project, error) {
 	project, err := s.queries.UpdateProject(ctx, db.UpdateProjectParams{
-		Name:         name,
-		Description:  description,
-		Instructions: instructions,
-		WorkspaceID:  workspaceID,
-		ID:           projectID,
+		Name:        name,
+		Description: description,
+		WorkspaceID: workspaceID,
+		ID:          projectID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Project{}, domain.ErrNotFound

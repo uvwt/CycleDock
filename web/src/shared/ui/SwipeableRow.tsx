@@ -114,12 +114,13 @@ export function SwipeableRow({
   isOpenRef.current = isOpen;
 
   const getActionsWidth = useCallback(() => {
-    if (actionsRef.current) {
-      return actionsRef.current.offsetWidth || 140;
-    }
-    // 默认每个操作按钮约 64px 宽
-    return Math.max(actions.length * 64, 80);
+    // 纯图标模式下每个操作按钮固定 44px 宽
+    return Math.max(actions.length * 44, 44);
   }, [actions.length]);
+
+  const actionsWidth = getActionsWidth();
+  // 当过度左滑时（-offset > actionsWidth），操作区随卡片左移动态等比例拉伸，始终紧贴卡片右边缘，杜绝断开断层
+  const currentActionsWidth = Math.max(actionsWidth, -offset);
 
   const close = useCallback(() => {
     setOffset(0);
@@ -217,10 +218,14 @@ export function SwipeableRow({
 
         // 边界与自然弹性阻尼
         if (targetOffset > 0) {
-          targetOffset = targetOffset * 0.15;
+          // 向右拖拽施加强阻尼与软上限（无右滑操作，给予微弱弹性反馈）
+          targetOffset = Math.min(targetOffset * 0.08, 16);
         } else if (targetOffset < -actionsWidth) {
+          // 向左超出动作按钮总宽时（过度左滑），施加橡皮筋阻尼并限制最大拉伸距离
           const overscroll = -actionsWidth - targetOffset;
-          targetOffset = -actionsWidth - overscroll * 0.2;
+          const maxOverscroll = 40;
+          const dampedOverscroll = Math.min(overscroll * 0.25, maxOverscroll);
+          targetOffset = -actionsWidth - dampedOverscroll;
         }
 
         setOffset(targetOffset);
@@ -273,31 +278,36 @@ export function SwipeableRow({
   }
 
   // 关键：底层操作区在未拖拽且未展开时必须严格隐藏，避免任何透明背景穿透
-  const isActionsVisible = isOpen || offset !== 0 || isSwiping;
+  const isActionsVisible = isOpen || offset < 0 || isSwiping;
 
   return (
     <div
       ref={containerRef}
+      data-swipe-open={isOpen ? "true" : undefined}
       className={cn(
-        "group/swipe relative overflow-hidden select-none touch-pan-y",
+        "group/swipe relative select-none touch-pan-y",
         className,
       )}
       {...bind()}
     >
-      {/* 隐藏在下层的快捷操作层 */}
+      {/* 隐藏在底部的快捷操作区：固定在右侧，随上层卡片整体左移而显露；过度左滑时动态拉伸跟随 */}
       <div
         ref={actionsRef}
         aria-hidden={!isOpen}
         style={{
           visibility: isActionsVisible ? "visible" : "hidden",
-          opacity: isActionsVisible ? 1 : 0,
+          width: currentActionsWidth,
+          transition: isSwiping
+            ? "none"
+            : "width 0.28s cubic-bezier(0.2, 0.9, 0.3, 1), visibility 0s linear " +
+              (isOpen ? "0s" : "0.28s"),
         }}
         className={cn(
-          "absolute inset-y-0 right-0 flex items-stretch z-0 transition-opacity duration-150",
+          "absolute inset-y-0 right-0 flex items-stretch z-0 overflow-hidden rounded-r-xl",
           isOpen ? "pointer-events-auto" : "pointer-events-none",
         )}
       >
-        {actions.map((act) => {
+        {actions.map((act, index) => {
           const variantClasses =
             act.variant === "destructive" || act.variant === "danger"
               ? "bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white"
@@ -311,13 +321,16 @@ export function SwipeableRow({
             <button
               key={act.key}
               type="button"
+              title={act.label}
+              aria-label={act.label}
               onClick={(e) => {
                 e.stopPropagation();
                 close();
                 act.onClick(e);
               }}
               className={cn(
-                "flex flex-col items-center justify-center gap-1 px-3.5 py-2 text-xs font-medium transition-colors select-none",
+                "flex items-center justify-center flex-1 min-w-[44px] transition-colors select-none",
+                index > 0 && "border-l border-white/20 dark:border-black/20",
                 variantClasses,
                 act.className,
               )}
@@ -327,15 +340,12 @@ export function SwipeableRow({
                   {act.icon}
                 </span>
               ) : null}
-              <span className="truncate max-w-[4rem] text-[11px] leading-tight">
-                {act.label}
-              </span>
             </button>
           );
         })}
       </div>
 
-      {/* 滑动上层主体内容 */}
+      {/* 滑动卡片主体（整体随手势向左平移，露出底层操作按钮） */}
       <div
         style={{
           transform: `translateX(${offset}px)`,
@@ -351,7 +361,13 @@ export function SwipeableRow({
             close();
           }
         }}
-        className={cn("relative z-10 w-full bg-surface", contentClassName)}
+        className={cn(
+          "relative z-10 w-full overflow-hidden bg-surface rounded-xl transition-[border-radius]",
+          offset < -2
+            ? "rounded-r-none [&_*]:rounded-r-none"
+            : "",
+          contentClassName,
+        )}
       >
         {children}
       </div>

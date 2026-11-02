@@ -53,6 +53,17 @@ type replyState struct {
 
 func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	definitions := internalToolDefinitions()
+	// cycledock_inspect_card_session 仅供 Discussion（主聊天/全局协调）会话挂载。
+	// Todo 与 Ongoing 等具体工作卡片相互自治，禁止翻阅彼此底层会话，协作必须通过 cycledock_send_card_message 显式委派。
+	if runtime.context.CardKind != domain.CardKindDiscussion {
+		filtered := make([]modelclient.ToolDefinition, 0, len(definitions))
+		for _, definition := range definitions {
+			if definition.Function.Name != "cycledock_inspect_card_session" {
+				filtered = append(filtered, definition)
+			}
+		}
+		definitions = filtered
+	}
 	if runtime.context.IsBuiltInProactive {
 		// 内置定时主动任务只允许查询信息并最终向主聊天发送 1 条气泡，不挂载建卡或改日程等写工具。
 		filtered := make([]modelclient.ToolDefinition, 0, 3)
@@ -306,6 +317,10 @@ func (r attemptToolRuntime) internalHandler(
 
 	case "cycledock_inspect_card_session":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
+			// 仅允许 Discussion 卡片查阅下属具体工作卡片的会话；Todo / Ongoing 之间必须通过消息委派。
+			if r.context.CardKind != domain.CardKindDiscussion {
+				return nil, errors.New("only discussion cards can inspect other card sessions; use cycledock_send_card_message to communicate between work cards")
+			}
 			cardIDStr := stringArg(args, "card_id")
 			targetCardID := r.context.CardID
 			if strings.TrimSpace(cardIDStr) != "" {

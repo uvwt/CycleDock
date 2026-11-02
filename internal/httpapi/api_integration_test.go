@@ -63,7 +63,7 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 
 	projectRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
-		"name": "Phase 2", "description": "Human Web", "instructions": "Keep durable context.",
+		"name": "Phase 2", "description": "Human Web\n\nKeep durable context.",
 	}, cookie, nil)
 	if projectRecorder.Code != http.StatusCreated {
 		t.Fatalf("create project: %d %s", projectRecorder.Code, projectRecorder.Body.String())
@@ -182,7 +182,7 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 	choiceID, _, err := dataStore.PublishReply(context.Background(), store.PublishReplyParams{
 		WorkspaceID: workspaceID, CardID: runCardID, AttemptID: current.Attempt.ID,
-		RunnerSourceID: agent.ID, IdempotencyKey: "http-choice",
+		RunnerSourceID: agent.ID, IdempotencyKey: "http-choice", FinishOnEnd: true,
 		Message: store.ReplyMessage{Type: "choice", EndTurn: true, Widget: &store.ChoiceWidget{
 			Question: "Which target?", Options: []store.ChoiceOption{{Value: "A", Label: "Target A"}, {Value: "B", Label: "Target B"}},
 		}},
@@ -217,9 +217,9 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if replyResult.EventID == "" || replyResult.TurnID == "" {
 		t.Fatalf("reply response does not expose session IDs: %+v body=%s", replyResult, reply.Body.String())
 	}
-	waitingAttempt, err := dataStore.GetAttempt(context.Background(), workspaceID, current.Attempt.ID)
-	if err != nil || waitingAttempt.Status != domain.AttemptStatusSuperseded {
-		t.Fatalf("reply did not supersede waiting attempt: attempt=%+v err=%v", waitingAttempt, err)
+	completedAttempt, err := dataStore.GetAttempt(context.Background(), workspaceID, current.Attempt.ID)
+	if err != nil || completedAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("reply changed the completed attempt: attempt=%+v err=%v", completedAttempt, err)
 	}
 	continued, err := dataStore.ClaimNextTurnAttempt(
 		context.Background(), workspaceID, agent.ID, time.Now().UTC(), time.Minute,
@@ -421,7 +421,7 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "", "")
+	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "")
 	if err != nil {
 		t.Fatal(err)
 	}

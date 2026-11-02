@@ -341,7 +341,7 @@ Session-first 不等于“保存所有秘密”。
 - 接 Model Routes；
 - 接 MCP / NexusDock；
 - SSE 映射 ADK Events；
-- waiting_human / confirmation。
+- 提问结束本轮 / confirmation。
 
 ### Phase D — Context & Artifact
 

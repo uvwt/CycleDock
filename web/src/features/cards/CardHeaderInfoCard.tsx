@@ -51,8 +51,8 @@ export function CardHeaderInfoCard({
 
   const kindLabel = useMemo(() => {
     if (card.kind === "discussion") return t("讨论");
-    if (card.kind === "ongoing") return t("定时任务");
-    return t("工作");
+    if (card.kind === "ongoing") return t("定时");
+    return t("任务");
   }, [card.kind, t]);
 
   const totalSteps = task?.step_count || task?.steps?.length || 0;
@@ -105,7 +105,7 @@ export function CardHeaderInfoCard({
                     : card.todo_state === "working"
                       ? t("进行中")
                       : card.todo_state === "review"
-                        ? t("待审核")
+                        ? t("待验收")
                         : t("已完成")}
                 </span>
               </div>
@@ -240,7 +240,7 @@ export function CardHeaderInfoCard({
                   </span>
                 </div>
                 <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 h-4">
-                  {dCard.kind === "ongoing" ? t("定时任务") : t("工作")}
+                  {dCard.kind === "ongoing" ? t("定时") : t("任务")}
                 </Badge>
               </button>
             ))}

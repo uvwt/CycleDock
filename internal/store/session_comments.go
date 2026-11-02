@@ -28,7 +28,7 @@ type SubmitSessionCommentParams struct {
 	Content               string
 	IdempotencyKey        string
 	DispatchMode          domain.DispatchMode
-	// 回复绑定正在回答的执行；选择按钮还须绑定具体消息，防止旧页面误答。
+	// 回复绑定已完成的执行；选择回复还须绑定具体消息，防止旧页面误答。
 	ReplyToAttemptID uuid.UUID
 	ChoiceMessageID  uuid.UUID
 }
@@ -60,7 +60,7 @@ func (s *Store) ReplySessionAndContinue(
 func (s *Store) submitSessionComment(
 	ctx context.Context,
 	p SubmitSessionCommentParams,
-	requireWaitingHuman bool,
+	replyToMessage bool,
 ) (SubmitSessionCommentResult, error) {
 	p.Content = strings.TrimSpace(p.Content)
 	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
@@ -101,7 +101,7 @@ func (s *Store) submitSessionComment(
 		requestHash = stableRequestHash(requestHash, "preferred_model_route", p.PreferredModelRouteID.String())
 	}
 
-	if requireWaitingHuman {
+	if replyToMessage {
 		requestHash = stableRequestHash(requestHash, "reply", p.ReplyToAttemptID.String(), p.ChoiceMessageID.String())
 	}
 
@@ -140,12 +140,18 @@ func (s *Store) submitSessionComment(
 		}, nil
 	}
 
-	if requireWaitingHuman {
+	if replyToMessage {
 		var status string
 		err := tx.QueryRow(ctx, `
-			SELECT status FROM turn_attempts
-			WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-			FOR UPDATE
+			SELECT a.status FROM turn_attempts a
+			JOIN card_turns t ON t.workspace_id=a.workspace_id AND t.id=a.turn_id
+			WHERE a.workspace_id=$1 AND a.card_id=$2 AND a.id=$3
+			  AND NOT EXISTS (
+				SELECT 1 FROM card_turns newer
+				WHERE newer.workspace_id=t.workspace_id AND newer.card_id=t.card_id
+				  AND newer.sequence>t.sequence AND newer.cancelled_at IS NULL
+			  )
+			FOR UPDATE OF a
 		`, p.WorkspaceID, p.CardID, p.ReplyToAttemptID).Scan(&status)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SubmitSessionCommentResult{}, domain.ErrAttemptNotCurrent
@@ -153,11 +159,11 @@ func (s *Store) submitSessionComment(
 		if err != nil {
 			return SubmitSessionCommentResult{}, err
 		}
-		if status != string(domain.AttemptStatusWaitingHuman) {
+		if status != string(domain.AttemptStatusCompleted) {
 			return SubmitSessionCommentResult{}, domain.ErrAttemptNotCurrent
 		}
 		if p.ChoiceMessageID != uuid.Nil {
-			// 与创建下一轮共用 Card 行锁，旧页面的选择不能回答新的等待问题。
+			// 与创建下一轮共用 Card 行锁，同一个问题只能创建一轮回答，后续输入使旧选择失效。
 			var payload []byte
 			err := tx.QueryRow(ctx, `
 				SELECT message FROM events
@@ -211,14 +217,14 @@ func (s *Store) submitSessionComment(
 		DeviceNodeID: deviceNodeID, DeviceName: deviceName,
 		PreferredModelRouteID: preferredRouteID,
 		WorkspaceID:           p.WorkspaceID,
-		CardID:            p.CardID,
-		Source:            domain.TurnSourceHuman,
-		Content:           p.Content,
-		CreatedBySourceID: uuid.NullUUID{UUID: p.AuthorSourceID, Valid: true},
-		SourceEventID:     uuid.NullUUID{UUID: eventID, Valid: true},
-		DispatchMode:      p.DispatchMode,
-		IdempotencyKey:    p.IdempotencyKey,
-		RequestHash:       requestHash,
+		CardID:                p.CardID,
+		Source:                domain.TurnSourceHuman,
+		Content:               p.Content,
+		CreatedBySourceID:     uuid.NullUUID{UUID: p.AuthorSourceID, Valid: true},
+		SourceEventID:         uuid.NullUUID{UUID: eventID, Valid: true},
+		DispatchMode:          p.DispatchMode,
+		IdempotencyKey:        p.IdempotencyKey,
+		RequestHash:           requestHash,
 	})
 	if err != nil {
 		return SubmitSessionCommentResult{}, err

@@ -35,7 +35,7 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 	humanSourceID := uuid.MustParse(identity.Source.ID)
 
 	ctx := context.Background()
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Unread Test", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Unread Test", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,7 +48,7 @@ External MCP deliberately has no interrupt tool. Human Web owns “interrupt now
 
 - Use `heartbeat_attempt` only to extend the lease.
 - Use `reply_message` for every user-visible bubble. One invocation creates one message, and you may invoke it repeatedly.
-- Set `end_turn=false` to continue working; use `end_turn=true` for the last text/attachment bubble, or with `type=choice` and `widget` to wait for a human choice.
+- Set `end_turn=false` to continue working; use `end_turn=true` for the last bubble, including `type=choice` with `widget`. Questions complete the Attempt; the human answer starts a new Turn in the same Session.
 - On Ongoing Cards, use `check_in` for healthy / warning / critical.
 - Every execution write must use the current `attempt_id`; foreign or stale Attempts reject writes.
 - Reuse the same `idempotency_key` when retrying the same logical Event write.

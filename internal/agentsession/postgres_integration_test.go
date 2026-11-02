@@ -293,7 +293,7 @@ func TestAttemptOwnershipBindsInvocationAndRejectsStaleWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Guard project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Guard project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

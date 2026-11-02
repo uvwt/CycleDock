@@ -24,7 +24,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := uuid.MustParse(me.Workspace.ID)
 	sourceID := uuid.MustParse(me.Source.ID)
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Notifications", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Notifications", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestWorkspaceCardStreamDeliversUpdates(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := uuid.MustParse(me.Workspace.ID)
 	sourceID := uuid.MustParse(me.Source.ID)
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Notifications SSE", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Notifications SSE", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestWorkspaceCardStreamDeliversUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherProject, err := dataStore.CreateProject(ctx, other.ID, "Private", "", "")
+	otherProject, err := dataStore.CreateProject(ctx, other.ID, "Private", "")
 	if err != nil {
 		t.Fatal(err)
 	}

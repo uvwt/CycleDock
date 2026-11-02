@@ -16,7 +16,7 @@ type ReplyMessageInput struct {
 	Alt            string              `json:"alt,omitempty"`
 	Images         []string            `json:"images,omitempty"`
 	Widget         *store.ChoiceWidget `json:"widget,omitempty"`
-	EndTurn        bool                `json:"end_turn,omitempty" jsonschema:"Optional; finish the Attempt, or wait for human with choice"`
+	EndTurn        bool                `json:"end_turn,omitempty" jsonschema:"Optional; finish the Attempt, including choice messages"`
 	IdempotencyKey string              `json:"idempotency_key" jsonschema:"Stable unique key for this bubble"`
 }
 

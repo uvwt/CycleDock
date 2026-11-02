@@ -33,7 +33,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a

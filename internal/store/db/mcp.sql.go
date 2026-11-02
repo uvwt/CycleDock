@@ -48,7 +48,7 @@ VALUES (
     $11, $12,
     $13, $14
 )
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
 `
 
 type CreateAgentCardParams struct {
@@ -105,6 +105,7 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 		&i.CreateRequestHash,
 		&i.PinnedAt,
 		&i.ConfirmationRound,
+		&i.PreferredModelRouteID,
 	)
 	return i, err
 }
@@ -215,7 +216,7 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 }
 
 const getCreatedCardRequest = `-- name: GetCreatedCardRequest :one
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
 FROM cards
 WHERE workspace_id = $1
   AND created_by_source_id = $2
@@ -250,6 +251,7 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 		&i.CreateRequestHash,
 		&i.PinnedAt,
 		&i.ConfirmationRound,
+		&i.PreferredModelRouteID,
 	)
 	return i, err
 }
@@ -339,7 +341,7 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 
 const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
     current_attempt.status AS current_attempt_status,
@@ -372,7 +374,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -404,6 +406,7 @@ type ListWorkspaceCardSummariesRow struct {
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound     int64              `json:"confirmation_round"`
+	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
 	ProjectName           string             `json:"project_name"`
 	Health                string             `json:"health"`
 	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
@@ -439,6 +442,7 @@ func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uu
 			&i.CreateRequestHash,
 			&i.PinnedAt,
 			&i.ConfirmationRound,
+			&i.PreferredModelRouteID,
 			&i.ProjectName,
 			&i.Health,
 			&i.CurrentAttemptStatus,

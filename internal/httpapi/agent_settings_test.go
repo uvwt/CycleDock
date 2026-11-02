@@ -12,6 +12,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestAgentSettingsRequireWorkspaceOwner(t *testing.T) {
@@ -195,4 +196,53 @@ func TestSaveAgentSettings_AcceptsAPIKeyConfiguredField(t *testing.T) {
 	if response.Code == http.StatusBadRequest && strings.Contains(response.Body.String(), "invalid_json") {
 		t.Fatalf("api_key_configured was rejected as invalid_json: %s", response.Body.String())
 	}
+}
+
+func TestAgentStatusReportsConfigurationWithoutExposingSettings(t *testing.T) {
+	_, _, dataStore := newHTTPIntegration(t)
+	ctx := context.Background()
+	workspace, err := dataStore.CreateWorkspace(ctx, "Model status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := dataStore.CreateWorkspace(ctx, "Other workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &API{store: dataStore}
+	check := func(workspaceID uuid.UUID, want bool) {
+		t.Helper()
+		// 普通成员也能查询本工作区状态，但不应取得路由、指令和密钥。
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/agent/status", nil)
+		request = request.WithContext(context.WithValue(ctx, identityContextKey{}, auth.Identity{WorkspaceID: workspaceID, Role: "member"}))
+		response := httptest.NewRecorder()
+		api.getAgentStatus(response, request)
+		var body map[string]bool
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		configured, exists := body["model_configured"]
+		if !exists || len(body) != 1 || configured != want {
+			t.Fatalf("status response=%v want configured=%v", body, want)
+		}
+	}
+	check(workspace.ID, false)
+	for _, enabled := range []bool{false, true, false} {
+		_, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{
+			Routes:             []store.ModelRouteInput{{Enabled: enabled, ProviderType: "openai_compatible", ProviderBaseURL: "https://example.com/v1", Model: "test-model"}},
+			SystemInstructions: "private instructions",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(workspace.ID, enabled)
+		check(foreign.ID, false)
+	}
+	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, store.AgentSettingsInput{}); err != nil {
+		t.Fatal(err)
+	}
+	check(workspace.ID, false)
 }

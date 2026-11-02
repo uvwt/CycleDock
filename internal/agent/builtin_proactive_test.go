@@ -144,7 +144,7 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Rust Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Rust Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,10 +6,11 @@ import { useProject } from "../../app/project-context";
 import { keys } from "../../app/query";
 import { api } from "../../shared/api/client";
 import type { ProjectSchedule, OngoingState } from "../../shared/api/types";
-import { ErrorView, Spinner } from "../../shared/ui/components";
+import { ErrorView } from "../../shared/ui/components";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { getAttemptStatusLabelKey } from "../../shared/lib/ongoing-health";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
+import { PlanSkeleton } from "./PlanSkeleton";
 
 const planStateLabels: Record<OngoingState, string> = {
   active: "运行中",
@@ -69,8 +70,18 @@ export default function PlanPage() {
 
   if (projectsPending) {
     return (
-      <main className="grid min-h-[calc(100dvh-3.5rem)] place-items-center md:min-h-dvh">
-        <Spinner text={t("读取项目…")} />
+      <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-heading">
+              {t("定时任务")}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("管理定时任务与长期工作，查看执行结果与自动执行日程。")}
+            </p>
+          </div>
+        </header>
+        <PlanSkeleton />
       </main>
     );
   }
@@ -141,9 +152,7 @@ export default function PlanPage() {
           {t("还没有项目")}
         </div>
       ) : cards.isPending || schedules.isPending ? (
-        <div className="py-20 grid place-items-center">
-          <Spinner />
-        </div>
+        <PlanSkeleton />
       ) : cards.error || schedules.error ? (
         <div>
           <ErrorView error={cards.error || schedules.error} />

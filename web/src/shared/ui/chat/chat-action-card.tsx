@@ -1,7 +1,6 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import {
-  ExternalLink,
   CheckCircle2,
   Clock,
   Sparkles,
@@ -17,12 +16,6 @@ import { api, APIError } from "@/shared/api/client";
 import { keys } from "@/app/query";
 import type { Card, CardDetail } from "@/shared/api/types";
 import { CardStatusDot, getCardVisualStatus } from "@/shared/ui/CardStatusDot";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/shared/ui/sheet";
 
 const chatCardVariants = cva(
   "group/card block select-none rounded-xl border transition-all duration-150 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
@@ -76,7 +69,6 @@ export const ChatActionCard = React.forwardRef<
   ) => {
     const { t } = useTranslation();
     const navigate = useNavigate();
-    const [mobileDrawerOpen, setMobileDrawerOpen] = React.useState(false);
 
     const {
       data: cardDetail,
@@ -117,11 +109,6 @@ export const ChatActionCard = React.forwardRef<
       cardDetail && "notFound" in cardDetail && cardDetail.notFound,
     );
     const card = cardDetail && "card" in cardDetail ? cardDetail.card : null;
-
-    const isMobile = React.useMemo(() => {
-      if (typeof window === "undefined") return false;
-      return window.innerWidth < 768;
-    }, []);
 
     const targetProject = card?.project_id || projectId;
     const targetUrl = React.useMemo(() => {
@@ -233,11 +220,7 @@ export const ChatActionCard = React.forwardRef<
         return;
       }
 
-      if (isMobile) {
-        setMobileDrawerOpen(true);
-      } else {
-        navigate(targetUrl);
-      }
+      navigate(targetUrl);
     };
 
     if (isLoading) {
@@ -284,123 +267,72 @@ export const ChatActionCard = React.forwardRef<
       card?.kind === "todo"
         ? t("任务")
         : card?.kind === "ongoing"
-          ? t("例行工作")
+          ? t("定时")
           : card?.kind === "discussion"
             ? t("讨论")
             : t("卡片");
 
     return (
-      <>
-        <div
-          ref={ref}
-          role="button"
-          tabIndex={0}
-          onClick={handleClick}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              handleClick(e as unknown as React.MouseEvent);
-            }
-          }}
-          className={cn(
-            chatCardVariants({ variant, size }),
-            "my-2 not-prose cursor-pointer",
-            className,
-          )}
-          {...props}
-        >
-          <div className="flex items-start gap-2.5 sm:gap-3">
-            {/* 左侧类型图标独立微底座 */}
-            <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs">
-              {kindIcon}
-            </div>
+      <div
+        ref={ref}
+        role="button"
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleClick(e as unknown as React.MouseEvent);
+          }
+        }}
+        className={cn(
+          chatCardVariants({ variant, size }),
+          "my-2 not-prose cursor-pointer",
+          className,
+        )}
+        {...props}
+      >
+        <div className="flex items-start gap-2.5 sm:gap-3">
+          {/* 左侧类型图标独立微底座 */}
+          <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs">
+            {kindIcon}
+          </div>
 
-            {/* 中间信息区 */}
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <h4 className="truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors">
-                  {title}
-                </h4>
-                <div className="flex items-center gap-1.5 shrink-0 ml-auto sm:ml-0">
-                  {statusBadge}
-                  {card && (
-                    <CardStatusDot
-                      status={visualStatus}
-                      className="size-1.5"
-                    />
-                  )}
-                </div>
+          {/* 中间信息区 */}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h4 className="truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors">
+                {title}
+              </h4>
+              <div className="flex items-center gap-1.5 shrink-0 ml-auto sm:ml-0">
+                {statusBadge}
+                {card && (
+                  <CardStatusDot
+                    status={visualStatus}
+                    className="size-1.5"
+                  />
+                )}
               </div>
-
-              {card?.description ? (
-                <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground leading-normal">
-                  {card.description}
-                </p>
-              ) : (
-                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-faint">
-                  <span>{kindLabel}</span>
-                  <span>•</span>
-                  <span>{cardId.slice(0, 8)}</span>
-                </div>
-              )}
             </div>
 
-            {/* 右侧微交互跳转指示 */}
-            <div className="shrink-0 pt-0.5 text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
-              <ArrowUpRight className="size-4" />
-            </div>
+            {card?.description ? (
+              <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground leading-normal">
+                {card.description}
+              </p>
+            ) : (
+              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-faint">
+                <span>{kindLabel}</span>
+                <span>•</span>
+                <span>{cardId.slice(0, 8)}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 右侧微交互跳转指示 */}
+          <div className="shrink-0 pt-0.5 text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
+            <ArrowUpRight className="size-4" />
           </div>
         </div>
-
-        {/* Mobile preview drawer */}
-        <Sheet open={mobileDrawerOpen} onOpenChange={setMobileDrawerOpen}>
-          <SheetContent side="bottom" className="max-h-[85vh] rounded-t-2xl sm:max-w-md sm:rounded-none">
-            <SheetHeader>
-              <SheetTitle>{title}</SheetTitle>
-              <p className="text-xs text-muted-foreground">
-                {kindLabel} · ID: {cardId.slice(0, 8)}
-              </p>
-            </SheetHeader>
-            <div className="space-y-4 px-4 pb-6 pt-2">
-              <div className="flex items-center justify-between rounded-lg bg-muted/50 p-3">
-                <div className="flex items-center gap-2">
-                  {kindIcon}
-                  <span className="font-medium text-sm">{kindLabel}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {statusBadge}
-                  {card && <CardStatusDot status={visualStatus} />}
-                </div>
-              </div>
-
-              {card?.description && (
-                <div className="space-y-1">
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    {t("描述")}
-                  </span>
-                  <p className="rounded-lg border border-line bg-surface p-3 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                    {card.description}
-                  </p>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileDrawerOpen(false);
-                    navigate(targetUrl);
-                  }}
-                  className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm active:scale-[0.98] transition"
-                >
-                  <span>{t("打开卡片详情页")}</span>
-                  <ExternalLink className="size-4" />
-                </button>
-              </div>
-            </div>
-          </SheetContent>
-        </Sheet>
-      </>
+      </div>
     );
   },
 );

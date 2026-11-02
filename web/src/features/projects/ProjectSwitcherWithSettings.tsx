@@ -67,19 +67,16 @@ function ProjectSettingsDialog({
   const { t } = useTranslation();
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description);
-  const [instructions, setInstructions] = useState(project.instructions);
 
   const save = useMutation({
     mutationFn: () =>
       api.updateProject(project.id, {
         name: name.trim(),
         description: description.trim(),
-        instructions: instructions.trim(),
       }),
     onSuccess: async (updated) => {
       setName(updated.name);
       setDescription(updated.description);
-      setInstructions(updated.instructions);
       await queryClient.invalidateQueries({ queryKey: keys.projects });
       toast.success(t("项目已保存"));
       onOpenChange(false);
@@ -92,9 +89,7 @@ function ProjectSettingsDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={t("项目设置")}
-      description={t(
-        "修改当前项目的名称、描述与 Agent 指令。Project Instructions 只作用于这个项目。",
-      )}
+      description={t("修改当前项目的名称与项目说明。")}
     >
       <div className="space-y-4 pt-1">
         <Field label={t("名称")}>
@@ -103,19 +98,14 @@ function ProjectSettingsDialog({
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
-        <Field label={t("描述")}>
-          <TextArea
-            rows={3}
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        </Field>
-        <Field label="Project Agent Instructions">
+        <Field label={t("项目说明")}>
           <TextArea
             rows={6}
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            placeholder={t("此项目的长期 Agent 工作指令")}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder={t(
+              "介绍项目背景、目标，以及希望 Agent 遵守的工作要求。对项目内所有 Card 生效。",
+            )}
           />
         </Field>
         <div className="flex justify-end gap-2 pt-2">

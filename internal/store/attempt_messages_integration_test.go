@@ -34,20 +34,14 @@ func TestAttemptMessagesAreIdempotentAndRejectStaleWrites(t *testing.T) {
 	if err != nil || !reused || again != id {
 		t.Fatalf("message replay: id=%s reused=%v err=%v", again, reused, err)
 	}
-	// 模型在调用等待工具前已经问过同一个问题，工具不应再生成一条重复消息。
 	params.Content, params.IdempotencyKey = "Which target?", "message-question"
 	if _, _, err := s.AddAttemptEvent(ctx, params); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err := s.WaitAttemptForHumanWithPrompt(ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID,
-			f.AgentID, "confirm", "Which target?", time.Now().UTC()); err != nil {
+		if err := s.CompleteAttempt(ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, f.AgentID, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := s.FinishAttempt(ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID,
-		domain.AttemptStatusSuperseded, "superseded by human reply", time.Now().UTC()); err != nil {
-		t.Fatal(err)
 	}
 	params.Content, params.IdempotencyKey = "late message", "message-late"
 	if _, _, err := s.AddAttemptEvent(ctx, params); !errors.Is(err, domain.ErrAttemptNotCurrent) {

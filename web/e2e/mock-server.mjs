@@ -13,7 +13,6 @@ const project = {
   id: "demo-project",
   name: "NexusDock 运维",
   description: "服务器和自动化任务",
-  instructions: "保障线上服务稳定",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -21,7 +20,6 @@ const secondProject = {
   id: "demo-project-b",
   name: "产品发布",
   description: "发布计划与上线检查",
-  instructions: "按发布清单推进",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
@@ -360,6 +358,7 @@ function details(id) {
         : [],
     health: card.health || "unknown",
     last_checkin: id === "ongoing-1" ? events[id][0] : null,
+    has_more_before: (events[id] || []).length > 50,
   };
 }
 http
@@ -764,6 +763,7 @@ http
           if (rest?.includes("/retry"))
             return data(res, { attempt_id: "attempt-retry-demo" });
         }
+        if (route === "/agent/status") return data(res, { model_configured: settings.routes.some((route) => route.enabled) });
         if (route === "/agent/settings") {
           if (req.method === "PUT") {
             settings = { ...settings, ...(await body(req)) };

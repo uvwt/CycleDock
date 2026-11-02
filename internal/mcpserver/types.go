@@ -129,9 +129,8 @@ type CheckInInput struct {
 
 type FinishAttemptInput struct {
 	AttemptID string `json:"attempt_id"`
-	Outcome   string `json:"outcome" jsonschema:"completed, failed, or waiting_human"`
-	Stage     string `json:"stage,omitempty" jsonschema:"Current stage when waiting_human"`
-	Summary   string `json:"summary,omitempty" jsonschema:"Failure or waiting_human summary"`
+	Outcome   string `json:"outcome" jsonschema:"completed or failed"`
+	Summary   string `json:"summary,omitempty" jsonschema:"Failure summary"`
 }
 
 type ConfirmCardInput struct {
@@ -141,10 +140,9 @@ type ConfirmCardInput struct {
 }
 
 type ProjectView struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Instructions string `json:"instructions"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type CardView struct {

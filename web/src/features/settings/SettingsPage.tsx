@@ -74,7 +74,7 @@ export default function SettingsPage({ role }: { role: string }) {
   }
 
   return (
-    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+    <main className="mx-auto flex-1 min-h-0 min-w-0 w-full max-w-7xl space-y-7 overflow-y-auto overflow-x-hidden px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
@@ -88,7 +88,7 @@ export default function SettingsPage({ role }: { role: string }) {
       <div className="space-y-6">
         <nav
           aria-label={t("设置")}
-          className="scrollbar-thin flex max-w-full flex-wrap gap-1 border-b border-line pb-2 md:flex-nowrap md:overflow-x-auto"
+          className="scrollbar-thin flex max-w-full flex-wrap gap-1 border-b border-line px-1 pt-1.5 pb-2 md:flex-nowrap md:overflow-x-auto"
         >
           {menus.map((group) => (
             <div key={group.group} className="flex shrink-0 gap-1">
@@ -98,9 +98,9 @@ export default function SettingsPage({ role }: { role: string }) {
                   to={"/settings/" + item.id}
                   key={item.id}
                   className={({ isActive }) =>
-                    `flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs transition-colors ${
+                    `flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs transition-colors ${
                       isActive
-                        ? "bg-surface font-medium text-sky-700 ring-1 ring-line"
+                        ? "bg-surface font-medium text-primary shadow-xs ring-1 ring-line"
                         : "text-muted-foreground hover:bg-surface hover:text-heading"
                     }`
                   }

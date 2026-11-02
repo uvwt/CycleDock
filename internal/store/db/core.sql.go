@@ -16,10 +16,10 @@ const createCard = `-- name: CreateCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
     discussion_state, todo_state, ongoing_state, source_discussion_id,
-    required_confirmations, created_by_source_id
+    required_confirmations, created_by_source_id, preferred_model_route_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
 `
 
 type CreateCardParams struct {
@@ -35,6 +35,7 @@ type CreateCardParams struct {
 	SourceDiscussionID    uuid.NullUUID `json:"source_discussion_id"`
 	RequiredConfirmations int32         `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID     `json:"created_by_source_id"`
+	PreferredModelRouteID uuid.NullUUID `json:"preferred_model_route_id"`
 }
 
 func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, error) {
@@ -51,6 +52,7 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		arg.SourceDiscussionID,
 		arg.RequiredConfirmations,
 		arg.CreatedBySourceID,
+		arg.PreferredModelRouteID,
 	)
 	var i Card
 	err := row.Scan(
@@ -72,22 +74,22 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 		&i.CreateRequestHash,
 		&i.PinnedAt,
 		&i.ConfirmationRound,
+		&i.PreferredModelRouteID,
 	)
 	return i, err
 }
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (id, workspace_id, name, description, instructions)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, workspace_id, name, description, instructions, created_at, updated_at, main_discussion_id
+INSERT INTO projects (id, workspace_id, name, description)
+VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, name, description, created_at, updated_at, main_discussion_id
 `
 
 type CreateProjectParams struct {
-	ID           uuid.UUID `json:"id"`
-	WorkspaceID  uuid.UUID `json:"workspace_id"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Instructions string    `json:"instructions"`
+	ID          uuid.UUID `json:"id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
@@ -96,7 +98,6 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Description,
-		arg.Instructions,
 	)
 	var i Project
 	err := row.Scan(
@@ -104,7 +105,6 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.WorkspaceID,
 		&i.Name,
 		&i.Description,
-		&i.Instructions,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MainDiscussionID,
@@ -168,7 +168,7 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 }
 
 const getCard = `-- name: GetCard :one
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
 FROM cards
 WHERE workspace_id = $1 AND id = $2
 `
@@ -200,6 +200,7 @@ func (q *Queries) GetCard(ctx context.Context, arg GetCardParams) (Card, error) 
 		&i.CreateRequestHash,
 		&i.PinnedAt,
 		&i.ConfirmationRound,
+		&i.PreferredModelRouteID,
 	)
 	return i, err
 }

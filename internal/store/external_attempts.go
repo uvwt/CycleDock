@@ -50,7 +50,7 @@ func (s *Store) ClaimCardTurnAttempt(
 			error_summary, started_at, lease_expires_at, finished_at
 		FROM turn_attempts
 		WHERE workspace_id=$1 AND card_id=$2
-		  AND status IN ('queued','running','waiting_human')
+		  AND status IN ('queued','running')
 		FOR UPDATE
 	`, workspaceID, cardID), &current)
 	if err == nil {

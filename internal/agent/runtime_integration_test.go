@@ -80,7 +80,7 @@ func TestCommentWakesDispatcherWithoutWaitingForPoll(t *testing.T) {
 
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Wake Workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
-	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model")); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestTwoDispatchersExecuteOneTurnOnce(t *testing.T) {
 
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Dispatcher Workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
-	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	card, _ := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Card", "", uuid.NullUUID{}, 1)
 	if _, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "fake-model")); err != nil {
 		t.Fatal(err)
@@ -274,20 +274,39 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 		}
 	})
 
-	t.Run("MCP initialize failure", func(t *testing.T) {
+	t.Run("MCP initialize failure does not block ordinary reply", func(t *testing.T) {
 		modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			writeModelResponse(t, w, "should not execute", nil)
+			raw, _ := io.ReadAll(r.Body)
+			if !bytes.Contains(raw, []byte("failtool")) || !bytes.Contains(raw, []byte("401")) {
+				t.Error("model did not receive unavailable connection context")
+			}
+			if bytes.Contains(raw, []byte("private-mcp-token")) {
+				t.Error("remote error body leaked into model context")
+			}
+			writeModelResponse(t, w, "普通对话仍可继续", nil)
 		}))
 		defer modelHTTP.Close()
 		mcpHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "MCP unavailable", http.StatusBadGateway)
+			http.Error(w, "private-mcp-token", http.StatusUnauthorized)
 		}))
 		defer mcpHTTP.Close()
 
-		status, summary, _, _ := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
-		if status != string(domain.AttemptStatusFailed) || summary != "Built-in Agent MCP connection or tool call failed." {
+		status, summary, workspaceID, cardID := runFailureScenario(t, dataStore, ctx, modelHTTP.URL, 0, mcpHTTP.URL)
+		if status != string(domain.AttemptStatusCompleted) || summary != "" {
 			t.Fatalf("status=%q summary=%q", status, summary)
+		}
+		events, err := dataStore.ListCardEvents(ctx, workspaceID, cardID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var warning, answer bool
+		for _, event := range events {
+			warning = warning || (strings.Contains(event.Content, "failtool") && strings.Contains(event.Content, "/settings/mcp") && strings.Contains(event.Content, "401"))
+			answer = answer || strings.Contains(event.Content, "普通对话仍可继续")
+		}
+		if warning || !answer {
+			t.Fatalf("warning=%v answer=%v", warning, answer)
 		}
 	})
 
@@ -430,7 +449,7 @@ func runFailureScenario(
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

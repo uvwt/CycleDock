@@ -13,7 +13,7 @@
 - Discussion 与 Todo / Ongoing 都是 Card；一个 Card 对应一个持久 Agent Session，产品 Timeline 展示 durable Event，执行调度使用 Turn / Attempt，不另建第二套聊天业务模型。
 - Project 仍是看板领域实体；Board 只是界面。
 - PC / 移动端响应式，普通白、灰中性色，色彩只辅助交互/状态；默认可读与低视觉噪音。
-- 数据隔离、Human-only Done、waiting_human、enqueue/interrupt 等领域规则由后端执行，前端只表达它们。
+- 数据隔离、Human-only Done、enqueue/interrupt 等领域规则由后端执行，前端只表达它们。
 
 ## 2. 页面与路由
 
@@ -35,7 +35,7 @@
 - 相同后端 `events` 表 / `timeline` 返回：comment(Human)=右，comment(Agent)、finding、result=左；status_change=居中小字；progress/checkin=简短阶段节点；confirm/reject 按重要性增强。
 - 服务端 `sequence` 始终保留为真实审计顺序和去重依据；会话展示优先按稳定因果关系组织轮次。Session-first Runtime 使用 `Comment Event ← source_event_id ← Turn ← Attempt ← attempt_id ← Agent Event` 稳定关联；Attempt 产生的 Result/Finding 等产品 Event 携带 `attempt_id`，同一 Attempt 的执行状态与 durable Agent Event 应紧跟触发它的来源消息展示。缺少用户来源的 Schedule / System Turn 独立展示，不得按文本、时间或数组位置猜测归属。
 - Todo/Ongoing 详情不保留右侧常驻栏。业务状态以标题旁紧凑状态切换器呈现；任务目标、来源 Discussion、Health / Schedule 等 durable 信息通过标题栏最右侧的信息按钮打开紧凑浮层。浮层默认阅读，Human 显式点击编辑后才显示保存/取消表单，移动端同样使用浮层而不是独立详情抽屉。
-- 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、waiting_human 的“回复并继续”、取消 Attempt 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
+- 底部输入框有“收起态 / 展开聚合态”两种状态。收起时保持单行、尽量不占聊天高度；获得焦点后展开，running/queued 的“加入队列 / 立即转向”、取消 Attempt 等控制全部聚合在输入框内部的底部控制区，不再另起一整行遮挡正文。
 - Discussion 的 Generate task 只在输入框右上角显示 Sparkles 图标，通过 `title / aria-label` 保留可访问名称，不显示额外文字按钮。跳到最新同样只显示向下图标。
 - Discussion 仅能生成任务而非转换状态，一个 Discussion 可生成多个工作；Todo/Ongoing 不再产生工作。
 - Human 可以在 Board 直接打开“新建待办”表单创建 Todo；AI Generate work 仍然只来自 Discussion。
@@ -67,7 +67,7 @@
 | Agent 设置 | Agent 开关、模型超时、最大 Tool Rounds、Workspace Agent Instructions |
 | NexusDock | 第一方设备授权状态、连接、断开及跳转 NexusDock 管理页 |
 | MCP 服务 | 自定义 MCP 列表、新建、修改、删除、测试；环境变量 Token 引用 |
-| 项目设置 | 当前 Project 名称、描述、Project Instructions |
+| 项目设置 | 当前 Project 名称、项目说明（背景、目标与 Agent 工作要求） |
 
 Agent/连接设置保留 owner 权限。不要把模型账号和 CycleDock 登录身份混淆，不要将 Workspace 级和 Project 级指令混淆。没有实现过的 Skill 管理、订阅账单、通知等不放空菜单。
 

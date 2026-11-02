@@ -422,7 +422,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.get_by_role("button", name="取消排队").wait_for()
         self.page.get_by_role("button", name="重试", exact=True).wait_for()
         self.page.get_by_text("系统触发 / 未关联历史").wait_for()
-        self.page.get_by_text("状态变化 · todo -> working").wait_for()
+        self.page.get_by_text("状态变化 · 待办 → 进行中").wait_for()
         self.page.get_by_text(
             "已定位 Docker 容器的错误记录。"
         ).wait_for(timeout=8000)
@@ -621,7 +621,7 @@ class CycleDockSmoke(unittest.TestCase):
 
         working = sidebar.get_by_role("button", name=re.compile(r"^进行中"))
         todo = sidebar.get_by_role("button", name=re.compile(r"^待办"))
-        review = sidebar.get_by_role("button", name=re.compile(r"^待审核"))
+        review = sidebar.get_by_role("button", name=re.compile(r"^待验收"))
         done = sidebar.get_by_role("button", name=re.compile(r"^已完成"))
         self.assertEqual(sidebar.get_by_role("button", name=re.compile(r"^持续事项")).count(), 0)
 
@@ -1096,9 +1096,12 @@ class CycleDockSmoke(unittest.TestCase):
     def test_mobile_topbar_buttons_aligned_and_simplified(self):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.page.get_by_role("button", name="切换页面").wait_for()
+        self.page.get_by_role("button", name="打开工作列表").wait_for()
 
-        # 手机端卡片页顶部不展示项目切换和设备在线列表按钮
+        # 手机端卡片页顶部不展示页面导航、项目切换和设备在线列表按钮
+        self.assertEqual(
+            self.page.locator('button[aria-label="切换页面"]:visible').count(), 0
+        )
         self.assertEqual(
             self.page.locator('button[aria-label="选择项目"]:visible').count(), 0
         )
@@ -1107,7 +1110,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
 
         # 左右两侧保留的顶部按钮高度必须一致（32px）且处于同一条水平中心线上
-        labels = ["切换页面", "打开工作列表", "任务详情", "切换任务状态", "更多操作"]
+        labels = ["打开工作列表", "任务详情", "切换任务状态", "更多操作"]
         boxes = {}
         for label in labels:
             btn = self.page.locator(
@@ -1146,7 +1149,6 @@ class CycleDockSmoke(unittest.TestCase):
                 const log = document.querySelector('[role="log"]');
                 const topBar = document.querySelector('[data-mobile-top-surface]');
                 const topButtons = [
-                    '切换页面',
                     '打开讨论列表',
                     '任务详情',
                     '更多操作',
@@ -1182,15 +1184,13 @@ class CycleDockSmoke(unittest.TestCase):
                     initRect.top >= 0 &&
                     initRect.bottom <= 56.5
                 );
-                const logBelowTopBar = logRectAtTop.top >= topBarRectAtTop.bottom - 0.5;
                 const firstBubbleUnobscured = Boolean(
                     firstBubbleRect && firstBubbleRect.top >= topBarRectAtTop.bottom - 0.5
                 );
 
                 return {
-                    ok: buttonsFixed && logBelowTopBar && firstBubbleUnobscured && midBtnHits.every(Boolean),
+                    ok: buttonsFixed && firstBubbleUnobscured && midBtnHits.every(Boolean),
                     buttonsFixed,
-                    logBelowTopBar,
                     firstBubbleUnobscured,
                     midBtnHits,
                     topBarBottom: topBarRectAtTop.bottom,

@@ -22,7 +22,7 @@ func TestCardPin_置顶与取消置顶(t *testing.T) {
 	sourceID := uuid.MustParse(person.Source.ID)
 
 	ctx := context.Background()
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Pin Test Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Pin Test Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

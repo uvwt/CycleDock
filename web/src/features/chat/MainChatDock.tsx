@@ -9,9 +9,8 @@ import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
 import { ConversationComposer } from "../cards/ConversationComposer";
-import { useModelSelection } from "../models/model-selection";
 import { PendingTurnQueue } from "../cards/PendingTurnQueue";
-import type { TimelineEvent } from "../../shared/api/types";
+import type { Attempt, TimelineEvent } from "../../shared/api/types";
 import {
   ConversationView,
   type QuotedMessage,
@@ -23,13 +22,14 @@ import {
 } from "../../shared/realtime/cardUpdates";
 import { Spinner } from "../../shared/ui/components";
 
+const BUBBLE_BOTTOM_STORAGE_KEY = "cycledock.main-chat.bubble-bottom";
+
 export function MainChatDock() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { projectID } = useProject();
   const { target } = useDeviceSelection();
-  const { selectedRouteId } = useModelSelection();
 
   const main = useQuery({
     queryKey: keys.mainDiscussion(projectID),
@@ -64,6 +64,128 @@ export function MainChatDock() {
 
   const windowRef = useRef<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const [bubbleBottom, setBubbleBottom] = useState<number | null>(() => {
+    try {
+      const saved = localStorage.getItem(BUBBLE_BOTTOM_STORAGE_KEY);
+      if (saved !== null) {
+        const val = parseFloat(saved);
+        if (Number.isFinite(val)) return val;
+      }
+    } catch {
+      // 避免部分私密浏览环境访问 localStorage 报错
+    }
+    return null;
+  });
+  const [isBubbleDragging, setIsBubbleDragging] = useState(false);
+  const bubbleDragRef = useRef<{
+    startY: number;
+    startBottom: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const suppressBubbleClickRef = useRef(false);
+
+  // 监听窗口大小变化，确保用户自定义悬浮球垂直高度始终落在安全可视区域内
+  useEffect(() => {
+    function handleResize() {
+      setBubbleBottom((prev) => {
+        if (prev === null) return null;
+        const minBottom = 16;
+        const maxBottom = Math.max(minBottom, window.innerHeight - 56 - 16);
+        return Math.min(Math.max(minBottom, prev), maxBottom);
+      });
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // 悬浮球及消息气泡上下拖拽逻辑（统一兼容鼠标与触屏事件）
+  function handleBubblePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+
+    const rect = triggerRef.current?.getBoundingClientRect();
+    const currentBottom = rect ? window.innerHeight - rect.bottom : 20;
+
+    bubbleDragRef.current = {
+      startY: e.clientY,
+      startBottom: currentBottom,
+      hasMoved: false,
+    };
+
+    function onPointerMove(ev: PointerEvent) {
+      if (!bubbleDragRef.current) return;
+      const deltaY = ev.clientY - bubbleDragRef.current.startY;
+
+      // 超过 4px 位移判定为拖拽意图，避免正常轻击时误触移动状态
+      if (!bubbleDragRef.current.hasMoved) {
+        if (Math.abs(deltaY) > 4) {
+          bubbleDragRef.current.hasMoved = true;
+          suppressBubbleClickRef.current = true;
+          setIsBubbleDragging(true);
+        } else {
+          return;
+        }
+      }
+
+      // 屏幕向上拖拽 deltaY < 0，对应 bottom 增加
+      const nextBottom = bubbleDragRef.current.startBottom - deltaY;
+      const minBottom = 16;
+      const maxBottom = Math.max(minBottom, window.innerHeight - 56 - 16);
+      const clamped = Math.min(Math.max(minBottom, nextBottom), maxBottom);
+
+      setBubbleBottom(clamped);
+    }
+
+    function onPointerUp() {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+
+      setIsBubbleDragging(false);
+
+      if (bubbleDragRef.current?.hasMoved) {
+        // 用户发生拖拽，持久化用户自定义的垂直高度
+        setBubbleBottom((latest) => {
+          if (latest !== null) {
+            try {
+              localStorage.setItem(BUBBLE_BOTTOM_STORAGE_KEY, String(latest));
+            } catch {
+              // 忽略本地存储写入失败
+            }
+          }
+          return latest;
+        });
+      } else {
+        suppressBubbleClickRef.current = false;
+      }
+
+      bubbleDragRef.current = null;
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+  }
+
+  function handleTriggerClick(e: React.MouseEvent) {
+    if (suppressBubbleClickRef.current) {
+      suppressBubbleClickRef.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    show();
+  }
+
+  function handlePeekClick(e: React.MouseEvent) {
+    if (suppressBubbleClickRef.current) {
+      suppressBubbleClickRef.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    show();
+  }
   const detail = useQuery({
     queryKey: keys.card(cardID),
     queryFn: () => api.card(cardID),
@@ -97,27 +219,23 @@ export function MainChatDock() {
   });
 
   const [olderEvents, setOlderEvents] = useState<TimelineEvent[]>([]);
+  const [olderAttempts, setOlderAttempts] = useState<Attempt[]>([]);
   const [hasMoreBefore, setHasMoreBefore] = useState(false);
   const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
 
   useEffect(() => {
     setOlderEvents([]);
+    setOlderAttempts([]);
     setHasMoreBefore(false);
     setLoadingMoreBefore(false);
   }, [cardID]);
 
+  // 当卡片详情更新时，若尚未加载过更早历史批次，则同步后端基于真实数据量判断的 has_more_before 分页标识
   useEffect(() => {
-    const timeline = detail.data?.timeline || [];
-    if (timeline.length > 0) {
-      const minSeq = timeline.reduce(
-        (min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min),
-        timeline[0].sequence || 0,
-      );
-      if (minSeq > 1) {
-        setHasMoreBefore(true);
-      }
+    if (detail.data && olderEvents.length === 0) {
+      setHasMoreBefore(Boolean(detail.data.has_more_before));
     }
-  }, [detail.data?.timeline]);
+  }, [detail.data, olderEvents.length]);
 
   const loadMoreBefore = async () => {
     if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
@@ -136,6 +254,7 @@ export function MainChatDock() {
       if (res.timeline && res.timeline.length > 0) {
         setOlderEvents((prev) => [...res.timeline, ...prev]);
       }
+      setOlderAttempts((prev) => [...(res.attempt_history || []), ...prev]);
       setHasMoreBefore(res.has_more_before);
     } catch (err) {
       console.error("Failed to load older timeline events", err);
@@ -143,6 +262,13 @@ export function MainChatDock() {
       setLoadingMoreBefore(false);
     }
   };
+
+  const combinedAttempts = useMemo(() => {
+    const attempts = new Map(olderAttempts.map((attempt) => [attempt.id, attempt]));
+    for (const attempt of detail.data?.attempt_history || []) attempts.set(attempt.id, attempt);
+    if (detail.data?.current_attempt) attempts.delete(detail.data.current_attempt.id);
+    return [...attempts.values()];
+  }, [olderAttempts, detail.data?.attempt_history, detail.data?.current_attempt]);
 
   const combinedTimeline = useMemo(() => {
     const rawTimeline = detail.data?.timeline || [];
@@ -161,10 +287,9 @@ export function MainChatDock() {
 
   const card = detail.data?.card;
   const current = detail.data?.current_attempt;
-  const waiting = current?.status === "waiting_human";
   const hasCurrent =
     Boolean(current) &&
-    ["queued", "running", "waiting_human"].includes(current?.status || "");
+    ["queued", "running"].includes(current?.status || "");
   const blocked = card?.discussion_state === "archived";
 
   async function sync() {
@@ -176,31 +301,18 @@ export function MainChatDock() {
   }
 
   const send = useMutation({
-    mutationFn: (mode: "enqueue" | "reply") => {
+    mutationFn: () => {
       const text = comment.trim();
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
-      if (mode === "reply") {
-        if (!current || current.status !== "waiting_human") {
-          return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
-        }
-        return api.reply(
-          cardID,
-          content,
-          current.id,
-          undefined,
-          target,
-          selectedRouteId || undefined,
-        );
-      }
       return api.send(
         cardID,
         content,
         "enqueue",
         undefined,
         target,
-        selectedRouteId || undefined,
+        main.data?.preferred_model_route_id || undefined,
       );
     },
     onSuccess: async () => {
@@ -208,25 +320,6 @@ export function MainChatDock() {
       setReplyTo(null);
       await sync();
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("发送失败")),
-  });
-
-  const choose = useMutation({
-    mutationFn: (choice: {
-      value: string;
-      attemptID: string;
-      messageID: string;
-    }) =>
-      api.reply(
-        cardID,
-        choice.value,
-        choice.attemptID,
-        choice.messageID,
-        target,
-        selectedRouteId || undefined,
-      ),
-    onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
   });
@@ -475,24 +568,6 @@ export function MainChatDock() {
 
   return (
     <>
-      {peek && !open && (
-        <div
-          className={`fixed right-4 z-40 transition-all ${
-            isFocusedConversation
-              ? "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+9rem)]"
-              : "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)]"
-          }`}
-        >
-          <button
-            type="button"
-            onClick={show}
-            className="max-w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface px-3 py-2 text-left text-xs text-foreground shadow-lg"
-          >
-            <span className="line-clamp-2">{peek}</span>
-          </button>
-        </div>
-      )}
-
       {open && (
         <section
           ref={windowRef}
@@ -618,7 +693,7 @@ export function MainChatDock() {
                 cardKind="discussion"
                 pendingTurns={detail.data?.pending_turns || []}
                 currentAttempt={current || null}
-                attemptHistory={detail.data?.attempt_history || []}
+                attemptHistory={combinedAttempts}
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
@@ -626,9 +701,6 @@ export function MainChatDock() {
                 compact
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
-                onChoose={(choice) => choose.mutate(choice)}
-                choicePending={choose.isPending}
-                waitingAttemptID={waiting ? current?.id : undefined}
                 onReply={setReplyTo}
               />
             )}
@@ -647,6 +719,9 @@ export function MainChatDock() {
               }}
             />
             <ConversationComposer
+              cardID={cardID}
+              projectID={projectID}
+              selectedRouteId={main.data?.preferred_model_route_id}
               comment={comment}
               setComment={setComment}
               replyTo={replyTo}
@@ -659,7 +734,7 @@ export function MainChatDock() {
               cancelPending={cancelAttempt.isPending}
               onSubmit={() => {
                 if (!comment.trim() || blocked || send.isPending) return;
-                send.mutate(waiting ? "reply" : "enqueue");
+                send.mutate();
               }}
               onCancel={() => cancelAttempt.mutate()}
             />
@@ -669,24 +744,41 @@ export function MainChatDock() {
 
       {!open && (
         <div
-          className={`fixed right-4 z-40 transition-all ${
-            isFocusedConversation
-              ? "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)]"
-              : "bottom-[max(1.25rem,env(safe-area-inset-bottom))]"
+          style={bubbleBottom !== null ? { bottom: `${bubbleBottom}px` } : undefined}
+          className={`fixed right-4 z-40 flex flex-col items-end gap-3 pointer-events-none ${
+            isBubbleDragging ? "select-none" : "transition-[bottom] duration-200"
+          } ${
+            bubbleBottom !== null
+              ? ""
+              : isFocusedConversation
+                ? "bottom-[calc(max(1.25rem,env(safe-area-inset-bottom))+4.5rem)]"
+                : "bottom-[max(1.25rem,env(safe-area-inset-bottom))]"
           }`}
         >
+          {peek && (
+            <button
+              type="button"
+              onClick={handlePeekClick}
+              onPointerDown={handleBubblePointerDown}
+              className="pointer-events-auto max-w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface px-3 py-2 text-left text-xs text-foreground shadow-lg transition hover:bg-muted active:scale-95 cursor-grab active:cursor-grabbing touch-none select-none"
+            >
+              <span className="line-clamp-2">{peek}</span>
+            </button>
+          )}
+
           <button
             ref={triggerRef}
             type="button"
             title={t("打开主聊天")}
             aria-label={t("打开主聊天")}
-            onClick={show}
-            className="relative grid size-14 place-items-center rounded-full border border-line bg-surface shadow-lg transition hover:bg-muted active:scale-95"
+            onClick={handleTriggerClick}
+            onPointerDown={handleBubblePointerDown}
+            className="pointer-events-auto relative grid size-14 place-items-center rounded-full border border-line bg-surface shadow-lg transition hover:bg-muted active:scale-95 cursor-grab active:cursor-grabbing touch-none select-none"
           >
             <img
               src="/cycledock-logo.png"
               alt=""
-              className="size-8 object-contain"
+              className="size-8 object-contain pointer-events-none"
               draggable={false}
             />
           </button>

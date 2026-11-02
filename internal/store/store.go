@@ -60,20 +60,24 @@ func (s *Store) CreateSource(ctx context.Context, workspaceID uuid.UUID, kind do
 	})
 }
 
-func (s *Store) CreateProject(ctx context.Context, workspaceID uuid.UUID, name, description, instructions string) (db.Project, error) {
+func (s *Store) CreateProject(ctx context.Context, workspaceID uuid.UUID, name, description string) (db.Project, error) {
 	return s.queries.CreateProject(ctx, db.CreateProjectParams{
-		ID:           uuid.New(),
-		WorkspaceID:  workspaceID,
-		Name:         name,
-		Description:  description,
-		Instructions: instructions,
+		ID:          uuid.New(),
+		WorkspaceID: workspaceID,
+		Name:        name,
+		Description: description,
 	})
 }
 
 func (s *Store) CreateDiscussion(
 	ctx context.Context,
 	workspaceID, projectID, sourceID uuid.UUID,
+	preferredModelRouteID ...uuid.NullUUID,
 ) (db.Card, error) {
+	var preferredRouteID uuid.NullUUID
+	if len(preferredModelRouteID) > 0 {
+		preferredRouteID = preferredModelRouteID[0]
+	}
 	return s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
@@ -82,6 +86,7 @@ func (s *Store) CreateDiscussion(
 		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
+		PreferredModelRouteID: preferredRouteID,
 	})
 }
 

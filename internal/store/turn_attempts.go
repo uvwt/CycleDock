@@ -15,20 +15,20 @@ import (
 )
 
 type CardTurn struct {
-	DeviceNodeID         string
-	DeviceName           string
+	DeviceNodeID          string
+	DeviceName            string
 	PreferredModelRouteID uuid.NullUUID
-	ID                   uuid.UUID
-	WorkspaceID          uuid.UUID
-	CardID               uuid.UUID
-	Source               domain.TurnSource
-	Content              string
-	CreatedBySourceID    uuid.NullUUID
-	SourceEventID        uuid.NullUUID
-	DispatchMode         domain.DispatchMode
-	ScheduleID           uuid.NullUUID
-	ScheduledFor         *time.Time
-	CreatedAt            time.Time
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	Source                domain.TurnSource
+	Content               string
+	CreatedBySourceID     uuid.NullUUID
+	SourceEventID         uuid.NullUUID
+	DispatchMode          domain.DispatchMode
+	ScheduleID            uuid.NullUUID
+	ScheduledFor          *time.Time
+	CreatedAt             time.Time
 }
 
 type CreateTurnResult struct {
@@ -360,7 +360,7 @@ func claimNextTurnAttempt(
 			FROM turn_attempts current_attempt
 			WHERE current_attempt.workspace_id=t.workspace_id
 			  AND current_attempt.card_id=t.card_id
-			  AND current_attempt.status IN ('queued','running','waiting_human')
+			  AND current_attempt.status IN ('queued','running')
 		  )
 		  AND (
 			(c.kind='discussion' AND c.discussion_state='active')
@@ -406,23 +406,18 @@ func supersedeAttemptForHumanTurn(
 	dispatchMode domain.DispatchMode,
 	now time.Time,
 ) error {
-	interrupt := dispatchMode == domain.DispatchModeInterrupt
+	if dispatchMode != domain.DispatchModeInterrupt {
+		return nil
+	}
 	_, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
 		SET status='superseded',
-		    error_summary=CASE
-		        WHEN $3::boolean THEN 'superseded by interrupting human turn'
-		        ELSE 'superseded by human reply'
-		    END,
-		    heartbeat_at=NULL,
-		    lease_expires_at=NULL,
-		    finished_at=$4,
-		    updated_at=$4
-		WHERE workspace_id=$1
-		  AND card_id=$2
-		  AND status IN ('queued','running','waiting_human')
-		  AND ($3::boolean OR status='waiting_human')
-	`, workspaceID, cardID, interrupt, now)
+		    error_summary='superseded by interrupting human turn',
+		    heartbeat_at=NULL, lease_expires_at=NULL,
+		    finished_at=$3, updated_at=$3
+		WHERE workspace_id=$1 AND card_id=$2
+		  AND status IN ('queued','running')
+	`, workspaceID, cardID, now)
 	if err != nil {
 		return fmt.Errorf("supersede current attempt for human turn: %w", err)
 	}
@@ -577,7 +572,7 @@ func (s *Store) FinishAttempt(
 		    finished_at=$6,
 		    updated_at=$6
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		  AND status IN ('queued','running','waiting_human')
+		  AND status IN ('queued','running')
 	`, workspaceID, cardID, attemptID, string(status), strings.TrimSpace(errorSummary), now)
 	if err != nil {
 		return err
@@ -822,7 +817,7 @@ func (s *Store) CancelAttempt(
 		return tx.Commit(ctx)
 	}
 	switch status {
-	case domain.AttemptStatusQueued, domain.AttemptStatusRunning, domain.AttemptStatusWaitingHuman:
+	case domain.AttemptStatusQueued, domain.AttemptStatusRunning:
 	default:
 		return fmt.Errorf("%w: only current attempt can be cancelled", domain.ErrConflict)
 	}
@@ -837,7 +832,7 @@ func (s *Store) CancelAttempt(
 		    finished_at=$5,
 		    updated_at=$5
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		  AND status IN ('queued','running','waiting_human')
+		  AND status IN ('queued','running')
 	`, workspaceID, cardID, attemptID, strings.TrimSpace(reason), now)
 	if err != nil {
 		return err
@@ -879,39 +874,6 @@ func (s *Store) HeartbeatAttempt(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		  AND status='running'
 	`, workspaceID, cardID, attemptID, now, now.Add(leaseDuration))
-	if err != nil {
-		return err
-	}
-	if command.RowsAffected() != 1 {
-		return domain.ErrAttemptNotCurrent
-	}
-	return tx.Commit(ctx)
-}
-
-func (s *Store) WaitAttemptForHuman(
-	ctx context.Context,
-	workspaceID, cardID, attemptID uuid.UUID,
-	now time.Time,
-) error {
-	now = now.UTC()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
-	}
-	command, err := tx.Exec(ctx, `
-		UPDATE turn_attempts
-		SET status='waiting_human',
-		    heartbeat_at=NULL,
-		    lease_expires_at=NULL,
-		    updated_at=$4
-		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		  AND status='running'
-	`, workspaceID, cardID, attemptID, now)
 	if err != nil {
 		return err
 	}

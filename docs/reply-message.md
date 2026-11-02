@@ -20,8 +20,8 @@ Agent 对用户的每一条可见气泡都由 `reply_message` 创建；一次工
 
 - `text/attachment + end_turn=false`：只产生气泡，Agent 可以继续调用工具或再次发消息。
 - `text/attachment + end_turn=true`：先持久化消息，Built-in Agent 终止 ADK loop，再结算 Attempt。External MCP 在同一个事务中结算 Attempt。不得再次写一个 Result 气泡，也不保存 Attempt 结果摘要。
-- `choice + end_turn=true`：在发布选择卡的同一事务中切换 Attempt 为 `waiting_human`，释放 lease。用户选择后使用现有 Human `/reply` 创建新 Turn，继承原 Card Session。
-- `choice + end_turn=false` 拒绝，因为还未准备接收人工选择。
+- `choice + end_turn=true`：选择消息结束本轮，Attempt 标记为 `completed`；Built-in Runner 在保存 ADK 尾部事件后结算，外部调用在消息事务内结算。用户选择后使用现有 Human `/reply` 创建新 Turn，继承原 Card Session。
+- `choice + end_turn=false` 拒绝，因为选项必须作为本轮的最终消息。
 - 不能把 `end_turn` 解释为 Card 的 Done；Todo 依然需要 `confirm_card` 与 Human Review。
 - 上游模型没有调用 reply tool 却正常返回自由文本时，Built-in Runner 用同一个持久消息 API 补发一次最终气泡，避免空白回复。模型原始 token 不再直接成为用户气泡。
 
@@ -29,7 +29,7 @@ Attempt 只保存执行状态、时间及必要的失败信息，不保存 `resu
 
 内置 ADK 同一响应中的工具调用按模型给出的顺序执行，保证多个气泡顺序稳定；`end_turn=true` 之后的同批工具只保存拒绝响应，不再执行。当前选择串行工具执行来保证消息顺序与结束边界，不保留默认并发工具执行。
 
-Human `/reply` 必须携带所回答的 `attempt_id`；选择按钮额外携带 `message_id`，`content` 使用选项的 `value`。服务端在创建 Turn 的同一事务中校验 waiting Attempt、消息归属和选项值；自由文字回复只绑定 Attempt，仍允许用户自行补充说明。幂等键包含回复目标，同键不能改答其他问题。
+Human `/reply` 必须携带所回答的 `attempt_id`；选择按钮额外携带 `message_id`，`content` 使用选项的 `value`。服务端在创建 Turn 的同一事务中校验已完成的 Attempt、其后没有新的有效 Turn、消息归属和选项值；自由文字回复只绑定 Attempt，仍允许用户自行补充说明。幂等键包含回复目标，同键不能改答其他问题。
 
 回滚消息迁移时，完整消息 JSON 转为旧结构可读取的 Progress 文本，保留事件 ID、顺序和 Attempt 关联。重新升级后，这些记录仍以历史 Progress 文本读取。
 

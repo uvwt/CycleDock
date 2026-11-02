@@ -86,7 +86,7 @@ docker compose logs --no-color app
 - 配置并安全备份固定的 `CYCLEDOCK_CONNECTION_ENCRYPTION_KEY`，否则无法保存或使用带 Token 的普通 MCP 连接。已配置第一方 NexusDock 时可沿用同一个部署密钥。
 - Provider Test 成功。
 - MCP Test 成功并显示预期工具数量。
-- waiting_human Attempt 仍保持 waiting，不会被 lease recovery 误过期。
+- 迁移 000022 将旧等待记录收口为 completed，释放 current Attempt，并从状态约束中移除等待状态。
 - retry / recovery 创建新的 Attempt，不复活旧 execution identity。
 - Context Compaction、Artifact 与 Session history retrieval 正常。
 

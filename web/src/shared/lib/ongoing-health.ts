@@ -57,7 +57,6 @@ export function getOngoingHealthInfo(health?: string) {
 const attemptStatusLabels: Record<string, string> = {
   queued: "排队中",
   running: "运行中",
-  waiting_human: "等待回复",
   completed: "已完成",
   failed: "执行失败",
   superseded: "已替代",

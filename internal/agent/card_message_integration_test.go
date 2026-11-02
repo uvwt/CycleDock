@@ -32,7 +32,7 @@ func TestBuiltInCardMessageQueuesAndRunsIsolatedTargetSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestBuiltInCardMessageQueuesAndRunsIsolatedTargetSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Other project", "", "")
+	foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Other project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

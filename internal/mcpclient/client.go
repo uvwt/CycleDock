@@ -77,12 +77,13 @@ const (
 )
 
 type ConnectError struct {
-	Phase ConnectPhase
-	Err   error
+	ServerName string
+	Phase      ConnectPhase
+	Err        error
 }
 
 func (e *ConnectError) Error() string {
-	return fmt.Sprintf("MCP %s failed: %v", e.Phase, e.Err)
+	return fmt.Sprintf("MCP %q %s failed: %v", e.ServerName, e.Phase, e.Err)
 }
 
 func (e *ConnectError) Unwrap() error {
@@ -108,70 +109,114 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 		tools:    make(map[string]Tool),
 	}
 	for _, connection := range connections {
-		connection.Name = strings.TrimSpace(connection.Name)
-		connection.URL = strings.TrimSpace(connection.URL)
-		if connection.Name == "" || connection.URL == "" {
+		if err := set.AddConnection(ctx, connection); err != nil {
 			set.Close()
-			return nil, errors.New("MCP connection name and URL are required")
-		}
-		if connection.Timeout <= 0 {
-			connection.Timeout = 30 * time.Second
-		}
-		client := mcp.NewClient(&mcp.Implementation{
-			Name: "cycledock-agent", Title: "CycleDock Built-in Agent", Version: "0.4.0",
-		}, nil)
-		transport := &mcp.StreamableClientTransport{
-			Endpoint:             connection.URL,
-			HTTPClient:           mcpHTTPClient(connection),
-			MaxRetries:           1,
-			DisableStandaloneSSE: true,
-		}
-		connectCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
-		session, err := client.Connect(connectCtx, transport, nil)
-		cancel()
-		if err != nil {
-			set.Close()
-			return nil, &ConnectError{Phase: ConnectPhaseInitialize, Err: err}
-		}
-		set.sessions[connection.Name] = &serverSession{config: connection, session: session}
-
-		listCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
-		result, err := session.ListTools(listCtx, nil)
-		cancel()
-		if err != nil {
-			set.Close()
-			return nil, &ConnectError{Phase: ConnectPhaseListTools, Err: err}
-		}
-		for _, remote := range result.Tools {
-			if remote == nil {
-				continue
-			}
-			name := modelToolName(connection.Name, remote.Name)
-			if connection.NativeToolNames {
-				name = nativeToolName(remote.Name)
-			}
-			if previous, exists := set.tools[name]; exists {
-				set.Close()
-				return nil, fmt.Errorf(
-					"MCP tool name collision %q between %s/%s and %s/%s",
-					name, previous.ServerName, previous.RemoteName, connection.Name, remote.Name,
-				)
-			}
-			tool := Tool{
-				ModelName: name, ServerName: connection.Name, RemoteName: remote.Name,
-				Description: strings.TrimSpace(remote.Description),
-				InputSchema: jsonMap(remote.InputSchema),
-				Hidden:      connection.HiddenRemoteTools[remote.Name],
-			}
-			if tool.InputSchema == nil {
-				tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
-			}
-			set.tools[name] = tool
-			set.ordered = append(set.ordered, tool)
+			return nil, err
 		}
 	}
-	sort.Slice(set.ordered, func(i, j int) bool { return set.ordered[i].ModelName < set.ordered[j].ModelName })
 	return set, nil
+}
+
+// AddConnection 独立接入一个服务；失败时不影响已连接服务，也不留下半份工具目录。
+// Connect 保持全量成功语义，运行时则可逐个接入并向用户报告不可用的服务。
+func (s *SessionSet) AddConnection(ctx context.Context, connection Connection) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("MCP session set is closed")
+	}
+	connection.Name = strings.TrimSpace(connection.Name)
+	connection.URL = strings.TrimSpace(connection.URL)
+	if connection.Name == "" || connection.URL == "" {
+		return errors.New("MCP connection name and URL are required")
+	}
+	if _, exists := s.sessions[connection.Name]; exists {
+		return fmt.Errorf("MCP connection %q already exists", connection.Name)
+	}
+	if connection.Timeout <= 0 {
+		connection.Timeout = 30 * time.Second
+	}
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "cycledock-agent", Title: "CycleDock Built-in Agent", Version: "0.4.0",
+	}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: connection.URL, HTTPClient: mcpHTTPClient(connection),
+		MaxRetries: 1, DisableStandaloneSSE: true,
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
+	session, err := client.Connect(connectCtx, transport, nil)
+	cancel()
+	if err != nil {
+		return &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseInitialize, Err: err}
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			session.Close()
+		}
+	}()
+	listCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
+	result, err := session.ListTools(listCtx, nil)
+	cancel()
+	if err != nil {
+		return &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseListTools, Err: err}
+	}
+
+	additions := make(map[string]Tool, len(result.Tools))
+	for _, remote := range result.Tools {
+		if remote == nil {
+			continue
+		}
+		name := modelToolName(connection.Name, remote.Name)
+		if connection.NativeToolNames {
+			name = nativeToolName(remote.Name)
+		}
+		previous, exists := s.tools[name]
+		if !exists {
+			previous, exists = additions[name]
+		}
+		if exists {
+			return fmt.Errorf("MCP tool name collision %q between %s/%s and %s/%s", name, previous.ServerName, previous.RemoteName, connection.Name, remote.Name)
+		}
+		tool := Tool{
+			ModelName: name, ServerName: connection.Name, RemoteName: remote.Name,
+			Description: strings.TrimSpace(remote.Description), InputSchema: jsonMap(remote.InputSchema),
+			Hidden: connection.HiddenRemoteTools[remote.Name],
+		}
+		if tool.InputSchema == nil {
+			tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		additions[name] = tool
+	}
+	s.sessions[connection.Name] = &serverSession{config: connection, session: session}
+	for name, tool := range additions {
+		s.tools[name] = tool
+		s.ordered = append(s.ordered, tool)
+	}
+	sort.Slice(s.ordered, func(i, j int) bool { return s.ordered[i].ModelName < s.ordered[j].ModelName })
+	committed = true
+	return nil
+}
+
+// RemoveConnection 同时撤下工具并关闭会话，避免接入后的 bootstrap 失败留下可调用工具。
+func (s *SessionSet) RemoveConnection(name string) error {
+	s.mu.Lock()
+	server := s.sessions[name]
+	delete(s.sessions, name)
+	kept := s.ordered[:0]
+	for _, tool := range s.ordered {
+		if tool.ServerName == name {
+			delete(s.tools, tool.ModelName)
+		} else {
+			kept = append(kept, tool)
+		}
+	}
+	s.ordered = kept
+	s.mu.Unlock()
+	if server != nil {
+		return server.session.Close()
+	}
+	return nil
 }
 
 func (s *SessionSet) ToolDefinitions() []modelclient.ToolDefinition {

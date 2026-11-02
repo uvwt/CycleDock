@@ -8,6 +8,7 @@ import { keys } from "../../app/query";
 import {
   ContextSidebar,
   ContextSidebarItem,
+  ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import { ConfirmDialog } from "../../shared/ui/components";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
@@ -17,10 +18,14 @@ export function PlanSidebar({
   cards,
   activeCardID,
   onSelect,
+  loading = false,
+  className = "",
 }: {
   cards: Card[];
   activeCardID: string;
   onSelect: (card: Card) => void;
+  loading?: boolean;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -57,6 +62,15 @@ export function PlanSidebar({
       }
       return b.updated_at.localeCompare(a.updated_at);
     });
+
+  if (loading && cards.length === 0) {
+    return (
+      <ContextSidebarSkeleton
+        ariaLabel={t("定时列表")}
+        className={className}
+      />
+    );
+  }
 
   return (
     <ContextSidebar

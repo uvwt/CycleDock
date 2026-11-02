@@ -229,17 +229,10 @@ func TestExternalOAuthClaimsHumanReplyAndScheduleTurns(t *testing.T) {
 	if first.Turn.ID != humanTurn.TurnID || first.Turn.Source != domain.TurnSourceHuman {
 		t.Fatalf("external claim human turn=%+v human=%+v", first, humanTurn)
 	}
-	if err := s.WaitAttemptForHumanWithPrompt(
-		ctx, todo.WorkspaceID, todo.CardID, first.Attempt.ID, external.ID,
-		"need_target", "which target?", time.Now().UTC(),
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.WaitAttemptForHumanWithPrompt(
-		ctx, todo.WorkspaceID, todo.CardID, first.Attempt.ID, external.ID,
-		"need_target", "which target?", time.Now().UTC(),
-	); err != nil {
-		t.Fatalf("waiting_human retry should be idempotent: %v", err)
+	for range 2 {
+		if err := s.CompleteAttempt(ctx, todo.WorkspaceID, todo.CardID, first.Attempt.ID, external.ID, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	reply, err := s.ReplySessionAndContinue(ctx, SubmitSessionCommentParams{
 		WorkspaceID: todo.WorkspaceID, CardID: todo.CardID,
@@ -253,8 +246,8 @@ func TestExternalOAuthClaimsHumanReplyAndScheduleTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldAttempt.Status != domain.AttemptStatusSuperseded {
-		t.Fatalf("waiting attempt status=%s want superseded", oldAttempt.Status)
+	if oldAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("previous attempt status=%s want completed", oldAttempt.Status)
 	}
 	continued, err := s.ClaimCardTurnAttempt(
 		ctx, todo.WorkspaceID, todo.CardID, external.ID,

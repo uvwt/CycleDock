@@ -90,14 +90,13 @@ const (
 type AttemptStatus string
 
 const (
-	AttemptStatusQueued       AttemptStatus = "queued"
-	AttemptStatusRunning      AttemptStatus = "running"
-	AttemptStatusWaitingHuman AttemptStatus = "waiting_human"
-	AttemptStatusCompleted    AttemptStatus = "completed"
-	AttemptStatusFailed       AttemptStatus = "failed"
-	AttemptStatusSuperseded   AttemptStatus = "superseded"
-	AttemptStatusExpired      AttemptStatus = "expired"
-	AttemptStatusCancelled    AttemptStatus = "cancelled"
+	AttemptStatusQueued     AttemptStatus = "queued"
+	AttemptStatusRunning    AttemptStatus = "running"
+	AttemptStatusCompleted  AttemptStatus = "completed"
+	AttemptStatusFailed     AttemptStatus = "failed"
+	AttemptStatusSuperseded AttemptStatus = "superseded"
+	AttemptStatusExpired    AttemptStatus = "expired"
+	AttemptStatusCancelled  AttemptStatus = "cancelled"
 )
 
 type ScheduleFrequency string

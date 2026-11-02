@@ -28,7 +28,7 @@ func TestHumanTurnAttemptControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	humanSourceID := uuid.MustParse(identity.Source.ID)
 
 	projectRecorder := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
-		"name": "Session control", "description": "", "instructions": "",
+		"name": "Session control", "description": "",
 	}, cookie, nil)
 	var project projectResponse
 	decodeRecorder(t, projectRecorder, &project)
@@ -241,7 +241,7 @@ func TestHumanTurnAttemptControlHTTPFlowAndWorkspaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "", "")
+	otherProject, err := dataStore.CreateProject(context.Background(), otherWorkspace.ID, "Private", "")
 	if err != nil {
 		t.Fatal(err)
 	}

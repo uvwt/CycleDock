@@ -124,7 +124,7 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestADKRunnerExternalizesLargeToolResultAndReadsArtifactWithoutRepeatingMCP
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func TestADKTailCompactionKeepsPromptBoundedAndHistoryRecoversExactOldValue(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +741,7 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +855,7 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,8 +902,8 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstAttempt.Status != domain.AttemptStatusWaitingHuman {
-		t.Fatalf("first attempt status=%s want waiting_human", firstAttempt.Status)
+	if firstAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("first attempt status=%s want completed", firstAttempt.Status)
 	}
 	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
 	if err != nil {
@@ -943,8 +943,8 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstAttempt.Status != domain.AttemptStatusSuperseded {
-		t.Fatalf("waiting attempt after reply=%s want superseded", firstAttempt.Status)
+	if firstAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("previous attempt after reply=%s want completed", firstAttempt.Status)
 	}
 
 	secondClaim, err := dataStore.ClaimNextTurnAttempt(

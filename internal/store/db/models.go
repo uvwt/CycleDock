@@ -73,6 +73,7 @@ type Card struct {
 	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound     int64              `json:"confirmation_round"`
+	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
 }
 
 type CardReadCursor struct {
@@ -247,7 +248,6 @@ type Project struct {
 	WorkspaceID      uuid.UUID          `json:"workspace_id"`
 	Name             string             `json:"name"`
 	Description      string             `json:"description"`
-	Instructions     string             `json:"instructions"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	MainDiscussionID uuid.NullUUID      `json:"main_discussion_id"`

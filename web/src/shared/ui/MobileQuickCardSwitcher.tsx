@@ -27,7 +27,7 @@ import { ConfirmDialog } from "./components";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
 import { cn } from "../lib/utils";
 
-type SwitcherTab = "working" | "review" | "discussion" | "done";
+type SwitcherTab = "working" | "review" | "discussion" | "ongoing" | "done";
 
 export function MobileQuickCardSwitcher({
   projectID,
@@ -54,10 +54,11 @@ export function MobileQuickCardSwitcher({
   const cards: Card[] = useMemo(() => cardsQuery.data || [], [cardsQuery.data]);
 
   // 分组统计与列表
-  const { workingCards, reviewCards, discussionCards, doneCards } = useMemo(() => {
+  const { workingCards, reviewCards, discussionCards, ongoingCards, doneCards } = useMemo(() => {
     const working: Card[] = [];
     const review: Card[] = [];
     const discussions: Card[] = [];
+    const ongoing: Card[] = [];
     const done: Card[] = [];
 
     for (const card of cards) {
@@ -77,8 +78,8 @@ export function MobileQuickCardSwitcher({
           working.push(card);
         }
       } else if (card.kind === "ongoing") {
-        // ongoing 持续计划归入活跃流
-        working.push(card);
+        // 定时任务与周期卡片归入专门的定时任务分类
+        ongoing.push(card);
       }
     }
 
@@ -97,6 +98,7 @@ export function MobileQuickCardSwitcher({
       workingCards: working.sort(sortFn),
       reviewCards: review.sort(sortFn),
       discussionCards: discussions.sort(sortFn),
+      ongoingCards: ongoing.sort(sortFn),
       doneCards: done.sort(sortFn),
     };
   }, [cards]);
@@ -112,6 +114,8 @@ export function MobileQuickCardSwitcher({
         if (currentCard) {
           if (currentCard.kind === "discussion") {
             setActiveTab("discussion");
+          } else if (currentCard.kind === "ongoing") {
+            setActiveTab("ongoing");
           } else if (currentCard.kind === "todo" && currentCard.todo_state === "review") {
             setActiveTab("review");
           } else if (currentCard.kind === "todo" && currentCard.todo_state === "done") {
@@ -132,8 +136,10 @@ export function MobileQuickCardSwitcher({
     setOpen(false);
     if (targetCard.kind === "discussion") {
       navigate(`/chat/${targetCard.project_id}/${targetCard.id}`);
+    } else if (targetCard.kind === "ongoing") {
+      navigate(`/plans/${targetCard.project_id}/${targetCard.id}`);
     } else {
-      navigate(`/chat/${targetCard.project_id}/${targetCard.id}`);
+      navigate(`/cards/${targetCard.project_id}/${targetCard.id}`);
     }
   };
 
@@ -168,12 +174,14 @@ export function MobileQuickCardSwitcher({
         return reviewCards;
       case "discussion":
         return discussionCards;
+      case "ongoing":
+        return ongoingCards;
       case "done":
         return doneCards;
       default:
         return [];
     }
-  }, [activeTab, workingCards, reviewCards, discussionCards, doneCards]);
+  }, [activeTab, workingCards, reviewCards, discussionCards, ongoingCards, doneCards]);
 
   const tabs: {
     id: SwitcherTab;
@@ -198,7 +206,7 @@ export function MobileQuickCardSwitcher({
     },
     {
       id: "review",
-      label: t("待审核"),
+      label: t("待验收"),
       icon: ShieldCheck,
       count: reviewCards.length,
       colorClasses: "data-[state=active]:text-amber-600 dark:data-[state=active]:text-amber-400",
@@ -209,6 +217,13 @@ export function MobileQuickCardSwitcher({
       icon: CheckCircle2,
       count: doneCards.length,
       colorClasses: "data-[state=active]:text-emerald-600 dark:data-[state=active]:text-emerald-400",
+    },
+    {
+      id: "ongoing",
+      label: t("定时任务"),
+      icon: CalendarClock,
+      count: ongoingCards.length,
+      colorClasses: "data-[state=active]:text-violet-600 dark:data-[state=active]:text-violet-400",
     },
   ];
 
@@ -295,7 +310,7 @@ export function MobileQuickCardSwitcher({
           </SheetHeader>
 
           {/* 卡片切换列表 */}
-          <div className="flex-1 overflow-y-auto overscroll-contain p-3 scrollbar-thin">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-3 scrollbar-thin">
             {currentList.length === 0 ? (
               <div className="flex h-44 flex-col items-center justify-center text-center text-muted-foreground">
                 <Sparkles className="mb-2 size-6 stroke-1 text-placeholder" />
@@ -343,7 +358,7 @@ export function MobileQuickCardSwitcher({
                     <SwipeableRow
                       key={item.id}
                       actions={swipeActions}
-                      className="rounded-xl overflow-hidden"
+                      className="rounded-xl"
                     >
                       <button
                         type="button"

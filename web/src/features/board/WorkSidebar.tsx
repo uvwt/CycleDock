@@ -13,6 +13,7 @@ import { keys } from "../../app/query";
 import {
   ContextSidebar,
   ContextSidebarItem,
+  ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import { Badge, ConfirmDialog } from "../../shared/ui/components";
 import {
@@ -36,15 +37,18 @@ export function WorkSidebar({
   activeCardID,
   activeAttemptStatus,
   onSelect,
+  loading = false,
   className = "",
 }: {
   cards: Card[];
   activeCardID?: string;
   activeAttemptStatus?: string;
   onSelect: (card: Card) => void;
+  loading?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
+
   const workCards = useMemo(
     () =>
       cards
@@ -91,7 +95,7 @@ export function WorkSidebar({
       case "working":
         return t("进行中");
       case "review":
-        return t("待审核");
+        return t("待验收");
       case "done":
         return t("已完成");
     }
@@ -120,13 +124,22 @@ export function WorkSidebar({
     },
   });
 
+  if (loading && cards.length === 0) {
+    return (
+      <ContextSidebarSkeleton
+        ariaLabel={t("任务列表")}
+        className={className}
+      />
+    );
+  }
+
   return (
     <ContextSidebar
-      ariaLabel={t("工作列表")}
+      ariaLabel={t("任务列表")}
       className={className}
       header={
         <div className="px-1 text-xs font-medium text-muted-foreground">
-          {t("工作")}
+          {t("任务")}
         </div>
       }
     >

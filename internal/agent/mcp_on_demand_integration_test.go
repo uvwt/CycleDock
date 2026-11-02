@@ -117,7 +117,7 @@ func TestMCPOnDemand_DiscoveryAndInvocation_AndSessionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestMCPOnDemand_SameNameToolIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "DB Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "DB Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestMCPOnDemand_CrossWorkspaceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project2, err := dataStore.CreateProject(ctx, ws2.ID, "Proj2", "", "")
+	project2, err := dataStore.CreateProject(ctx, ws2.ID, "Proj2", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,7 @@ func TestMCPOnDemand_DisabledConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Disabled Proj", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Disabled Proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,7 @@ func TestMCPOnDemand_ParameterValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Param Proj", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Param Proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +817,7 @@ func TestMCPOnDemand_CrossTurnStableToolIDReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Cross Turn Proj", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Cross Turn Proj", "")
 	if err != nil {
 		t.Fatal(err)
 	}

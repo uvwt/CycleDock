@@ -20,7 +20,7 @@ func TestDiscussionMetadataGenerationRetriesWithoutAttempt(t *testing.T) {
 	ctx := context.Background()
 	workspace, _ := dataStore.CreateWorkspace(ctx, "Metadata workspace")
 	human, _ := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
-	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, _ := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	card, err := dataStore.CreateDiscussion(ctx, workspace.ID, project.ID, human.ID)
 	if err != nil {
 		t.Fatal(err)

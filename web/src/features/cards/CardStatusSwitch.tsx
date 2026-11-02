@@ -6,12 +6,13 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import type { Card, TodoState, OngoingState } from "../../shared/api/types";
 import { Menu, MenuItem } from "../../shared/ui/components";
+import { cn } from "../../shared/lib/utils";
 
 const todoOptions: { value: TodoState; label: string; dotClassName: string }[] =
   [
     { value: "todo", label: "待办", dotClassName: "bg-slate-400" },
     { value: "working", label: "进行中", dotClassName: "bg-sky-500" },
-    { value: "review", label: "待审核", dotClassName: "bg-amber-500" },
+    { value: "review", label: "待验收", dotClassName: "bg-amber-500" },
     { value: "done", label: "已完成", dotClassName: "bg-emerald-500" },
   ];
 
@@ -25,7 +26,13 @@ const ongoingOptions: {
   { value: "archived", label: "已归档", dotClassName: "bg-slate-400" },
 ];
 
-export function CardStatusSwitch({ card }: { card: Card }) {
+export function CardStatusSwitch({
+  card,
+  className,
+}: {
+  card: Card;
+  className?: string;
+}) {
   const { t } = useTranslation();
   const isTodo = card.kind === "todo";
   const current = isTodo ? card.todo_state : card.ongoing_state;
@@ -62,7 +69,10 @@ export function CardStatusSwitch({ card }: { card: Card }) {
           type="button"
           aria-label={t("切换任务状态")}
           title={t("切换任务状态")}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs leading-none font-medium text-foreground shadow-sm transition hover:border-line-strong hover:bg-muted data-[state=open]:border-line-strong data-[state=open]:bg-muted"
+          className={cn(
+            "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs leading-none text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground",
+            className,
+          )}
         >
           <span
             aria-hidden
