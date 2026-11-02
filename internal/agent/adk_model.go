@@ -37,24 +37,40 @@ type adkRouteModel struct {
 	modelCalls  int
 }
 
-func prioritizeRoutes(routes []db.WorkspaceModelRoute, preferredID uuid.NullUUID) []db.WorkspaceModelRoute {
-	if !preferredID.Valid || preferredID.UUID == uuid.Nil || len(routes) == 0 {
+func prioritizeRoutes(
+	routes []db.WorkspaceModelRoute,
+	preferredID uuid.NullUUID,
+	kindDefaultID uuid.NullUUID,
+	workspaceDefaultID uuid.NullUUID,
+) []db.WorkspaceModelRoute {
+	if len(routes) == 0 {
 		return routes
 	}
-	var preferred *db.WorkspaceModelRoute
-	remaining := make([]db.WorkspaceModelRoute, 0, len(routes))
+	routeByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(routes))
 	for _, r := range routes {
-		if r.ID == preferredID.UUID {
-			match := r
-			preferred = &match
-		} else {
-			remaining = append(remaining, r)
+		routeByID[r.ID] = r
+	}
+
+	ordered := make([]db.WorkspaceModelRoute, 0, len(routes))
+	seen := make(map[uuid.UUID]bool, len(routes))
+
+	candidates := []uuid.NullUUID{preferredID, kindDefaultID, workspaceDefaultID}
+	for _, candidate := range candidates {
+		if candidate.Valid && candidate.UUID != uuid.Nil && !seen[candidate.UUID] {
+			if r, ok := routeByID[candidate.UUID]; ok {
+				ordered = append(ordered, r)
+				seen[candidate.UUID] = true
+			}
 		}
 	}
-	if preferred == nil {
-		return routes
+
+	for _, r := range routes {
+		if !seen[r.ID] {
+			ordered = append(ordered, r)
+			seen[r.ID] = true
+		}
 	}
-	return append([]db.WorkspaceModelRoute{*preferred}, remaining...)
+	return ordered
 }
 
 func newADKRouteModel(

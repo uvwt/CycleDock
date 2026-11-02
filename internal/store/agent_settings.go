@@ -29,8 +29,11 @@ type ModelRouteInput struct {
 }
 
 type AgentSettingsInput struct {
-	SystemInstructions string
-	Routes             []ModelRouteInput
+	SystemInstructions      string
+	Routes                  []ModelRouteInput
+	DefaultModelRouteID     *uuid.UUID
+	DiscussionModelRouteID *uuid.UUID
+	PlanModelRouteID       *uuid.UUID
 }
 
 type AgentSettings struct {
@@ -180,13 +183,6 @@ func (s *Store) SaveAgentSettings(
 		}
 	}
 
-	settings, err := q.UpsertWorkspaceAgentSettings(ctx, db.UpsertWorkspaceAgentSettingsParams{
-		WorkspaceID: workspaceID, SourceID: sourceID,
-		SystemInstructions: input.SystemInstructions,
-	})
-	if err != nil {
-		return AgentSettings{}, mapConstraintError(err)
-	}
 	existingRoutes, err := q.ListWorkspaceModelRoutes(ctx, workspaceID)
 	if err != nil {
 		return AgentSettings{}, err
@@ -227,6 +223,46 @@ func (s *Store) SaveAgentSettings(
 			return AgentSettings{}, mapConstraintError(err)
 		}
 		storedRoutes = append(storedRoutes, stored)
+	}
+
+	validRouteIDs := make(map[uuid.UUID]bool, len(storedRoutes))
+	for _, r := range storedRoutes {
+		validRouteIDs[r.ID] = true
+	}
+
+	toNullUUID := func(u *uuid.UUID) (uuid.NullUUID, error) {
+		if u == nil || *u == uuid.Nil {
+			return uuid.NullUUID{}, nil
+		}
+		if !validRouteIDs[*u] {
+			return uuid.NullUUID{}, fmt.Errorf("%w: default model route does not exist in workspace routes", domain.ErrConflict)
+		}
+		return uuid.NullUUID{UUID: *u, Valid: true}, nil
+	}
+
+	defaultRouteID, err := toNullUUID(input.DefaultModelRouteID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	discussionRouteID, err := toNullUUID(input.DiscussionModelRouteID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	planRouteID, err := toNullUUID(input.PlanModelRouteID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+
+	settings, err := q.UpsertWorkspaceAgentSettings(ctx, db.UpsertWorkspaceAgentSettingsParams{
+		WorkspaceID:            workspaceID,
+		SourceID:               sourceID,
+		SystemInstructions:     input.SystemInstructions,
+		DefaultModelRouteID:    defaultRouteID,
+		DiscussionModelRouteID: discussionRouteID,
+		PlanModelRouteID:       planRouteID,
+	})
+	if err != nil {
+		return AgentSettings{}, mapConstraintError(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return AgentSettings{}, err

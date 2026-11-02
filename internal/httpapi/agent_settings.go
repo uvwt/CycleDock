@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -19,10 +20,13 @@ import (
 )
 
 type agentSettingsResponse struct {
-	Configured         bool                 `json:"configured"`
-	Routes             []modelRouteResponse `json:"routes"`
-	SystemInstructions string               `json:"system_instructions"`
-	SourceID           string               `json:"source_id,omitempty"`
+	Configured             bool                 `json:"configured"`
+	Routes                 []modelRouteResponse `json:"routes"`
+	SystemInstructions     string               `json:"system_instructions"`
+	SourceID               string               `json:"source_id,omitempty"`
+	DefaultModelRouteID    string               `json:"default_model_route_id,omitempty"`
+	DiscussionModelRouteID string               `json:"discussion_model_route_id,omitempty"`
+	PlanModelRouteID       string               `json:"plan_model_route_id,omitempty"`
 }
 
 type modelRouteResponse struct {
@@ -82,7 +86,10 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			ClearAPIKey      bool   `json:"clear_api_key"`
 			APIKeyConfigured bool   `json:"api_key_configured"`
 		} `json:"routes"`
-		SystemInstructions string `json:"system_instructions"`
+		SystemInstructions     string `json:"system_instructions"`
+		DefaultModelRouteID    string `json:"default_model_route_id"`
+		DiscussionModelRouteID string `json:"discussion_model_route_id"`
+		PlanModelRouteID       string `json:"plan_model_route_id"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -115,8 +122,39 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			APIKeyEnv: route.APIKeyEnv, ClearAPIKey: route.ClearAPIKey,
 		})
 	}
+	parseRouteID := func(raw, field string) (*uuid.UUID, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, nil
+		}
+		u, err := uuid.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid_%s", field)
+		}
+		return &u, nil
+	}
+	defaultRouteID, err := parseRouteID(request.DefaultModelRouteID, "default_model_route_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_default_model_route_id", "Default model route id is invalid.")
+		return
+	}
+	discussionRouteID, err := parseRouteID(request.DiscussionModelRouteID, "discussion_model_route_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_discussion_model_route_id", "Discussion model route id is invalid.")
+		return
+	}
+	planRouteID, err := parseRouteID(request.PlanModelRouteID, "plan_model_route_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_plan_model_route_id", "Plan model route id is invalid.")
+		return
+	}
+
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
-		Routes: routes, SystemInstructions: request.SystemInstructions,
+		Routes:                 routes,
+		SystemInstructions:     request.SystemInstructions,
+		DefaultModelRouteID:    defaultRouteID,
+		DiscussionModelRouteID: discussionRouteID,
+		PlanModelRouteID:       planRouteID,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -416,9 +454,26 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 			APIKeyConfigured: len(route.ApiKeyCiphertext) > 0 || route.ApiKeyEnv != "",
 		})
 	}
+	defaultRouteID := ""
+	if settings.DefaultModelRouteID.Valid {
+		defaultRouteID = settings.DefaultModelRouteID.UUID.String()
+	}
+	discussionRouteID := ""
+	if settings.DiscussionModelRouteID.Valid {
+		discussionRouteID = settings.DiscussionModelRouteID.UUID.String()
+	}
+	planRouteID := ""
+	if settings.PlanModelRouteID.Valid {
+		planRouteID = settings.PlanModelRouteID.UUID.String()
+	}
 	return agentSettingsResponse{
-		Configured: true, Routes: routes,
-		SystemInstructions: settings.SystemInstructions, SourceID: settings.SourceID.String(),
+		Configured:             true,
+		Routes:                 routes,
+		SystemInstructions:     settings.SystemInstructions,
+		SourceID:               settings.SourceID.String(),
+		DefaultModelRouteID:    defaultRouteID,
+		DiscussionModelRouteID: discussionRouteID,
+		PlanModelRouteID:       planRouteID,
 	}
 }
 

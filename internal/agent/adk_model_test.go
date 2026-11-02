@@ -317,28 +317,28 @@ func TestPrioritizeRoutes(t *testing.T) {
 		{ID: id3, Model: "model-3"},
 	}
 
-	// 1. 无效 preferredID 保持原顺序
-	res := prioritizeRoutes(routes, uuid.NullUUID{Valid: false})
+	// 1. 无任何优先配置，保持原顺序
+	res := prioritizeRoutes(routes, uuid.NullUUID{}, uuid.NullUUID{}, uuid.NullUUID{})
 	if len(res) != 3 || res[0].ID != id1 || res[1].ID != id2 || res[2].ID != id3 {
 		t.Fatalf("expected original order, got %+v", res)
 	}
 
-	// 2. 指定不存在的 preferredID 保持原顺序
-	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: uuid.New(), Valid: true})
-	if len(res) != 3 || res[0].ID != id1 || res[1].ID != id2 || res[2].ID != id3 {
-		t.Fatalf("expected original order, got %+v", res)
-	}
-
-	// 3. 指定 id2，id2 应置于首位
-	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: id2, Valid: true})
-	if len(res) != 3 || res[0].ID != id2 || res[1].ID != id1 || res[2].ID != id3 {
-		t.Fatalf("expected id2 first, got %+v", res)
-	}
-
-	// 4. 指定 id3，id3 应置于首位
-	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: id3, Valid: true})
+	// 2. 只有工作区默认 id3
+	res = prioritizeRoutes(routes, uuid.NullUUID{}, uuid.NullUUID{}, uuid.NullUUID{UUID: id3, Valid: true})
 	if len(res) != 3 || res[0].ID != id3 || res[1].ID != id1 || res[2].ID != id2 {
 		t.Fatalf("expected id3 first, got %+v", res)
+	}
+
+	// 3. 场景默认 id2 覆盖工作区默认 id3
+	res = prioritizeRoutes(routes, uuid.NullUUID{}, uuid.NullUUID{UUID: id2, Valid: true}, uuid.NullUUID{UUID: id3, Valid: true})
+	if len(res) != 3 || res[0].ID != id2 || res[1].ID != id3 || res[2].ID != id1 {
+		t.Fatalf("expected id2 first, id3 second, got %+v", res)
+	}
+
+	// 4. 用户指定 preferredID(id1) 覆盖场景默认 id2 与工作区默认 id3
+	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: id1, Valid: true}, uuid.NullUUID{UUID: id2, Valid: true}, uuid.NullUUID{UUID: id3, Valid: true})
+	if len(res) != 3 || res[0].ID != id1 || res[1].ID != id2 || res[2].ID != id3 {
+		t.Fatalf("expected id1 first, id2 second, id3 third, got %+v", res)
 	}
 }
 
