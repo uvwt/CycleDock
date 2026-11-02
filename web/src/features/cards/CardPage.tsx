@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Info, PanelLeft } from "lucide-react";
+import { Info, PanelLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -457,6 +457,11 @@ function CardPageContent() {
           >
             <div className="flex items-center gap-1.5">
               <MobileGlobalNavMenu />
+              <MobileQuickCardSwitcher
+                projectID={card.project_id}
+                activeCardID={card.id}
+                activeAttemptStatus={current?.status}
+              />
               <button
                 type="button"
                 title={
@@ -481,6 +486,15 @@ function CardPageContent() {
             </div>
 
             <div className="relative flex items-center gap-1.5">
+              <button
+                type="button"
+                title={t("新建讨论")}
+                aria-label={t("新建讨论")}
+                onClick={startDiscussion}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-4" />
+              </button>
               <button
                 type="button"
                 aria-expanded={infoOpen}
