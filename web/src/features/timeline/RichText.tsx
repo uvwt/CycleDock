@@ -1,8 +1,39 @@
-import { useState } from "react";
+import { useState, type AnchorHTMLAttributes, type DetailedHTMLProps, type MouseEvent } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import { useProject } from "../../app/project-context";
+import { ChatActionCard } from "../../shared/ui/chat";
+
+function parseCardLink(href?: string): { cardId: string; projectId?: string } | null {
+  if (!href) return null;
+  // Match cycledock://card/:cardId or cycledock://card/:projectId/:cardId
+  if (href.startsWith("cycledock://card/")) {
+    const parts = href.replace("cycledock://card/", "").split("/").filter(Boolean);
+    if (parts.length === 1) {
+      return { cardId: parts[0] };
+    }
+    if (parts.length >= 2) {
+      return { projectId: parts[0], cardId: parts[1] };
+    }
+  }
+
+  // Match [card:UUID] or card:UUID
+  if (href.startsWith("card:")) {
+    const cardId = href.replace("card:", "").trim();
+    if (cardId) return { cardId };
+  }
+
+  // Match /cards/:projectId/:cardId or /chat/:projectId/:cardId
+  const match = href.match(/^\/(?:cards|chat)\/([^/]+)\/([a-zA-Z0-9_-]+)/);
+  if (match) {
+    return { projectId: match[1], cardId: match[2] };
+  }
+
+  return null;
+}
 
 export function RichText({
   content,
@@ -12,12 +43,105 @@ export function RichText({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { projectID } = useProject();
   const [copied, setCopied] = useState(false);
+
+  const handleLinkClick = (
+    e: MouseEvent<HTMLAnchorElement>,
+    href: string | undefined,
+  ) => {
+    if (!href) return;
+
+    // 检查是否为应用内部相对路径或同源完整 URL
+    let isInternal = false;
+    let targetPath = href;
+
+    if (href.startsWith("/")) {
+      isInternal = true;
+      targetPath = href;
+    } else if (
+      href.startsWith(window.location.origin) ||
+      (!href.startsWith("http://") &&
+        !href.startsWith("https://") &&
+        !href.startsWith("mailto:") &&
+        !href.startsWith("tel:") &&
+        !href.startsWith("#"))
+    ) {
+      try {
+        const url = new URL(href, window.location.origin);
+        if (url.origin === window.location.origin) {
+          isInternal = true;
+          targetPath = url.pathname + url.search + url.hash;
+        }
+      } catch {
+        // 忽略解析异常
+      }
+    }
+
+    if (isInternal) {
+      e.preventDefault();
+
+      // 智能补齐 projectID：如果形如 /cards/:cardID 或 /chat/:cardID（只有两段）
+      const cardMatch = targetPath.match(/^\/(cards|chat)\/([^/?#]+)(.*)$/);
+      if (cardMatch && projectID) {
+        const [, section, cardID, rest] = cardMatch;
+        // 如果第二段不是当前 projectID 且后续没有更多段，说明缺失 projectID
+        const segments = targetPath.split("?")[0].split("#")[0].split("/").filter(Boolean);
+        if (segments.length === 2) {
+          const resolvedUrl = `/${section}/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}${rest}`;
+          navigate(resolvedUrl);
+          return;
+        }
+      }
+
+      navigate(targetPath);
+    }
+  };
+
   return (
     <div className={`prose-chat text-foreground ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          a: ({
+            href,
+            children,
+            ...props
+          }: DetailedHTMLProps<
+            AnchorHTMLAttributes<HTMLAnchorElement>,
+            HTMLAnchorElement
+          >) => {
+            const cardRef = parseCardLink(href);
+            if (cardRef) {
+              const fallbackTitle = typeof children === "string" ? children : undefined;
+              return (
+                <ChatActionCard
+                  cardId={cardRef.cardId}
+                  projectId={cardRef.projectId}
+                  fallbackTitle={fallbackTitle}
+                />
+              );
+            }
+
+            const isExternal =
+              Boolean(href) &&
+              (href!.startsWith("http://") || href!.startsWith("https://")) &&
+              !href!.startsWith(window.location.origin);
+
+            return (
+              <a
+                href={href}
+                onClick={(e) => handleLinkClick(e, href)}
+                target={isExternal ? "_blank" : undefined}
+                rel={isExternal ? "noopener noreferrer" : undefined}
+                className="font-medium text-primary underline underline-offset-4 decoration-primary/40 hover:decoration-primary transition-colors cursor-pointer"
+                {...props}
+              >
+                {children}
+              </a>
+            );
+          },
           blockquote: ({ children }) => (
             <div className="my-2 flex overflow-hidden rounded-lg border-l-3 border-primary bg-surface/80 dark:bg-surface/50 px-3 py-1.5 text-xs text-muted-foreground shadow-2xs">
               <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
@@ -54,3 +178,4 @@ export function RichText({
     </div>
   );
 }
+
