@@ -132,13 +132,26 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
+	var kindDefaultID uuid.NullUUID
+	switch cardContext.CardKind {
+	case domain.CardKindDiscussion:
+		kindDefaultID = settings.DiscussionModelRouteID
+	case domain.CardKindOngoing:
+		kindDefaultID = settings.PlanModelRouteID
+	}
+	routes := prioritizeRoutes(
+		settings.Routes,
+		cardContext.PreferredModelRouteID,
+		kindDefaultID,
+		settings.DefaultModelRouteID,
+	)
 	// 流式正文先保存为 Message 快照；完整工具调用在同一气泡上提交。
 	llm, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
 		r.store,
 		cardContext.WorkspaceID,
-		settings.Routes,
+		routes,
 	)
 	if err != nil {
 		return err
@@ -151,7 +164,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		r.modelAuth,
 		r.store,
 		cardContext.WorkspaceID,
-		settings.Routes,
+		routes,
 	)
 	if err != nil {
 		return err

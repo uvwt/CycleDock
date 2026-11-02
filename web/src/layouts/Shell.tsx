@@ -74,7 +74,7 @@ export function Shell({ children }: { children: ReactNode }) {
     {
       to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
       activePath: "/plans",
-      label: t("计划"),
+      label: t("定时任务"),
       icon: CalendarClock,
     },
     {

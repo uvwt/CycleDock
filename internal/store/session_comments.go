@@ -20,13 +20,14 @@ type DeviceTarget struct {
 }
 
 type SubmitSessionCommentParams struct {
-	DeviceTarget   *DeviceTarget
-	WorkspaceID    uuid.UUID
-	CardID         uuid.UUID
-	AuthorSourceID uuid.UUID
-	Content        string
-	IdempotencyKey string
-	DispatchMode   domain.DispatchMode
+	DeviceTarget          *DeviceTarget
+	PreferredModelRouteID *uuid.UUID
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	AuthorSourceID        uuid.UUID
+	Content               string
+	IdempotencyKey        string
+	DispatchMode          domain.DispatchMode
 	// 回复绑定正在回答的执行；选择按钮还须绑定具体消息，防止旧页面误答。
 	ReplyToAttemptID uuid.UUID
 	ChoiceMessageID  uuid.UUID
@@ -94,6 +95,10 @@ func (s *Store) submitSessionComment(
 
 	if deviceNodeID != "" {
 		requestHash = stableRequestHash(requestHash, "device_target", deviceNodeID, deviceName)
+	}
+
+	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
+		requestHash = stableRequestHash(requestHash, "preferred_model_route", p.PreferredModelRouteID.String())
 	}
 
 	if requireWaitingHuman {
@@ -197,9 +202,15 @@ func (s *Store) submitSessionComment(
 		return SubmitSessionCommentResult{}, mapConstraintError(err)
 	}
 
+	var preferredRouteID uuid.NullUUID
+	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
+		preferredRouteID = uuid.NullUUID{UUID: *p.PreferredModelRouteID, Valid: true}
+	}
+
 	turn, err := insertTurn(ctx, tx, insertTurnParams{
 		DeviceNodeID: deviceNodeID, DeviceName: deviceName,
-		WorkspaceID:       p.WorkspaceID,
+		PreferredModelRouteID: preferredRouteID,
+		WorkspaceID:           p.WorkspaceID,
 		CardID:            p.CardID,
 		Source:            domain.TurnSourceHuman,
 		Content:           p.Content,

@@ -9,6 +9,7 @@ import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
 import { ConversationComposer } from "../cards/ConversationComposer";
+import { useModelSelection } from "../models/model-selection";
 import { PendingTurnQueue } from "../cards/PendingTurnQueue";
 import type { TimelineEvent } from "../../shared/api/types";
 import {
@@ -37,6 +38,7 @@ export function MainChatDock() {
   const navigate = useNavigate();
   const { projectID } = useProject();
   const { target } = useDeviceSelection();
+  const { selectedRouteId } = useModelSelection();
 
   const main = useQuery({
     queryKey: keys.mainDiscussion(projectID),
@@ -194,9 +196,23 @@ export function MainChatDock() {
         if (!current || current.status !== "waiting_human") {
           return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
         }
-        return api.reply(cardID, content, current.id, undefined, target);
+        return api.reply(
+          cardID,
+          content,
+          current.id,
+          undefined,
+          target,
+          selectedRouteId || undefined,
+        );
       }
-      return api.send(cardID, content, "enqueue", undefined, target);
+      return api.send(
+        cardID,
+        content,
+        "enqueue",
+        undefined,
+        target,
+        selectedRouteId || undefined,
+      );
     },
     onSuccess: async () => {
       setComment("");
@@ -219,6 +235,7 @@ export function MainChatDock() {
         choice.attemptID,
         choice.messageID,
         target,
+        selectedRouteId || undefined,
       ),
     onSuccess: sync,
     onError: (error) =>

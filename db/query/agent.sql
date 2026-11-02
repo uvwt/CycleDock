@@ -5,13 +5,18 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 
 -- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
-    workspace_id, source_id, system_instructions
+    workspace_id, source_id, system_instructions,
+    default_model_route_id, discussion_model_route_id, plan_model_route_id
 )
 VALUES (
-    sqlc.arg(workspace_id), sqlc.arg(source_id), sqlc.arg(system_instructions)
+    sqlc.arg(workspace_id), sqlc.arg(source_id), sqlc.arg(system_instructions),
+    sqlc.narg(default_model_route_id), sqlc.narg(discussion_model_route_id), sqlc.narg(plan_model_route_id)
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET system_instructions = EXCLUDED.system_instructions,
+    default_model_route_id = EXCLUDED.default_model_route_id,
+    discussion_model_route_id = EXCLUDED.discussion_model_route_id,
+    plan_model_route_id = EXCLUDED.plan_model_route_id,
     updated_at = now()
 RETURNING *;
 

@@ -181,11 +181,17 @@ export const api = {
     dispatch_mode: "enqueue" | "interrupt",
     idempotencyKey?: string,
     device_target?: DeviceTarget | null,
+    preferred_model_route_id?: string | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
       "POST",
-      { content, dispatch_mode, device_target: device_target ?? undefined },
+      {
+        content,
+        dispatch_mode,
+        device_target: device_target ?? undefined,
+        preferred_model_route_id: preferred_model_route_id ?? undefined,
+      },
       idempotencyKey || true,
     ),
   reply: (
@@ -194,6 +200,7 @@ export const api = {
     attemptID: string,
     messageID?: string,
     device_target?: DeviceTarget | null,
+    preferred_model_route_id?: string | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
@@ -203,6 +210,7 @@ export const api = {
         attempt_id: attemptID,
         message_id: messageID,
         device_target: device_target ?? undefined,
+        preferred_model_route_id: preferred_model_route_id ?? undefined,
       },
       true,
     ),

@@ -188,6 +188,9 @@ export type AgentSettings = {
   routes: ModelRoute[];
   system_instructions: string;
   source_id?: string;
+  default_model_route_id?: string;
+  discussion_model_route_id?: string;
+  plan_model_route_id?: string;
 };
 export type ModelAuthAccount = {
   id: string;

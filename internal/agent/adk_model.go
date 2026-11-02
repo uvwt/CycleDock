@@ -37,6 +37,42 @@ type adkRouteModel struct {
 	modelCalls  int
 }
 
+func prioritizeRoutes(
+	routes []db.WorkspaceModelRoute,
+	preferredID uuid.NullUUID,
+	kindDefaultID uuid.NullUUID,
+	workspaceDefaultID uuid.NullUUID,
+) []db.WorkspaceModelRoute {
+	if len(routes) == 0 {
+		return routes
+	}
+	routeByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(routes))
+	for _, r := range routes {
+		routeByID[r.ID] = r
+	}
+
+	ordered := make([]db.WorkspaceModelRoute, 0, len(routes))
+	seen := make(map[uuid.UUID]bool, len(routes))
+
+	candidates := []uuid.NullUUID{preferredID, kindDefaultID, workspaceDefaultID}
+	for _, candidate := range candidates {
+		if candidate.Valid && candidate.UUID != uuid.Nil && !seen[candidate.UUID] {
+			if r, ok := routeByID[candidate.UUID]; ok {
+				ordered = append(ordered, r)
+				seen[candidate.UUID] = true
+			}
+		}
+	}
+
+	for _, r := range routes {
+		if !seen[r.ID] {
+			ordered = append(ordered, r)
+			seen[r.ID] = true
+		}
+	}
+	return ordered
+}
+
 func newADKRouteModel(
 	client *modelclient.Client,
 	auth *modelauth.Service,
