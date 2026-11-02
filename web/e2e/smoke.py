@@ -43,10 +43,10 @@ class CycleDockSmoke(unittest.TestCase):
         picker.get_by_role("menuitem", name=name, exact=True).click()
 
     def card_action_button(self):
-        # 侧边栏每一项也有“更多操作”；只操作当前 Card 顶部的操作按钮。
-        return self.page.locator("main section > div.absolute").get_by_role(
-            "button", name="更多操作"
-        )
+        # 侧边栏每一项也有“更多操作”；只操作当前 Card 顶部可见的操作按钮。
+        return self.page.locator(
+            'main section > div button[aria-label="更多操作"]:visible'
+        ).first
 
     def open_card_menu(self):
         self.card_action_button().click()
@@ -1107,7 +1107,7 @@ class CycleDockSmoke(unittest.TestCase):
         boxes = {}
         for label in labels:
             btn = self.page.locator(
-                f'main section > div.absolute button[aria-label="{label}"]:visible'
+                f'main section > div button[aria-label="{label}"]:visible'
             )
             self.assertEqual(btn.count(), 1, f"expected visible top button: {label}")
             boxes[label] = btn.bounding_box()
@@ -1125,6 +1125,80 @@ class CycleDockSmoke(unittest.TestCase):
                 msg=f"{label} vertical center misaligned: {box}",
             )
 
+        # 验证手机端上下滑动聊天列表时，顶部按钮不随列表滚动消失，且列表首条气泡不被顶部栏背景遮挡
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.page.get_by_text("建议监控 CPU、内存和容器健康").wait_for()
+        for idx in range(1, 7):
+            resp = self.page.request.post(
+                BASE + "/api/v1/cards/discussion-1/comments",
+                data={"content": f"移动端顶部固定与防遮挡回归消息 #{idx}"},
+            )
+            self.assertTrue(resp.ok)
+        self.page.reload()
+        self.page.get_by_text("移动端顶部固定与防遮挡回归消息 #6").wait_for()
+
+        scroll_check = self.page.evaluate(
+            """() => {
+                const log = document.querySelector('[role="log"]');
+                const topBar = document.querySelector('[data-mobile-top-surface]');
+                const topButtons = [
+                    '切换页面',
+                    '打开讨论列表',
+                    '任务详情',
+                    '更多操作',
+                ].map((label) =>
+                    document.querySelector(`[data-mobile-top-surface] button[aria-label="${label}"]`)
+                );
+                if (!log || !topBar || topButtons.some((b) => !b)) {
+                    return { ok: false, reason: 'missing elements' };
+                }
+
+                log.scrollTop = 0;
+                const topBarRectAtTop = topBar.getBoundingClientRect();
+                const logRectAtTop = log.getBoundingClientRect();
+                const firstBubble = document.querySelector('[id^="event-"]');
+                const firstBubbleRect = firstBubble ? firstBubble.getBoundingClientRect() : null;
+                const initialBtnRects = topButtons.map((b) => b.getBoundingClientRect());
+
+                log.scrollTop = Math.max(120, Math.floor(log.scrollHeight / 2));
+                window.scrollTo(0, 200);
+                const midBtnRects = topButtons.map((b) => b.getBoundingClientRect());
+                const midBtnHits = topButtons.map((b, i) => {
+                    const r = midBtnRects[i];
+                    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                    return Boolean(hit && (hit === b || b.contains(hit)));
+                });
+
+                log.scrollTop = log.scrollHeight;
+                const bottomBtnRects = topButtons.map((b) => b.getBoundingClientRect());
+
+                const buttonsFixed = initialBtnRects.every((initRect, i) =>
+                    Math.abs(initRect.top - midBtnRects[i].top) < 0.5 &&
+                    Math.abs(initRect.top - bottomBtnRects[i].top) < 0.5 &&
+                    initRect.top >= 0 &&
+                    initRect.bottom <= 56.5
+                );
+                const logBelowTopBar = logRectAtTop.top >= topBarRectAtTop.bottom - 0.5;
+                const firstBubbleUnobscured = Boolean(
+                    firstBubbleRect && firstBubbleRect.top >= topBarRectAtTop.bottom - 0.5
+                );
+
+                return {
+                    ok: buttonsFixed && logBelowTopBar && firstBubbleUnobscured && midBtnHits.every(Boolean),
+                    buttonsFixed,
+                    logBelowTopBar,
+                    firstBubbleUnobscured,
+                    midBtnHits,
+                    topBarBottom: topBarRectAtTop.bottom,
+                    logTop: logRectAtTop.top,
+                    firstBubbleTop: firstBubbleRect ? firstBubbleRect.top : null,
+                };
+            }"""
+        )
+        self.assertTrue(
+            scroll_check["ok"],
+            f"mobile topbar scroll/occlusion check failed: {scroll_check}",
+        )
     def test_agent_settings_hide_runtime_controls(self):
         self.page.goto(BASE + "/settings/models")
         self.page.get_by_text("Agent全局指令", exact=True).wait_for()
