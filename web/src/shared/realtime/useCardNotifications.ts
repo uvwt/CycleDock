@@ -108,10 +108,14 @@ export function useCardNotifications(workspaceID: string) {
         stopWatchingLocation = watchLocation(reportViewing);
         const onSnapshot = (event: MessageEvent<string>) => {
           const cards = JSON.parse(event.data) as CardUpdate[];
-          // 页面确认看过这些版本。关掉标签前没确认的更新，留给关闭后的推送。
-          void api.ackPushCards(
-            cards.map((card) => ({ id: card.id, revision: card.revision })),
-          );
+          // 页面处于前台可见状态时才确认看过这些版本。
+          // 若页面处于后台或锁屏（hidden），严禁自动 ack，保留让 Web Push 触达的机会。
+          // 待切回前台（visible）时再补发已阅确认。
+          if (document.visibilityState === "visible") {
+            void api.ackPushCards(
+              cards.map((card) => ({ id: card.id, revision: card.revision })),
+            );
+          }
           // 首次快照只建立基线；原生 SSE 重连保留基线，补齐断线期间变化。
           if (previousCards) {
             for (const card of cards) {
@@ -154,6 +158,22 @@ export function useCardNotifications(workspaceID: string) {
             }
           }
           previousCards = new Map(cards.map((card) => [card.id, card]));
+        };
+        const syncAckOnVisible = () => {
+          if (document.visibilityState === "visible" && previousCards) {
+            const cards = Array.from(previousCards.values());
+            if (cards.length > 0) {
+              void api.ackPushCards(
+                cards.map((card) => ({ id: card.id, revision: card.revision })),
+              );
+            }
+          }
+        };
+        document.addEventListener("visibilitychange", syncAckOnVisible);
+        const previousStopReporting = stopReporting;
+        stopReporting = () => {
+          previousStopReporting();
+          document.removeEventListener("visibilitychange", syncAckOnVisible);
         };
         const connect = () => {
           stream = new EventSource("/api/v1/cards/updates/stream", {
