@@ -305,3 +305,40 @@ func TestADKRouteModelCancellationStopsRetryBackoff(t *testing.T) {
 		t.Fatalf("error=%v calls=%d", runErr, calls.Load())
 	}
 }
+
+func TestPrioritizeRoutes(t *testing.T) {
+	id1 := uuid.New()
+	id2 := uuid.New()
+	id3 := uuid.New()
+
+	routes := []db.WorkspaceModelRoute{
+		{ID: id1, Model: "model-1"},
+		{ID: id2, Model: "model-2"},
+		{ID: id3, Model: "model-3"},
+	}
+
+	// 1. 无效 preferredID 保持原顺序
+	res := prioritizeRoutes(routes, uuid.NullUUID{Valid: false})
+	if len(res) != 3 || res[0].ID != id1 || res[1].ID != id2 || res[2].ID != id3 {
+		t.Fatalf("expected original order, got %+v", res)
+	}
+
+	// 2. 指定不存在的 preferredID 保持原顺序
+	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: uuid.New(), Valid: true})
+	if len(res) != 3 || res[0].ID != id1 || res[1].ID != id2 || res[2].ID != id3 {
+		t.Fatalf("expected original order, got %+v", res)
+	}
+
+	// 3. 指定 id2，id2 应置于首位
+	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: id2, Valid: true})
+	if len(res) != 3 || res[0].ID != id2 || res[1].ID != id1 || res[2].ID != id3 {
+		t.Fatalf("expected id2 first, got %+v", res)
+	}
+
+	// 4. 指定 id3，id3 应置于首位
+	res = prioritizeRoutes(routes, uuid.NullUUID{UUID: id3, Valid: true})
+	if len(res) != 3 || res[0].ID != id3 || res[1].ID != id1 || res[2].ID != id2 {
+		t.Fatalf("expected id3 first, got %+v", res)
+	}
+}
+

@@ -801,9 +801,10 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content      string              `json:"content"`
-		DeviceTarget *store.DeviceTarget `json:"device_target,omitempty"`
-		DispatchMode string              `json:"dispatch_mode"`
+		Content               string              `json:"content"`
+		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
+		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
+		DispatchMode          string              `json:"dispatch_mode"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -827,12 +828,25 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var preferredRouteID *uuid.UUID
+	if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+			return
+		}
+		preferredRouteID = &id
+	}
+
 	identity := identityFromRequest(r)
 	result, err := api.store.SubmitSessionComment(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
-		AuthorSourceID: identity.SourceID,
-		Content:        request.Content, IdempotencyKey: idempotencyKey, DeviceTarget: request.DeviceTarget,
-		DispatchMode: domain.DispatchMode(request.DispatchMode),
+		AuthorSourceID:        identity.SourceID,
+		Content:               request.Content,
+		IdempotencyKey:        idempotencyKey,
+		DeviceTarget:          request.DeviceTarget,
+		PreferredModelRouteID: preferredRouteID,
+		DispatchMode:          domain.DispatchMode(request.DispatchMode),
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -847,10 +861,11 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content      string              `json:"content"`
-		DeviceTarget *store.DeviceTarget `json:"device_target,omitempty"`
-		AttemptID    string              `json:"attempt_id"`
-		MessageID    string              `json:"message_id,omitempty"`
+		Content               string              `json:"content"`
+		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
+		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
+		AttemptID             string              `json:"attempt_id"`
+		MessageID             string              `json:"message_id,omitempty"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -880,12 +895,26 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var preferredRouteID *uuid.UUID
+	if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+			return
+		}
+		preferredRouteID = &id
+	}
+
 	identity := identityFromRequest(r)
 	result, err := api.store.ReplySessionAndContinue(r.Context(), store.SubmitSessionCommentParams{
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
-		AuthorSourceID: identity.SourceID,
-		Content:        request.Content, IdempotencyKey: idempotencyKey, DeviceTarget: request.DeviceTarget,
-		ReplyToAttemptID: attemptID, ChoiceMessageID: messageID,
+		AuthorSourceID:        identity.SourceID,
+		Content:               request.Content,
+		IdempotencyKey:        idempotencyKey,
+		DeviceTarget:          request.DeviceTarget,
+		PreferredModelRouteID: preferredRouteID,
+		ReplyToAttemptID:      attemptID,
+		ChoiceMessageID:       messageID,
 	})
 	if err != nil {
 		api.handleError(w, err)

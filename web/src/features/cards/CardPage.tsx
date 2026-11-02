@@ -1,5 +1,7 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
+import { ModelMenu } from "../models/ModelMenu";
+import { useModelSelection } from "../models/model-selection";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -42,6 +44,7 @@ export default function CardPage() {
 
 function CardPageContent() {
   const { target } = useDeviceSelection();
+  const { selectedRouteId } = useModelSelection();
   const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
@@ -232,9 +235,23 @@ function CardPageContent() {
         if (!current || current.status !== "waiting_human") {
           return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
         }
-        return api.reply(cardID, content, current.id, undefined, target);
+        return api.reply(
+          cardID,
+          content,
+          current.id,
+          undefined,
+          target,
+          selectedRouteId || undefined,
+        );
       }
-      return api.send(cardID, content, mode, undefined, target);
+      return api.send(
+        cardID,
+        content,
+        mode,
+        undefined,
+        target,
+        selectedRouteId || undefined,
+      );
     },
     onSuccess: async () => {
       setComment("");
@@ -257,6 +274,7 @@ function CardPageContent() {
         choice.attemptID,
         choice.messageID,
         target,
+        selectedRouteId || undefined,
       ),
     onSuccess: sync,
     onError: (error) =>
@@ -543,6 +561,7 @@ function CardPageContent() {
                 )}
               </button>
               <DeviceMenu className="hidden md:inline-flex" />
+              <ModelMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
               <CardActions
                 card={card}

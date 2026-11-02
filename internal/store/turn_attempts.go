@@ -15,19 +15,20 @@ import (
 )
 
 type CardTurn struct {
-	DeviceNodeID      string
-	DeviceName        string
-	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
-	CardID            uuid.UUID
-	Source            domain.TurnSource
-	Content           string
-	CreatedBySourceID uuid.NullUUID
-	SourceEventID     uuid.NullUUID
-	DispatchMode      domain.DispatchMode
-	ScheduleID        uuid.NullUUID
-	ScheduledFor      *time.Time
-	CreatedAt         time.Time
+	DeviceNodeID         string
+	DeviceName           string
+	PreferredModelRouteID uuid.NullUUID
+	ID                   uuid.UUID
+	WorkspaceID          uuid.UUID
+	CardID               uuid.UUID
+	Source               domain.TurnSource
+	Content              string
+	CreatedBySourceID    uuid.NullUUID
+	SourceEventID        uuid.NullUUID
+	DispatchMode         domain.DispatchMode
+	ScheduleID           uuid.NullUUID
+	ScheduledFor         *time.Time
+	CreatedAt            time.Time
 }
 
 type CreateTurnResult struct {
@@ -1134,19 +1135,20 @@ func (s *Store) GetAttempt(
 }
 
 type insertTurnParams struct {
-	DeviceNodeID      string
-	DeviceName        string
-	WorkspaceID       uuid.UUID
-	CardID            uuid.UUID
-	Source            domain.TurnSource
-	Content           string
-	CreatedBySourceID uuid.NullUUID
-	SourceEventID     uuid.NullUUID
-	DispatchMode      domain.DispatchMode
-	ScheduleID        uuid.NullUUID
-	ScheduledFor      *time.Time
-	IdempotencyKey    string
-	RequestHash       string
+	DeviceNodeID          string
+	DeviceName            string
+	PreferredModelRouteID uuid.NullUUID
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	Source                domain.TurnSource
+	Content               string
+	CreatedBySourceID     uuid.NullUUID
+	SourceEventID         uuid.NullUUID
+	DispatchMode          domain.DispatchMode
+	ScheduleID            uuid.NullUUID
+	ScheduledFor          *time.Time
+	IdempotencyKey        string
+	RequestHash           string
 }
 
 func insertTurn(ctx context.Context, tx pgx.Tx, p insertTurnParams) (CardTurn, error) {
@@ -1158,14 +1160,14 @@ func insertTurn(ctx context.Context, tx pgx.Tx, p insertTurnParams) (CardTurn, e
 	_, err := tx.Exec(ctx, `
 		INSERT INTO card_turns (
 			id, workspace_id, card_id, source, content, created_by_source_id,
-			source_event_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, device_node_id, device_name
+			source_event_id, dispatch_mode, schedule_id, scheduled_for, idempotency_key, request_hash, device_node_id, device_name, preferred_model_route_id
 		)
 		VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),NULLIF($12,''),$13,$14
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),NULLIF($12,''),$13,$14,$15
 		)
 	`, turnID, p.WorkspaceID, p.CardID, string(p.Source), p.Content,
 		nullUUIDValue(p.CreatedBySourceID), nullUUIDValue(p.SourceEventID), string(p.DispatchMode),
-		nullUUIDValue(p.ScheduleID), scheduledFor, p.IdempotencyKey, p.RequestHash, p.DeviceNodeID, p.DeviceName)
+		nullUUIDValue(p.ScheduleID), scheduledFor, p.IdempotencyKey, p.RequestHash, p.DeviceNodeID, p.DeviceName, nullUUIDValue(p.PreferredModelRouteID))
 	if err != nil {
 		return CardTurn{}, mapConstraintError(err)
 	}
@@ -1212,13 +1214,13 @@ func loadTurn(ctx context.Context, q interface {
 	err := q.QueryRow(ctx, `
 		SELECT
 			id, workspace_id, card_id, source, content, device_node_id, device_name, created_by_source_id,
-			source_event_id, dispatch_mode, schedule_id, scheduled_for, created_at
+			source_event_id, dispatch_mode, schedule_id, scheduled_for, created_at, preferred_model_route_id
 		FROM card_turns
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, turnID).Scan(
 		&turn.ID, &turn.WorkspaceID, &turn.CardID, &turn.Source, &turn.Content, &turn.DeviceNodeID, &turn.DeviceName,
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
-		&turn.ScheduledFor, &turn.CreatedAt,
+		&turn.ScheduledFor, &turn.CreatedAt, &turn.PreferredModelRouteID,
 	)
 	return turn, err
 }

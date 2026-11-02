@@ -1,4 +1,5 @@
 import { DeviceSelectionProvider } from "../features/devices/DeviceSelectionProvider";
+import { ModelSelectionProvider } from "../features/models/ModelSelectionProvider";
 import { Suspense, lazy, useEffect } from "react";
 import {
   Navigate,
@@ -143,16 +144,17 @@ function Authenticated() {
   return (
     <ProjectProvider>
       <DeviceSelectionProvider key={me.data.workspace.id}>
-        <Shell>
-          <NotificationPermissionPrompt />
-          <Suspense
-            fallback={
-              <div className="grid min-h-[50vh] place-items-center">
-                <Spinner />
-              </div>
-            }
-          >
-            <Routes>
+        <ModelSelectionProvider key={me.data.workspace.id}>
+          <Shell>
+            <NotificationPermissionPrompt />
+            <Suspense
+              fallback={
+                <div className="grid min-h-[50vh] place-items-center">
+                  <Spinner />
+                </div>
+              }
+            >
+              <Routes>
               <Route path="/" element={<Navigate to="/chat" replace />} />
               <Route path="/chat" element={<ChatHome />} />
               <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
@@ -183,6 +185,7 @@ function Authenticated() {
             </Routes>
           </Suspense>
         </Shell>
+        </ModelSelectionProvider>
       </DeviceSelectionProvider>
     </ProjectProvider>
   );

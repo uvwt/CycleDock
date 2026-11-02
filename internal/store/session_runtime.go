@@ -40,6 +40,8 @@ type AgentCardContext struct {
 	TurnCreatedAt      time.Time
 	IsBuiltInProactive bool
 
+	PreferredModelRouteID uuid.NullUUID
+
 	AttemptID        uuid.UUID
 	AttemptNumber    int
 	AttemptReason    domain.AttemptReason
@@ -66,7 +68,7 @@ func (s *Store) LoadAgentCardContext(
 			c.id, c.kind, c.title, c.description, COALESCE(p.main_discussion_id = c.id, false),
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
-			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''),
+			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), t.preferred_model_route_id,
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
 				SELECT count(*)
@@ -102,7 +104,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.ProjectID, &out.ProjectName, &out.ProjectDescription, &out.ProjectInstructions,
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription, &out.IsMainDiscussion,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
-		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey,
+		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,
 	)

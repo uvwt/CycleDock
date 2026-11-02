@@ -120,6 +120,7 @@ type CardTurn struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	DeviceNodeID        string             `json:"device_node_id"`
 	DeviceName          string             `json:"device_name"`
+	PreferredModelRouteID uuid.NullUUID    `json:"preferred_model_route_id"`
 }
 
 type Event struct {
