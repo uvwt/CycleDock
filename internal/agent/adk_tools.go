@@ -297,6 +297,154 @@ func (r attemptToolRuntime) internalHandler(
 			}, nil
 		}, nil
 
+	case "cycledock_inspect_card_session":
+		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
+			cardIDStr := stringArg(args, "card_id")
+			targetCardID := r.context.CardID
+			if strings.TrimSpace(cardIDStr) != "" {
+				parsed, err := uuid.Parse(strings.TrimSpace(cardIDStr))
+				if err != nil {
+					return nil, fmt.Errorf("invalid card_id: %w", err)
+				}
+				targetCardID = parsed
+			}
+
+			mode := strings.ToLower(strings.TrimSpace(stringArg(args, "mode")))
+			if mode == "" {
+				mode = "simple"
+			}
+			if mode != "simple" && mode != "full" {
+				return nil, fmt.Errorf("unsupported mode %q: must be 'simple' or 'full'", mode)
+			}
+
+			if r.store == nil {
+				return nil, errors.New("store is not configured")
+			}
+
+			// Validate target card existence and make sure it is a non-discussion card within the current workspace.
+			targetCard, err := r.store.GetCard(ctx, r.context.WorkspaceID, targetCardID)
+			if err != nil {
+				return nil, fmt.Errorf("target card not found in current workspace: %w", err)
+			}
+			if targetCard.Kind == string(domain.CardKindDiscussion) {
+				return nil, errors.New("cannot inspect discussion cards with cycledock_inspect_card_session; only todo and ongoing cards are allowed")
+			}
+
+			limit := 50
+			if val, ok := args["limit"].(float64); ok && val > 0 {
+				limit = int(val)
+			} else if val, ok := args["limit"].(int); ok && val > 0 {
+				limit = val
+			}
+			if limit > 200 {
+				limit = 200
+			}
+
+			if mode == "full" {
+				if r.historyService == nil {
+					return nil, errors.New("history service is not configured for full session inspection")
+				}
+				rounds, err := r.historyService.InspectFullSession(ctx, r.context.WorkspaceID, targetCardID, limit)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{
+					"card_id":    targetCardID.String(),
+					"card_title": targetCard.Title,
+					"card_kind":  string(targetCard.Kind),
+					"mode":       "full",
+					"count":      len(rounds),
+					"rounds":     rounds,
+				}, nil
+			}
+
+			// Simple mode: extract user-visible bubbles from card timeline.
+			timeline, err := r.store.ListCardTimeline(ctx, r.context.WorkspaceID, targetCardID)
+			if err != nil {
+				return nil, fmt.Errorf("list card timeline: %w", err)
+			}
+
+			type bubbleItem struct {
+				Author    string    `json:"author"`
+				Content   string    `json:"content"`
+				Timestamp time.Time `json:"timestamp"`
+			}
+			type timelineMessage struct {
+				Type    string `json:"type"`
+				Content string `json:"content"`
+				Widget  *struct {
+					Question string `json:"question"`
+					Options  []struct {
+						Value string `json:"value"`
+						Label string `json:"label"`
+					} `json:"options"`
+				} `json:"widget"`
+			}
+			bubbles := make([]bubbleItem, 0, len(timeline))
+			for _, event := range timeline {
+				author := "Cycle"
+				if event.ActorKind == "human" {
+					if event.ActorName != "" {
+						author = event.ActorName
+					} else {
+						author = "User"
+					}
+				} else if event.ActorName != "" && event.ActorName != "Cycle Agent" {
+					author = event.ActorName
+				}
+
+				var content string
+				if len(event.Message) > 0 {
+					var msg timelineMessage
+					if err := json.Unmarshal(event.Message, &msg); err == nil {
+						content = msg.Content
+						if msg.Type == "choice" && msg.Widget != nil {
+							var choiceLines []string
+							if strings.TrimSpace(content) != "" {
+								choiceLines = append(choiceLines, content)
+							}
+							if strings.TrimSpace(msg.Widget.Question) != "" {
+								choiceLines = append(choiceLines, msg.Widget.Question)
+							}
+							for i, opt := range msg.Widget.Options {
+								label := opt.Label
+								if label == "" {
+									label = opt.Value
+								}
+								choiceLines = append(choiceLines, fmt.Sprintf("%d. %s", i+1, label))
+							}
+							content = strings.Join(choiceLines, "\n")
+						}
+					}
+				}
+				if strings.TrimSpace(content) == "" && strings.TrimSpace(event.Content) != "" {
+					content = event.Content
+				}
+				if strings.TrimSpace(content) == "" {
+					continue
+				}
+
+				bubbles = append(bubbles, bubbleItem{
+					Author:    author,
+					Content:   content,
+					Timestamp: event.CreatedAt.Time,
+				})
+			}
+
+			if len(bubbles) > limit {
+				bubbles = bubbles[len(bubbles)-limit:]
+			}
+
+			return map[string]any{
+				"card_id":    targetCardID.String(),
+				"card_title": targetCard.Title,
+				"card_kind":  string(targetCard.Kind),
+				"mode":       "simple",
+				"count":      len(bubbles),
+				"bubbles":    bubbles,
+			}, nil
+		}, nil
+
 	case "cycledock_read_artifact":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			if r.artifactService == nil {
