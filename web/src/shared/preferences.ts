@@ -152,6 +152,8 @@ const en = {
   工作空间切换失败: "Failed to switch workspace",
   工作空间加载失败: "Failed to load workspaces",
   设置: "Settings",
+  "管理个人偏好、模型服务与外部连接。":
+    "Manage personal preferences, model services, and external connections.",
   导航抽屉: "Navigation menu",
   退出登录: "Sign out",
   工作空间: "Workspace",

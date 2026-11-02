@@ -21,15 +21,6 @@ import {
 } from "../../shared/realtime/cardUpdates";
 import { Spinner } from "../../shared/ui/components";
 
-function unreadKey(projectID: string) {
-  return `cycledock.main-chat.unread.${projectID}`;
-}
-
-function readUnread(projectID: string) {
-  const value = Number(localStorage.getItem(unreadKey(projectID)));
-  return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
 export function MainChatDock() {
   const { t } = useTranslation();
   const location = useLocation();
@@ -59,7 +50,6 @@ export function MainChatDock() {
 
   const [open, setOpen] = useState(false);
   const [peek, setPeek] = useState("");
-  const [unread, setUnread] = useState(0);
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
@@ -81,7 +71,6 @@ export function MainChatDock() {
   useEffect(() => {
     setOpen(false);
     setPeek("");
-    setUnread(projectID ? readUnread(projectID) : 0);
   }, [projectID]);
 
   useEffect(() => {
@@ -209,23 +198,14 @@ export function MainChatDock() {
       });
       if (open) return;
       setPeek(detail.body);
-      setUnread((current) => {
-        const next = current + 1;
-        localStorage.setItem(unreadKey(projectID), String(next));
-        return next;
-      });
     };
     window.addEventListener(cardMessageEvent, onMessage);
     return () => window.removeEventListener(cardMessageEvent, onMessage);
   }, [cardID, open, projectID]);
 
-  const badge = unread > 9 ? "9+" : String(unread);
-
   function show() {
     setOpen(true);
     setPeek("");
-    setUnread(0);
-    localStorage.setItem(unreadKey(projectID), "0");
     if (!cardID) openChat.mutate();
   }
 
@@ -625,11 +605,6 @@ export function MainChatDock() {
               className="size-8 object-contain"
               draggable={false}
             />
-            {unread > 0 && (
-              <span className="absolute -top-1 -right-1 grid min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                {badge}
-              </span>
-            )}
           </button>
         </div>
       )}

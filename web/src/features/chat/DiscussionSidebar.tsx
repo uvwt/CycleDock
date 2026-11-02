@@ -86,6 +86,10 @@ export function DiscussionSidebar({
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
     onSuccess: async (_, card) => {
+      queryClient.setQueryData(keys.card(card.id), {
+        card: null,
+        notFound: true,
+      });
       await queryClient.invalidateQueries({
         queryKey: keys.cards(card.project_id),
       });

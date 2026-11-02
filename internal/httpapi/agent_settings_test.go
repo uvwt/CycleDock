@@ -42,7 +42,7 @@ func TestAgentSettingsHTTPAndMCPBearerToken(t *testing.T) {
 		"routes": []map[string]any{{
 			"id": uuid.NewString(), "enabled": true, "provider_type": "openai_compatible",
 			"provider_base_url": "http://127.0.0.1:18090/v1", "model": "test",
-			"api_key": "sk-ant-api03-test-direct-key",
+			"api_key":            "sk-ant-api03-test-direct-key",
 			"api_key_configured": false,
 		}},
 		"system_instructions": "",

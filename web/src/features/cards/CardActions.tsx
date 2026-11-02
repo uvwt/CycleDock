@@ -109,6 +109,10 @@ export function CardActions({
   const remove = useMutation({
     mutationFn: () => api.deleteCard(card.id),
     onSuccess: async () => {
+      queryClient.setQueryData(keys.card(card.id), {
+        card: null,
+        notFound: true,
+      });
       await queryClient.invalidateQueries({
         queryKey: keys.cards(card.project_id),
       });

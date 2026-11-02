@@ -1,3 +1,4 @@
+import { safeRandomUUID } from "../lib/utils";
 import type {
   AgentSettings,
   AuthorizedAIClient,
@@ -46,7 +47,7 @@ async function request<T>(
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (idempotency)
     headers["Idempotency-Key"] =
-      typeof idempotency === "string" ? idempotency : crypto.randomUUID();
+      typeof idempotency === "string" ? idempotency : safeRandomUUID();
   const signal = AbortSignal.timeout(timeoutMS);
   try {
     const response = await fetch("/api/v1" + path, {

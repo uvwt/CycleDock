@@ -139,16 +139,18 @@ type attemptResponse struct {
 }
 
 type eventResponse struct {
-	ID            string          `json:"id"`
-	Sequence      int64           `json:"sequence"`
-	Type          string          `json:"type"`
-	AttemptID     string          `json:"attempt_id,omitempty"`
-	Content       string          `json:"content"`
-	CheckinStatus string          `json:"checkin_status,omitempty"`
-	Message       json.RawMessage `json:"message,omitempty"`
-	ActorName     string          `json:"actor_name"`
-	ActorKind     string          `json:"actor_kind"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID              string          `json:"id"`
+	Sequence        int64           `json:"sequence"`
+	Type            string          `json:"type"`
+	AttemptID       string          `json:"attempt_id,omitempty"`
+	SourceCardID    string          `json:"source_card_id,omitempty"`
+	SourceCardTitle string          `json:"source_card_title,omitempty"`
+	Content         string          `json:"content"`
+	CheckinStatus   string          `json:"checkin_status,omitempty"`
+	Message         json.RawMessage `json:"message,omitempty"`
+	ActorName       string          `json:"actor_name"`
+	ActorKind       string          `json:"actor_kind"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 type pendingTurnResponse struct {
@@ -1271,6 +1273,12 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		}
 		if row.AttemptID.Valid {
 			item.AttemptID = row.AttemptID.UUID.String()
+		}
+		if row.SourceCardID.Valid {
+			item.SourceCardID = row.SourceCardID.UUID.String()
+		}
+		if row.SourceCardTitle != "" {
+			item.SourceCardTitle = row.SourceCardTitle
 		}
 		response = append(response, item)
 	}

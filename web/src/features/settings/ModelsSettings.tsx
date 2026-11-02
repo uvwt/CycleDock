@@ -28,6 +28,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { safeRandomUUID } from "../../shared/lib/utils";
 import { api } from "../../shared/api/client";
 import type {
   AgentSettings,
@@ -386,7 +387,7 @@ export function ModelsSettings() {
           keys.models(provider, account.id),
         );
         return {
-          id: crypto.randomUUID(),
+          id: safeRandomUUID(),
           enabled: true,
           provider_type: provider,
           credential_id: account.id,
@@ -435,7 +436,7 @@ export function ModelsSettings() {
     );
     const defaultModel = cached?.[0]?.id ?? "";
     const newRouteItem: ModelRoute = {
-      id: crypto.randomUUID(),
+      id: safeRandomUUID(),
       enabled: true,
       provider_type: provider,
       credential_id: credentialID,
@@ -540,7 +541,7 @@ export function ModelsSettings() {
     );
 
     const newRouteItem: ModelRoute = {
-      id: crypto.randomUUID(),
+      id: safeRandomUUID(),
       enabled: true,
       provider_type: "openai_compatible",
       credential_id: "",
@@ -635,7 +636,7 @@ export function ModelsSettings() {
             { id: string; name: string }[]
           >(keys.models("chatgpt", account.id));
           return {
-            id: crypto.randomUUID(),
+            id: safeRandomUUID(),
             enabled: true,
             provider_type: "chatgpt",
             credential_id: account.id,
@@ -694,7 +695,7 @@ export function ModelsSettings() {
               { id: string; name: string }[]
             >(keys.models("grok", account.id));
             return {
-              id: crypto.randomUUID(),
+              id: safeRandomUUID(),
               enabled: true,
               provider_type: "grok",
               credential_id: account.id,
@@ -820,12 +821,6 @@ export function ModelsSettings() {
                             ? "尚未连接账号"
                             : "当前部署未开放"}
                       </p>
-                      {status?.warning && (
-                        <p className="mt-2 text-xs text-warning">
-                          Hosted DEV 临时登录测试模式；正式使用仍需要批准的
-                          OAuth Client ID。
-                        </p>
-                      )}
                     </div>
                     {status?.available && (
                       <Button
@@ -1084,23 +1079,18 @@ export function ModelsSettings() {
       </Section>
 
       <Section
-        title="Agent全局指令"
-        description="整个工作空间的默认全局指令，与单个项目的指令分开保存，对所有 Agent 会话生效。"
+        title="全局指令"
+        description="在所有项目和对话中都会默认生效。适合设置通用的沟通习惯、回答偏好或开发规范。"
       >
         <div className="space-y-4">
-          <Field
-            label="Workspace Agent Instructions"
-            hint="设定工作区内 Agent 的通用行为准则、协作风格或基础角色上下文。"
-          >
-            <TextArea
-              rows={8}
-              value={draft.system_instructions}
-              onChange={(e) =>
-                setDraft({ ...draft, system_instructions: e.target.value })
-              }
-              placeholder="输入工作区 Agent 全局指令，例如设定 Agent 的行为准则、回答语言风格或上下文规则…"
-            />
-          </Field>
+          <TextArea
+            rows={8}
+            value={draft.system_instructions}
+            onChange={(e) =>
+              setDraft({ ...draft, system_instructions: e.target.value })
+            }
+            placeholder="例如：始终使用中文回复、给出代码时优先使用 diff 格式、遇到高风险操作必须先向我确认…"
+          />
           <div className="flex justify-start">
             <Button
               variant="primary"

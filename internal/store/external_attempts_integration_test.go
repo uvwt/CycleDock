@@ -29,6 +29,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	first, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"execute external work", "external-turn-1",
+		uuid.NullUUID{},
 	)
 	if err != nil || first.Reused || first.EventID == uuid.Nil || first.TurnID == uuid.Nil {
 		t.Fatalf("submit agent turn: %+v err=%v", first, err)
@@ -36,6 +37,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	replayed, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"execute external work", "external-turn-1",
+		uuid.NullUUID{},
 	)
 	if err != nil || !replayed.Reused || replayed.TurnID != first.TurnID || replayed.EventID != first.EventID {
 		t.Fatalf("replay agent turn: %+v err=%v", replayed, err)
@@ -43,6 +45,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	if _, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"changed work", "external-turn-1",
+		uuid.NullUUID{},
 	); !errors.Is(err, domain.ErrIdempotencyMismatch) {
 		t.Fatalf("mismatched turn replay error=%v", err)
 	}
@@ -57,6 +60,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	otherTurn, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, otherCard.ID, oauthA.ID,
 		"must stay on the other card", "external-turn-other",
+		uuid.NullUUID{},
 	)
 	if err != nil {
 		t.Fatal(err)

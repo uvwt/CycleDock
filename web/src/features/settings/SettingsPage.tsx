@@ -74,12 +74,17 @@ export default function SettingsPage({ role }: { role: string }) {
   }
 
   return (
-    <main className="mx-auto w-full min-w-0 max-w-6xl overflow-x-hidden px-4 py-7 sm:px-8 sm:py-8">
-      <div className="mb-6">
-        <h1 className="text-[22px] font-semibold tracking-tight text-heading">
-          {t("设置")}
-        </h1>
-      </div>
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight text-heading">
+            {t("设置")}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("管理个人偏好、模型服务与外部连接。")}
+          </p>
+        </div>
+      </header>
       <div className="space-y-6">
         <nav
           aria-label={t("设置")}

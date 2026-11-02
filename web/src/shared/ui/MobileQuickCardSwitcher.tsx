@@ -150,7 +150,11 @@ export function MobileQuickCardSwitcher({
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
-    onSuccess: () => {
+    onSuccess: (_, deletedCard) => {
+      queryClient.setQueryData(keys.card(deletedCard.id), {
+        card: null,
+        notFound: true,
+      });
       queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       setDeleteTarget(null);
     },

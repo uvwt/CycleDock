@@ -1205,13 +1205,12 @@ class CycleDockSmoke(unittest.TestCase):
         )
     def test_agent_settings_hide_runtime_controls(self):
         self.page.goto(BASE + "/settings/models")
-        self.page.get_by_text("Agent全局指令", exact=True).wait_for()
-        self.page.get_by_text("Workspace Agent Instructions", exact=True).wait_for()
-        for removed in ("启用 Cycle Agent", "请求超时（毫秒）", "最大工具轮次"):
+        self.page.get_by_text("全局指令", exact=True).wait_for()
+        for removed in ("启用 Cycle Agent", "请求超时（毫秒）", "最大工具轮次", "Workspace Agent Instructions", "设定工作区内 Agent 的通用行为准则"):
             self.assertEqual(
                 self.page.get_by_text(removed, exact=True).count(),
                 0,
-                f"runtime-only setting is still visible: {removed}",
+                f"runtime-only or removed text is still visible: {removed}",
             )
 
     def test_ios_pwa_push_subscription_and_background_idle(self):

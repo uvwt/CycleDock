@@ -171,7 +171,7 @@ export function Sheet({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  title: string;
+  title?: string;
   children: ReactNode;
   side?: "left" | "right";
   className?: string;
@@ -186,9 +186,13 @@ export function Sheet({
           className,
         )}
       >
-        <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
-          <SheetTitle>{title}</SheetTitle>
-        </SheetHeader>
+        {title ? (
+          <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
+            <SheetTitle>{title}</SheetTitle>
+          </SheetHeader>
+        ) : (
+          <SheetTitle className="sr-only">详情</SheetTitle>
+        )}
         <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5">
           {children}
         </div>

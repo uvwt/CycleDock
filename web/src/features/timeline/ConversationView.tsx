@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { ArrowDown, Bot, Check, Clock, Copy, MoreHorizontal, Reply, RotateCcw, ClipboardCheck, AlertCircle, CornerDownRight } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -361,10 +362,25 @@ function EventRow({
                 {senderLabel(event.actor_kind, event.actor_name)}
               </span>
               {isDelegate && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:border-indigo-800/80 dark:bg-indigo-950/50 dark:text-indigo-300">
-                  <CornerDownRight className="h-3 w-3" />
-                  {t("跨卡片委派")}
-                </span>
+                event.source_card_id ? (
+                  <Link
+                    to={`/cards/${event.source_card_id}`}
+                    className="inline-flex items-center gap-1 rounded-full border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] font-medium text-indigo-700 transition hover:bg-indigo-100 hover:text-indigo-800 dark:border-indigo-800/80 dark:bg-indigo-950/50 dark:text-indigo-300 dark:hover:bg-indigo-900/60 dark:hover:text-indigo-200"
+                    title={t("查看来源会话: {{title}}", {
+                      title: event.source_card_title || t("未命名卡片"),
+                    })}
+                  >
+                    <CornerDownRight className="h-3 w-3 shrink-0" />
+                    <span>
+                      {t("跨卡片委派")}: 「{event.source_card_title || t("来源卡片")}」
+                    </span>
+                  </Link>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:border-indigo-800/80 dark:bg-indigo-950/50 dark:text-indigo-300">
+                    <CornerDownRight className="h-3 w-3" />
+                    {t("跨卡片委派")}
+                  </span>
+                )
               )}
               {hasMetadata && (
                 <div

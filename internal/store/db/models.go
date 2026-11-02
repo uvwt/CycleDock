@@ -137,6 +137,7 @@ type Event struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
+	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
 }
 
 type HumanAccount struct {

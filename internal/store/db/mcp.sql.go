@@ -120,7 +120,7 @@ VALUES (
     $7, $8, $9,
     $10
 )
-RETURNING id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round
+RETURNING id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
 `
 
 type CreateAgentEventParams struct {
@@ -165,12 +165,13 @@ func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventPara
 		&i.CreatedAt,
 		&i.Message,
 		&i.ConfirmationRound,
+		&i.SourceCardID,
 	)
 	return i, err
 }
 
 const getAgentEventRequest = `-- name: GetAgentEventRequest :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
 FROM events
 WHERE workspace_id = $1
   AND actor_source_id = $2
@@ -208,6 +209,7 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 		&i.CreatedAt,
 		&i.Message,
 		&i.ConfirmationRound,
+		&i.SourceCardID,
 	)
 	return i, err
 }
@@ -253,10 +255,10 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 }
 
 const listRecentCardTimeline = `-- name: ListRecentCardTimeline :many
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, actor_name, actor_kind
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, actor_name, actor_kind
 FROM (
     SELECT
-        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round,
+        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id,
         s.name AS actor_name,
         s.kind AS actor_kind
     FROM events e
@@ -292,6 +294,7 @@ type ListRecentCardTimelineRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
+	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
 	ActorName         string             `json:"actor_name"`
 	ActorKind         string             `json:"actor_kind"`
 }
@@ -320,6 +323,7 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 			&i.CreatedAt,
 			&i.Message,
 			&i.ConfirmationRound,
+			&i.SourceCardID,
 			&i.ActorName,
 			&i.ActorKind,
 		); err != nil {

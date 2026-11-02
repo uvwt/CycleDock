@@ -5,7 +5,7 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
-  ChevronRight,
+  ArrowUpRight,
   FileQuestion,
   Loader2,
 } from "lucide-react";
@@ -13,9 +13,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/shared/lib/utils";
-import { api } from "@/shared/api/client";
+import { api, APIError } from "@/shared/api/client";
 import { keys } from "@/app/query";
-import type { Card } from "@/shared/api/types";
+import type { Card, CardDetail } from "@/shared/api/types";
 import { CardStatusDot, getCardVisualStatus } from "@/shared/ui/CardStatusDot";
 import {
   Sheet,
@@ -25,20 +25,20 @@ import {
 } from "@/shared/ui/sheet";
 
 const chatCardVariants = cva(
-  "group/card block select-none rounded-xl border transition-all duration-150 text-left overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+  "group/card block select-none rounded-xl border transition-all duration-150 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
   {
     variants: {
       variant: {
         default:
-          "border-line/80 bg-surface/90 hover:bg-surface hover:border-primary/40 hover:shadow-xs active:scale-[0.99] dark:bg-surface/60 dark:hover:bg-surface/90",
+          "border-line/70 bg-muted/40 hover:bg-muted/75 hover:border-primary/40 hover:shadow-2xs active:scale-[0.99] dark:bg-muted/20 dark:hover:bg-muted/40",
         elevated:
           "border-line bg-surface shadow-xs hover:border-primary/50 hover:shadow-sm active:scale-[0.99]",
         ghost:
           "border-transparent bg-muted/40 hover:bg-muted/70 hover:border-line/60",
       },
       size: {
-        sm: "p-2.5 max-w-sm text-xs",
-        default: "p-3 max-w-md text-sm",
+        sm: "p-2 max-w-sm text-xs",
+        default: "p-2.5 sm:p-3 w-full max-w-lg text-sm",
       },
     },
     defaultVariants: {
@@ -82,29 +82,62 @@ export const ChatActionCard = React.forwardRef<
       data: cardDetail,
       isLoading,
       isError,
-    } = useQuery({
+    } = useQuery<CardDetail | { card: null; notFound: true }>({
       queryKey: keys.card(cardId),
-      queryFn: () => api.card(cardId),
+      queryFn: async () => {
+        try {
+          return await api.card(cardId);
+        } catch (err) {
+          // 当卡片被删除或不存在返回 404/410 时，视为正常业务状态缓存，避免反复发起网络重试与界面闪烁
+          if (
+            err instanceof APIError &&
+            (err.status === 404 || err.status === 410)
+          ) {
+            return { card: null, notFound: true };
+          }
+          throw err;
+        }
+      },
       enabled: Boolean(cardId),
-      staleTime: 1000 * 30,
+      staleTime: 1000 * 60 * 10,
+      gcTime: 1000 * 60 * 30,
+      retry: (failureCount, error) => {
+        if (
+          error instanceof APIError &&
+          (error.status === 404 || error.status === 410)
+        ) {
+          return false;
+        }
+        return failureCount < 1;
+      },
+      refetchOnWindowFocus: false,
     });
 
-    const card = cardDetail?.card;
+    const isNotFound = Boolean(
+      cardDetail && "notFound" in cardDetail && cardDetail.notFound,
+    );
+    const card = cardDetail && "card" in cardDetail ? cardDetail.card : null;
 
     const isMobile = React.useMemo(() => {
       if (typeof window === "undefined") return false;
       return window.innerWidth < 768;
     }, []);
 
-    const targetProject = card?.project_id || projectId || "current";
+    const targetProject = card?.project_id || projectId;
     const targetUrl = React.useMemo(() => {
-      if (!card) {
-        return `/cards/${targetProject}/${cardId}`;
+      if (card?.kind === "discussion") {
+        return targetProject
+          ? `/chat/${targetProject}/${card.id}`
+          : `/chat/${card.id}`;
       }
-      if (card.kind === "discussion") {
-        return `/chat/${targetProject}/${card.id}`;
+      if (card?.kind === "ongoing") {
+        return targetProject
+          ? `/plans/${targetProject}/${card.id}`
+          : `/cards/${card?.id || cardId}`;
       }
-      return `/cards/${targetProject}/${card.id}`;
+      return targetProject
+        ? `/cards/${targetProject}/${card?.id || cardId}`
+        : `/cards/${cardId}`;
     }, [card, targetProject, cardId]);
 
     const visualStatus = React.useMemo(() => {
@@ -196,7 +229,7 @@ export const ChatActionCard = React.forwardRef<
       e.preventDefault();
 
       if (onOpenCard) {
-        onOpenCard(cardId, card);
+        onOpenCard(cardId, card ?? undefined);
         return;
       }
 
@@ -227,7 +260,7 @@ export const ChatActionCard = React.forwardRef<
       );
     }
 
-    if (isError || (!card && !fallbackTitle)) {
+    if (isNotFound || isError || (!card && !fallbackTitle)) {
       return (
         <div
           ref={ref}
@@ -271,46 +304,50 @@ export const ChatActionCard = React.forwardRef<
           }}
           className={cn(
             chatCardVariants({ variant, size }),
-            "my-2.5 not-prose cursor-pointer",
+            "my-2 not-prose cursor-pointer",
             className,
           )}
           {...props}
         >
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
+          <div className="flex items-start gap-2.5 sm:gap-3">
+            {/* 左侧类型图标独立微底座 */}
+            <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs">
               {kindIcon}
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                {kindLabel}
-              </span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {statusBadge}
-              {card && (
-                <CardStatusDot
-                  status={visualStatus}
-                  className="size-2 ml-0.5"
-                />
+
+            {/* 中间信息区 */}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h4 className="truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors">
+                  {title}
+                </h4>
+                <div className="flex items-center gap-1.5 shrink-0 ml-auto sm:ml-0">
+                  {statusBadge}
+                  {card && (
+                    <CardStatusDot
+                      status={visualStatus}
+                      className="size-1.5"
+                    />
+                  )}
+                </div>
+              </div>
+
+              {card?.description ? (
+                <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground leading-normal">
+                  {card.description}
+                </p>
+              ) : (
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-faint">
+                  <span>{kindLabel}</span>
+                  <span>•</span>
+                  <span>{cardId.slice(0, 8)}</span>
+                </div>
               )}
             </div>
-          </div>
 
-          <div className="mt-1.5 flex items-baseline justify-between gap-2">
-            <h4 className="font-medium text-foreground text-sm line-clamp-2 leading-snug group-hover/card:text-primary transition-colors">
-              {title}
-            </h4>
-          </div>
-
-          {card?.description && (
-            <p className="mt-1 text-xs text-muted-foreground line-clamp-1">
-              {card.description}
-            </p>
-          )}
-
-          <div className="mt-2.5 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted-foreground">
-            <span className="truncate">ID: {cardId.slice(0, 8)}</span>
-            <div className="inline-flex items-center gap-1 text-primary group-hover/card:translate-x-0.5 transition-transform font-medium">
-              <span>{t("查看详情")}</span>
-              <ChevronRight className="size-3" />
+            {/* 右侧微交互跳转指示 */}
+            <div className="shrink-0 pt-0.5 text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
+              <ArrowUpRight className="size-4" />
             </div>
           </div>
         </div>

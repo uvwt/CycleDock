@@ -55,3 +55,17 @@ func TestBuildADKInstructions_主聊天场景不影响其他卡片(t *testing.T)
 		})
 	}
 }
+
+func TestBuildADKInstructions_包含卡片引用跳转规范(t *testing.T) {
+	card := store.AgentCardContext{CardKind: domain.CardKindDiscussion, CardTitle: "普通讨论"}
+	instructions := buildADKInstructions(card, "", "")
+	if !strings.Contains(instructions, "[卡片标题](cycledock://card/<card_id>)") {
+		t.Fatal("通用指令必须包含标准卡片引用标记约束，以支持前端卡片跳转渲染")
+	}
+
+	mainCard := store.AgentCardContext{CardKind: domain.CardKindDiscussion, IsMainDiscussion: true, CardTitle: "主聊天"}
+	mainInstructions := buildADKInstructions(mainCard, "", "")
+	if !strings.Contains(mainInstructions, "必须使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)") {
+		t.Fatal("主聊天指令必须明确硬约束使用标准卡片引用标记")
+	}
+}

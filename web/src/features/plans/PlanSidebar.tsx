@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Card } from "../../shared/api/types";
 import { api } from "../../shared/api/client";
+import { keys } from "../../app/query";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -35,7 +36,11 @@ export function PlanSidebar({
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
-    onSuccess: () => {
+    onSuccess: (_, deletedCard) => {
+      queryClient.setQueryData(keys.card(deletedCard.id), {
+        card: null,
+        notFound: true,
+      });
       queryClient.invalidateQueries({ queryKey: ["cards"] });
       setDeleteTarget(null);
     },

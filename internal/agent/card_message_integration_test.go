@@ -117,6 +117,12 @@ func TestBuiltInCardMessageQueuesAndRunsIsolatedTargetSession(t *testing.T) {
 	if err != nil || len(timeline) != 1 || timeline[0].ActorSourceID != settings.SourceID {
 		t.Fatalf("handoff must be a single agent-authored event: %+v err=%v", timeline, err)
 	}
+	if !timeline[0].SourceCardID.Valid || timeline[0].SourceCardID.UUID != source.ID {
+		t.Fatalf("source card must be recorded on delegated event: %+v", timeline[0])
+	}
+	if timeline[0].SourceCardTitle != source.Title {
+		t.Fatalf("source card title mismatch: got %q, want %q", timeline[0].SourceCardTitle, source.Title)
+	}
 	targetClaim, err := dataStore.ClaimNextTurnAttempt(ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute)
 	if err != nil {
 		t.Fatal(err)

@@ -328,7 +328,10 @@ func TestRunnerLateModelResponseAfterInterruptCannotPersistResult(t *testing.T) 
 			if modelCalls == 1 {
 				writeModelResponse(t, w, "", []modelclient.ToolCall{{
 					ID: "external-failure", Type: "function",
-					Function: modelclient.ToolFunction{Name: "mcp_failtool_boom", Arguments: `{"value":"x"}`},
+					Function: modelclient.ToolFunction{
+						Name:      "call_mcp_tool",
+						Arguments: `{"tool_id":"failtool:boom","arguments":{"value":"x"}}`,
+					},
 				}})
 				return
 			}

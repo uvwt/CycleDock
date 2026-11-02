@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,9 +55,10 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	definitions := internalToolDefinitions()
 	if runtime.context.IsBuiltInProactive {
 		// 内置定时主动任务只允许查询信息并最终向主聊天发送 1 条气泡，不挂载建卡或改日程等写工具。
-		filtered := make([]modelclient.ToolDefinition, 0, 1)
+		filtered := make([]modelclient.ToolDefinition, 0, 3)
 		for _, definition := range definitions {
-			if definition.Function.Name == "reply_message" {
+			switch definition.Function.Name {
+			case "reply_message", "search_mcp_tools", "call_mcp_tool":
 				filtered = append(filtered, definition)
 			}
 		}
@@ -83,7 +85,7 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	}
 
 	if runtime.mcpSessions != nil {
-		for _, definition := range runtime.mcpSessions.ToolDefinitions() {
+		for _, definition := range runtime.mcpSessions.NativeToolDefinitions() {
 			name := definition.Function.Name
 			converted, err := definitionToADKTool(
 				definition,
@@ -147,6 +149,10 @@ func (r attemptToolRuntime) internalHandler(
 	name string,
 ) (func(adkagent.Context, map[string]any) (map[string]any, error), error) {
 	switch name {
+	case "search_mcp_tools":
+		return r.searchMCPToolsTool, nil
+	case "call_mcp_tool":
+		return r.callMCPToolTool, nil
 	case "cycledock_list_schedules":
 		return r.listSchedulesTool, nil
 	case "cycledock_create_schedule":
@@ -260,10 +266,11 @@ func (r attemptToolRuntime) internalHandler(
 			if cardID == r.context.CardID {
 				return nil, errors.New("target card must differ from the current card")
 			}
-			// Workspace 和发送者来自当前执行身份；只交接消息，不复制源 Session。
+			// Workspace 和发送者来自当前执行身份；记录源会话卡片以支持跨卡片溯源与跳转，不复制源 Session。
 			result, err := r.store.SubmitAgentTurn(
 				ctx, r.context.WorkspaceID, cardID, r.context.RunnerSourceID,
 				stringArg(args, "content"), stringArg(args, "idempotency_key"),
+				uuid.NullUUID{UUID: r.context.CardID, Valid: true},
 			)
 			if err != nil {
 				return nil, err
@@ -681,4 +688,341 @@ func int64Arg(args map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+func (r attemptToolRuntime) searchMCPToolsTool(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errors.New("store is not configured")
+	}
+
+	// 1. Workspace scope 来自认证上下文（当前 Attempt 的 CardContext），不信任模型传入的 scope。
+	enabledConnections, err := r.store.ListEnabledMCPConnections(ctx, r.context.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled MCP connections: %w", err)
+	}
+
+	query := strings.TrimSpace(stringArg(args, "query"))
+	connFilter := strings.TrimSpace(stringArg(args, "connection_name"))
+	toolIDFilter := strings.TrimSpace(stringArg(args, "tool_id"))
+	limit := intArg(args, "limit")
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 15 {
+		limit = 15
+	}
+
+	if len(enabledConnections) == 0 || r.mcpSessions == nil {
+		if connFilter != "" {
+			return map[string]any{
+				"tools":   []any{},
+				"count":   0,
+				"message": fmt.Sprintf("MCP 连接 %q 在当前工作区不存在或未启用。", connFilter),
+			}, nil
+		}
+		return map[string]any{
+			"tools":   []any{},
+			"count":   0,
+			"message": "当前工作区未启用任何外部 MCP 连接。可在工作区设置中配置并启用 MCP 连接。",
+		}, nil
+	}
+
+	enabledMap := make(map[string]bool, len(enabledConnections))
+	for _, c := range enabledConnections {
+		enabledMap[strings.ToLower(c.Name)] = true
+	}
+
+	// 若指定了连接名称过滤，先检查该连接是否存在且已启用
+	if connFilter != "" && !enabledMap[strings.ToLower(connFilter)] {
+		return map[string]any{
+			"tools":   []any{},
+			"count":   0,
+			"message": fmt.Sprintf("MCP 连接 %q 在当前工作区不存在或未启用。", connFilter),
+		}, nil
+	}
+
+	// 3. 获取所有外部 MCP 工具，并仅保留当前工作区启用的连接中的工具
+	allExternal := r.mcpSessions.ExternalTools()
+	var candidates []mcpclient.Tool
+	for _, tool := range allExternal {
+		if enabledMap[strings.ToLower(tool.ServerName)] {
+			if connFilter == "" || strings.EqualFold(tool.ServerName, connFilter) {
+				candidates = append(candidates, tool)
+			}
+		}
+	}
+
+	// 4. 工具评分与匹配：支持自然语言关键词、可选连接筛选与精确工具 ID
+	type scoredTool struct {
+		tool  mcpclient.Tool
+		score int
+	}
+
+	var matched []scoredTool
+
+	// 4.1 精确 tool_id 匹配
+	if toolIDFilter != "" {
+		for _, tool := range candidates {
+			toolID := tool.ToolID()
+			if strings.EqualFold(toolID, toolIDFilter) ||
+				strings.EqualFold(tool.ServerName+"/"+tool.RemoteName, toolIDFilter) {
+				matched = append(matched, scoredTool{tool: tool, score: 1000})
+			}
+		}
+		// 若未在缓存中直接匹配到，尝试刷新一次服务器工具目录以避免遗漏
+		if len(matched) == 0 {
+			if sName, _, ok := mcpclient.ParseToolID(toolIDFilter); ok && enabledMap[strings.ToLower(sName)] {
+				_ = r.mcpSessions.RefreshServer(ctx, sName)
+				for _, tool := range r.mcpSessions.ExternalTools() {
+					if enabledMap[strings.ToLower(tool.ServerName)] &&
+						(strings.EqualFold(tool.ToolID(), toolIDFilter) ||
+							strings.EqualFold(tool.ServerName+"/"+tool.RemoteName, toolIDFilter)) {
+						matched = append(matched, scoredTool{tool: tool, score: 1000})
+					}
+				}
+			}
+		}
+	} else if query != "" {
+		// 4.2 自然语言关键词与工具名匹配
+		exactIDServer, exactIDRemote, isExactID := mcpclient.ParseToolID(query)
+		tokens := tokenizeSearchQuery(query)
+
+		for _, tool := range candidates {
+			score := 0
+
+			// 若 query 直接是稳定 tool_id 形式（如 conn:tool 或 conn/tool）
+			if isExactID && strings.EqualFold(tool.ServerName, exactIDServer) && strings.EqualFold(tool.RemoteName, exactIDRemote) {
+				score += 500
+			}
+
+			lowerQuery := strings.ToLower(query)
+			lowerName := strings.ToLower(tool.RemoteName)
+			lowerDesc := strings.ToLower(tool.Description)
+			lowerServer := strings.ToLower(tool.ServerName)
+
+			if lowerName == lowerQuery {
+				score += 200
+			} else if strings.Contains(lowerName, lowerQuery) {
+				score += 100
+			}
+			if strings.Contains(lowerDesc, lowerQuery) {
+				score += 40
+			}
+
+			for _, token := range tokens {
+				switch {
+				case lowerName == token:
+					score += 50
+				case strings.Contains(lowerName, token):
+					score += 25
+				case lowerServer == token:
+					score += 20
+				case strings.Contains(lowerDesc, token):
+					score += 10
+				}
+			}
+
+			if score > 0 {
+				matched = append(matched, scoredTool{tool: tool, score: score})
+			}
+		}
+	} else {
+		// 4.3 未传 query 且未传 tool_id：列出连接内全部可用工具
+		for _, tool := range candidates {
+			matched = append(matched, scoredTool{tool: tool, score: 1})
+		}
+	}
+
+	// 5. 排序：分数降序；分数相同时按 tool_id 升序保持确定性
+	sort.Slice(matched, func(i, j int) bool {
+		if matched[i].score != matched[j].score {
+			return matched[i].score > matched[j].score
+		}
+		return matched[i].tool.ToolID() < matched[j].tool.ToolID()
+	})
+
+	if len(matched) > limit {
+		matched = matched[:limit]
+	}
+
+	// 6. 构造输出：返回少量匹配工具的稳定 ID、连接名称、工具名称、说明和完整参数 Schema
+	type toolOutput struct {
+		ToolID         string         `json:"tool_id"`
+		ConnectionName string         `json:"connection_name"`
+		ToolName       string         `json:"tool_name"`
+		Description    string         `json:"description"`
+		InputSchema    map[string]any `json:"input_schema"`
+	}
+
+	results := make([]toolOutput, 0, len(matched))
+	for _, item := range matched {
+		results = append(results, toolOutput{
+			ToolID:         item.tool.ToolID(),
+			ConnectionName: item.tool.ServerName,
+			ToolName:       item.tool.RemoteName,
+			Description:    item.tool.Description,
+			InputSchema:    item.tool.InputSchema,
+		})
+	}
+
+	if len(results) == 0 {
+		return map[string]any{
+			"tools":   []any{},
+			"count":   0,
+			"message": "未找到匹配的外部 MCP 工具。可尝试更换查询词、置空 query 查看全部可用工具，或检查工作区连接设置。",
+		}, nil
+	}
+
+	return map[string]any{
+		"tools": results,
+		"count": len(results),
+	}, nil
+}
+
+func (r attemptToolRuntime) callMCPToolTool(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errors.New("store is not configured")
+	}
+
+	toolID := stringArg(args, "tool_id")
+	if toolID == "" {
+		return map[string]any{
+			"error": "缺少必填参数 tool_id。请先使用 search_mcp_tools 查找可用工具并获取对应的 tool_id（格式如 'connection_name:tool_name'）。",
+		}, nil
+	}
+
+	serverName, remoteName, ok := mcpclient.ParseToolID(toolID)
+	if !ok {
+		return map[string]any{
+			"error":   fmt.Sprintf("tool_id 格式不正确：%q。正确格式为 '<connection_name>:<tool_name>'。请使用 search_mcp_tools 检索有效工具。", toolID),
+			"tool_id": toolID,
+		}, nil
+	}
+
+	// 1. 验证连接归属与启用状态：必须属于当前 Workspace 且处于 enabled 状态
+	enabledConnections, err := r.store.ListEnabledMCPConnections(ctx, r.context.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("verify MCP connection status: %w", err)
+	}
+	var canonicalServerName string
+	for _, c := range enabledConnections {
+		if strings.EqualFold(c.Name, serverName) {
+			canonicalServerName = c.Name
+			break
+		}
+	}
+	if canonicalServerName == "" {
+		return map[string]any{
+			"error":           fmt.Sprintf("MCP 连接 %q 在当前工作区未启用或不存在。请检查工作区设置或调用 search_mcp_tools 查找其他可用工具。", serverName),
+			"tool_id":         toolID,
+			"connection_name": serverName,
+		}, nil
+	}
+	serverName = canonicalServerName
+
+	if r.mcpSessions == nil {
+		return map[string]any{
+			"error":   "MCP 运行时会话不可用。",
+			"tool_id": toolID,
+		}, nil
+	}
+
+	// 2. 查找工具定义
+	tool, found := r.mcpSessions.GetExternalTool(serverName, remoteName)
+	if !found {
+		// 动态刷新一次工具目录，防止服务器端新增工具未载入
+		_ = r.mcpSessions.RefreshServer(ctx, serverName)
+		tool, found = r.mcpSessions.GetExternalTool(serverName, remoteName)
+	}
+	if !found {
+		return map[string]any{
+			"error":           fmt.Sprintf("在连接 %q 上未找到工具 %q。该工具可能已被移除，请使用 search_mcp_tools 重新检索可用工具。", serverName, remoteName),
+			"tool_id":         toolID,
+			"connection_name": serverName,
+			"tool_name":       remoteName,
+		}, nil
+	}
+
+	// 3. 参数按工具实际 inputSchema 校验
+	toolArgs, _ := args["arguments"].(map[string]any)
+	if toolArgs == nil {
+		toolArgs = map[string]any{}
+	}
+
+	if err := validateToolArguments(tool.InputSchema, toolArgs); err != nil {
+		// 刷新一次 schema 再次尝试校验，避免因服务端 schema 更新后本地缓存未刷新导致的误判
+		if refreshErr := r.mcpSessions.RefreshServer(ctx, serverName); refreshErr == nil {
+			if refreshedTool, ok := r.mcpSessions.GetExternalTool(serverName, remoteName); ok {
+				tool = refreshedTool
+				err = validateToolArguments(tool.InputSchema, toolArgs)
+			}
+		}
+		if err != nil {
+			return map[string]any{
+				"error":           fmt.Sprintf("参数校验失败：%v。请依据该工具的 input_schema 修正 arguments 参数，禁止盲目重试或静默改写。", err),
+				"tool_id":         tool.ToolID(),
+				"connection_name": serverName,
+				"tool_name":       remoteName,
+				"input_schema":    tool.InputSchema,
+			}, nil
+		}
+	}
+
+	// 4. 调用远程 MCP 服务
+	raw, err := r.mcpSessions.CallExternal(ctx, serverName, remoteName, toolArgs)
+	if err != nil {
+		// 通道与执行错误作为工具响应返回给模型，保留上下文与定位证据
+		return map[string]any{
+			"error":           fmt.Sprintf("MCP 工具调用失败：%v", err),
+			"tool_id":         tool.ToolID(),
+			"connection_name": serverName,
+			"tool_name":       remoteName,
+		}, nil
+	}
+
+	// 5. 结果处理：脱敏、Artifact 外置与 Session Event 证据保留
+	prepared, err := r.prepareMCPResult(ctx, tool.ToolID(), raw)
+	if err != nil {
+		return nil, fmt.Errorf("prepare MCP result for %s: %w", tool.ToolID(), err)
+	}
+
+	out := map[string]any{
+		"tool_id":         tool.ToolID(),
+		"connection_name": serverName,
+		"tool_name":       remoteName,
+	}
+	for k, v := range prepared {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func validateToolArguments(schemaMap map[string]any, args map[string]any) error {
+	if schemaMap == nil {
+		return nil
+	}
+	schema, err := jsonSchemaFromMap(schemaMap)
+	if err != nil {
+		return fmt.Errorf("invalid json schema: %w", err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		return fmt.Errorf("resolve json schema: %w", err)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return resolved.Validate(args)
+}
+
+func tokenizeSearchQuery(query string) []string {
+	var tokens []string
+	fields := strings.Fields(strings.ToLower(query))
+	for _, field := range fields {
+		cleaned := strings.Trim(field, ".,!?:;\"'()[]{}/\\-_")
+		if cleaned != "" {
+			tokens = append(tokens, cleaned)
+		}
+	}
+	return tokens
 }

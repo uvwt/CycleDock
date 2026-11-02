@@ -60,4 +60,3 @@ func TestModelAPIKeyEncryptionBindsWorkspaceAndRoute(t *testing.T) {
 		t.Fatal("invalid encryption key unexpectedly accepted")
 	}
 }
-

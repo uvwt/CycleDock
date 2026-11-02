@@ -46,6 +46,29 @@ type Tool struct {
 	Hidden      bool
 }
 
+// FormatToolID returns the stable tool identifier for external MCP tools.
+func FormatToolID(serverName, remoteName string) string {
+	return strings.TrimSpace(serverName) + ":" + strings.TrimSpace(remoteName)
+}
+
+// ParseToolID parses a stable tool identifier, supporting both colon (server:tool)
+// and slash (server/tool) separators.
+func ParseToolID(id string) (serverName, remoteName string, ok bool) {
+	id = strings.TrimSpace(id)
+	if s, r, found := strings.Cut(id, ":"); found && s != "" && r != "" {
+		return s, r, true
+	}
+	if s, r, found := strings.Cut(id, "/"); found && s != "" && r != "" {
+		return s, r, true
+	}
+	return "", "", false
+}
+
+// ToolID returns the stable identifier of this tool.
+func (t Tool) ToolID() string {
+	return FormatToolID(t.ServerName, t.RemoteName)
+}
+
 type ConnectPhase string
 
 const (
@@ -152,6 +175,8 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 }
 
 func (s *SessionSet) ToolDefinitions() []modelclient.ToolDefinition {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	definitions := make([]modelclient.ToolDefinition, 0, len(s.ordered))
 	for _, tool := range s.ordered {
 		if tool.Hidden {
@@ -171,18 +196,114 @@ func (s *SessionSet) ToolDefinitions() []modelclient.ToolDefinition {
 	return definitions
 }
 
+// NativeToolDefinitions returns tool definitions only for first-party/native tools
+// (e.g. NexusDock tools) that should be mounted directly onto the agent.
+func (s *SessionSet) NativeToolDefinitions() []modelclient.ToolDefinition {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	definitions := make([]modelclient.ToolDefinition, 0, len(s.ordered))
+	for _, tool := range s.ordered {
+		if tool.Hidden {
+			continue
+		}
+		session, ok := s.sessions[tool.ServerName]
+		if !ok || !session.config.NativeToolNames {
+			continue
+		}
+		description := tool.Description
+		if description == "" {
+			description = "MCP tool " + tool.RemoteName
+		}
+		definitions = append(definitions, modelclient.ToolDefinition{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name: tool.ModelName, Description: description, Parameters: tool.InputSchema,
+			},
+		})
+	}
+	return definitions
+}
+
+// ExternalTools returns all visible tools from external/third-party MCP connections.
+func (s *SessionSet) ExternalTools() []Tool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Tool, 0, len(s.ordered))
+	for _, tool := range s.ordered {
+		if tool.Hidden {
+			continue
+		}
+		session, ok := s.sessions[tool.ServerName]
+		if ok && session.config.NativeToolNames {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+// GetExternalTool retrieves an external tool by connection name and remote tool name.
+func (s *SessionSet) GetExternalTool(serverName, remoteName string) (Tool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, tool := range s.ordered {
+		if !tool.Hidden && strings.EqualFold(tool.ServerName, serverName) && tool.RemoteName == remoteName {
+			session, ok := s.sessions[tool.ServerName]
+			if ok && session.config.NativeToolNames {
+				continue
+			}
+			return tool, true
+		}
+	}
+	return Tool{}, false
+}
+
+// GetExternalToolByID retrieves an external tool using a stable tool_id (supporting server:tool or server/tool).
+func (s *SessionSet) GetExternalToolByID(toolID string) (Tool, bool) {
+	serverName, remoteName, ok := ParseToolID(toolID)
+	if !ok {
+		return Tool{}, false
+	}
+	return s.GetExternalTool(serverName, remoteName)
+}
+
 func (s *SessionSet) HasTool(modelName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tool, ok := s.tools[modelName]
 	return ok && !tool.Hidden
 }
 
 func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[string]any) (string, error) {
+	s.mu.Lock()
 	tool, ok := s.tools[modelName]
+	s.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("unknown MCP tool %q", modelName)
 	}
 	if tool.Hidden {
 		return "", fmt.Errorf("MCP tool %q is runtime-only", modelName)
+	}
+	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("encode MCP result %s/%s: %w", tool.ServerName, tool.RemoteName, err)
+	}
+	return boundedModelResult(raw), nil
+}
+
+// CallExternal invokes an external MCP tool by its server and remote name.
+func (s *SessionSet) CallExternal(
+	ctx context.Context,
+	serverName, remoteName string,
+	arguments map[string]any,
+) (string, error) {
+	tool, found := s.GetExternalTool(serverName, remoteName)
+	if !found {
+		return "", fmt.Errorf("external MCP tool %s/%s not found", serverName, remoteName)
 	}
 	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
 	if err != nil {
@@ -201,6 +322,7 @@ func (s *SessionSet) CallInternal(
 	serverName, remoteName string,
 	arguments map[string]any,
 ) (map[string]any, error) {
+	s.mu.Lock()
 	found := false
 	for _, tool := range s.ordered {
 		if tool.ServerName == serverName && tool.RemoteName == remoteName {
@@ -208,6 +330,7 @@ func (s *SessionSet) CallInternal(
 			break
 		}
 	}
+	s.mu.Unlock()
 	if !found {
 		return nil, fmt.Errorf("MCP runtime tool %s/%s is unavailable", serverName, remoteName)
 	}
@@ -231,7 +354,13 @@ func (s *SessionSet) callRemote(
 	serverName, remoteName string,
 	arguments map[string]any,
 ) (*mcp.CallToolResult, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, errors.New("MCP session set is closed")
+	}
 	connected := s.sessions[serverName]
+	s.mu.Unlock()
 	if connected == nil {
 		return nil, fmt.Errorf("MCP session %q is unavailable", serverName)
 	}
@@ -244,6 +373,90 @@ func (s *SessionSet) callRemote(
 		return nil, fmt.Errorf("call MCP %s/%s: %w", serverName, remoteName, err)
 	}
 	return result, nil
+}
+
+// RefreshServer re-lists tools from an active server session and updates the catalog.
+func (s *SessionSet) RefreshServer(ctx context.Context, serverName string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("MCP session set is closed")
+	}
+	server := s.sessions[serverName]
+	s.mu.Unlock()
+	if server == nil {
+		return fmt.Errorf("MCP session %q is unavailable", serverName)
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, server.config.Timeout)
+	result, err := server.session.ListTools(listCtx, nil)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("refresh MCP tools for %q: %w", serverName, err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("MCP session set is closed")
+	}
+
+	newOrdered := make([]Tool, 0, len(s.ordered))
+	for _, t := range s.ordered {
+		if t.ServerName != serverName {
+			newOrdered = append(newOrdered, t)
+		} else {
+			delete(s.tools, t.ModelName)
+		}
+	}
+
+	for _, remote := range result.Tools {
+		if remote == nil {
+			continue
+		}
+		name := modelToolName(server.config.Name, remote.Name)
+		if server.config.NativeToolNames {
+			name = nativeToolName(remote.Name)
+		}
+		tool := Tool{
+			ModelName:   name,
+			ServerName:  server.config.Name,
+			RemoteName:  remote.Name,
+			Description: strings.TrimSpace(remote.Description),
+			InputSchema: jsonMap(remote.InputSchema),
+			Hidden:      server.config.HiddenRemoteTools[remote.Name],
+		}
+		if tool.InputSchema == nil {
+			tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		s.tools[name] = tool
+		newOrdered = append(newOrdered, tool)
+	}
+	sort.Slice(newOrdered, func(i, j int) bool { return newOrdered[i].ModelName < newOrdered[j].ModelName })
+	s.ordered = newOrdered
+	return nil
+}
+
+// RefreshTools re-lists tools from all active server sessions.
+func (s *SessionSet) RefreshTools(ctx context.Context) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("MCP session set is closed")
+	}
+	names := make([]string, 0, len(s.sessions))
+	for name := range s.sessions {
+		names = append(names, name)
+	}
+	s.mu.Unlock()
+
+	var errs []error
+	for _, name := range names {
+		if err := s.RefreshServer(ctx, name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func boundedModelResult(raw []byte) string {

@@ -1,5 +1,6 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import type { DeviceTarget } from "../../shared/api/types";
+import { safeRandomUUID } from "../../shared/lib/utils";
 import { ChatInput } from "../../shared/ui/chat";
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
@@ -88,7 +89,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         content: value,
         deviceTarget,
         pendingCardID: card.id,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: safeRandomUUID(),
       };
       // Card 创建成功后先固化 Card ID 与幂等键；首条消息失败时只能重试该 Card，
       // 不能重新创建第二张 Discussion。

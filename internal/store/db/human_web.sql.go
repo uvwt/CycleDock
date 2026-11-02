@@ -98,7 +98,7 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 }
 
 const latestCheckinForCard = `-- name: LatestCheckinForCard :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -130,6 +130,7 @@ func (q *Queries) LatestCheckinForCard(ctx context.Context, arg LatestCheckinFor
 		&i.CreatedAt,
 		&i.Message,
 		&i.ConfirmationRound,
+		&i.SourceCardID,
 	)
 	return i, err
 }
@@ -218,13 +219,23 @@ func (q *Queries) ListCardSchedules(ctx context.Context, arg ListCardSchedulesPa
 
 const listCardTimeline = `-- name: ListCardTimeline :many
 SELECT
-    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round,
+    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id,
     s.name AS actor_name,
-    s.kind AS actor_kind
+    s.kind AS actor_kind,
+    COALESCE(
+        CASE
+            WHEN sc.id IS NOT NULL THEN COALESCE(NULLIF(sc.title, ''), '讨论')
+            ELSE ''
+        END,
+        ''
+    )::text AS source_card_title
 FROM events e
 JOIN sources s
   ON s.workspace_id = e.workspace_id
  AND s.id = e.actor_source_id
+LEFT JOIN cards sc
+  ON sc.workspace_id = e.workspace_id
+ AND sc.id = e.source_card_id
 WHERE e.workspace_id = $1
   AND e.card_id = $2
   -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
@@ -258,8 +269,10 @@ type ListCardTimelineRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
+	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
 	ActorName         string             `json:"actor_name"`
 	ActorKind         string             `json:"actor_kind"`
+	SourceCardTitle   string             `json:"source_card_title"`
 }
 
 func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelineParams) ([]ListCardTimelineRow, error) {
@@ -286,8 +299,10 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.CreatedAt,
 			&i.Message,
 			&i.ConfirmationRound,
+			&i.SourceCardID,
 			&i.ActorName,
 			&i.ActorKind,
+			&i.SourceCardTitle,
 		); err != nil {
 			return nil, err
 		}

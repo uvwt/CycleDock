@@ -75,13 +75,13 @@ export function CardHeaderInfoCard({
       className={
         variant === "sheet"
           ? "w-full overflow-y-auto space-y-4"
-          : "w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
+          : "w-80 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
       }
       aria-label={t("任务详情")}
     >
       {/* 标题与类型状态概览 */}
       <div className="space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
+        <div className={`flex items-center justify-between gap-2 ${variant === "sheet" ? "pr-8" : ""}`}>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
               {kindLabel}
@@ -135,7 +135,7 @@ export function CardHeaderInfoCard({
               </div>
             )}
           </div>
-          {onClose && (
+          {variant !== "sheet" && onClose && (
             <button
               type="button"
               onClick={onClose}

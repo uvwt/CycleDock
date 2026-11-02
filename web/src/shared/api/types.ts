@@ -51,6 +51,8 @@ export type TimelineEvent = {
   id: string;
   sequence: number;
   attempt_id?: string;
+  source_card_id?: string;
+  source_card_title?: string;
   type:
     | "comment"
     | "progress"

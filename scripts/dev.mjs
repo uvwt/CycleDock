@@ -94,6 +94,7 @@ async function main() {
       throw new Error('CYCLEDOCK_ADMIN_PASSWORD 至少需要 12 位。')
     }
     process.env.HTTP_ADDR ||= '127.0.0.1:8080'
+    process.env.DEV_WEB_HOST ||= '127.0.0.1'
     process.env.DEV_WEB_PORT ||= '5173'
     const backend = new URL(`http://${process.env.HTTP_ADDR}`)
     const webPort = Number(process.env.DEV_WEB_PORT)
@@ -102,7 +103,7 @@ async function main() {
     }
     // 先检查端口，避免发现已有服务后才对其数据库执行迁移。
     await checkPort(backend.hostname, Number(backend.port || 80))
-    await checkPort('127.0.0.1', webPort)
+    await checkPort(process.env.DEV_WEB_HOST, webPort)
     // 只在手动启动时编译；开发中的源码变动不能打断正在执行的 Agent。
     mkdirSync(resolve('tmp/dev'), { recursive: true })
     await run('go', ['build', '-o', resolve('tmp/dev/cycledock'), './cmd/cycledock'])

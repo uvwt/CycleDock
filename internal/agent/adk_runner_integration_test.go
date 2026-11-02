@@ -74,23 +74,35 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 		w.Header().Set("Content-Type", "application/json")
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "mcp_lab_inventory") {
-				t.Errorf("first turn did not expose inventory tool")
+			if !requestIncludesTool(body, "search_mcp_tools") || !requestIncludesTool(body, "call_mcp_tool") {
+				t.Errorf("first turn did not expose MCP discovery and call tools")
+			}
+			writeModelResponse(t, w, "Searching for container tools.", []modelclient.ToolCall{{
+				ID:   "search-call-1",
+				Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "search_mcp_tools",
+					Arguments: `{"query":"container inventory"}`,
+				},
+			}})
+		case 2:
+			if !strings.Contains(string(rawMessages), "lab:inventory") {
+				t.Errorf("search result missing lab:inventory tool: %s", rawMessages)
 			}
 			writeModelResponse(t, w, "I will inspect the inventory.", []modelclient.ToolCall{{
 				ID:   "inventory-call-1",
 				Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "mcp_lab_inventory",
-					Arguments: "{}",
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:inventory","arguments":{}}`,
 				},
 			}})
-		case 2:
+		case 3:
 			if !hasInventoryEvidence {
 				t.Errorf("tool response missing from first turn follow-up request: %s", rawMessages)
 			}
 			writeModelResponse(t, w, "The nginx container uses nginx:1.25.", nil)
-		case 3:
+		case 4:
 			if !hasInventoryEvidence {
 				t.Errorf("second turn did not receive prior tool response: %s", rawMessages)
 			} else {
@@ -299,12 +311,15 @@ func TestADKRunnerExternalizesLargeToolResultAndReadsArtifactWithoutRepeatingMCP
 
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "mcp_lab_large_inventory") {
-				t.Errorf("large MCP tool missing")
+			if !requestIncludesTool(body, "call_mcp_tool") {
+				t.Errorf("call_mcp_tool missing")
 			}
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID: "large-call-1", Type: "function",
-				Function: modelclient.ToolFunction{Name: "mcp_lab_large_inventory", Arguments: "{}"},
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:large_inventory","arguments":{}}`,
+				},
 			}})
 		case 2:
 			artifactRef, artifactVersion = extractArtifactReference(body.Messages)

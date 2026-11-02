@@ -101,25 +101,42 @@ function CardPageContent() {
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
 
+  // 监听屏幕断点（<1024px 为移动/平板端，对应 Tailwind lg 断点）
+  // 用于严格控制 Radix Dialog/Sheet 等 Portal 浮层组件的挂载，防止桌面端同时渲染出 body 浮层
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(max-width: 1023px)").matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    media.addEventListener("change", handler);
+    return () => media.removeEventListener("change", handler);
+  }, []);
+
   // 手机端滑动手势：右滑呼出左侧导航/卡片抽屉，左滑呼出右侧任务详情
   const handleSwipeRight = useCallback(() => {
     // 仅在移动端屏幕（<1024px，对应 tailwind lg 断点）触发
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (!isMobile) return;
     if (infoOpen) {
       setInfoOpen(false);
     } else {
       setContextSidebarOpen(true);
     }
-  }, [infoOpen]);
+  }, [infoOpen, isMobile]);
 
   const handleSwipeLeft = useCallback(() => {
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (!isMobile) return;
     if (contextSidebarOpen) {
       setContextSidebarOpen(false);
     } else {
       setInfoOpen(true);
     }
-  }, [contextSidebarOpen]);
+  }, [contextSidebarOpen, isMobile]);
 
   const containerRef = useSwipeGesture<HTMLElement>({
     onSwipeRight: handleSwipeRight,
@@ -571,25 +588,28 @@ function CardPageContent() {
             </div>
           </div>
 
-          {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
-          <div className="lg:hidden">
-            <Sheet
-              open={infoOpen}
-              onOpenChange={setInfoOpen}
-              side="right"
-              title={t("任务详情")}
-            >
-              <CardHeaderInfoCard
-                card={card}
-                detail={detail.data}
-                projectCards={projectCards.data || []}
-                task={stream.live?.task}
-                variant="sheet"
-                onSync={sync}
-                onClose={() => setInfoOpen(false)}
-              />
-            </Sheet>
-          </div>
+          {/* 移动/平板端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭）。
+              注意：Radix UI 的 SheetContent 基于 Dialog.Portal 直接挂载到 document.body 根节点，
+              纯 CSS 类名 lg:hidden 无法阻止 Portal 渲染，必须在 React 逻辑层由 isMobile 控制挂载，
+              避免桌面端（>=1024px）展开详情时同时出现桌面嵌入卡片与全屏抽屉两个任务详情浮层。 */}
+          {isMobile && (
+            <div className="lg:hidden">
+              <Sheet
+                open={infoOpen}
+                onOpenChange={setInfoOpen}
+                side="right"
+              >
+                <CardHeaderInfoCard
+                  card={card}
+                  detail={detail.data}
+                  projectCards={projectCards.data || []}
+                  task={stream.live?.task}
+                  variant="sheet"
+                  onSync={sync}
+                />
+              </Sheet>
+            </div>
+          )}
 
           {/* 平板端呼出侧边栏悬浮在左上角 */}
           <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
@@ -712,7 +732,7 @@ function CardPageContent() {
             </div>
 
             {/* 桌面端：右上角嵌入圆角详情卡片（非全高侧边栏），展开时左侧聊天与输入框自动左移让位 */}
-            {infoOpen && (
+            {!isMobile && infoOpen && (
               <div className="hidden lg:block shrink-0 pt-14 pr-4 pb-4">
                 <CardHeaderInfoCard
                   card={card}
@@ -720,6 +740,7 @@ function CardPageContent() {
                   projectCards={projectCards.data || []}
                   task={stream.live?.task}
                   onSync={sync}
+                  onClose={() => setInfoOpen(false)}
                 />
               </div>
             )}
@@ -727,7 +748,7 @@ function CardPageContent() {
         </section>
       </div>
 
-      {contextSidebar && (
+      {isMobile && contextSidebar && (
         <Sheet
           open={contextSidebarOpen}
           onOpenChange={setContextSidebarOpen}

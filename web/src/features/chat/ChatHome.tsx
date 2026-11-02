@@ -137,7 +137,7 @@ export default function ChatHome() {
             <MessageSquareText className="mx-auto size-9 text-placeholder" />
             <h1 className="mt-4 text-xl font-semibold">{t("还没有项目")}</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {t("请先在工作区中创建一个项目。")}
+              {t("请先创建一个项目。")}
             </p>
             <Link
               className="mt-5 inline-block text-sm font-medium text-sky-700"

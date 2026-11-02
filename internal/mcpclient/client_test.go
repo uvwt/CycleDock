@@ -166,3 +166,89 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
 }
+
+func TestToolIDFormatAndParse(t *testing.T) {
+	id := FormatToolID("github", "create_issue")
+	if id != "github:create_issue" {
+		t.Fatalf("expected github:create_issue, got %s", id)
+	}
+
+	server, remote, ok := ParseToolID("github:create_issue")
+	if !ok || server != "github" || remote != "create_issue" {
+		t.Fatalf("colon parse failed: %s %s %v", server, remote, ok)
+	}
+
+	server, remote, ok = ParseToolID("github/create_issue")
+	if !ok || server != "github" || remote != "create_issue" {
+		t.Fatalf("slash parse failed: %s %s %v", server, remote, ok)
+	}
+
+	if _, _, ok := ParseToolID("invalid"); ok {
+		t.Fatal("expected failure for id without separator")
+	}
+}
+
+func TestSessionSetExternalToolsAndRefresh(t *testing.T) {
+	var toolCount atomic.Int32
+	toolCount.Store(1)
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name: "dynamic-server", Version: "1.0.0",
+	}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "tool_1", Description: "First tool"},
+		func(ctx context.Context, request *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, map[string]any, error) {
+			return nil, map[string]any{"ok": true}, nil
+		},
+	)
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		if toolCount.Load() == 2 {
+			// Add a second tool dynamically
+			mcp.AddTool(server, &mcp.Tool{Name: "tool_2", Description: "Second tool"},
+				func(ctx context.Context, request *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, map[string]any, error) {
+					return nil, map[string]any{"ok": true}, nil
+				},
+			)
+		}
+		return server
+	}, nil))
+	defer httpServer.Close()
+
+	set, err := Connect(context.Background(), []Connection{{
+		Name: "ext", URL: httpServer.URL, Timeout: 2 * time.Second,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+
+	externalTools := set.ExternalTools()
+	if len(externalTools) != 1 || externalTools[0].RemoteName != "tool_1" {
+		t.Fatalf("expected 1 external tool, got %+v", externalTools)
+	}
+
+	tool, found := set.GetExternalTool("ext", "tool_1")
+	if !found || tool.ToolID() != "ext:tool_1" {
+		t.Fatalf("GetExternalTool failed: %+v", tool)
+	}
+
+	tool, found = set.GetExternalToolByID("ext/tool_1")
+	if !found || tool.RemoteName != "tool_1" {
+		t.Fatalf("GetExternalToolByID with slash failed: %+v", tool)
+	}
+
+	// Dynamic tool addition and refresh
+	toolCount.Store(2)
+	if err := set.RefreshServer(context.Background(), "ext"); err != nil {
+		t.Fatalf("RefreshServer failed: %v", err)
+	}
+
+	externalTools = set.ExternalTools()
+	if len(externalTools) != 2 {
+		t.Fatalf("expected 2 tools after refresh, got %d", len(externalTools))
+	}
+
+	tool, found = set.GetExternalTool("ext", "tool_2")
+	if !found || tool.ToolID() != "ext:tool_2" {
+		t.Fatalf("GetExternalTool for tool_2 failed: %+v", tool)
+	}
+}

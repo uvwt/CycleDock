@@ -104,7 +104,33 @@ large MCP tool result (> 12k chars)
 
 Artifact 使用 ADK artifact.Service 兼容的 versioned PostgreSQL 实现，scope 固定由当前 Workspace/Card Session identity 推导；Agent 不能通过参数切换到其他 Card。MIME、metadata、version 与 canonical URI 一起持久化。
 
-## 8. Turn Queue
+## 8. 外部 MCP 工具按需发现与调用
+
+为了避免模型启动时一次性注入全部第三方 MCP 工具导致 Context 爆炸与模型幻觉，CycleDock 对普通外部 MCP 采用按需检索与调用机制，最终不保留外部工具逐个直接暴露的平行入口。
+
+### 8.1 两个核心入口
+
+1. **`search_mcp_tools`**：
+   - 支持自然语言任务描述、可选连接名过滤（`connection_name`）与精确 `tool_id` 查询。
+   - 采用简单、可解释的内存分词评分排序，不依赖向量数据库或模型二次调用。
+   - 返回少量候选工具（默认 5，上限 15）的稳定 `tool_id`（格式 `<connection_name>:<tool_name>`）、连接名称、工具名称、描述与完整参数 `input_schema`。
+2. **`call_mcp_tool`**：
+   - 接收 `tool_id` 与 `arguments`。
+   - **执行前校验**：严格依据工具实际 `input_schema` 进行 JSON Schema 校验；在认证上下文（当前 Attempt 的 Workspace）下校验连接是否存在且处于启用状态。
+   - **错误恢复**：参数错误、连接停用或工具不存在时，立即返回包含 `input_schema` 的可操作错误，引导模型修正参数或重新搜索，不静默改写参数、不盲目重试有副作用的调用。
+   - **证据留存**：执行结果经结构化脱敏后进入 Session Event 链路，超过 12k 字符外置为 Artifact；FunctionCall 与 FunctionResponse 完整保留实际连接与工具标识。
+
+### 8.2 跨 Turn 复用机制
+
+在 Session-first 架构下，同一 Card Session 前序轮次或搜索结果中获取的工具 Schema 会保留在持久会话上下文中。后续轮次如果需要再次调用同一工具，Agent 可直接调用 `call_mcp_tool`，无需重复发起搜索。
+
+### 8.3 边界与限制
+
+- NexusDock 第一方设备操作与记忆工具（`exec_command`、`recall_search` 等）继续作为 Native Tools 直接挂载，不走外部按需发现。
+- CycleDock 内置系统工具（`reply_message`、`cycledock_*`）保持原有直接挂载调用方式。
+- 外部 MCP 工具目录支持连接级与全局刷新，在服务端动态增删工具或本地工具缺失时按需重查，避免使用无限期过期的定义。
+
+## 9. Turn Queue
 
 排队 Turn 不能提前送入 ADK Session。
 

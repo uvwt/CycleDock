@@ -72,7 +72,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_generate_work",
-				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards.",
+				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) so the UI displays an interactive card widget with direct navigation.",
 				Parameters: object(map[string]any{
 					"kind":                   map[string]any{"type": "string", "enum": []string{"todo", "ongoing"}},
 					"title":                  stringField("Concise generated work title."),
@@ -159,6 +159,38 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 						"description": "Maximum number of bubbles or events to return (1-200). Defaults to 50.",
 					},
 				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "search_mcp_tools",
+				Description: "Search available external MCP tools by task description, keyword, or exact tool ID. Returns matching tools with their stable tool_id, connection name, tool name, description, and full input_schema. Call this before call_mcp_tool when you need external third-party tools not already in your context.",
+				Parameters: object(map[string]any{
+					"query":           stringField("Natural language query describing the desired capability, keyword, or task description."),
+					"connection_name": stringField("Optional filter to search tools only from a specific MCP connection."),
+					"tool_id":         stringField("Optional exact tool ID (format '<connection_name>:<tool_name>') to retrieve its schema."),
+					"limit": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     15,
+						"description": "Maximum number of matched tools to return (default 5, max 15).",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "call_mcp_tool",
+				Description: "Call an external MCP tool by its stable tool_id (format: '<connection_name>:<tool_name>') with arguments matching its input_schema. If you already have the tool schema from earlier in this Card Session, call this directly without searching again. Parameter errors, disabled connections, or schema mismatches return actionable errors to guide fixing parameters or re-searching.",
+				Parameters: object(map[string]any{
+					"tool_id": stringField("The stable tool_id returned by search_mcp_tools (format: '<connection_name>:<tool_name>')."),
+					"arguments": map[string]any{
+						"type":        "object",
+						"description": "Arguments to pass to the MCP tool, matching its input_schema.",
+					},
+				}, "tool_id"),
 			},
 		},
 	}

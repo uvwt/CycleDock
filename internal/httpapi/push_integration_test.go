@@ -20,7 +20,7 @@ import (
 
 type recordedPush struct {
 	endpoint string
-	payload []byte
+	payload  []byte
 }
 
 type recordingSender struct {
