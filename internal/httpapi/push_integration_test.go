@@ -289,7 +289,8 @@ func TestSendCardPushTruncatesLongPreviewAndIsolatesPartialFailures(t *testing.T
 		{Endpoint: badEndpoint, P256dh: "k1", AuthSecret: "a1"},
 		{Endpoint: goodEndpoint, P256dh: "k2", AuthSecret: "a2"},
 	}
-	if err := api.sendCardPush(context.Background(), uuid.New(), update, subs); err != nil {
+	workspaceID := uuid.New()
+	if err := api.sendCardPush(context.Background(), workspaceID, update, subs); err != nil {
 		t.Fatalf("partial success should advance snapshot instead of retrying forever: %v", err)
 	}
 	if len(sender.sent) != 1 || sender.sent[0].endpoint != goodEndpoint {
@@ -304,6 +305,10 @@ func TestSendCardPushTruncatesLongPreviewAndIsolatesPartialFailures(t *testing.T
 	}
 	if utf8.RuneCountInString(decoded.Body) != maxPushBodyRunes || !strings.HasSuffix(decoded.Body, "…") {
 		t.Fatalf("body not truncated: len=%d", utf8.RuneCountInString(decoded.Body))
+	}
+	expectedTag := "card:" + workspaceID.String() + ":" + update.ID
+	if decoded.Tag != expectedTag {
+		t.Fatalf("tag = %q, want %q", decoded.Tag, expectedTag)
 	}
 
 	// 全部有效订阅都投递失败时仍返回错误，以便下一轮重试。

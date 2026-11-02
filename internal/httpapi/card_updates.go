@@ -42,6 +42,11 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
    FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
      AND event_type = 'message'
      AND (message->>'preview' IS DISTINCT FROM 'true')
+     AND (
+       (message->>'end_turn' = 'true')
+       OR (message->>'type' = 'choice')
+       OR (a.status IN ('completed', 'waiting_human', 'failed'))
+     )
    ORDER BY sequence DESC LIMIT 1
  ) m ON true
  LEFT JOIN LATERAL (
