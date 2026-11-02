@@ -1079,6 +1079,95 @@ export function ModelsSettings() {
       </Section>
 
       <Section
+        title="默认模型分配"
+        description="针对看板及不同卡片场景设置默认模型。若卡片单轮未手动选定模型，将优先匹配此处设定的场景默认或看板默认模型。"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Field
+            label="看板默认模型"
+            hint="未指定场景或未设置特定场景默认模型时的兜底模型。"
+          >
+            <Select
+              value={draft.default_model_route_id ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  default_model_route_id: e.target.value || undefined,
+                })
+              }
+            >
+              <option value="">跟随路由首位 (自动默认)</option>
+              {draft.routes
+                .filter((r) => r.enabled && r.id)
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.model || "未命名模型"} ({names[r.provider_type] || r.provider_type})
+                  </option>
+                ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="讨论默认模型"
+            hint="讨论卡片 (Discussion) 进行对话沟通与构思方案时的默认优先模型。"
+          >
+            <Select
+              value={draft.discussion_model_route_id ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  discussion_model_route_id: e.target.value || undefined,
+                })
+              }
+            >
+              <option value="">跟随看板默认</option>
+              {draft.routes
+                .filter((r) => r.enabled && r.id)
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.model || "未命名模型"} ({names[r.provider_type] || r.provider_type})
+                  </option>
+                ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="定时任务默认模型"
+            hint="定时任务与周期监控卡片 (Ongoing) 执行任务时的默认优先模型。"
+          >
+            <Select
+              value={draft.plan_model_route_id ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  plan_model_route_id: e.target.value || undefined,
+                })
+              }
+            >
+              <option value="">跟随看板默认</option>
+              {draft.routes
+                .filter((r) => r.enabled && r.id)
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.model || "未命名模型"} ({names[r.provider_type] || r.provider_type})
+                  </option>
+                ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            variant="primary"
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+          >
+            保存默认模型设置
+          </Button>
+        </div>
+      </Section>
+
+      <Section
         title="全局指令"
         description="在所有项目和对话中都会默认生效。适合设置通用的沟通习惯、回答偏好或开发规范。"
       >

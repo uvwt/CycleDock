@@ -82,7 +82,7 @@ export function TaskDetailsPanel({
 
       {card.kind === "ongoing" && (
         <>
-          <Section title="计划">
+          <Section title="定时任务">
             <div className="flex items-center gap-2 text-sm text-secondary-foreground">
               <span>健康状态：</span>
               <OngoingHealthBadge health={detail.health} />

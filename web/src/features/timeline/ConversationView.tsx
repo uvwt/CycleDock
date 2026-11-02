@@ -874,7 +874,7 @@ export function ConversationView({
                           {cardKind === "todo"
                             ? t("待办")
                             : cardKind === "ongoing"
-                              ? t("计划")
+                              ? t("定时任务")
                               : t("讨论")}
                         </span>
                         {card.kind === "todo" && card.todo_state && (

@@ -2,6 +2,7 @@ import { ChatInput, ChatReplyBar } from "../../shared/ui/chat";
 import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QuotedMessage } from "../timeline/ConversationView";
+import { ModelMenu } from "../models/ModelMenu";
 
 export function ConversationComposer({
   comment,
@@ -69,6 +70,7 @@ export function ConversationComposer({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
+          <ModelMenu />
           {!streamConnected && (
             <span title={streamError} className="mr-1 text-[11px] text-faint">
               {t("正在连接…")}

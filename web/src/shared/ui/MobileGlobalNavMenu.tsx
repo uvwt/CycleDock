@@ -38,7 +38,7 @@ export function MobileGlobalNavMenu() {
     },
     {
       to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
-      label: t("计划"),
+      label: t("定时任务"),
       icon: CalendarClock,
     },
     {

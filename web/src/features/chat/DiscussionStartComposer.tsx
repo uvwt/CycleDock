@@ -15,6 +15,7 @@ const STORAGE_KEY = "cycledock.new-discussion.drafts.v2";
 type SavedDraft = {
   content: string;
   deviceTarget?: DeviceTarget | null;
+  preferredModelRouteID?: string;
   pendingCardID?: string;
   idempotencyKey?: string;
 };
@@ -45,8 +46,12 @@ function writeDraft(projectID: string, draft?: SavedDraft) {
   }
 }
 
+import { ModelMenu } from "../models/ModelMenu";
+import { useModelSelection } from "../models/model-selection";
+
 export function DiscussionStartComposer({ projectID }: { projectID: string }) {
   const { target } = useDeviceSelection();
+  const { selectedRouteId } = useModelSelection();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const initial = readDraft(projectID);
@@ -68,6 +73,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
       "enqueue",
       draft.idempotencyKey,
       draft.deviceTarget,
+      draft.preferredModelRouteID,
     );
     writeDraft(projectID);
     setPending(null);
@@ -80,14 +86,16 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     const value = content.trim();
     if (!value || sending) return;
     setSending(true);
-    // 发起发送时固定设备选择；创建 Card 的网络等待期间切换设备不改变这条消息。
+    // 发起发送时固定设备选择与模型选择；创建 Card 的网络等待期间切换不改变这条消息。
     const deviceTarget = target;
+    const preferredModelRouteID = selectedRouteId || undefined;
     try {
       const card = await api.createDiscussion(projectID);
       await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       const draft: SavedDraft = {
         content: value,
         deviceTarget,
+        preferredModelRouteID,
         pendingCardID: card.id,
         idempotencyKey: safeRandomUUID(),
       };
@@ -143,6 +151,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5 pr-0.5 pb-1">
+        <ModelMenu />
         {pending?.pendingCardID && (
           <button
             type="button"

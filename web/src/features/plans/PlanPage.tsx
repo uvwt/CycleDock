@@ -92,7 +92,7 @@ export default function PlanPage() {
     )
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   const filters = [
-    { id: "all", label: t("全部计划") },
+    { id: "all", label: t("全部定时任务") },
     { id: "active", label: t("运行中") },
     { id: "paused", label: t("已暂停") },
     { id: "archived", label: t("已归档") },
@@ -103,10 +103,10 @@ export default function PlanPage() {
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
-            {t("计划")}
+            {t("定时任务")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("管理长期工作，查看执行结果与自动执行日程。")}
+            {t("管理定时任务与长期工作，查看执行结果与自动执行日程。")}
           </p>
         </div>
         <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -172,7 +172,7 @@ export default function PlanPage() {
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center justify-between gap-2">
                     <span className="truncate text-sm font-semibold text-heading">
-                      {card.title || t("未命名计划")}
+                      {card.title || t("未命名定时任务")}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <OngoingHealthBadge health={card.health} size="xs" />
@@ -229,10 +229,10 @@ export default function PlanPage() {
         <div className="py-20 text-center">
           <CalendarClock className="mx-auto size-9 text-placeholder" />
           <p className="mt-4 text-sm font-medium text-foreground">
-            {view === "all" ? t("这个项目还没有计划") : t("这个筛选下没有计划")}
+            {view === "all" ? t("这个项目还没有定时任务") : t("这个筛选下没有定时任务")}
           </p>
           <p className="mt-1 text-[13px] text-faint">
-            {t("从讨论中生成长期工作，在详情中配置自动执行时间。")}
+            {t("从讨论中生成长期工作，在详情中配置周期规则。")}
           </p>
         </div>
       )}
