@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +93,114 @@ func (s *PostgresService) SearchHistory(
 		return nil, fmt.Errorf("search session history: %w", err)
 	}
 	return hits, nil
+}
+
+// SessionRound represents one inspected round or event in full mode.
+type SessionRound struct {
+	EventID      string           `json:"event_id"`
+	InvocationID string           `json:"invocation_id,omitempty"`
+	OccurredAt   time.Time        `json:"occurred_at"`
+	Author       string           `json:"author"`
+	Role         string           `json:"role,omitempty"`
+	Text         string           `json:"text,omitempty"`
+	Thinking     string           `json:"thinking,omitempty"`
+	ToolCalls    []map[string]any `json:"tool_calls,omitempty"`
+	ToolResults  []map[string]any `json:"tool_results,omitempty"`
+}
+
+// InspectFullSession loads all events for the card session and converts them into
+// complete rounds including thinking, tool calls, and outputs.
+func (s *PostgresService) InspectFullSession(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	limit int,
+) ([]SessionRound, error) {
+	if s == nil || s.pool == nil {
+		return nil, fmt.Errorf("postgres session service is not initialized")
+	}
+	appName, userID, sessionID := Identity(workspaceID, cardID)
+	if limit <= 0 {
+		limit = 50
+	} else if limit > 200 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, invocation_id, occurred_at, event
+		FROM agent_session_events
+		WHERE app_name=$1 AND user_id=$2 AND session_id=$3
+		ORDER BY occurred_at DESC, sequence DESC
+		LIMIT $4
+	`, appName, userID, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("inspect full session events: %w", err)
+	}
+	defer rows.Close()
+
+	reverse := make([]SessionRound, 0)
+	for rows.Next() {
+		var eventID, invocationID string
+		var occurredAt time.Time
+		var raw []byte
+		if err := rows.Scan(&eventID, &invocationID, &occurredAt, &raw); err != nil {
+			return nil, fmt.Errorf("scan session history: %w", err)
+		}
+		var event session.Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, fmt.Errorf("decode session history event %q: %w", eventID, err)
+		}
+		if event.Actions.Compaction != nil {
+			continue
+		}
+
+		round := SessionRound{
+			EventID:      eventID,
+			InvocationID: invocationID,
+			OccurredAt:   occurredAt.UTC(),
+			Author:       event.Author,
+		}
+		if event.Content != nil {
+			round.Role = event.Content.Role
+			var texts []string
+			var thoughts []string
+			for _, part := range event.Content.Parts {
+				if part == nil {
+					continue
+				}
+				if part.Thought && strings.TrimSpace(part.Text) != "" {
+					thoughts = append(thoughts, part.Text)
+				} else if strings.TrimSpace(part.Text) != "" {
+					texts = append(texts, part.Text)
+				}
+				if part.FunctionCall != nil {
+					round.ToolCalls = append(round.ToolCalls, map[string]any{
+						"id":   part.FunctionCall.ID,
+						"name": part.FunctionCall.Name,
+						"args": part.FunctionCall.Args,
+					})
+				}
+				if part.FunctionResponse != nil {
+					round.ToolResults = append(round.ToolResults, map[string]any{
+						"id":       part.FunctionResponse.ID,
+						"name":     part.FunctionResponse.Name,
+						"response": part.FunctionResponse.Response,
+					})
+				}
+			}
+			if len(texts) > 0 {
+				round.Text = strings.Join(texts, "\n")
+			}
+			if len(thoughts) > 0 {
+				round.Thinking = strings.Join(thoughts, "\n")
+			}
+		}
+		reverse = append(reverse, round)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inspect session events: %w", err)
+	}
+	slices.Reverse(reverse)
+	return reverse, nil
 }
 
 func renderHistoryEvent(event *session.Event) string {
