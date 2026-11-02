@@ -255,8 +255,6 @@ func publicRunError(err error) string {
 		return "Model provider response exceeded the safety limit."
 	case errors.Is(err, errRunawayToolLoop):
 		return "Built-in Agent stopped after 8 consecutive identical tool rounds with unchanged results."
-	case errors.Is(err, errToolBudgetExceeded):
-		return "Built-in Agent reached the 256-round tool budget before completion. Continue in a new turn."
 	case strings.Contains(err.Error(), "environment variable"):
 		return "Built-in Agent secret environment variable is not configured."
 	case errors.Is(err, modelauth.ErrNotConnected), errors.Is(err, modelauth.ErrReauthRequired):

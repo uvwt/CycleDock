@@ -92,16 +92,10 @@ func (m *adkRouteModel) GenerateContent(
 		modelCall := m.modelCalls
 		m.mu.Unlock()
 
-		// 正常长任务和无进展循环分开限制；历史中的新 Turn、不同参数或结果都会打断重复计数。
+		// 依托 repeatedToolLoop 死循环熔断保障长任务顺利推进；历史中的新 Turn、不同参数或结果都会打断重复计数。
 		if repeatedToolLoop(messages) {
 			yield(nil, errRunawayToolLoop)
 			return
-		}
-		if modelCall >= toolBudgetWarningRound {
-			messages = append(messages, modelclient.Message{
-				Role:    "system",
-				Content: fmt.Sprintf("本次执行最多允许 %d 轮工具调用，目前剩余 %d 轮。请停止扩展任务，优先验证已有改动并收尾；明确说明已完成、未完成和验证情况，不要将未完成工作描述为完成。使用 reply_message(end_turn=true) 或最终文本回复结束本轮。", maxRunToolRounds, max(0, maxRunToolRounds-modelCall+1)),
-			})
 		}
 
 		var lastErr error
@@ -147,10 +141,6 @@ func (m *adkRouteModel) GenerateContent(
 				completion, err := m.client.Complete(requestCtx, config, messages, tools)
 				cancel()
 				if stopped {
-					return
-				}
-				if err == nil && len(completion.ToolCalls) > 0 && modelCall > maxRunToolRounds {
-					yield(nil, errToolBudgetExceeded)
 					return
 				}
 				var response *model.LLMResponse

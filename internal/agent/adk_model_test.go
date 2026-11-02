@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -68,7 +67,7 @@ func TestADKRouteModelFallsBackAfterHTTP402(t *testing.T) {
 	}
 }
 
-// 通过真实 HTTP 模型边界验证预算、收尾提示和无进展检测，不依赖修改模型内部计数。
+// 通过真实 HTTP 模型边界验证无进展死循环熔断与长任务正常推进，不人为截断工具调用预算。
 func TestADKRouteModelToolLoopLimits(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -81,8 +80,7 @@ func TestADKRouteModelToolLoopLimits(t *testing.T) {
 		{name: "changing arguments can continue beyond 64 rounds", stableResult: true, finishAt: 71, wantCalls: 71},
 		{name: "polling with changing results can continue beyond 64 rounds", stableArgs: true, finishAt: 71, wantCalls: 71},
 		{name: "unchanged calls and results stop early", stableArgs: true, stableResult: true, wantCalls: 8, wantErr: errRunawayToolLoop},
-		{name: "total budget has a separate failure", wantCalls: 257, wantErr: errToolBudgetExceeded},
-		{name: "final text is allowed after the last tool round", finishAt: 257, wantCalls: 257},
+		{name: "long tasks continue beyond former 256 limit without budget error", finishAt: 260, wantCalls: 260},
 	} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%v", test.name, stream), func(t *testing.T) {
@@ -96,15 +94,6 @@ func TestADKRouteModelToolLoopLimits(t *testing.T) {
 						t.Error(err)
 						http.Error(w, "invalid request", http.StatusBadRequest)
 						return
-					}
-					warned := false
-					for _, message := range request.Messages {
-						if message.Role == "system" && strings.Contains(message.Content, "明确说明已完成、未完成和验证情况") {
-							warned = true
-						}
-					}
-					if warned != (call >= toolBudgetWarningRound) {
-						t.Errorf("call %d: warning=%v", call, warned)
 					}
 					w.Header().Set("Content-Type", "application/json")
 					if call == test.finishAt {
@@ -130,7 +119,7 @@ func TestADKRouteModelToolLoopLimits(t *testing.T) {
 				req := &model.LLMRequest{Contents: []*genai.Content{genai.NewContentFromText("执行任务", genai.RoleUser)}}
 				var runErr error
 				finished := false
-				for round := 0; round <= maxRunToolRounds; round++ {
+				for round := 0; round <= 300; round++ {
 					var content *genai.Content
 					for response, err := range llm.GenerateContent(context.Background(), req, stream) {
 						if err != nil {
