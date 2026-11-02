@@ -245,6 +245,7 @@ const en = {
     "A shared conversation timeline, boards, ongoing work and AI Agents.",
   工作空间权限由服务端维护: "Workspace permissions are enforced by the server",
   "登录 CycleDock": "Sign in to CycleDock",
+  "跨卡片委派": "Delegated",
   继续进入你的工作空间: "Continue to your workspace",
   使用: "Continue with",
   登录: "Sign in",
