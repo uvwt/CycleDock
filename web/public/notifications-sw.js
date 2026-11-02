@@ -10,6 +10,26 @@ const seen = new Map();
 // 在 Edge/Chrome 里会把前台标签报成 hidden 或未聚焦，不能用来决定是否弹通知。
 const viewingByClient = new Map();
 
+// 暂存用户点击通知但尚未被前端消费的跳转意图（应对 iOS PWA 冷启动或重定向丢失）
+let pendingNavigation = null;
+const PENDING_NAVIGATION_TTL_MS = 30_000;
+
+function setPendingNavigation(url) {
+  pendingNavigation = {
+    url,
+    timestamp: Date.now(),
+  };
+}
+
+function consumePendingNavigation() {
+  if (!pendingNavigation) return null;
+  const isFresh =
+    Date.now() - pendingNavigation.timestamp < PENDING_NAVIGATION_TTL_MS;
+  const nav = isFresh ? pendingNavigation.url : null;
+  pendingNavigation = null;
+  return nav;
+}
+
 function enqueue(update, options = {}) {
   const work = delivery
     .catch((error) => console.error("Card notification failed", error))
@@ -95,6 +115,21 @@ self.addEventListener("message", (event) => {
     });
     return;
   }
+  if (event.data?.type === "CYCLE_CHECK_PENDING_NAVIGATION") {
+    const targetURL = consumePendingNavigation();
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: "CYCLE_PENDING_NAVIGATION",
+        url: targetURL,
+      });
+    } else if (event.source?.postMessage) {
+      event.source.postMessage({
+        type: "CYCLE_PENDING_NAVIGATION",
+        url: targetURL,
+      });
+    }
+    return;
+  }
   if (event.data?.type !== "card.updated") return;
   event.waitUntil(enqueue(event.data));
 });
@@ -124,17 +159,58 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(
     (async () => {
-      const url = new URL(event.notification.data.url, self.location.origin);
-      if (url.origin !== self.location.origin) return;
+      const rawTarget = event.notification.data?.url;
+      const url = resolveTargetURL(rawTarget, false);
+      if (!url || url.origin !== self.location.origin) return;
+
+      // 记录待消费导航意图，兜底 iOS PWA 冷启动或路由丢失
+      setPendingNavigation(url.href);
+
       const windows = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
-      const existing = windows.find(
+
+      // 1. 若已有完全匹配目标路径的窗口，直接聚焦
+      const exactMatch = windows.find(
         (client) => new URL(client.url).pathname === url.pathname,
       );
-      if (existing) return existing.focus();
-      await self.clients.openWindow(url.href);
+      if (exactMatch) {
+        consumePendingNavigation();
+        return exactMatch.focus();
+      }
+
+      // 2. 若存在同源窗口（但停留在其他路径），优先聚焦并通过 client.navigate 或 postMessage 通知前端 SPA 切路由
+      const anyWindow = windows.find((client) => {
+        try {
+          return new URL(client.url).origin === self.location.origin;
+        } catch {
+          return false;
+        }
+      });
+      if (anyWindow) {
+        consumePendingNavigation();
+        await anyWindow.focus();
+        if ("navigate" in anyWindow && typeof anyWindow.navigate === "function") {
+          try {
+            await anyWindow.navigate(url.href);
+            return;
+          } catch {
+            // navigate 失败时回退 postMessage
+          }
+        }
+        anyWindow.postMessage({
+          type: "CYCLE_NAVIGATE",
+          url: url.href,
+        });
+        return;
+      }
+
+      // 3. 没有任何现存窗口（冷启动）：尝试通过 openWindow 打开
+      // 无论 openWindow 是否被系统重定向至 start_url，页面启动后都会通过握手消费 pendingNavigation
+      if (self.clients.openWindow) {
+        await self.clients.openWindow(url.href);
+      }
     })(),
   );
 });

@@ -30,7 +30,7 @@ function worker() {
       },
     },
   };
-  vm.runInNewContext(source, { self, URL, console: { error() {} } });
+  vm.runInNewContext(source, { self, URL, console: { error() {} }, Date });
   const update = {
     type: "card.updated",
     workspaceID: "workspace",
@@ -84,6 +84,13 @@ function worker() {
         },
       });
       await work;
+    },
+    async sendPendingCheck(port) {
+      handlers.get("message")({
+        data: { type: "CYCLE_CHECK_PENDING_NAVIGATION" },
+        ports: port ? [port] : [],
+        waitUntil() {},
+      });
     },
   };
 }
@@ -203,6 +210,77 @@ test("通知点击打开对应卡片，已有页面则聚焦", async () => {
   await w.click({ ...w.shown[0], close() {} });
   assert.equal(focused, true);
   assert.equal(w.opened.length, 1);
+});
+
+test("通知点击已有同源其他页面时，聚焦并触发导航通知", async () => {
+  const w = worker();
+  await w.send();
+  let focused = false;
+  const messages = [];
+  let navigatedTo = null;
+  w.windows.push({
+    url: "https://cycledock.test/chat",
+    focus: async () => {
+      focused = true;
+    },
+    navigate: async (url) => {
+      navigatedTo = url;
+    },
+    postMessage: (msg) => {
+      messages.push(msg);
+    },
+  });
+  await w.click({ ...w.shown[0], close() {} });
+  assert.equal(focused, true);
+  assert.equal(navigatedTo, "https://cycledock.test/cards/project/card");
+  assert.equal(w.opened.length, 0);
+
+  // 若 client.navigate 失败，降级通过 postMessage 传递 CYCLE_NAVIGATE
+  const w2 = worker();
+  await w2.send();
+  let focused2 = false;
+  const messages2 = [];
+  w2.windows.push({
+    url: "https://cycledock.test/chat",
+    focus: async () => {
+      focused2 = true;
+    },
+    navigate: async () => {
+      throw new Error("navigate not supported");
+    },
+    postMessage: (msg) => {
+      messages2.push(msg);
+    },
+  });
+  await w2.click({ ...w2.shown[0], close() {} });
+  assert.equal(focused2, true);
+  assert.equal(messages2.length, 1);
+  assert.equal(messages2[0].type, "CYCLE_NAVIGATE");
+  assert.equal(messages2[0].url, "https://cycledock.test/cards/project/card");
+});
+
+test("冷启动下通知点击暂存待消费意图，前端握手即可获取目标卡片并消费", async () => {
+  const w = worker();
+  await w.send();
+  await w.click({ ...w.shown[0], close() {} });
+  assert.deepEqual(w.opened, ["https://cycledock.test/cards/project/card"]);
+
+  // 前端握手拉取未消费意图
+  const responses = [];
+  const fakePort = {
+    postMessage: (msg) => responses.push(msg),
+  };
+  await w.sendPendingCheck(fakePort);
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].type, "CYCLE_PENDING_NAVIGATION");
+  assert.equal(responses[0].url, "https://cycledock.test/cards/project/card");
+
+  // 第二次拉取应已清空（消费过）
+  responses.length = 0;
+  await w.sendPendingCheck(fakePort);
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].type, "CYCLE_PENDING_NAVIGATION");
+  assert.equal(responses[0].url, null);
 });
 
 test("拒绝外部地址", async () => {
