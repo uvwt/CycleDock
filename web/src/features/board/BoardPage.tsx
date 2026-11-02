@@ -118,7 +118,7 @@ function Lane({
           {cards.length}
         </span>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto pr-1">
+      <div className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto pr-1 pb-24 lg:pb-2">
         {cards.map((c) => (
           <TaskCard key={c.id} card={c} onOpen={onOpen} />
         ))}
@@ -242,6 +242,23 @@ export default function BoardPage() {
 
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScrollRef = useRef(false);
+
+  // 初始化或当激活 Tab 变化时自动对齐移动端滑动容器
+  useEffect(() => {
+    if (isDesktop) return;
+    const container = mobileContainerRef.current;
+    if (!container) return;
+    const targetIndex = states.indexOf(activeTab);
+    if (targetIndex >= 0) {
+      const targetScrollLeft = targetIndex * container.clientWidth;
+      if (Math.abs(container.scrollLeft - targetScrollLeft) > 2) {
+        container.scrollTo({
+          left: targetScrollLeft,
+          behavior: isProgrammaticScrollRef.current ? "smooth" : "auto",
+        });
+      }
+    }
+  }, [activeTab, isDesktop]);
 
   function handleTabSelect(state: TodoState) {
     setSelectedTab(state);
@@ -437,7 +454,7 @@ export default function BoardPage() {
                   </div>
                 </div>
 
-                {/* 移动端左右滑动单列卡片平铺容器 */}
+                {/* 移动端左右滑动单列卡片平铺容器 */}{/* w-full snap-center 配合 px-0.5，在右侧留足间隙与边界 */}
                 <div
                   ref={mobileContainerRef}
                   onScroll={handleMobileScroll}
@@ -446,7 +463,7 @@ export default function BoardPage() {
                   {states.map((state) => (
                     <div
                       key={state}
-                      className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5"
+                      className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5 pb-2"
                     >
                       <Lane
                         state={state}
