@@ -48,7 +48,7 @@ export function ConversationSkeleton({
       </div>
 
       {/* 消息时间线灰白气泡流 */}
-      <div className="scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-4 pt-[calc(env(safe-area-inset-top,0px)+4.5rem)] pb-32 sm:px-8 sm:pt-20 sm:pb-32 space-y-7">
+      <div className="scrollbar-thin relative flex min-h-0 w-full flex-1 flex-col overflow-y-auto px-4 pt-[calc(env(safe-area-inset-top,0px)+4.5rem)] pb-6 sm:px-8 sm:pt-20 sm:pb-32 space-y-7">
         <div className="mx-auto w-full max-w-3xl space-y-7">
           {/* 用户发言气泡（右对齐，纯灰白块） */}
           <div className="ml-auto w-52 max-w-[70%]">
@@ -84,7 +84,7 @@ export function ConversationSkeleton({
       {/* 底部输入框停靠栏占位（单个灰白容器） */}
       <div
         data-composer-dock
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center border-t border-line/60 bg-surface/98 backdrop-blur-sm px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] sm:border-t-0 sm:bg-transparent sm:px-6 sm:pb-3"
+        className="pointer-events-none z-30 shrink-0 w-full flex justify-center border-t border-line/60 bg-surface px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-transparent sm:px-6 sm:pb-3"
       >
         <Skeleton className="h-14 w-full max-w-3xl rounded-2xl" />
       </div>

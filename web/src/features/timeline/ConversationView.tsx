@@ -1275,7 +1275,7 @@ export function ConversationView({
       <div
         style={
           bottomInsetPx !== undefined
-            ? { bottom: `${Math.max(88, bottomInsetPx + 8)}px` }
+            ? { bottom: `${bottomInsetPx <= 24 ? 16 : Math.max(88, bottomInsetPx + 8)}px` }
             : undefined
         }
         className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center transition-all duration-200 ${

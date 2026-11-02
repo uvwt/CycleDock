@@ -778,7 +778,7 @@ function CardPageContent({
                 }
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={combinedAttempts}
-                bottomInsetPx={composerDockHeight}
+                bottomInsetPx={isMobile ? 16 : composerDockHeight}
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
@@ -794,7 +794,7 @@ function CardPageContent({
 
               <div
                 data-composer-dock
-                className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end border-t border-line/60 bg-surface/98 backdrop-blur-sm sm:border-t-0 sm:bg-gradient-to-t sm:from-surface sm:via-surface/95 sm:to-transparent sm:pt-6"
+                className="z-30 shrink-0 w-full flex flex-col justify-end border-t border-line/60 bg-surface sm:pointer-events-none sm:absolute sm:inset-x-0 sm:bottom-0 sm:border-t-0 sm:bg-gradient-to-t sm:from-surface sm:via-surface/95 sm:to-transparent sm:pt-6"
               >
                 <div
                   ref={composerDockRef}
