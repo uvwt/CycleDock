@@ -5,6 +5,35 @@ import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "../../app/project-context";
+import { ChatActionCard } from "../../shared/ui/chat";
+
+function parseCardLink(href?: string): { cardId: string; projectId?: string } | null {
+  if (!href) return null;
+  // Match cycledock://card/:cardId or cycledock://card/:projectId/:cardId
+  if (href.startsWith("cycledock://card/")) {
+    const parts = href.replace("cycledock://card/", "").split("/").filter(Boolean);
+    if (parts.length === 1) {
+      return { cardId: parts[0] };
+    }
+    if (parts.length >= 2) {
+      return { projectId: parts[0], cardId: parts[1] };
+    }
+  }
+
+  // Match [card:UUID] or card:UUID
+  if (href.startsWith("card:")) {
+    const cardId = href.replace("card:", "").trim();
+    if (cardId) return { cardId };
+  }
+
+  // Match /cards/:projectId/:cardId or /chat/:projectId/:cardId
+  const match = href.match(/^\/(?:cards|chat)\/([^/]+)\/([a-zA-Z0-9_-]+)/);
+  if (match) {
+    return { projectId: match[1], cardId: match[2] };
+  }
+
+  return null;
+}
 
 export function RichText({
   content,
@@ -83,6 +112,18 @@ export function RichText({
             AnchorHTMLAttributes<HTMLAnchorElement>,
             HTMLAnchorElement
           >) => {
+            const cardRef = parseCardLink(href);
+            if (cardRef) {
+              const fallbackTitle = typeof children === "string" ? children : undefined;
+              return (
+                <ChatActionCard
+                  cardId={cardRef.cardId}
+                  projectId={cardRef.projectId}
+                  fallbackTitle={fallbackTitle}
+                />
+              );
+            }
+
             const isExternal =
               Boolean(href) &&
               (href!.startsWith("http://") || href!.startsWith("https://")) &&
@@ -137,3 +178,4 @@ export function RichText({
     </div>
   );
 }
+
