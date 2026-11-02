@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useDrag } from "@use-gesture/react";
 import { cn } from "../lib/utils";
 
 interface SwipeActionGroupContextValue {
@@ -106,17 +107,11 @@ export function SwipeableRow({
   const [isOpen, setIsOpen] = useState(false);
   const [isSwiping, setIsSwiping] = useState(false);
 
-  // 手势跟踪 Ref，避免 re-render 延迟
-  const touchState = useRef({
-    startX: 0,
-    startY: 0,
-    currentX: 0,
-    currentY: 0,
-    axisLocked: null as "horizontal" | "vertical" | null,
-    initialOffset: 0,
-    maxActionsWidth: 0,
-    hasMoved: false,
-  });
+  // 手势跟踪 Ref 保证最新值
+  const offsetRef = useRef(0);
+  offsetRef.current = offset;
+  const isOpenRef = useRef(false);
+  isOpenRef.current = isOpen;
 
   const getActionsWidth = useCallback(() => {
     if (actionsRef.current) {
@@ -199,139 +194,106 @@ export function SwipeableRow({
     };
   }, [close, isOpen]);
 
+  // 使用 @use-gesture/react 统一管理手势
+  const bind = useDrag(
+    ({
+      down,
+      movement: [mx],
+      velocity: [vx],
+      direction: [dx],
+      memo,
+    }) => {
+      if (disabled || !actions.length) return;
+
+      const actionsWidth = getActionsWidth();
+
+      if (memo === undefined) {
+        memo = offsetRef.current;
+        setIsSwiping(true);
+      }
+
+      if (down) {
+        let targetOffset = memo + mx;
+
+        // 边界与自然弹性阻尼
+        if (targetOffset > 0) {
+          targetOffset = targetOffset * 0.15;
+        } else if (targetOffset < -actionsWidth) {
+          const overscroll = -actionsWidth - targetOffset;
+          targetOffset = -actionsWidth - overscroll * 0.2;
+        }
+
+        setOffset(targetOffset);
+        return memo;
+      }
+
+      // 手势释放
+      setIsSwiping(false);
+      const currentOffset = offsetRef.current;
+      const wasOpen = isOpenRef.current;
+
+      let shouldOpen = false;
+      const isFlick = vx > 0.35;
+
+      if (!wasOpen) {
+        // 从关闭到开启（向左滑）
+        if (isFlick && dx < 0) {
+          shouldOpen = true;
+        } else if (currentOffset <= -actionsWidth * threshold) {
+          shouldOpen = true;
+        }
+      } else {
+        // 从开启到关闭（向右滑）
+        if (isFlick && dx > 0) {
+          shouldOpen = false;
+        } else if (currentOffset > -actionsWidth * (1 - threshold)) {
+          shouldOpen = false;
+        } else {
+          shouldOpen = true;
+        }
+      }
+
+      if (shouldOpen) {
+        open();
+      } else {
+        close();
+      }
+    },
+    {
+      axis: "x",
+      filterTaps: true,
+      preventScrollAxis: "x",
+      pointer: { touch: true },
+    },
+  );
+
   // 如果无 actions 或被禁用，则退化为普通渲染
   if (!actions.length || disabled) {
     return <div className={cn("relative", className)}>{children}</div>;
   }
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-
-    const touch = e.touches[0];
-    const actionsWidth = getActionsWidth();
-
-    touchState.current = {
-      startX: touch.clientX,
-      startY: touch.clientY,
-      currentX: touch.clientX,
-      currentY: touch.clientY,
-      axisLocked: null,
-      initialOffset: isOpen ? -actionsWidth : 0,
-      maxActionsWidth: actionsWidth,
-      hasMoved: false,
-    };
-
-    setIsSwiping(false);
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - touchState.current.startX;
-    const dy = touch.clientY - touchState.current.startY;
-
-    // 前 6px 严格判定轴向
-    if (touchState.current.axisLocked === null) {
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-      if (absX < 6 && absY < 6) {
-        return;
-      }
-      if (absY >= absX) {
-        // 垂直移动占优，判定为列表滚动，放弃滑动拦截
-        touchState.current.axisLocked = "vertical";
-        return;
-      }
-      // 水平方向占优，锁定水平滑动
-      touchState.current.axisLocked = "horizontal";
-      setIsSwiping(true);
-    }
-
-    if (touchState.current.axisLocked !== "horizontal") {
-      return;
-    }
-
-    // 组织浏览器默认滚动行为
-    touchState.current.hasMoved = true;
-    touchState.current.currentX = touch.clientX;
-    touchState.current.currentY = touch.clientY;
-
-    const maxW = touchState.current.maxActionsWidth;
-    let targetOffset = touchState.current.initialOffset + dx;
-
-    // 边界与阻尼计算
-    if (targetOffset > 0) {
-      // 向右滑（超过左边缘），施加强阻尼
-      targetOffset = targetOffset * 0.2;
-    } else if (targetOffset < -maxW) {
-      // 向左超出操作按钮宽度，施加橡皮筋阻尼
-      const overscroll = -maxW - targetOffset;
-      targetOffset = -maxW - overscroll * 0.25;
-    }
-
-    setOffset(targetOffset);
-  };
-
-  const handleTouchEnd = () => {
-    if (touchState.current.axisLocked !== "horizontal") {
-      touchState.current.axisLocked = null;
-      setIsSwiping(false);
-      return;
-    }
-
-    setIsSwiping(false);
-    const maxW = touchState.current.maxActionsWidth;
-    const currentOffset = offset;
-    const wasOpen = isOpen;
-
-    let shouldOpen = false;
-
-    if (!wasOpen) {
-      // 从关闭状态向左滑：超过 threshold 展开
-      if (currentOffset <= -maxW * threshold) {
-        shouldOpen = true;
-      }
-    } else {
-      // 从展开状态向右滑：只要收拢超过 (1 - threshold)，或者向右移动超过 25px
-      const deltaX =
-        touchState.current.currentX - touchState.current.startX;
-      if (deltaX > 25 || currentOffset > -maxW * (1 - threshold)) {
-        shouldOpen = false;
-      } else {
-        shouldOpen = true;
-      }
-    }
-
-    if (shouldOpen) {
-      open();
-    } else {
-      close();
-    }
-
-    touchState.current.axisLocked = null;
-  };
-
-  const handleTouchCancel = () => {
-    setIsSwiping(false);
-    touchState.current.axisLocked = null;
-    close();
-  };
+  // 关键：底层操作区在未拖拽且未展开时必须严格隐藏，避免任何透明背景穿透
+  const isActionsVisible = isOpen || offset !== 0 || isSwiping;
 
   return (
     <div
       ref={containerRef}
-      className={cn("group/swipe relative overflow-hidden select-none", className)}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onTouchCancel={handleTouchCancel}
+      className={cn(
+        "group/swipe relative overflow-hidden select-none touch-pan-y",
+        className,
+      )}
+      {...bind()}
     >
       {/* 隐藏在下层的快捷操作层 */}
       <div
         ref={actionsRef}
         aria-hidden={!isOpen}
+        style={{
+          visibility: isActionsVisible ? "visible" : "hidden",
+          opacity: isActionsVisible ? 1 : 0,
+        }}
         className={cn(
-          "absolute inset-y-0 right-0 flex items-stretch z-0",
+          "absolute inset-y-0 right-0 flex items-stretch z-0 transition-opacity duration-150",
           isOpen ? "pointer-events-auto" : "pointer-events-none",
         )}
       >
@@ -377,7 +339,9 @@ export function SwipeableRow({
       <div
         style={{
           transform: `translateX(${offset}px)`,
-          transition: isSwiping ? "none" : "transform 0.25s cubic-bezier(0.2, 0.9, 0.3, 1)",
+          transition: isSwiping
+            ? "none"
+            : "transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1)",
         }}
         onClickCapture={(e) => {
           // 如果当前处于展开状态，点击主体应拦截默认行为并收起展开项
@@ -387,10 +351,11 @@ export function SwipeableRow({
             close();
           }
         }}
-        className={cn("relative z-10 w-full bg-inherit", contentClassName)}
+        className={cn("relative z-10 w-full bg-surface", contentClassName)}
       >
         {children}
       </div>
     </div>
   );
 }
+

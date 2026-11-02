@@ -125,7 +125,7 @@ function CardPageContent() {
     onSwipeRight: handleSwipeRight,
     onSwipeLeft: handleSwipeLeft,
     threshold: 45,
-    horizontalRatio: 1.5,
+    horizontalRatio: 1.2,
   });
 
   useEffect(() => {
@@ -453,7 +453,7 @@ function CardPageContent() {
           {/* 手机端固定顶部栏：常驻视口顶部，包含全局导航、抽屉菜单与操作按钮 */}
           <div
             data-mobile-top-surface
-            className={`sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+            className="sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden bg-transparent"
           >
             <div className="flex items-center gap-1.5">
               <MobileGlobalNavMenu />
@@ -565,16 +565,15 @@ function CardPageContent() {
               side="right"
               title={t("任务详情")}
             >
-              <div className="-m-5 p-4">
-                <CardHeaderInfoCard
-                  card={card}
-                  detail={detail.data}
-                  projectCards={projectCards.data || []}
-                  task={stream.live?.task}
-                  onSync={sync}
-                  onClose={() => setInfoOpen(false)}
-                />
-              </div>
+              <CardHeaderInfoCard
+                card={card}
+                detail={detail.data}
+                projectCards={projectCards.data || []}
+                task={stream.live?.task}
+                variant="sheet"
+                onSync={sync}
+                onClose={() => setInfoOpen(false)}
+              />
             </Sheet>
           </div>
 
