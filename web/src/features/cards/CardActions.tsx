@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   Archive,
@@ -26,6 +26,13 @@ import {
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
+import {
+  Sheet as UISheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "../../shared/ui/sheet";
+import { useTranslation } from "react-i18next";
 
 export function CardActions({
   card,
@@ -43,11 +50,23 @@ export function CardActions({
   preserve?: boolean;
   variant?: "inline" | "toolbar";
 }) {
+  const { t } = useTranslation();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 767px)");
+    setIsMobile(media.matches);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    media.addEventListener("change", handler);
+    return () => media.removeEventListener("change", handler);
+  }, []);
 
   const sync = async () => {
     await Promise.all([
@@ -116,99 +135,220 @@ export function CardActions({
     return null;
   }
 
+  const triggerButton =
+    variant === "toolbar" ? (
+      <button
+        type="button"
+        title="更多操作"
+        aria-label="更多操作"
+        onClick={isMobile ? () => setDrawerOpen(true) : undefined}
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+      >
+        <MoreHorizontal className="size-4" />
+      </button>
+    ) : (
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        title="更多操作"
+        aria-label="更多操作"
+        onClick={isMobile ? () => setDrawerOpen(true) : undefined}
+        className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+      >
+        <MoreHorizontal className="size-4" />
+      </Button>
+    );
+
+  const cardKindLabel =
+    card.kind === "discussion"
+      ? t("讨论")
+      : card.kind === "ongoing"
+        ? t("定时任务")
+        : t("任务");
+
   return (
     <>
-      <Menu
-        side={menuSide}
-        align={menuSide === "right" ? "start" : "end"}
-        trigger={
-          variant === "toolbar" ? (
-            <button
-              type="button"
-              title="更多操作"
-              aria-label="更多操作"
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+      {isMobile ? (
+        <>
+          {triggerButton}
+          <UISheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+            <SheetContent
+              side="bottom"
+              className="max-h-[85vh] rounded-t-2xl border-line/70 bg-surface/98 p-0 pb-safe backdrop-blur-md"
             >
-              <MoreHorizontal className="size-4" />
-            </button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              title="更多操作"
-              aria-label="更多操作"
-              className="text-faint hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
-            >
-              <MoreHorizontal className="size-4" />
-            </Button>
-          )
-        }
-      >
-        {taskDetails && card.kind !== "discussion" && (
-          <MenuItem onSelect={() => setDetailsOpen(true)}>
-            <FileText className="size-4" />
-            任务详情
-          </MenuItem>
-        )}
-        {!preserve && (
-          <MenuItem onSelect={openEditor}>
-            <Pencil className="size-4" />
-            编辑信息
-          </MenuItem>
-        )}
+              <div className="mx-auto mt-2.5 h-1.5 w-12 rounded-full bg-muted-foreground/20" />
+              <SheetHeader className="border-b border-line/60 px-4 py-3">
+                <SheetTitle className="text-left text-sm font-medium text-muted-foreground">
+                  {card.title || cardKindLabel}
+                </SheetTitle>
+              </SheetHeader>
+              <div className="flex flex-col gap-1 p-2">
+                {taskDetails && card.kind !== "discussion" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      setDetailsOpen(true);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80"
+                  >
+                    <FileText className="size-4 text-muted-foreground" />
+                    <span>{t("任务详情")}</span>
+                  </button>
+                )}
+                {!preserve && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      openEditor();
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80"
+                  >
+                    <Pencil className="size-4 text-muted-foreground" />
+                    <span>{t("编辑信息")}</span>
+                  </button>
+                )}
 
-        {/* 主讨论始终置顶，不提供切换置顶操作 */}
-        {!preserve && (
-          <MenuItem
-            disabled={togglePin.isPending}
-            onSelect={() => togglePin.mutate(!card.pinned_at)}
-          >
-            {card.pinned_at ? (
-              <>
-                <PinOff className="size-4" />
-                取消置顶
-              </>
-            ) : (
-              <>
-                <Pin className="size-4" />
-                置顶讨论
-              </>
-            )}
-          </MenuItem>
-        )}
+                {/* 主讨论始终置顶，不提供切换置顶操作 */}
+                {!preserve && (
+                  <button
+                    type="button"
+                    disabled={togglePin.isPending}
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      togglePin.mutate(!card.pinned_at);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80 disabled:opacity-50"
+                  >
+                    {card.pinned_at ? (
+                      <>
+                        <PinOff className="size-4 text-muted-foreground" />
+                        <span>{t("取消置顶")}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pin className="size-4 text-muted-foreground" />
+                        <span>{t("置顶讨论")}</span>
+                      </>
+                    )}
+                  </button>
+                )}
 
-        {card.kind === "discussion" && !preserve && (
-          <>
-            {card.discussion_state === "active" && (
-              <MenuItem
-                disabled={archive.isPending}
-                onSelect={() => archive.mutate()}
-              >
-                <Archive className="size-4" />
-                归档讨论
-              </MenuItem>
-            )}
-          </>
-        )}
+                {card.kind === "discussion" && !preserve && card.discussion_state === "active" && (
+                  <button
+                    type="button"
+                    disabled={archive.isPending}
+                    onClick={() => {
+                      setDrawerOpen(false);
+                      archive.mutate();
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80 disabled:opacity-50"
+                  >
+                    <Archive className="size-4 text-muted-foreground" />
+                    <span>{t("归档讨论")}</span>
+                  </button>
+                )}
 
-        {!preserve && (
-          <>
-            <MenuSeparator />
-            <MenuItem
-              danger
-              disabled={remove.isPending}
-              onSelect={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="size-4" />
-              {card.kind === "discussion"
-                ? "删除讨论"
-                : card.kind === "ongoing"
-                  ? "删除定时任务"
-                  : "删除任务"}
+                {!preserve && (
+                  <>
+                    <div className="my-1 h-px bg-line/60" />
+                    <button
+                      type="button"
+                      disabled={remove.isPending}
+                      onClick={() => {
+                        setDrawerOpen(false);
+                        setDeleteOpen(true);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-danger transition active:bg-danger/10 disabled:opacity-50"
+                    >
+                      <Trash2 className="size-4" />
+                      <span>
+                        {card.kind === "discussion"
+                          ? t("删除讨论")
+                          : card.kind === "ongoing"
+                            ? t("删除定时任务")
+                            : t("删除任务")}
+                      </span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </SheetContent>
+          </UISheet>
+        </>
+      ) : (
+        <Menu
+          side={menuSide}
+          align={menuSide === "right" ? "start" : "end"}
+          trigger={triggerButton}
+        >
+          {taskDetails && card.kind !== "discussion" && (
+            <MenuItem onSelect={() => setDetailsOpen(true)}>
+              <FileText className="size-4" />
+              {t("任务详情")}
             </MenuItem>
-          </>
-        )}
-      </Menu>
+          )}
+          {!preserve && (
+            <MenuItem onSelect={openEditor}>
+              <Pencil className="size-4" />
+              {t("编辑信息")}
+            </MenuItem>
+          )}
+
+          {/* 主讨论始终置顶，不提供切换置顶操作 */}
+          {!preserve && (
+            <MenuItem
+              disabled={togglePin.isPending}
+              onSelect={() => togglePin.mutate(!card.pinned_at)}
+            >
+              {card.pinned_at ? (
+                <>
+                  <PinOff className="size-4" />
+                  {t("取消置顶")}
+                </>
+              ) : (
+                <>
+                  <Pin className="size-4" />
+                  {t("置顶讨论")}
+                </>
+              )}
+            </MenuItem>
+          )}
+
+          {card.kind === "discussion" && !preserve && (
+            <>
+              {card.discussion_state === "active" && (
+                <MenuItem
+                  disabled={archive.isPending}
+                  onSelect={() => archive.mutate()}
+                >
+                  <Archive className="size-4" />
+                  {t("归档讨论")}
+                </MenuItem>
+              )}
+            </>
+          )}
+
+          {!preserve && (
+            <>
+              <MenuSeparator />
+              <MenuItem
+                danger
+                disabled={remove.isPending}
+                onSelect={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="size-4" />
+                {card.kind === "discussion"
+                  ? t("删除讨论")
+                  : card.kind === "ongoing"
+                    ? t("删除定时任务")
+                    : t("删除任务")}
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+      )}
 
       {taskDetails && card.kind !== "discussion" && (
         <Modal

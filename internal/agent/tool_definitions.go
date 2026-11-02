@@ -140,5 +140,26 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 				}, "content", "idempotency_key"),
 			},
 		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_inspect_card_session",
+				Description: "Inspect the conversation history/session of a non-discussion Card (todo or ongoing) within the current Workspace. Supports 'simple' mode (visible user messages and reply bubbles, matching what users see) and 'full' mode (detailed turns including thinking/reasoning and tool calls/results).",
+				Parameters: object(map[string]any{
+					"card_id": stringField("Target Card UUID. Defaults to the current Card if omitted."),
+					"mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"simple", "full"},
+						"description": "Inspection mode: 'simple' for user-visible conversation bubbles, 'full' for complete turns with thinking and tool executions. Defaults to 'simple'.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     200,
+						"description": "Maximum number of bubbles or events to return (1-200). Defaults to 50.",
+					},
+				}),
+			},
+		},
 	}
 }

@@ -16,6 +16,7 @@ import {
   CalendarClock,
   Activity,
   Cpu,
+  Settings,
 } from "lucide-react";
 import { useProject } from "../../app/project-context";
 
@@ -47,8 +48,13 @@ export function MobileGlobalNavMenu() {
     },
     {
       to: "/nexusdock",
-      label: t("远程设备"),
+      label: t("设备"),
       icon: Cpu,
+    },
+    {
+      to: "/settings/general",
+      label: t("设置"),
+      icon: Settings,
     },
   ];
 

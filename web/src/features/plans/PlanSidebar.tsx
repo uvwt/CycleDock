@@ -102,7 +102,7 @@ export function PlanSidebar({
                 onClick={() => onSelect(card)}
                 swipeActions={swipeActions}
                 icon={<CalendarClock className="size-4 text-faint" />}
-                title={card.title || t("未命名计划")}
+                title={card.title || t("未命名定时任务")}
                 description={summary || undefined}
                 meta={
                   showHealth ? (
@@ -116,18 +116,18 @@ export function PlanSidebar({
       ) : (
         <div className="mx-1 rounded-xl border border-dashed border-line/60 bg-surface/40 px-4 py-8 text-center">
           <CalendarClock className="mx-auto mb-2 size-5 text-faint/70" />
-          <p className="text-xs text-faint">{t("这个项目还没有计划")}</p>
+          <p className="text-xs text-faint">{t("这个项目还没有定时任务")}</p>
         </div>
       )}
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title={t("删除这个计划？")}
+        title={t("删除这个定时任务？")}
         description={t(
-          "删除计划将同步清理其所有执行记录和周期规则，该操作无法撤销。",
+          "删除定时任务将同步清理其所有执行记录和周期规则，该操作无法撤销。",
         )}
-        confirmLabel={t("删除计划")}
+        confirmLabel={t("删除定时任务")}
         pending={deleteMutation.isPending}
         onConfirm={() => {
           if (deleteTarget) {

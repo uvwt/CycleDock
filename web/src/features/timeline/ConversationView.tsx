@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, Bot, Check, Clock, Copy, MoreHorizontal, Reply, RotateCcw, ClipboardCheck, AlertCircle } from "lucide-react";
+import { ArrowDown, Bot, Check, Clock, Copy, MoreHorizontal, Reply, RotateCcw, ClipboardCheck, AlertCircle, CornerDownRight } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -153,6 +153,7 @@ function EventRow({
   const [showTime, setShowTime] = useState(false);
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
+  const isDelegate = !human && event.type === "comment";
   const message = event.type === "message" ? event.message : undefined;
   if (system) {
     if (event.type === "confirm" || event.type === "reject") {
@@ -359,6 +360,12 @@ function EventRow({
               <span className="font-semibold text-foreground/80">
                 {senderLabel(event.actor_kind, event.actor_name)}
               </span>
+              {isDelegate && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200/80 bg-indigo-50/80 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:border-indigo-800/80 dark:bg-indigo-950/50 dark:text-indigo-300">
+                  <CornerDownRight className="h-3 w-3" />
+                  {t("跨卡片委派")}
+                </span>
+              )}
               {hasMetadata && (
                 <div
                   className={`inline-flex items-center gap-x-2 ${
@@ -401,7 +408,11 @@ function EventRow({
           <div className="flex flex-wrap items-end gap-2.5 max-w-full">
             <ChatBubbleMessage
               variant={human ? "sent" : "received"}
-              className="w-fit max-w-full"
+              className={`w-fit max-w-full ${
+                isDelegate
+                  ? "border border-indigo-200/70 bg-indigo-50/40 text-foreground dark:border-indigo-800/60 dark:bg-indigo-950/20"
+                  : ""
+              }`}
             >
             {(event.type === "finding" || event.type === "result") && (
               <p

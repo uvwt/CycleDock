@@ -50,6 +50,10 @@ class CycleDockSmoke(unittest.TestCase):
 
     def open_card_menu(self):
         self.card_action_button().click()
+        if (self.page.viewport_size or {}).get("width", 1280) < 768:
+            sheet = self.page.locator('[data-slot="sheet-content"]')
+            sheet.wait_for()
+            return sheet
         menu = self.page.get_by_role("menu")
         menu.wait_for()
         return menu
@@ -130,7 +134,7 @@ class CycleDockSmoke(unittest.TestCase):
     def test_edit_dialog_scrolls_on_small_screen_and_closes_with_escape(self):
         self.page.set_viewport_size({"width": 375, "height": 520})
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.open_card_menu().get_by_role("menuitem", name="编辑信息").click()
+        self.open_card_menu().get_by_role("button", name="编辑信息").click()
         editor = self.page.get_by_role("dialog", name="编辑任务信息")
         title = editor.get_by_placeholder("任务标题")
         title.wait_for()
@@ -142,7 +146,7 @@ class CycleDockSmoke(unittest.TestCase):
         editor.wait_for(state="hidden")
         self.card_action_button().focus()
         self.page.keyboard.press("Enter")
-        self.page.get_by_role("menu").wait_for()
+        self.page.locator('[data-slot="sheet-content"]').wait_for()
 
     def test_composers_preserve_newline_and_ime_confirmation(self):
         for path, placeholder in [
@@ -861,7 +865,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
         self.page.get_by_role("button", name="打开讨论列表").wait_for()
         menu = self.open_card_menu()
-        menu.get_by_role("menuitem", name="编辑信息").click()
+        menu.get_by_role("button", name="编辑信息").click()
         self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.assertLessEqual(
             self.page.evaluate("document.documentElement.scrollWidth"), 390

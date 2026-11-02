@@ -24,6 +24,7 @@ export function CardHeaderInfoCard({
   detail,
   projectCards = [],
   task,
+  variant = "popover",
   onSync,
   onClose,
 }: {
@@ -31,6 +32,7 @@ export function CardHeaderInfoCard({
   detail?: CardDetail;
   projectCards?: Card[];
   task?: TaskProgress;
+  variant?: "popover" | "sheet";
   onSync?: () => Promise<void>;
   onClose?: () => void;
 }) {
@@ -70,7 +72,11 @@ export function CardHeaderInfoCard({
 
   return (
     <section
-      className="w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
+      className={
+        variant === "sheet"
+          ? "w-full overflow-y-auto space-y-4"
+          : "w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
+      }
       aria-label={t("任务详情")}
     >
       {/* 标题与类型状态概览 */}

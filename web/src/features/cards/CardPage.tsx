@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Info, PanelLeft } from "lucide-react";
+import { Info, PanelLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -128,7 +128,7 @@ function CardPageContent() {
     onSwipeRight: handleSwipeRight,
     onSwipeLeft: handleSwipeLeft,
     threshold: 45,
-    horizontalRatio: 1.5,
+    horizontalRatio: 1.2,
   });
 
   useEffect(() => {
@@ -471,10 +471,15 @@ function CardPageContent() {
           {/* 手机端固定顶部栏：常驻视口顶部，包含全局导航、抽屉菜单与操作按钮 */}
           <div
             data-mobile-top-surface
-            className={`sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+            className="sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden bg-transparent"
           >
             <div className="flex items-center gap-1.5">
               <MobileGlobalNavMenu />
+              <MobileQuickCardSwitcher
+                projectID={card.project_id}
+                activeCardID={card.id}
+                activeAttemptStatus={current?.status}
+              />
               <button
                 type="button"
                 title={
@@ -499,6 +504,15 @@ function CardPageContent() {
             </div>
 
             <div className="relative flex items-center gap-1.5">
+              <button
+                type="button"
+                title={t("新建讨论")}
+                aria-label={t("新建讨论")}
+                onClick={startDiscussion}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-4" />
+              </button>
               <button
                 type="button"
                 aria-expanded={infoOpen}
@@ -584,16 +598,15 @@ function CardPageContent() {
               side="right"
               title={t("任务详情")}
             >
-              <div className="-m-5 p-4">
-                <CardHeaderInfoCard
-                  card={card}
-                  detail={detail.data}
-                  projectCards={projectCards.data || []}
-                  task={stream.live?.task}
-                  onSync={sync}
-                  onClose={() => setInfoOpen(false)}
-                />
-              </div>
+              <CardHeaderInfoCard
+                card={card}
+                detail={detail.data}
+                projectCards={projectCards.data || []}
+                task={stream.live?.task}
+                variant="sheet"
+                onSync={sync}
+                onClose={() => setInfoOpen(false)}
+              />
             </Sheet>
           </div>
 
