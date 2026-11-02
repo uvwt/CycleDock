@@ -9,14 +9,11 @@ import (
 )
 
 const (
-	maxRunToolRounds       = 256
-	toolBudgetWarningRound = 240
-	maxRepeatedToolRounds  = 8
+	maxRepeatedToolRounds = 8
 )
 
 var (
-	errRunawayToolLoop    = errors.New("tool calls and results repeated without progress")
-	errToolBudgetExceeded = errors.New("model exceeded the per-attempt tool budget")
+	errRunawayToolLoop = errors.New("tool calls and results repeated without progress")
 )
 
 // repeatedToolLoop 只比较尾部完整的工具轮次，不把调用 ID、过程解说或历史轮数当成进展。

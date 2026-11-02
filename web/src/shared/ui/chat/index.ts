@@ -13,6 +13,11 @@ export {
 } from "./chat-bubble";
 
 export {
+  ChatActionCard,
+  type ChatActionCardProps,
+} from "./chat-action-card";
+
+export {
   ChatMessageList,
   type ChatMessageListProps,
 } from "./chat-message-list";

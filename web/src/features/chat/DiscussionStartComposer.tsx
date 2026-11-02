@@ -72,7 +72,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     setPending(null);
     setContent("");
     await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-    navigate(`/chat/${projectID}/${cardID}`);
+    navigate(`/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`);
   }
 
   async function createAndSend() {
@@ -137,6 +137,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
           onChange={setContent}
           placeholder={placeholder}
           readOnly={Boolean(pending)}
+          disabled={sending}
         />
       </div>
 
@@ -146,7 +147,9 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() =>
-              navigate(`/chat/${projectID}/${pending.pendingCardID}`)
+              navigate(
+                `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(pending.pendingCardID!)}`,
+              )
             }
             className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
           >
@@ -172,3 +175,4 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     </form>
   );
 }
+

@@ -1,6 +1,7 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Info, PanelLeft } from "lucide-react";
@@ -22,11 +23,17 @@ import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { PlanSidebar } from "../plans/PlanSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
-import type { Card } from "../../shared/api/types";
+import type { Card, DeviceTarget, PendingTurn } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { MobileGlobalNavMenu } from "../../shared/ui/MobileGlobalNavMenu";
 import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
+
+type NavigationState = {
+  initialMessage?: string;
+  initialDeviceTarget?: DeviceTarget | null;
+  initialIdempotencyKey?: string;
+};
 
 export default function CardPage() {
   const { cardID = "" } = useParams();
@@ -39,6 +46,10 @@ function CardPageContent() {
   const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const navState = (location.state as NavigationState | null) || null;
+  const [pendingInitialTurn, setPendingInitialTurn] = useState<string | null>(
+    navState?.initialMessage?.trim() || null,
+  );
   const listVisible = useContextSidebarVisible();
   const { projectID: activeProjectID, setProjectID } = useProject();
 
@@ -90,6 +101,33 @@ function CardPageContent() {
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
 
+  // 手机端滑动手势：右滑呼出左侧导航/卡片抽屉，左滑呼出右侧任务详情
+  const handleSwipeRight = useCallback(() => {
+    // 仅在移动端屏幕（<1024px，对应 tailwind lg 断点）触发
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (infoOpen) {
+      setInfoOpen(false);
+    } else {
+      setContextSidebarOpen(true);
+    }
+  }, [infoOpen]);
+
+  const handleSwipeLeft = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (contextSidebarOpen) {
+      setContextSidebarOpen(false);
+    } else {
+      setInfoOpen(true);
+    }
+  }, [contextSidebarOpen]);
+
+  const containerRef = useSwipeGesture<HTMLElement>({
+    onSwipeRight: handleSwipeRight,
+    onSwipeLeft: handleSwipeLeft,
+    threshold: 45,
+    horizontalRatio: 1.5,
+  });
+
   useEffect(() => {
     const el = composerDockRef.current;
     if (!el) return;
@@ -128,8 +166,9 @@ function CardPageContent() {
       card.project_id +
       "/" +
       card.id;
-    if (location.pathname !== path) navigate(path, { replace: true });
-  }, [card, navigate, location.pathname]);
+    if (location.pathname !== path)
+      navigate(path, { replace: true, state: location.state });
+  }, [card, navigate, location.pathname, location.state]);
 
   const latestVisibleMessageSequence = useMemo(
     () =>
@@ -273,13 +312,35 @@ function CardPageContent() {
     send.mutate(waiting ? "reply" : "enqueue");
   }
 
-  function back() {
-    navigate(
-      isDiscussion
-        ? "/chat?project=" + encodeURIComponent(actualProjectID)
-        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
-    );
-  }
+  // 当由首页新建讨论快速跳转进入时，承接并在后台自动发送首条消息
+  useEffect(() => {
+    if (!cardID || !pendingInitialTurn) return;
+    const messageToSend = pendingInitialTurn;
+    const initialKey = navState?.initialIdempotencyKey;
+    const initialDevice = navState?.initialDeviceTarget ?? target;
+
+    // 避免重复触发，清理路由 state
+    navigate(location.pathname, { replace: true, state: {} });
+
+    api
+      .send(cardID, messageToSend, "enqueue", initialKey, initialDevice)
+      .then(async () => {
+        setPendingInitialTurn(null);
+        await sync();
+      })
+      .catch((error) => {
+        setPendingInitialTurn(null);
+        // 发送失败时将消息填入输入框，方便用户重试
+        setComment(messageToSend);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t("首条消息发送失败，已保留在输入框"),
+        );
+      });
+    // 仅挂载时根据 initialMessage 触发一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardID]);
 
   function openDiscussion(item: Card) {
     setContextSidebarOpen(false);
@@ -289,6 +350,14 @@ function CardPageContent() {
   function startDiscussion() {
     setContextSidebarOpen(false);
     navigate(`/chat?project=${encodeURIComponent(actualProjectID)}`);
+  }
+
+  function back() {
+    navigate(
+      isDiscussion
+        ? "/chat?project=" + encodeURIComponent(actualProjectID)
+        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
+    );
   }
 
   function openWork(item: Card) {
@@ -366,6 +435,7 @@ function CardPageContent() {
 
   return (
     <main
+      ref={containerRef}
       className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
     >
       <div
@@ -378,15 +448,77 @@ function CardPageContent() {
         </div>
 
         <section
-          className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
-          <header
-            aria-hidden="true"
+          {/* 手机端固定顶部栏：常驻视口顶部，包含全局导航、抽屉菜单与操作按钮 */}
+          <div
             data-mobile-top-surface
-            className="pointer-events-none fixed inset-x-0 top-0 z-10 h-14 bg-transparent md:hidden"
-          />
-          {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
-          <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
+            className={`sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          >
+            <div className="flex items-center gap-1.5">
+              <MobileGlobalNavMenu />
+              <button
+                type="button"
+                title={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                aria-label={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                onClick={() => setContextSidebarOpen(true)}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <PanelLeft className="size-4" />
+              </button>
+            </div>
+
+            <div className="relative flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-expanded={infoOpen}
+                aria-label={t("任务详情")}
+                title={t("任务详情")}
+                onClick={() => setInfoOpen((prev) => !prev)}
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
+                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
+                } ${
+                  infoOpen
+                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
+                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <Info className="size-4 sm:size-3.5" />
+                <span className="hidden sm:inline">{t("任务详情")}</span>
+                {liveTaskTotal > 0 && (
+                  <span className="tabular-nums text-[11px] opacity-80">
+                    {liveTaskCompleted}/{liveTaskTotal}
+                  </span>
+                )}
+              </button>
+              {!isDiscussion && <CardStatusSwitch card={card} />}
+              <CardActions
+                card={card}
+                variant="toolbar"
+                preserve={card.id === mainDiscussion.data?.id}
+                taskDetails={{
+                  detail: detail.data,
+                  projectCards: projectCards.data || [],
+                }}
+                onDeleted={back}
+              />
+            </div>
+          </div>
+
+          {/* 平板/桌面端：操作按钮悬浮在右上角 */}
+          <div className="hidden md:flex absolute top-3 right-3 z-20 max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -423,31 +555,31 @@ function CardPageContent() {
                 onDeleted={back}
               />
             </div>
-
-            {/* 手机端窄屏：展开任务详情浮层，配备防止误触穿透遮罩与关闭控制 */}
-            {infoOpen && (
-              <div className="lg:hidden">
-                <div
-                  className="fixed inset-0 z-30 bg-background/40 backdrop-blur-[1px]"
-                  aria-hidden="true"
-                  onClick={() => setInfoOpen(false)}
-                />
-                <div className="absolute right-0 top-full mt-2 z-40">
-                  <CardHeaderInfoCard
-                    card={card}
-                    detail={detail.data}
-                    projectCards={projectCards.data || []}
-                    task={stream.live?.task}
-                    onSync={sync}
-                    onClose={() => setInfoOpen(false)}
-                  />
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* 移动端呼出侧边栏悬浮在左上角 */}
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 sm:left-4 lg:hidden">
+          {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
+          <div className="lg:hidden">
+            <Sheet
+              open={infoOpen}
+              onOpenChange={setInfoOpen}
+              side="right"
+              title={t("任务详情")}
+            >
+              <div className="-m-5 p-4">
+                <CardHeaderInfoCard
+                  card={card}
+                  detail={detail.data}
+                  projectCards={projectCards.data || []}
+                  task={stream.live?.task}
+                  onSync={sync}
+                  onClose={() => setInfoOpen(false)}
+                />
+              </div>
+            </Sheet>
+          </div>
+
+          {/* 平板端呼出侧边栏悬浮在左上角 */}
+          <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
             <MobileGlobalNavMenu />
             <MobileQuickCardSwitcher
               projectID={card.project_id}
@@ -485,7 +617,24 @@ function CardPageContent() {
                 events={detail.data.timeline}
                 live={stream.live}
                 cardKind={card.kind}
-                pendingTurns={detail.data.pending_turns}
+                pendingTurns={
+                  pendingInitialTurn &&
+                  !detail.data.pending_turns.some(
+                    (turn) => turn.content === pendingInitialTurn,
+                  )
+                    ? [
+                        {
+                          id: "initial-temp",
+                          sequence: 0,
+                          source: "human",
+                          dispatch_mode: "enqueue",
+                          content: pendingInitialTurn,
+                          created_at: new Date().toISOString(),
+                        } as PendingTurn,
+                        ...detail.data.pending_turns,
+                      ]
+                    : detail.data.pending_turns
+                }
                 currentAttempt={detail.data.current_attempt}
                 attemptHistory={detail.data.attempt_history}
                 bottomInsetPx={composerDockHeight}

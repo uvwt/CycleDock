@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { MessageSquareText, PanelLeft } from "lucide-react";
@@ -18,6 +19,25 @@ export default function ChatHome() {
   const navigate = useNavigate();
   const listVisible = useContextSidebarVisible();
   const [mobileListOpen, setMobileListOpen] = useState(false);
+
+  const handleSwipeRight = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 768 && !mobileListOpen) {
+      setMobileListOpen(true);
+    }
+  }, [mobileListOpen]);
+
+  const handleSwipeLeft = useCallback(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 768 && mobileListOpen) {
+      setMobileListOpen(false);
+    }
+  }, [mobileListOpen]);
+
+  const containerRef = useSwipeGesture<HTMLElement>({
+    onSwipeRight: handleSwipeRight,
+    onSwipeLeft: handleSwipeLeft,
+    threshold: 45,
+    horizontalRatio: 1.5,
+  });
   const {
     projectID,
     isPending: projectsPending,
@@ -78,7 +98,7 @@ export default function ChatHome() {
             />
           </div>
 
-          <section className="relative flex min-h-0 min-w-0 flex-col">
+          <section ref={containerRef} className="relative flex min-h-0 min-w-0 flex-col">
             <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 md:hidden">
               <button
                 type="button"

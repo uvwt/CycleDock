@@ -17,6 +17,7 @@ import { loadPushPublicKey } from "../shared/realtime/notifications";
 import { Shell } from "../layouts/Shell";
 import { LoginPage } from "./LoginPage";
 import { ProjectProvider } from "./ProjectContext";
+import { useProject } from "./project-context";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 const ChatHome = lazy(() => import("../features/chat/ChatHome"));
@@ -35,6 +36,72 @@ function Authenticated() {
   const location = useLocation();
   const navigate = useNavigate();
   useCardNotifications(me.data?.workspace.id || "");
+
+  // 监听来自 Service Worker 的通知点击跳转（热启动/前台）以及冷启动拉取（未被消费的 pending intent）
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    const navigateToTarget = (rawURL?: string | null) => {
+      if (!rawURL) return;
+      try {
+        const parsed = new URL(rawURL, window.location.origin);
+        if (parsed.origin !== window.location.origin) return;
+        const targetPath = parsed.pathname + parsed.search + parsed.hash;
+        const currentPath =
+          window.location.pathname + window.location.search + window.location.hash;
+        if (targetPath && targetPath !== currentPath) {
+          navigate(targetPath);
+        }
+      } catch {
+        // 忽略异常 URL
+      }
+    };
+
+    const handleMessage = (event: MessageEvent) => {
+      if (
+        event.data?.type === "CYCLE_NAVIGATE" ||
+        event.data?.type === "CYCLE_PENDING_NAVIGATION"
+      ) {
+        navigateToTarget(event.data.url);
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleMessage);
+
+    // 冷启动 / 页面加载就绪时，主动向 Service Worker 查询是否有未消费的通知点击意图
+    const checkPendingNavigation = async () => {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const targetWorker =
+          registration.active || navigator.serviceWorker.controller;
+        if (!targetWorker) return;
+
+        if (typeof MessageChannel !== "undefined") {
+          const channel = new MessageChannel();
+          channel.port1.onmessage = (event) => {
+            if (event.data?.type === "CYCLE_PENDING_NAVIGATION") {
+              navigateToTarget(event.data.url);
+            }
+          };
+          targetWorker.postMessage(
+            { type: "CYCLE_CHECK_PENDING_NAVIGATION" },
+            [channel.port2],
+          );
+        } else {
+          targetWorker.postMessage({ type: "CYCLE_CHECK_PENDING_NAVIGATION" });
+        }
+      } catch {
+        // 忽略 SW 通信异常
+      }
+    };
+
+    void checkPendingNavigation();
+
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleMessage);
+    };
+  }, [navigate]);
+
   useEffect(() => {
     if (me.data) void loadPushPublicKey().catch(() => undefined);
   }, [me.data]);
@@ -97,6 +164,8 @@ function Authenticated() {
               <Route path="/activity" element={<ActivityPage />} />
               <Route path="/activity/:projectID" element={<ActivityPage />} />
               <Route path="/nexusdock" element={<NexusDockPage />} />
+              <Route path="/cards/:cardID" element={<CardIDRedirect />} />
+              <Route path="/chat/:cardID" element={<CardIDRedirect mode="chat" />} />
               <Route path="/cards/:projectID/:cardID" element={<CardPage />} />
               <Route
                 path="/settings/*"
@@ -128,6 +197,24 @@ function LegacyCardRedirect() {
   const location = useLocation();
   const parts = location.pathname.split("/");
   return <Navigate to={`/cards/${parts[2]}/${parts[4]}`} replace />;
+}
+
+function CardIDRedirect({ mode = "cards" }: { mode?: "cards" | "chat" }) {
+  const location = useLocation();
+  const { projectID } = useProject();
+  const parts = location.pathname.split("/").filter(Boolean);
+  const cardID = parts[1] || "";
+  if (!cardID) {
+    return <Navigate to="/chat" replace />;
+  }
+  if (!projectID) {
+    return <Navigate to="/chat" replace />;
+  }
+  const target =
+    mode === "chat"
+      ? `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`
+      : `/cards/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`;
+  return <Navigate to={`${target}${location.search}${location.hash}`} replace />;
 }
 export function App() {
   return <Authenticated />;

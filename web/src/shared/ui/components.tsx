@@ -167,19 +167,24 @@ export function Sheet({
   title,
   children,
   side = "right",
+  className,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   children: ReactNode;
   side?: "left" | "right";
+  className?: string;
 }) {
   return (
     <UISheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side={side}
         aria-describedby={undefined}
-        className="w-[min(94vw,440px)] gap-0 sm:max-w-none"
+        className={cn(
+          "w-[min(82vw,320px)] gap-0 sm:max-w-none",
+          className,
+        )}
       >
         <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
           <SheetTitle>{title}</SheetTitle>
