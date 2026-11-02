@@ -35,6 +35,10 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
    FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id
    ORDER BY sequence DESC LIMIT 1
  ) e ON true
+ LEFT JOIN LATERAL (
+   SELECT id, status FROM turn_attempts WHERE workspace_id=c.workspace_id AND card_id=c.id
+   ORDER BY created_at DESC, id DESC LIMIT 1
+ ) a ON true
  -- 通知只认模型回复的正式消息，排除用户评论（comment）与流式快照。置顶、标题、进度和状态变更仍通过上面的 revision 刷新页面。
  LEFT JOIN LATERAL (
    SELECT sequence, left(COALESCE(NULLIF(btrim(content), ''), message->'widget'->>'question',
@@ -49,10 +53,6 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
      )
    ORDER BY sequence DESC LIMIT 1
  ) m ON true
- LEFT JOIN LATERAL (
-   SELECT id, status FROM turn_attempts WHERE workspace_id=c.workspace_id AND card_id=c.id
-   ORDER BY created_at DESC, id DESC LIMIT 1
- ) a ON true
  LEFT JOIN LATERAL (
    SELECT MAX(sequence) AS sequence, MAX(cancelled_at) AS cancelled_at FROM card_turns WHERE workspace_id=c.workspace_id AND card_id=c.id
  ) t ON true
