@@ -3,7 +3,7 @@ import { DeviceMenu } from "../devices/DeviceMenu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Info, PanelLeft } from "lucide-react";
+import { Info, PanelLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -14,7 +14,6 @@ import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
-import { CardActions } from "./CardActions";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { PendingTurnQueue } from "./PendingTurnQueue";
@@ -65,11 +64,6 @@ function CardPageContent() {
   );
 
   const isDiscussion = card?.kind === "discussion";
-  const mainDiscussion = useQuery({
-    queryKey: keys.mainDiscussion(actualProjectID),
-    queryFn: () => api.mainDiscussion(actualProjectID),
-    enabled: Boolean(actualProjectID) && isDiscussion,
-  });
   const isOngoing = card?.kind === "ongoing";
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
@@ -273,14 +267,6 @@ function CardPageContent() {
     send.mutate(waiting ? "reply" : "enqueue");
   }
 
-  function back() {
-    navigate(
-      isDiscussion
-        ? "/chat?project=" + encodeURIComponent(actualProjectID)
-        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
-    );
-  }
-
   function openDiscussion(item: Card) {
     setContextSidebarOpen(false);
     navigate(`/chat/${item.project_id}/${item.id}`);
@@ -412,16 +398,15 @@ function CardPageContent() {
               </button>
               <DeviceMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
-              <CardActions
-                card={card}
-                variant="toolbar"
-                preserve={card.id === mainDiscussion.data?.id}
-                taskDetails={{
-                  detail: detail.data,
-                  projectCards: projectCards.data || [],
-                }}
-                onDeleted={back}
-              />
+              <button
+                type="button"
+                onClick={startDiscussion}
+                title={t("新建讨论")}
+                aria-label={t("新建讨论")}
+                className="grid size-9 place-items-center rounded-xl border border-line bg-surface text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-4" />
+              </button>
             </div>
 
             {/* 手机端窄屏：展开任务详情浮层，配备防止误触穿透遮罩与关闭控制 */}
