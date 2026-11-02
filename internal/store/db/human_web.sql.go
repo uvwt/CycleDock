@@ -12,6 +12,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countProjectDoneCards = `-- name: CountProjectDoneCards :one
+SELECT COUNT(*)::bigint
+FROM cards
+WHERE workspace_id = $1
+  AND project_id = $2
+  AND todo_state = 'done'
+`
+
+type CountProjectDoneCardsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ProjectID   uuid.UUID `json:"project_id"`
+}
+
+func (q *Queries) CountProjectDoneCards(ctx context.Context, arg CountProjectDoneCardsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countProjectDoneCards, arg.WorkspaceID, arg.ProjectID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteCardSchedule = `-- name: DeleteCardSchedule :execrows
 DELETE FROM card_schedules
 WHERE workspace_id = $1
@@ -288,6 +308,233 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.ConfirmationRound,
 			&i.ActorName,
 			&i.ActorKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCardTimelineBefore = `-- name: ListCardTimelineBefore :many
+WITH scoped_events AS (
+    SELECT
+        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round,
+        s.name AS actor_name,
+        s.kind AS actor_kind
+    FROM events e
+    JOIN sources s
+      ON s.workspace_id = e.workspace_id
+     AND s.id = e.actor_source_id
+    WHERE e.workspace_id = $1
+      AND e.card_id = $2
+      AND ($3::bigint IS NULL OR e.sequence < $3::bigint)
+      -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
+      AND NOT EXISTS (
+        SELECT 1 FROM card_turns t
+        WHERE t.workspace_id = e.workspace_id
+          AND t.card_id = e.card_id
+          AND t.source_event_id = e.id
+          AND t.cancelled_at IS NOT NULL
+      )
+    ORDER BY e.sequence DESC
+    LIMIT $4::int
+)
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, actor_name, actor_kind
+FROM scoped_events
+ORDER BY sequence ASC
+`
+
+type ListCardTimelineBeforeParams struct {
+	WorkspaceID    uuid.UUID   `json:"workspace_id"`
+	CardID         uuid.UUID   `json:"card_id"`
+	BeforeSequence pgtype.Int8 `json:"before_sequence"`
+	PageLimit      int32       `json:"page_limit"`
+}
+
+type ListCardTimelineBeforeRow struct {
+	ID                uuid.UUID          `json:"id"`
+	Sequence          int64              `json:"sequence"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	CardID            uuid.UUID          `json:"card_id"`
+	EventType         string             `json:"event_type"`
+	ActorSourceID     uuid.UUID          `json:"actor_source_id"`
+	AttemptID         uuid.NullUUID      `json:"attempt_id"`
+	Content           string             `json:"content"`
+	CheckinStatus     pgtype.Text        `json:"checkin_status"`
+	IdempotencyKey    pgtype.Text        `json:"idempotency_key"`
+	RequestHash       pgtype.Text        `json:"request_hash"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	Message           []byte             `json:"message"`
+	ConfirmationRound int64              `json:"confirmation_round"`
+	ActorName         string             `json:"actor_name"`
+	ActorKind         string             `json:"actor_kind"`
+}
+
+func (q *Queries) ListCardTimelineBefore(ctx context.Context, arg ListCardTimelineBeforeParams) ([]ListCardTimelineBeforeRow, error) {
+	rows, err := q.db.Query(ctx, listCardTimelineBefore,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.BeforeSequence,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCardTimelineBeforeRow{}
+	for rows.Next() {
+		var i ListCardTimelineBeforeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Sequence,
+			&i.WorkspaceID,
+			&i.CardID,
+			&i.EventType,
+			&i.ActorSourceID,
+			&i.AttemptID,
+			&i.Content,
+			&i.CheckinStatus,
+			&i.IdempotencyKey,
+			&i.RequestHash,
+			&i.CreatedAt,
+			&i.Message,
+			&i.ConfirmationRound,
+			&i.ActorName,
+			&i.ActorKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectActiveCardSummaries = `-- name: ListProjectActiveCardSummaries :many
+SELECT
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round,
+    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT e.checkin_status
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type = 'checkin'
+    ORDER BY e.sequence DESC
+    LIMIT 1
+) latest_checkin ON true
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> $1
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = $1
+WHERE c.workspace_id = $2
+  AND c.project_id = $3
+  AND (c.todo_state IS NULL OR c.todo_state <> 'done')
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
+`
+
+type ListProjectActiveCardSummariesParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ProjectID   uuid.UUID `json:"project_id"`
+}
+
+type ListProjectActiveCardSummariesRow struct {
+	ID                      uuid.UUID          `json:"id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	ProjectID               uuid.UUID          `json:"project_id"`
+	Kind                    string             `json:"kind"`
+	Title                   string             `json:"title"`
+	Description             string             `json:"description"`
+	DiscussionState         pgtype.Text        `json:"discussion_state"`
+	TodoState               pgtype.Text        `json:"todo_state"`
+	OngoingState            pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations   int32              `json:"required_confirmations"`
+	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
+	ConfirmationRound       int64              `json:"confirmation_round"`
+	Health                  string             `json:"health"`
+	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus     string             `json:"latest_attempt_status"`
+	LatestMessageSequence   int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
+	Unread                  bool               `json:"unread"`
+}
+
+func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListProjectActiveCardSummariesParams) ([]ListProjectActiveCardSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listProjectActiveCardSummaries, arg.SourceID, arg.WorkspaceID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectActiveCardSummariesRow{}
+	for rows.Next() {
+		var i ListProjectActiveCardSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Description,
+			&i.DiscussionState,
+			&i.TodoState,
+			&i.OngoingState,
+			&i.SourceDiscussionID,
+			&i.RequiredConfirmations,
+			&i.CreatedBySourceID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CreateIdempotencyKey,
+			&i.CreateRequestHash,
+			&i.PinnedAt,
+			&i.ConfirmationRound,
+			&i.Health,
+			&i.CurrentAttemptStatus,
+			&i.LatestAttemptStatus,
+			&i.LatestMessageSequence,
+			&i.LastReadMessageSequence,
+			&i.Unread,
 		); err != nil {
 			return nil, err
 		}
@@ -617,6 +864,146 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 			&i.CreateRequestHash,
 			&i.PinnedAt,
 			&i.ConfirmationRound,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectDoneCardsPaged = `-- name: ListProjectDoneCardsPaged :many
+SELECT
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round,
+    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    current_attempt.status AS current_attempt_status,
+    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT e.checkin_status
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type = 'checkin'
+    ORDER BY e.sequence DESC
+    LIMIT 1
+) latest_checkin ON true
+LEFT JOIN turn_attempts current_attempt
+  ON current_attempt.workspace_id = c.workspace_id
+ AND current_attempt.card_id = c.id
+ AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+LEFT JOIN LATERAL (
+    SELECT a.status
+    FROM turn_attempts a
+    WHERE a.workspace_id = c.workspace_id
+      AND a.card_id = c.id
+    ORDER BY a.created_at DESC, a.attempt_number DESC
+    LIMIT 1
+) latest_attempt ON true
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> $1
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = $1
+WHERE c.workspace_id = $2
+  AND c.project_id = $3
+  AND c.todo_state = 'done'
+ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
+LIMIT $5::int
+OFFSET $4::int
+`
+
+type ListProjectDoneCardsPagedParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ProjectID   uuid.UUID `json:"project_id"`
+	PageOffset  int32     `json:"page_offset"`
+	PageLimit   int32     `json:"page_limit"`
+}
+
+type ListProjectDoneCardsPagedRow struct {
+	ID                      uuid.UUID          `json:"id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	ProjectID               uuid.UUID          `json:"project_id"`
+	Kind                    string             `json:"kind"`
+	Title                   string             `json:"title"`
+	Description             string             `json:"description"`
+	DiscussionState         pgtype.Text        `json:"discussion_state"`
+	TodoState               pgtype.Text        `json:"todo_state"`
+	OngoingState            pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations   int32              `json:"required_confirmations"`
+	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
+	ConfirmationRound       int64              `json:"confirmation_round"`
+	Health                  string             `json:"health"`
+	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus     string             `json:"latest_attempt_status"`
+	LatestMessageSequence   int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
+	Unread                  bool               `json:"unread"`
+}
+
+func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProjectDoneCardsPagedParams) ([]ListProjectDoneCardsPagedRow, error) {
+	rows, err := q.db.Query(ctx, listProjectDoneCardsPaged,
+		arg.SourceID,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProjectDoneCardsPagedRow{}
+	for rows.Next() {
+		var i ListProjectDoneCardsPagedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Description,
+			&i.DiscussionState,
+			&i.TodoState,
+			&i.OngoingState,
+			&i.SourceDiscussionID,
+			&i.RequiredConfirmations,
+			&i.CreatedBySourceID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CreateIdempotencyKey,
+			&i.CreateRequestHash,
+			&i.PinnedAt,
+			&i.ConfirmationRound,
+			&i.Health,
+			&i.CurrentAttemptStatus,
+			&i.LatestAttemptStatus,
+			&i.LatestMessageSequence,
+			&i.LastReadMessageSequence,
+			&i.Unread,
 		); err != nil {
 			return nil, err
 		}

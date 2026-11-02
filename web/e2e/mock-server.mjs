@@ -523,6 +523,23 @@ http
             cards.filter((card) => card.project_id === projectCards[1]),
           );
         }
+        const projectDoneCards = route.match(/^\/projects\/([^/]+)\/cards\/done$/);
+        if (projectDoneCards && req.method === "GET") {
+          const limit = Number(url.searchParams.get("limit") || 30);
+          const offset = Number(url.searchParams.get("offset") || 0);
+          const doneList = cards.filter(
+            (card) =>
+              card.project_id === projectDoneCards[1] &&
+              card.kind === "todo" &&
+              card.todo_state === "done",
+          );
+          const paged = doneList.slice(offset, offset + limit);
+          return data(res, {
+            cards: paged,
+            total_count: doneList.length,
+            has_more: offset + paged.length < doneList.length,
+          });
+        }
         if (
           route === `/projects/${project.id}/discussions` &&
           req.method === "POST"
@@ -622,6 +639,24 @@ http
             return;
           }
           if (!rest && req.method === "GET") return data(res, details(id));
+          if (rest === "timeline" && req.method === "GET") {
+            const beforeSeq = Number(
+              url.searchParams.get("before_sequence") || Number.MAX_SAFE_INTEGER,
+            );
+            const limit = Number(url.searchParams.get("limit") || 50);
+            const allEvents = (events[id] || []).filter(
+              (item) => (item.sequence || 0) < beforeSeq,
+            );
+            const hasMoreBefore = allEvents.length > limit;
+            const slice = hasMoreBefore
+              ? allEvents.slice(allEvents.length - limit)
+              : allEvents;
+            return data(res, {
+              timeline: slice,
+              has_more_before: hasMoreBefore,
+              oldest_sequence: slice.length > 0 ? slice[0].sequence : 0,
+            });
+          }
           if (!rest && req.method === "PATCH") {
             Object.assign(card, await body(req));
             return data(res, card);

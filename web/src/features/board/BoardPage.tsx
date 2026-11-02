@@ -84,11 +84,17 @@ function Lane({
   cards,
   onOpen,
   className = "",
+  hasMoreDone,
+  loadingMoreDone,
+  onLoadMoreDone,
 }: {
   state: TodoState;
   cards: Card[];
   onOpen: (card: Card) => void;
   className?: string;
+  hasMoreDone?: boolean;
+  loadingMoreDone?: boolean;
+  onLoadMoreDone?: () => void;
 }) {
   const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({ id: state });
@@ -122,6 +128,25 @@ function Lane({
         {cards.map((c) => (
           <TaskCard key={c.id} card={c} onOpen={onOpen} />
         ))}
+        {state === "done" && hasMoreDone && (
+          <div className="pt-2 pb-1 text-center">
+            <button
+              type="button"
+              disabled={loadingMoreDone}
+              onClick={onLoadMoreDone}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-xs hover:bg-muted/70 hover:text-foreground disabled:opacity-50 transition-colors"
+            >
+              {loadingMoreDone ? (
+                <>
+                  <Spinner text="" />
+                  <span>{t("加载中...")}</span>
+                </>
+              ) : (
+                <span>{t("加载更早的已完成卡片")}</span>
+              )}
+            </button>
+          </div>
+        )}
         {!cards.length && (
           <div className="grid flex-1 place-items-center rounded-xl border border-dashed border-line/70 bg-surface/30 p-6 text-center">
             <p className="text-xs text-faint">{t("没有任务")}</p>
@@ -209,11 +234,59 @@ export default function BoardPage() {
     setProjectID,
   } = useProject();
 
+  const [moreDoneCards, setMoreDoneCards] = useState<Card[]>([]);
+  const [hasMoreDone, setHasMoreDone] = useState(false);
+  const [loadingMoreDone, setLoadingMoreDone] = useState(false);
+
+  // When projectID changes, reset extra loaded done cards
+  useEffect(() => {
+    setMoreDoneCards([]);
+    setHasMoreDone(false);
+  }, [projectID]);
+
   const cards = useQuery({
     queryKey: keys.cards(projectID || ""),
     queryFn: () => api.cards(projectID!),
     enabled: !!projectID,
   });
+
+  // Check if initial active cards list hit the 30 done cards limit
+  useEffect(() => {
+    if (!cards.data) return;
+    const initialDone = cards.data.filter(
+      (c) => c.kind === "todo" && c.todo_state === "done",
+    );
+    // If backend truncated at 30 items, there might be more
+    if (initialDone.length >= 30 && moreDoneCards.length === 0) {
+      setHasMoreDone(true);
+    }
+  }, [cards.data, moreDoneCards.length]);
+
+  const handleLoadMoreDone = async () => {
+    if (!projectID || loadingMoreDone) return;
+    setLoadingMoreDone(true);
+    try {
+      const offset = (cards.data || []).filter(
+        (c) => c.kind === "todo" && c.todo_state === "done",
+      ).length + moreDoneCards.length;
+      const res = await api.projectDoneCards(projectID, 30, offset);
+      if (res.cards.length === 0) {
+        setHasMoreDone(false);
+      } else {
+        setMoreDoneCards((prev) => {
+          const map = new Map<string, Card>();
+          for (const c of prev) map.set(c.id, c);
+          for (const c of res.cards) map.set(c.id, c);
+          return Array.from(map.values());
+        });
+        setHasMoreDone(res.has_more);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t("加载失败"));
+    } finally {
+      setLoadingMoreDone(false);
+    }
+  };
 
   const cardsByState = useMemo(() => {
     const map: Record<TodoState, Card[]> = {
@@ -227,8 +300,14 @@ export default function BoardPage() {
         map[c.todo_state].push(c);
       }
     }
+    if (moreDoneCards.length > 0) {
+      const doneMap = new Map<string, Card>();
+      for (const c of map.done) doneMap.set(c.id, c);
+      for (const c of moreDoneCards) doneMap.set(c.id, c);
+      map.done = Array.from(doneMap.values());
+    }
     return map;
-  }, [cards.data]);
+  }, [cards.data, moreDoneCards]);
 
   // 默认激活用户最需要关注的列：working > todo > 首个非空列 > working
   const [selectedTab, setSelectedTab] = useState<TodoState | null>(null);
@@ -470,6 +549,9 @@ export default function BoardPage() {
                         cards={cardsByState[state]}
                         onOpen={open}
                         className="h-full"
+                        hasMoreDone={state === "done" && hasMoreDone}
+                        loadingMoreDone={state === "done" && loadingMoreDone}
+                        onLoadMoreDone={handleLoadMoreDone}
                       />
                     </div>
                   ))}
@@ -488,6 +570,9 @@ export default function BoardPage() {
                         state={state}
                         cards={cardsByState[state]}
                         onOpen={open}
+                        hasMoreDone={state === "done" && hasMoreDone}
+                        loadingMoreDone={state === "done" && loadingMoreDone}
+                        onLoadMoreDone={handleLoadMoreDone}
                       />
                     ))}
                   </div>

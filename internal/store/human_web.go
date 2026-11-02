@@ -117,6 +117,58 @@ func (s *Store) ListProjectCardSummaries(
 	})
 }
 
+func (s *Store) ListProjectActiveCardSummaries(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+) ([]db.ListProjectActiveCardSummariesRow, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	return s.queries.ListProjectActiveCardSummaries(ctx, db.ListProjectActiveCardSummariesParams{
+		SourceID:    sourceID,
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+	})
+}
+
+func (s *Store) ListProjectDoneCardsPaged(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+	limit, offset int32,
+) ([]db.ListProjectDoneCardsPagedRow, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 30
+	} else if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return s.queries.ListProjectDoneCardsPaged(ctx, db.ListProjectDoneCardsPagedParams{
+		SourceID:    sourceID,
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+		PageLimit:   limit,
+		PageOffset:  offset,
+	})
+}
+
+func (s *Store) CountProjectDoneCards(
+	ctx context.Context,
+	workspaceID, projectID uuid.UUID,
+) (int64, error) {
+	if _, err := s.GetProject(ctx, workspaceID, projectID); err != nil {
+		return 0, err
+	}
+	return s.queries.CountProjectDoneCards(ctx, db.CountProjectDoneCardsParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   projectID,
+	})
+}
+
 func (s *Store) ListProjectSchedules(
 	ctx context.Context,
 	workspaceID, projectID uuid.UUID,
@@ -249,6 +301,31 @@ func (s *Store) ListCardTimeline(
 	return s.queries.ListCardTimeline(ctx, db.ListCardTimelineParams{
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
+	})
+}
+
+func (s *Store) ListCardTimelineBefore(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	beforeSequence int64,
+	limit int32,
+) ([]db.ListCardTimelineBeforeRow, error) {
+	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	} else if limit > 100 {
+		limit = 100
+	}
+	if beforeSequence <= 0 {
+		beforeSequence = 1<<62 - 1
+	}
+	return s.queries.ListCardTimelineBefore(ctx, db.ListCardTimelineBeforeParams{
+		WorkspaceID:    workspaceID,
+		CardID:         cardID,
+		BeforeSequence: pgtype.Int8{Int64: beforeSequence, Valid: true},
+		PageLimit:      limit,
 	})
 }
 
