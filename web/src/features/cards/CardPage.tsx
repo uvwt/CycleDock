@@ -308,14 +308,6 @@ function CardPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardID]);
 
-  function back() {
-    navigate(
-      isDiscussion
-        ? "/chat?project=" + encodeURIComponent(actualProjectID)
-        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
-    );
-  }
-
   function openDiscussion(item: Card) {
     setContextSidebarOpen(false);
     navigate(`/chat/${item.project_id}/${item.id}`);
