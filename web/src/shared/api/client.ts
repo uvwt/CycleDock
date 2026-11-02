@@ -144,10 +144,13 @@ export const api = {
       title,
       description,
     }),
-  card: (id: string, limit = 50, all = false) =>
-    request<CardDetail>(
-      `/cards/${id}?limit=${encodeURIComponent(String(limit))}${all ? "&all=true" : ""}`,
-    ),
+  card: (id: string, limit?: number, all = false) => {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (all) params.set("all", "true");
+    const qs = params.toString();
+    return request<CardDetail>(`/cards/${id}${qs ? `?${qs}` : ""}`);
+  },
   cardTimelineBefore: (id: string, beforeSequence: number, limit = 50) =>
     request<CardTimelinePaged>(
       `/cards/${id}/timeline?before_sequence=${encodeURIComponent(String(beforeSequence))}&limit=${encodeURIComponent(String(limit))}`,
