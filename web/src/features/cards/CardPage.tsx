@@ -125,7 +125,7 @@ function CardPageContent() {
     onSwipeRight: handleSwipeRight,
     onSwipeLeft: handleSwipeLeft,
     threshold: 45,
-    horizontalRatio: 1.5,
+    horizontalRatio: 1.2,
   });
 
   useEffect(() => {
