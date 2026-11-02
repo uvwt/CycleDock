@@ -17,7 +17,7 @@ SELECT COUNT(*)::bigint
 FROM cards
 WHERE workspace_id = $1
   AND project_id = $2
-  AND status = 'done'
+  AND todo_state = 'done'
 `
 
 type CountProjectDoneCardsParams struct {
@@ -464,7 +464,7 @@ LEFT JOIN card_read_cursors read_cursor
  AND read_cursor.source_id = $1
 WHERE c.workspace_id = $2
   AND c.project_id = $3
-  AND c.status <> 'done'
+  AND (c.todo_state IS NULL OR c.todo_state <> 'done')
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
 `
 
@@ -923,7 +923,7 @@ LEFT JOIN card_read_cursors read_cursor
  AND read_cursor.source_id = $1
 WHERE c.workspace_id = $2
   AND c.project_id = $3
-  AND c.status = 'done'
+  AND c.todo_state = 'done'
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
 LIMIT $5::int
 OFFSET $4::int

@@ -125,7 +125,7 @@ LEFT JOIN card_read_cursors read_cursor
  AND read_cursor.source_id = sqlc.arg(source_id)
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
-  AND c.status <> 'done'
+  AND (c.todo_state IS NULL OR c.todo_state <> 'done')
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
 
 -- name: ListProjectDoneCardsPaged :many
@@ -176,7 +176,7 @@ LEFT JOIN card_read_cursors read_cursor
  AND read_cursor.source_id = sqlc.arg(source_id)
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
-  AND c.status = 'done'
+  AND c.todo_state = 'done'
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
 LIMIT sqlc.arg(page_limit)::int
 OFFSET sqlc.arg(page_offset)::int;
@@ -186,7 +186,7 @@ SELECT COUNT(*)::bigint
 FROM cards
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND project_id = sqlc.arg(project_id)
-  AND status = 'done';
+  AND todo_state = 'done';
 
 -- name: MarkCardRead :one
 INSERT INTO card_read_cursors (
