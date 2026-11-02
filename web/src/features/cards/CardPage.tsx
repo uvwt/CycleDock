@@ -448,15 +448,77 @@ function CardPageContent() {
         </div>
 
         <section
-          className={`relative flex flex-1 min-h-0 min-w-0 flex-col ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
         >
-          <header
-            aria-hidden="true"
+          {/* 手机端固定顶部栏：常驻视口顶部，包含全局导航、抽屉菜单与操作按钮 */}
+          <div
             data-mobile-top-surface
-            className="pointer-events-none fixed inset-x-0 top-0 z-10 h-14 bg-transparent md:hidden"
-          />
-          {/* 移除整块占位导航栏，操作按钮悬浮在右上角 */}
-          <div className="absolute top-3 right-3 z-20 flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
+            className={`sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+          >
+            <div className="flex items-center gap-1.5">
+              <MobileGlobalNavMenu />
+              <button
+                type="button"
+                title={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                aria-label={
+                  isDiscussion
+                    ? t("打开讨论列表")
+                    : isOngoing
+                      ? t("打开计划列表")
+                      : t("打开工作列表")
+                }
+                onClick={() => setContextSidebarOpen(true)}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <PanelLeft className="size-4" />
+              </button>
+            </div>
+
+            <div className="relative flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-expanded={infoOpen}
+                aria-label={t("任务详情")}
+                title={t("任务详情")}
+                onClick={() => setInfoOpen((prev) => !prev)}
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
+                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
+                } ${
+                  infoOpen
+                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
+                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <Info className="size-4 sm:size-3.5" />
+                <span className="hidden sm:inline">{t("任务详情")}</span>
+                {liveTaskTotal > 0 && (
+                  <span className="tabular-nums text-[11px] opacity-80">
+                    {liveTaskCompleted}/{liveTaskTotal}
+                  </span>
+                )}
+              </button>
+              {!isDiscussion && <CardStatusSwitch card={card} />}
+              <CardActions
+                card={card}
+                variant="toolbar"
+                preserve={card.id === mainDiscussion.data?.id}
+                taskDetails={{
+                  detail: detail.data,
+                  projectCards: projectCards.data || [],
+                }}
+                onDeleted={back}
+              />
+            </div>
+          </div>
+
+          {/* 平板/桌面端：操作按钮悬浮在右上角 */}
+          <div className="hidden md:flex absolute top-3 right-3 z-20 max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
@@ -493,31 +555,31 @@ function CardPageContent() {
                 onDeleted={back}
               />
             </div>
-
-            {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
-            <div className="lg:hidden">
-              <Sheet
-                open={infoOpen}
-                onOpenChange={setInfoOpen}
-                side="right"
-                title={t("任务详情")}
-              >
-                <div className="-m-5 p-4">
-                  <CardHeaderInfoCard
-                    card={card}
-                    detail={detail.data}
-                    projectCards={projectCards.data || []}
-                    task={stream.live?.task}
-                    onSync={sync}
-                    onClose={() => setInfoOpen(false)}
-                  />
-                </div>
-              </Sheet>
-            </div>
           </div>
 
-          {/* 移动端呼出侧边栏悬浮在左上角 */}
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 sm:left-4 lg:hidden">
+          {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
+          <div className="lg:hidden">
+            <Sheet
+              open={infoOpen}
+              onOpenChange={setInfoOpen}
+              side="right"
+              title={t("任务详情")}
+            >
+              <div className="-m-5 p-4">
+                <CardHeaderInfoCard
+                  card={card}
+                  detail={detail.data}
+                  projectCards={projectCards.data || []}
+                  task={stream.live?.task}
+                  onSync={sync}
+                  onClose={() => setInfoOpen(false)}
+                />
+              </div>
+            </Sheet>
+          </div>
+
+          {/* 平板端呼出侧边栏悬浮在左上角 */}
+          <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
             <MobileGlobalNavMenu />
             <MobileQuickCardSwitcher
               projectID={card.project_id}
