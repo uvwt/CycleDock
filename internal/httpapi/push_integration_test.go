@@ -117,13 +117,30 @@ func TestPushWaitsUntilThePageCloses(t *testing.T) {
 		t.Fatalf("user comment was pushed: %+v", sender.sent)
 	}
 
-	// 2. 模型回复消息，当页面还开着时（Touch 活跃状态）不应推送
+	// 2. 模型回复消息：中间进度气泡（end_turn=false）在页面 Idle 时也不应触发推送；
+	// 最终答复（end_turn=true）在页面还开着时（Touch 活跃状态）不应推送，关掉后补推。
 	if _, err := dataStore.CreateHumanTurn(ctx, workspaceID, card.ID, sourceID, "问个问题", uuid.NewString(), domain.DispatchModeEnqueue); err != nil {
 		t.Fatal(err)
 	}
 	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, runner.ID, time.Now(), time.Minute)
 	if err != nil || claim == nil {
 		t.Fatalf("claim turn: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: runner.ID, Message: store.ReplyMessage{Type: "text", Content: "正在排查中…", EndTurn: false},
+		IdempotencyKey: "push-progress-ignored",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dataStore.IdlePushSubscription(ctx, workspaceID, userID, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.deliverPushes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("intermediate progress message was pushed: %+v", sender.sent)
 	}
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
 		WorkspaceID: workspaceID, CardID: card.ID, AttemptID: claim.Attempt.ID,
@@ -289,7 +306,8 @@ func TestSendCardPushTruncatesLongPreviewAndIsolatesPartialFailures(t *testing.T
 		{Endpoint: badEndpoint, P256dh: "k1", AuthSecret: "a1"},
 		{Endpoint: goodEndpoint, P256dh: "k2", AuthSecret: "a2"},
 	}
-	if err := api.sendCardPush(context.Background(), uuid.New(), update, subs); err != nil {
+	workspaceID := uuid.New()
+	if err := api.sendCardPush(context.Background(), workspaceID, update, subs); err != nil {
 		t.Fatalf("partial success should advance snapshot instead of retrying forever: %v", err)
 	}
 	if len(sender.sent) != 1 || sender.sent[0].endpoint != goodEndpoint {
@@ -304,6 +322,10 @@ func TestSendCardPushTruncatesLongPreviewAndIsolatesPartialFailures(t *testing.T
 	}
 	if utf8.RuneCountInString(decoded.Body) != maxPushBodyRunes || !strings.HasSuffix(decoded.Body, "…") {
 		t.Fatalf("body not truncated: len=%d", utf8.RuneCountInString(decoded.Body))
+	}
+	expectedTag := "card:" + workspaceID.String() + ":" + update.ID
+	if decoded.Tag != expectedTag {
+		t.Fatalf("tag = %q, want %q", decoded.Tag, expectedTag)
 	}
 
 	// 全部有效订阅都投递失败时仍返回错误，以便下一轮重试。

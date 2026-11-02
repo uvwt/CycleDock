@@ -38,6 +38,7 @@ type pushPayload struct {
 	Title       string `json:"title"`
 	Body        string `json:"body"`
 	URL         string `json:"url"`
+	Tag         string `json:"tag"`
 }
 
 func (api *API) getPushConfig(w http.ResponseWriter, _ *http.Request) {
@@ -314,6 +315,7 @@ func (api *API) sendCardPush(ctx context.Context, workspaceID uuid.UUID, update 
 		Type: "card.updated", WorkspaceID: workspaceID.String(), CardID: update.ID, Revision: update.Revision,
 		Title: title, Body: truncatePushText(cardPushBody(update), maxPushBodyRunes),
 		URL: "/" + section + "/" + url.PathEscape(update.ProjectID) + "/" + url.PathEscape(update.ID),
+		Tag: "card:" + workspaceID.String() + ":" + update.ID,
 	})
 	if err != nil {
 		return err
