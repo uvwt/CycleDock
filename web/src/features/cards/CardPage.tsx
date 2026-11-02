@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Info, PanelLeft, Plus } from "lucide-react";
+import { Info, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -482,15 +482,6 @@ function CardPageContent() {
               </button>
               <DeviceMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
-              <button
-                type="button"
-                onClick={startDiscussion}
-                title={t("新建讨论")}
-                aria-label={t("新建讨论")}
-                className="grid size-9 place-items-center rounded-xl border border-line bg-surface text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              >
-                <Plus className="size-4" />
-              </button>
               <CardActions
                 card={card}
                 variant="toolbar"
