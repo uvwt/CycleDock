@@ -42,14 +42,14 @@ export default function ChatHome() {
     }
   }, [mobileListOpen]);
 
-// 移动端仅在当前打开了移动端抽屉列表时才激活向左滑关闭手势；
-  // 避免未展开移动抽屉时向左滑与列表项的 SwipeableRow（如向左滑置顶/删除）发生手势冲突
+  // 移动端仅在当前打开了移动端抽屉列表时才激活向左滑关闭手势；
+  // 避免未展开移动抽屉时向左滑与列表项的 SwipeableRow（如向左滑置顶/删除）发生手势冲突；
+  // 不设 edgeWidth，允许在除会话输入窗口外的页面任意空白区域右滑呼出讨论列表
   const containerRef = useSwipeGesture<HTMLElement>({
     onSwipeRight: handleSwipeRight,
     onSwipeLeft: mobileListOpen ? handleSwipeLeft : undefined,
     threshold: 45,
     horizontalRatio: 1.2,
-    edgeWidth: 60, // 靠近屏幕左侧边缘更易唤起
   });
   const {
     projectID,
@@ -158,7 +158,11 @@ export default function ChatHome() {
                   </h1>
                 </div>
 
-                <div ref={composerRef} className="w-full">
+                <div
+                  ref={composerRef}
+                  data-no-swipe="true"
+                  className="w-full"
+                >
                   <DiscussionStartComposer
                     key={projectID}
                     projectID={projectID}

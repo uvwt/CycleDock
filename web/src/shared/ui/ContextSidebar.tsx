@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Pin } from "lucide-react";
 import { SwipeableRow, type SwipeActionItem } from "./SwipeableRow";
 import { Skeleton } from "./skeleton";
 
@@ -81,6 +82,7 @@ export function ContextSidebarSkeleton({
 
 export function ContextSidebarItem({
   active,
+  pinned = false,
   icon,
   title,
   description,
@@ -91,6 +93,7 @@ export function ContextSidebarItem({
   onClick,
 }: {
   active: boolean;
+  pinned?: boolean;
   icon?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
@@ -118,9 +121,14 @@ export function ContextSidebarItem({
           {icon ? <div className={`shrink-0 ${description ? "mt-0.5" : ""}`}>{icon}</div> : null}
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-1.5">
-              <p className="truncate text-[13px] leading-5">
-                {title}
-              </p>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <p className="truncate text-[13px] leading-5">
+                  {title}
+                </p>
+                {pinned ? (
+                  <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                ) : null}
+              </div>
               {meta && !description ? (
                 <span
                   className={`shrink-0 text-[11px] font-normal tabular-nums text-faint group-hover:text-muted-foreground transition-opacity duration-150 ${
@@ -154,7 +162,7 @@ export function ContextSidebarItem({
       </button>
       {/* 桌面端 hover 时展示 actions，移动端触控屏避免与手势冲突；滑开抽屉时隐藏 */}
       {actions ? (
-        <div className="hidden [@media(hover:hover)]:flex absolute top-1/2 right-1.5 -translate-y-1/2 items-center group-data-[swipe-open=true]/swipe:hidden">
+        <div className="hidden [@media(hover:hover)]:flex opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto absolute top-1/2 right-1.5 -translate-y-1/2 items-center group-data-[swipe-open=true]/swipe:hidden">
           {actions}
         </div>
       ) : null}

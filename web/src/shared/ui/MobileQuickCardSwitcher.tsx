@@ -9,7 +9,9 @@ import {
   ShieldCheck,
   CheckCircle2,
   CalendarClock,
+  Pencil,
   Pin,
+  PinOff,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -24,6 +26,7 @@ import { api } from "../api/client";
 import { keys } from "../../app/query";
 import { CardStatusDot, getCardVisualStatus } from "./CardStatusDot";
 import { ConfirmDialog } from "./components";
+import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
 import { cn } from "../lib/utils";
 
@@ -213,6 +216,14 @@ export function QuickCardSwitcherModal({
 
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+  const [editTarget, setEditTarget] = useState<Card | null>(null);
+
+  const mainDiscussion = useQuery({
+    queryKey: keys.mainDiscussion(projectID),
+    queryFn: () => api.mainDiscussion(projectID),
+    enabled: Boolean(projectID),
+  });
+  const mainDiscussionID = mainDiscussion.data?.id || "";
 
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
@@ -396,7 +407,8 @@ export function QuickCardSwitcherModal({
             <SwipeActionGroup className="flex flex-col gap-2 p-1">
               {currentList.map((card) => {
                 const isActive = card.id === activeCardID;
-                const isPinned = Boolean(card.pinned_at);
+                const isMain = card.id === mainDiscussionID;
+                const isPinned = isMain || Boolean(card.pinned_at);
                 const visualStatus = getCardVisualStatus(
                   card,
                   isActive,
@@ -404,20 +416,33 @@ export function QuickCardSwitcherModal({
                 );
 
                 const swipeActions = [
-                  {
-                    key: "pin",
-                    label: isPinned ? t("取消置顶") : t("置顶"),
-                    icon: <Pin className="size-4" />,
-                    variant: "primary" as const,
-                    onClick: () => {
-                      pinMutation.mutate({
-                        id: card.id,
-                        pinned: !isPinned,
-                      });
-                    },
-                  },
-                  ...(card.kind !== "discussion"
+                  ...(!isMain
                     ? [
+                        {
+                          key: "pin",
+                          label: isPinned ? t("取消置顶") : t("置顶"),
+                          icon: isPinned ? (
+                            <PinOff className="size-4" />
+                          ) : (
+                            <Pin className="size-4 rotate-45" />
+                          ),
+                          variant: "primary" as const,
+                          onClick: () => {
+                            pinMutation.mutate({
+                              id: card.id,
+                              pinned: !isPinned,
+                            });
+                          },
+                        },
+                        {
+                          key: "edit",
+                          label: t("编辑"),
+                          icon: <Pencil className="size-4" />,
+                          variant: "secondary" as const,
+                          onClick: () => {
+                            setEditTarget(card);
+                          },
+                        },
                         {
                           key: "delete",
                           label: t("删除"),
@@ -521,6 +546,12 @@ export function QuickCardSwitcherModal({
               deleteMutation.mutate(deleteTarget);
             }
           }}
+        />
+
+        <EditCardDialog
+          card={editTarget}
+          open={Boolean(editTarget)}
+          onOpenChange={(isOpen) => !isOpen && setEditTarget(null)}
         />
       </SheetContent>
     </UISheet>

@@ -55,7 +55,7 @@ export interface SwipeActionItem {
   icon?: React.ReactNode;
   onClick: (e: React.MouseEvent) => void;
   className?: string;
-  variant?: "default" | "destructive" | "warning" | "primary" | "danger";
+  variant?: "default" | "destructive" | "warning" | "primary" | "danger" | "secondary";
 }
 
 export interface SwipeableRowProps {
@@ -109,9 +109,14 @@ export function SwipeableRow({
 
   // 手势跟踪 Ref 保证最新值
   const offsetRef = useRef(0);
-  offsetRef.current = offset;
   const isOpenRef = useRef(false);
-  isOpenRef.current = isOpen;
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const getActionsWidth = useCallback(() => {
     // 纯图标模式下每个操作按钮固定 44px 宽
@@ -124,7 +129,9 @@ export function SwipeableRow({
 
   const close = useCallback(() => {
     setOffset(0);
+    offsetRef.current = 0;
     setIsOpen(false);
+    isOpenRef.current = false;
     onOpenChange?.(false);
     if (group && group.activeId === itemId) {
       group.setActiveId(null);
@@ -137,7 +144,9 @@ export function SwipeableRow({
   const open = useCallback(() => {
     const width = getActionsWidth();
     setOffset(-width);
+    offsetRef.current = -width;
     setIsOpen(true);
+    isOpenRef.current = true;
     onOpenChange?.(true);
     if (group) {
       group.setActiveId(itemId);
@@ -229,6 +238,7 @@ export function SwipeableRow({
         }
 
         setOffset(targetOffset);
+        offsetRef.current = targetOffset;
         return memo;
       }
 
@@ -291,10 +301,9 @@ export function SwipeableRow({
       ref={containerRef}
       data-swipe-open={isOpen ? "true" : undefined}
       className={cn(
-        "group/swipe relative select-none touch-pan-y",
+        "group/swipe relative select-none",
         className,
       )}
-      {...bind()}
     >
       {/* 隐藏在底部的快捷操作区：固定在右侧，随上层卡片整体左移而显露；过度左滑时动态拉伸跟随 */}
       <div
@@ -323,7 +332,9 @@ export function SwipeableRow({
                 ? "bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white"
                 : act.variant === "primary"
                   ? "bg-primary hover:bg-primary/90 active:bg-primary/80 text-primary-foreground"
-                  : "bg-muted text-foreground hover:bg-muted/80 active:bg-muted";
+                  : act.variant === "secondary"
+                    ? "bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white"
+                    : "bg-muted text-foreground hover:bg-muted/80 active:bg-muted";
 
           return (
             <button
@@ -337,14 +348,14 @@ export function SwipeableRow({
                 act.onClick(e);
               }}
               className={cn(
-                "flex items-center justify-center flex-1 min-w-[44px] transition-colors select-none",
+                "flex items-center justify-center flex-1 min-w-[44px] transition-colors select-none touch-manipulation active:opacity-85",
                 index > 0 && "border-l border-white/20 dark:border-black/20",
                 variantClasses,
                 act.className,
               )}
             >
               {act.icon ? (
-                <span className="shrink-0 size-4 flex items-center justify-center">
+                <span className="shrink-0 size-4 flex items-center justify-center pointer-events-none">
                   {act.icon}
                 </span>
               ) : null}
@@ -355,6 +366,7 @@ export function SwipeableRow({
 
       {/* 滑动卡片主体（整体随手势向左平移，露出底层操作按钮） */}
       <div
+        {...bind()}
         style={{
           transform: `translateX(${offset}px)`,
           transition: isSwiping
@@ -370,7 +382,7 @@ export function SwipeableRow({
           }
         }}
         className={cn(
-          "relative z-10 w-full overflow-hidden bg-surface rounded-xl transition-[border-radius]",
+          "relative z-10 w-full overflow-hidden bg-surface rounded-xl transition-[border-radius] touch-pan-y",
           offset < -2
             ? "rounded-r-none [&_*]:rounded-r-none"
             : "",
