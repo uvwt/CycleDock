@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -29,21 +29,87 @@ import { cn } from "../lib/utils";
 
 type SwitcherTab = "working" | "review" | "discussion" | "ongoing" | "done";
 
-export function MobileQuickCardSwitcher({
+export interface QuickCardSwitcherTriggerProps {
+  projectID: string;
+  className?: string;
+  onClick: () => void;
+}
+
+/**
+ * 快速切换入口按钮
+ * 仅负责渲染触发按钮与活跃任务数字角标，支持在移动端顶栏、桌面端工具栏等不同布局区域多次复用，
+ * 避免重复挂载底层 SheetPortal 与全局键盘监听。
+ */
+export function QuickCardSwitcherTrigger({
   projectID,
-  activeCardID,
-  activeAttemptStatus,
   className = "",
-}: {
+  onClick,
+}: QuickCardSwitcherTriggerProps) {
+  const { t } = useTranslation();
+  const cardsQuery = useQuery({
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
+    enabled: Boolean(projectID),
+  });
+
+  const cards: Card[] = useMemo(() => cardsQuery.data || [], [cardsQuery.data]);
+
+  const activeBadgeCount = useMemo(() => {
+    let count = 0;
+    for (const card of cards) {
+      if (
+        card.kind === "todo" &&
+        (card.todo_state === "working" || card.todo_state === "review")
+      ) {
+        count++;
+      }
+    }
+    return count;
+  }, [cards]);
+
+  return (
+    <button
+      type="button"
+      title={t("快速切换卡片 (⌘K)")}
+      aria-label={t("快速切换卡片 (⌘K)")}
+      onClick={onClick}
+      className={cn(
+        "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground",
+        className,
+      )}
+    >
+      <Layers className="size-4" />
+      {activeBadgeCount > 0 && (
+        <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground shadow">
+          {activeBadgeCount > 99 ? "99+" : activeBadgeCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
+export interface QuickCardSwitcherModalProps {
   projectID: string;
   activeCardID?: string;
   activeAttemptStatus?: string;
-  className?: string;
-}) {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * 快速切换弹窗本体
+ * 负责全局 ⌘K/Ctrl+K 快捷键、Tab 分类筛选、滑动操作与卡片跳转导航。
+ * 移动端以标准底部 Sheet 呈现，桌面端转换为居中命令面板，且动画采用平滑渐隐缩放以消除位移冲突与掉帧。
+ */
+export function QuickCardSwitcherModal({
+  projectID,
+  activeCardID,
+  activeAttemptStatus,
+  open,
+  onOpenChange,
+}: QuickCardSwitcherModalProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<SwitcherTab>("working");
 
   const cardsQuery = useQuery({
     queryKey: keys.cards(projectID),
@@ -105,35 +171,37 @@ export function MobileQuickCardSwitcher({
 
   const activeBadgeCount = workingCards.length + reviewCards.length;
 
-  // 打开抽屉时自动选择最有优先级的 Tab
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) {
-      // 优先聚焦当前卡片所在分组或有活跃任务的分组
-      if (activeCardID) {
-        const currentCard = cards.find((c) => c.id === activeCardID);
-        if (currentCard) {
-          if (currentCard.kind === "discussion") {
-            setActiveTab("discussion");
-          } else if (currentCard.kind === "ongoing") {
-            setActiveTab("ongoing");
-          } else if (currentCard.kind === "todo" && currentCard.todo_state === "review") {
-            setActiveTab("review");
-          } else if (currentCard.kind === "todo" && currentCard.todo_state === "done") {
-            setActiveTab("done");
-          } else {
-            setActiveTab("working");
-          }
-          setOpen(true);
-          return;
+  const [selectedTab, setSelectedTab] = useState<SwitcherTab | null>(null);
+
+  const defaultTab = useMemo((): SwitcherTab => {
+    if (activeCardID) {
+      const currentCard = cards.find((c) => c.id === activeCardID);
+      if (currentCard) {
+        if (currentCard.kind === "discussion") return "discussion";
+        if (currentCard.kind === "ongoing") return "ongoing";
+        if (currentCard.kind === "todo") {
+          if (currentCard.todo_state === "review") return "review";
+          if (currentCard.todo_state === "done") return "done";
+          return "working";
         }
       }
-      setActiveTab("discussion");
     }
-    setOpen(nextOpen);
-  };
+    return "discussion";
+  }, [activeCardID, cards]);
+
+  const activeTab = selectedTab || defaultTab;
+  const setActiveTab = setSelectedTab;
+
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSelectedTab(null);
+    }
+    onOpenChange(nextOpen);
+  }, [onOpenChange]);
 
   const handleSelectCard = (targetCard: Card) => {
-    setOpen(false);
+    setSelectedTab(null);
+    onOpenChange(false);
     if (targetCard.kind === "discussion") {
       navigate(`/chat/${targetCard.project_id}/${targetCard.id}`);
     } else if (targetCard.kind === "ongoing") {
@@ -227,209 +295,315 @@ export function MobileQuickCardSwitcher({
     },
   ];
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 桌面端快捷键：Cmd+K (macOS) 或 Ctrl+K (Windows/Linux)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        handleOpenChange(!open);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, handleOpenChange]);
+
   return (
-    <>
-      <button
-        type="button"
-        title={t("快速切换卡片")}
-        aria-label={t("快速切换卡片")}
-        onClick={() => handleOpenChange(true)}
+    <UISheet open={open} onOpenChange={handleOpenChange}>
+      <SheetContent
+        side="bottom"
+        showCloseButton={false}
+        aria-describedby={undefined}
+        onOpenAutoFocus={(e) => e.preventDefault()}
         className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground md:hidden",
-          className,
+          "fixed inset-x-0 bottom-0 z-50 flex max-h-[82vh] h-[70vh] flex-col rounded-t-2xl border-t border-line bg-surface p-0 shadow-2xl focus:outline-none sm:max-w-none",
+          // 桌面端（>= 768px）形态转换为居中悬浮命令面板：
+          // 1. 使用 inset-x-0 mx-auto 纯盒模型居中，避免 translate-x-[-50%] 与 CSS keyframe exit 的 X 位移冲突
+          // 2. 覆盖默认 slide-out-to-bottom 为 slide-out-to-bottom-0，改用渐隐 + 缩放 (fade-out-0 zoom-out-95)
+          // 3. 关闭桌面端 transition，使 200ms 的 exit keyframe 动画干净执行，消除双重 transform 过渡导致的掉帧与白屏闪烁
+          "md:bottom-auto md:top-[12vh] md:inset-x-0 md:mx-auto md:translate-x-0 md:w-full md:max-w-xl md:h-[600px] md:max-h-[76vh] md:rounded-2xl md:border",
+          "md:transition-none md:data-[state=open]:duration-200 md:data-[state=closed]:duration-200",
+          "md:data-[state=open]:slide-in-from-bottom-0 md:data-[state=open]:fade-in-0 md:data-[state=open]:zoom-in-95",
+          "md:data-[state=closed]:slide-out-to-bottom-0 md:data-[state=closed]:fade-out-0 md:data-[state=closed]:zoom-out-95",
         )}
       >
-        <Layers className="size-4" />
-        {activeBadgeCount > 0 && (
-          <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground shadow">
-            {activeBadgeCount > 99 ? "99+" : activeBadgeCount}
-          </span>
-        )}
-      </button>
+        {/* 拖动提示条（仅移动端触屏展示） */}
+        <div className="flex w-full items-center justify-center pt-2.5 pb-1 md:hidden">
+          <span className="h-1.5 w-10 rounded-full bg-muted-foreground/25" />
+        </div>
 
-      <UISheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          side="bottom"
-          aria-describedby={undefined}
-          onOpenAutoFocus={(e) => e.preventDefault()}
-          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[82vh] h-[70vh] flex-col rounded-t-2xl border-t border-line bg-surface p-0 shadow-2xl focus:outline-none sm:max-w-none"
-        >
-          {/* 拖动提示条 */}
-          <div className="flex w-full items-center justify-center pt-2.5 pb-1">
-            <span className="h-1.5 w-10 rounded-full bg-muted-foreground/25" />
-          </div>
-
-          <SheetHeader className="border-b border-divider px-4 py-2 text-left">
-            <div className="flex items-center justify-between">
+        <SheetHeader className="border-b border-divider px-4 py-2.5 text-left">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
               <SheetTitle className="text-base font-semibold text-foreground">
                 {t("快速切换")}
               </SheetTitle>
-              {activeBadgeCount > 0 && (
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                  {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
-                </span>
-              )}
+              <span className="hidden md:inline-flex items-center rounded border border-line bg-muted/60 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+                ⌘K / Ctrl+K
+              </span>
             </div>
+            {activeBadgeCount > 0 && (
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
+              </span>
+            )}
+          </div>
 
-            {/* 分类 Tabs */}
-            <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    data-state={isActive ? "active" : "inactive"}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={cn(
-                      "flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition",
-                      isActive
-                        ? "bg-muted text-foreground shadow-xs font-semibold"
-                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                      tab.colorClasses,
-                    )}
-                  >
-                    <Icon className="size-3.5" />
-                    <span>{tab.label}</span>
-                    {tab.count > 0 && (
-                      <span
-                        className={cn(
-                          "rounded-full px-1.5 py-0.2 text-[10px] tabular-nums font-semibold",
-                          isActive
-                            ? "bg-foreground/10 text-foreground"
-                            : "bg-muted-foreground/15 text-muted-foreground",
-                        )}
-                      >
-                        {tab.count}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </SheetHeader>
-
-          {/* 卡片切换列表 */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-3 scrollbar-thin">
-            {currentList.length === 0 ? (
-              <div className="flex h-44 flex-col items-center justify-center text-center text-muted-foreground">
-                <Sparkles className="mb-2 size-6 stroke-1 text-placeholder" />
-                <p className="text-xs">{t("当前分类暂无内容")}</p>
-              </div>
-            ) : (
-              <SwipeActionGroup className="space-y-1.5">
-                {currentList.map((item) => {
-                  const isCurrent = item.id === activeCardID;
-                  const visualStatus = getCardVisualStatus(
-                    item,
-                    isCurrent,
-                    isCurrent ? activeAttemptStatus : undefined,
-                  );
-
-                  const swipeActions = [
-                    {
-                      key: "pin",
-                      label: item.pinned_at ? t("取消置顶") : t("置顶"),
-                      icon: <Pin className="size-4 rotate-45" />,
-                      variant: "primary" as const,
-                      onClick: () => {
-                        pinMutation.mutate({
-                          id: item.id,
-                          pinned: !item.pinned_at,
-                        });
-                      },
-                    },
-                    ...(item.kind !== "discussion"
-                      ? [
-                          {
-                            key: "delete",
-                            label: t("删除"),
-                            icon: <Trash2 className="size-4" />,
-                            variant: "danger" as const,
-                            onClick: () => {
-                              setDeleteTarget(item);
-                            },
-                          },
-                        ]
-                      : []),
-                  ];
-
-                  return (
-                    <SwipeableRow
-                      key={item.id}
-                      actions={swipeActions}
-                      className="rounded-xl"
+          {/* 分类 Tabs */}
+          <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  data-state={isActive ? "active" : "inactive"}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition",
+                    isActive
+                      ? "bg-primary/10 font-semibold text-primary shadow-xs"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <Icon className={cn("size-3.5", isActive ? "" : "opacity-70")} />
+                  <span>{tab.label}</span>
+                  {tab.count > 0 && (
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.2 text-[10px] tabular-nums",
+                        isActive
+                          ? "bg-primary text-primary-foreground font-bold"
+                          : "bg-muted text-muted-foreground",
+                      )}
                     >
-                      <button
-                        type="button"
-                        onClick={() => handleSelectCard(item)}
-                        className={cn(
-                          "group flex w-full items-start gap-2.5 rounded-xl border p-2.5 text-left transition active:scale-[0.99]",
-                          isCurrent
-                            ? "border-primary/40 bg-primary/5 shadow-xs"
-                            : "border-transparent bg-canvas/60 hover:border-line hover:bg-muted/60",
-                        )}
-                      >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </SheetHeader>
+
+        {/* 任务/讨论列表 */}
+        <div className="flex-1 overflow-y-auto px-3 py-2.5 min-h-0">
+          {currentList.length === 0 ? (
+            <div className="flex h-40 flex-col items-center justify-center text-center text-muted-foreground">
+              <p className="text-xs">{t("该分类下暂无卡片")}</p>
+            </div>
+          ) : (
+            <SwipeActionGroup className="flex flex-col gap-2 p-1">
+              {currentList.map((card) => {
+                const isActive = card.id === activeCardID;
+                const isPinned = Boolean(card.pinned_at);
+                const visualStatus = getCardVisualStatus(
+                  card,
+                  isActive,
+                  isActive ? activeAttemptStatus : undefined,
+                );
+
+                const swipeActions = [
+                  {
+                    key: "pin",
+                    label: isPinned ? t("取消置顶") : t("置顶"),
+                    icon: <Pin className="size-4" />,
+                    variant: "primary" as const,
+                    onClick: () => {
+                      pinMutation.mutate({
+                        id: card.id,
+                        pinned: !isPinned,
+                      });
+                    },
+                  },
+                  ...(card.kind !== "discussion"
+                    ? [
+                        {
+                          key: "delete",
+                          label: t("删除"),
+                          icon: <Trash2 className="size-4" />,
+                          variant: "danger" as const,
+                          onClick: () => {
+                            setDeleteTarget(card);
+                          },
+                        },
+                      ]
+                    : []),
+                ];
+
+                return (
+                  <SwipeableRow
+                    key={card.id}
+                    id={card.id}
+                    actions={swipeActions}
+                    className="rounded-xl"
+                  >
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => handleSelectCard(card)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleSelectCard(card);
+                        }
+                      }}
+                      className={cn(
+                        "group relative flex w-full select-none items-center justify-between rounded-xl border px-3.5 py-2.5 text-left transition active:scale-[0.99] cursor-pointer",
+                        isActive
+                          ? "border-primary/40 bg-primary/5 text-foreground ring-1 ring-primary/25 shadow-xs"
+                          : "border-line/60 bg-canvas/70 hover:border-line hover:bg-muted/70",
+                      )}
+                    >
+                      <div className="flex min-w-0 flex-1 items-start gap-2.5">
                         <div className="mt-0.5 shrink-0">
-                          {item.kind === "discussion" ? (
+                          {card.kind === "discussion" ? (
                             <MessageSquare className="size-3.5 text-indigo-500" />
-                          ) : item.kind === "ongoing" ? (
+                          ) : card.kind === "ongoing" ? (
                             <CalendarClock className="size-3.5 text-violet-500" />
                           ) : (
                             <CardStatusDot status={visualStatus} className="size-2.5" />
                           )}
                         </div>
-
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
-                            <span
+                            <h4
                               className={cn(
                                 "truncate text-xs font-medium leading-snug",
-                                isCurrent ? "font-semibold text-primary" : "text-foreground",
+                                isActive ? "text-primary font-semibold" : "text-foreground",
                               )}
                             >
-                              {item.title || t("未命名")}
-                            </span>
-                            {item.pinned_at && (
-                              <Pin className="size-2.5 shrink-0 text-amber-500 fill-amber-500" />
-                            )}
-                            {isCurrent && (
-                              <span className="shrink-0 rounded bg-primary/15 px-1 py-0.2 text-[9px] font-semibold text-primary">
-                                {t("当前")}
-                              </span>
+                              {card.title ||
+                                (card.kind === "discussion"
+                                  ? t("未命名讨论")
+                                  : card.kind === "ongoing"
+                                    ? t("未命名定时任务")
+                                    : t("未命名卡片"))}
+                            </h4>
+                            {isPinned && (
+                              <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
                             )}
                           </div>
-
-                          {item.description && (
-                            <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">
-                              {item.description}
+                          {card.description && (
+                            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                              {card.description}
                             </p>
                           )}
                         </div>
-                      </button>
-                    </SwipeableRow>
-                  );
-                })}
-              </SwipeActionGroup>
-            )}
-          </div>
+                      </div>
 
-          <ConfirmDialog
-            open={Boolean(deleteTarget)}
-            onOpenChange={(open) => !open && setDeleteTarget(null)}
-            title={t("删除这个卡片？")}
-            description={t("删除卡片将同步清理相关记录，该操作无法撤销。")}
-            confirmLabel={t("删除卡片")}
-            pending={deleteMutation.isPending}
-            onConfirm={() => {
-              if (deleteTarget) {
-                deleteMutation.mutate(deleteTarget);
-              }
-            }}
-          />
-        </SheetContent>
-      </UISheet>
+                      {/* 状态徽标与当前标记 */}
+                      <div className="ml-2 flex shrink-0 items-center gap-1.5">
+                        {isActive && (
+                          <span className="flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            <Sparkles className="size-2.5" />
+                            {t("当前")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </SwipeableRow>
+                );
+              })}
+            </SwipeActionGroup>
+          )}
+        </div>
+
+        <ConfirmDialog
+          open={Boolean(deleteTarget)}
+          onOpenChange={(isOpen) => !isOpen && setDeleteTarget(null)}
+          title={t("删除这个卡片？")}
+          description={t("删除卡片将同步清理相关记录，该操作无法撤销。")}
+          confirmLabel={t("删除卡片")}
+          pending={deleteMutation.isPending}
+          onConfirm={() => {
+            if (deleteTarget) {
+              deleteMutation.mutate(deleteTarget);
+            }
+          }}
+        />
+      </SheetContent>
+    </UISheet>
+  );
+}
+
+export interface QuickCardSwitcherProps {
+  projectID: string;
+  activeCardID?: string;
+  activeAttemptStatus?: string;
+  className?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  triggerOnly?: boolean;
+  modalOnly?: boolean;
+}
+
+/**
+ * 完整组合版 QuickCardSwitcher
+ * 提供向后兼容性；当仅需按钮时可传 triggerOnly，仅需弹窗时可传 modalOnly。
+ */
+export function MobileQuickCardSwitcher({
+  projectID,
+  activeCardID,
+  activeAttemptStatus,
+  className = "",
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  triggerOnly = false,
+  modalOnly = false,
+}: QuickCardSwitcherProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (!isControlled) {
+        setInternalOpen(nextOpen);
+      }
+      controlledOnOpenChange?.(nextOpen);
+    },
+    [isControlled, controlledOnOpenChange],
+  );
+
+  if (triggerOnly) {
+    return (
+      <QuickCardSwitcherTrigger
+        projectID={projectID}
+        className={className}
+        onClick={() => setOpen(true)}
+      />
+    );
+  }
+
+  if (modalOnly) {
+    return (
+      <QuickCardSwitcherModal
+        projectID={projectID}
+        activeCardID={activeCardID}
+        activeAttemptStatus={activeAttemptStatus}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    );
+  }
+
+  return (
+    <>
+      <QuickCardSwitcherTrigger
+        projectID={projectID}
+        className={className}
+        onClick={() => setOpen(true)}
+      />
+      <QuickCardSwitcherModal
+        projectID={projectID}
+        activeCardID={activeCardID}
+        activeAttemptStatus={activeAttemptStatus}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </>
   );
 }
+
+export { MobileQuickCardSwitcher as QuickCardSwitcher };

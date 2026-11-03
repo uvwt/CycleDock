@@ -265,10 +265,16 @@ export function SwipeableRow({
       }
     },
     {
+      // 仅响应水平手势；纵向滚动由 CSS touch-pan-y 原生处理，互不冲突
       axis: "x",
+      // 区分轻点与拖拽：松手时如果只是滑动操作则拦截 click，避免滑动后误触进入详情
       filterTaps: true,
-      preventScrollAxis: "x",
-      pointer: { touch: true },
+      // 移动端手指触控容差：8px 内微小位移仍视为点击，避免误判为滑动
+      tapsThreshold: 8,
+      // 注意：切勿配置 preventScrollAxis: "x"！
+      // 该选项会在触控设备上引入 250ms 延迟，导致：
+      // 1) 正常轻点（<250ms）被判断为未就绪而被全局拦截 click，导致无法点击跳转详情；
+      // 2) 正常左滑因未满 250ms 触发轴阻断，导致“必须长按才能左滑”。
     },
   );
 
@@ -294,6 +300,8 @@ export function SwipeableRow({
       <div
         ref={actionsRef}
         aria-hidden={!isOpen}
+        onPointerDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
         style={{
           visibility: isActionsVisible ? "visible" : "hidden",
           width: currentActionsWidth,
