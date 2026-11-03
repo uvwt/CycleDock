@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
+import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { MessageSquareText, PanelLeft } from "lucide-react";
@@ -12,7 +12,10 @@ import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import { DiscussionSidebar } from "./DiscussionSidebar";
-import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
+import {
+  QuickCardSwitcherTrigger,
+  QuickCardSwitcherModal,
+} from "../../shared/ui/MobileQuickCardSwitcher";
 import { DiscussionStartComposer } from "./DiscussionStartComposer";
 
 export default function ChatHome() {
@@ -20,6 +23,12 @@ export default function ChatHome() {
   const navigate = useNavigate();
   const listVisible = useContextSidebarVisible();
   const [mobileListOpen, setMobileListOpen] = useState(false);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+
+  // 手机端聊天框区域上滑手势：快速呼出卡片切换面板
+  const composerRef = useSwipeUpGesture<HTMLDivElement>({
+    onSwipeUp: () => setQuickSwitcherOpen(true),
+  });
 
   const handleSwipeRight = useCallback(() => {
     if (typeof window !== "undefined" && window.innerWidth < 768 && !mobileListOpen) {
@@ -127,7 +136,18 @@ export default function ChatHome() {
               >
                 <PanelLeft className="size-5" />
               </button>
-              <MobileQuickCardSwitcher projectID={projectID} />
+              <QuickCardSwitcherTrigger
+                projectID={projectID}
+                onClick={() => setQuickSwitcherOpen(true)}
+              />
+            </div>
+
+            {/* 桌面端右上角快速切换 */}
+            <div className="absolute top-3 right-3 z-10 hidden md:flex items-center gap-1.5 sm:right-4">
+              <QuickCardSwitcherTrigger
+                projectID={projectID}
+                onClick={() => setQuickSwitcherOpen(true)}
+              />
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-6">
@@ -138,10 +158,12 @@ export default function ChatHome() {
                   </h1>
                 </div>
 
-                <DiscussionStartComposer
-                  key={projectID}
-                  projectID={projectID}
-                />
+                <div ref={composerRef} className="w-full">
+                  <DiscussionStartComposer
+                    key={projectID}
+                    projectID={projectID}
+                  />
+                </div>
               </div>
             </div>
           </section>
@@ -180,6 +202,13 @@ export default function ChatHome() {
           />
         </Sheet>
       )}
+
+      {/* 页面全局快速切换弹窗（单例挂载，避免多端 CSS 响应式断点导致 Portal 重复渲染与动画打架） */}
+      <QuickCardSwitcherModal
+        projectID={projectID}
+        open={quickSwitcherOpen}
+        onOpenChange={setQuickSwitcherOpen}
+      />
     </main>
   );
 }

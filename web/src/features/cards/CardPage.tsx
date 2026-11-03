@@ -1,7 +1,7 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
+import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Info, PanelLeft, Plus } from "lucide-react";
@@ -27,7 +27,10 @@ import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card, DeviceTarget, PendingTurn } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
-import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
+import {
+  QuickCardSwitcherTrigger,
+  QuickCardSwitcherModal,
+} from "../../shared/ui/MobileQuickCardSwitcher";
 
 type NavigationState = {
   initialMessage?: string;
@@ -258,6 +261,14 @@ function CardPageContent({
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+
+  // 手机端聊天框区域上滑手势：快速呼出卡片切换面板
+  useSwipeUpGesture({
+    targetRef: composerDockRef,
+    onSwipeUp: () => setQuickSwitcherOpen(true),
+    enabled: isMobile,
+  });
 
   // 手机端滑动手势：右滑呼出左侧导航/卡片抽屉，左滑呼出右侧任务详情
   const handleSwipeRight = useCallback(() => {
@@ -597,10 +608,9 @@ function CardPageContent({
             className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden pointer-events-none bg-transparent"
           >
             <div className="flex items-center gap-1.5 pointer-events-auto">
-              <MobileQuickCardSwitcher
+              <QuickCardSwitcherTrigger
                 projectID={card.project_id}
-                activeCardID={card.id}
-                activeAttemptStatus={current?.status}
+                onClick={() => setQuickSwitcherOpen(true)}
               />
               <button
                 type="button"
@@ -664,6 +674,10 @@ function CardPageContent({
           {/* 平板/桌面端：操作按钮悬浮在右上角 */}
           <div className="hidden md:flex absolute top-3 right-3 z-20 max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
+              <QuickCardSwitcherTrigger
+                projectID={card.project_id}
+                onClick={() => setQuickSwitcherOpen(true)}
+              />
               <button
                 type="button"
                 aria-expanded={infoOpen}
@@ -700,6 +714,15 @@ function CardPageContent({
             </div>
           </div>
 
+          {/* 全局卡片快速切换弹窗（单例挂载，避免多端 CSS 响应式断点导致 Portal 重复渲染与动画打架） */}
+          <QuickCardSwitcherModal
+            projectID={card.project_id}
+            activeCardID={card.id}
+            activeAttemptStatus={current?.status}
+            open={quickSwitcherOpen}
+            onOpenChange={setQuickSwitcherOpen}
+          />
+
           {/* 移动/平板端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭）。
               注意：Radix UI 的 SheetContent 基于 Dialog.Portal 直接挂载到 document.body 根节点，
               纯 CSS 类名 lg:hidden 无法阻止 Portal 渲染，必须在 React 逻辑层由 isMobile 控制挂载，
@@ -732,11 +755,6 @@ function CardPageContent({
 
           {/* 平板端呼出侧边栏悬浮在左上角 */}
           <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
-            <MobileQuickCardSwitcher
-              projectID={card.project_id}
-              activeCardID={card.id}
-              activeAttemptStatus={current?.status}
-            />
             <button
               type="button"
               title={
