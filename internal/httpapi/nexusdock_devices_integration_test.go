@@ -109,7 +109,7 @@ func TestNexusDockDevices_按认证Workspace读取并允许成员查看(t *testi
 	if got.Code != 200 || !response.Available || !response.Connected || len(response.Devices) != 1 || response.Devices[0].ID != "node-a" || refreshCalls.Load() != 1 || strings.Contains(got.Body.String(), "secret") {
 		t.Fatalf("应刷新授权并只返回摘要: %d %s refresh=%d", got.Code, got.Body.String(), refreshCalls.Load())
 	}
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Device selection", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Device selection", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -278,7 +278,18 @@ ADK experimental model routing 不作为唯一故障转移保证。
 
 ## 12. MCP / NexusDock
 
-普通 MCP 优先迁移到 ADK McpToolset。
+### 12.1 普通外部 MCP：按需发现与调用
+
+普通外部 MCP 工具不再在启动时将全部 Schema 一次性全量注入模型上下文，避免大量工具定义挤占有限的 Prompt 预算并引起模型混乱。
+Built-in Agent 通过统一的两个入口按需使用外部 MCP：
+
+1. `search_mcp_tools`：按任务描述自然语言查询、可选连接名筛选或精确工具 ID 检索，返回少量候选（默认 5，上限 15）的稳定 `tool_id`（格式 `<connection_name>:<tool_name>`）、连接名称、工具名称、描述与完整参数 `input_schema`。
+2. `call_mcp_tool`：接收 `tool_id` 和 `arguments`，在调用前按实际 JSON Schema 校验参数，严格从当前认证上下文检查工作区归属与连接启用状态，执行后将实际工具身份、参数及结果写入 Session Event 链路（超过 12k 字符外置为 PostgreSQL Artifact）。
+
+- **复用原则**：同一 Card Session 中一旦通过搜索获得了某个工具的 Schema，后续轮次直接调用 `call_mcp_tool`，无需每个 Turn 重复搜索。
+- **无第二套执行链路**：外部 MCP 统一复用既有连接池、Bearer Token 认证、目录缓存与刷新机制，最终不保留独立工具逐个暴露与按需调用的双重平行入口。
+
+### 12.2 NexusDock 第一方集成
 
 NexusDock 继续作为 first-party integration：
 
@@ -330,7 +341,7 @@ Session-first 不等于“保存所有秘密”。
 - 接 Model Routes；
 - 接 MCP / NexusDock；
 - SSE 映射 ADK Events；
-- waiting_human / confirmation。
+- 提问结束本轮 / confirmation。
 
 ### Phase D — Context & Artifact
 

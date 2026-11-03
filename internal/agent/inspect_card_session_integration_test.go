@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,20 +16,47 @@ import (
 )
 
 func TestInspectCardSessionTool(t *testing.T) {
-	// 验证 buildADKTools 包含 cycledock_inspect_card_session
-	tools, err := buildADKTools(attemptToolRuntime{})
+	// 验证 buildADKTools 仅对 Discussion 卡片挂载 cycledock_inspect_card_session
+	discTools, err := buildADKTools(attemptToolRuntime{
+		context: store.AgentCardContext{CardKind: domain.CardKindDiscussion},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var inspectToolFound bool
-	for _, tool := range tools {
+	var discInspectFound bool
+	for _, tool := range discTools {
 		if tool.Name() == "cycledock_inspect_card_session" {
-			inspectToolFound = true
+			discInspectFound = true
 			break
 		}
 	}
-	if !inspectToolFound {
-		t.Fatalf("expected cycledock_inspect_card_session in internal tools")
+	if !discInspectFound {
+		t.Fatalf("expected cycledock_inspect_card_session in discussion card internal tools")
+	}
+
+	// 验证 Todo / Ongoing 卡片不挂载 cycledock_inspect_card_session
+	todoTools, err := buildADKTools(attemptToolRuntime{
+		context: store.AgentCardContext{CardKind: domain.CardKindTodo},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range todoTools {
+		if tool.Name() == "cycledock_inspect_card_session" {
+			t.Fatalf("cycledock_inspect_card_session must not be mounted on todo cards")
+		}
+	}
+
+	ongoingTools, err := buildADKTools(attemptToolRuntime{
+		context: store.AgentCardContext{CardKind: domain.CardKindOngoing},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range ongoingTools {
+		if tool.Name() == "cycledock_inspect_card_session" {
+			t.Fatalf("cycledock_inspect_card_session must not be mounted on ongoing cards")
+		}
 	}
 
 	dataStore, pool := newAgentIntegrationStore(t)
@@ -42,7 +70,7 @@ func TestInspectCardSessionTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Inspect Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Inspect Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +136,8 @@ func TestInspectCardSessionTool(t *testing.T) {
 		historyService: historySvc,
 		context: store.AgentCardContext{
 			WorkspaceID: workspace.ID,
-			CardID:      todoCard.ID,
+			CardID:      discussionCard.ID,
+			CardKind:    domain.CardKindDiscussion,
 		},
 	}
 
@@ -182,7 +211,7 @@ func TestInspectCardSessionTool(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Foreign Project", "", "")
+		foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Foreign Project", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,6 +243,32 @@ func TestInspectCardSessionTool(t *testing.T) {
 		}
 		if resMap["mode"] != "full" {
 			t.Errorf("expected mode full, got %v", resMap["mode"])
+		}
+	})
+
+	t.Run("rejects non-discussion caller", func(t *testing.T) {
+		todoRuntime := attemptToolRuntime{
+			store:          dataStore,
+			historyService: historySvc,
+			context: store.AgentCardContext{
+				WorkspaceID: workspace.ID,
+				CardID:      todoCard.ID,
+				CardKind:    domain.CardKindTodo,
+			},
+		}
+		todoHandler, err := todoRuntime.internalHandler("cycledock_inspect_card_session")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = todoHandler(&toolCtx, map[string]any{
+			"card_id": todoCard.ID.String(),
+			"mode":    "simple",
+		})
+		if err == nil {
+			t.Fatal("expected error for non-discussion caller, got nil")
+		}
+		if !strings.Contains(err.Error(), "only discussion cards") {
+			t.Errorf("expected error message to mention only discussion cards, got %v", err)
 		}
 	})
 }

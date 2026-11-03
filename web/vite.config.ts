@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   plugins: [react(), tailwindcss()],
   server: {
-    host: "127.0.0.1",
+    host: process.env.DEV_WEB_HOST || "127.0.0.1",
     port: Number(process.env.DEV_WEB_PORT || 5173),
     strictPort: true,
     // 让 API、SSE 和授权回调共用浏览器入口，保持 Cookie 同源。

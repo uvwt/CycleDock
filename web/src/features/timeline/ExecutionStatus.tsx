@@ -11,7 +11,6 @@ import { Button, HintTooltip } from "../../shared/ui/components";
 const attemptLabels: Record<string, string> = {
   queued: "等待执行",
   running: "正在执行",
-  waiting_human: "等待你的回复",
   completed: "执行完成",
   failed: "执行失败",
   superseded: "已被新要求替代",
@@ -154,9 +153,9 @@ function AgentAttempt({
     execution?.started_at || (sameLiveAttempt ? live?.startedAt : undefined);
   const showRunningDevice = Boolean(
     status === "running" &&
-      sameLiveAttempt &&
-      live?.deviceName &&
-      !live.finished,
+    sameLiveAttempt &&
+    live?.deviceName &&
+    !live.finished,
   );
   // 续在上一条气泡后面时，执行耗时挂在组首（第一个气泡），本气泡不单独展示孤立时间行。
   const showRunningHeader =
@@ -164,20 +163,16 @@ function AgentAttempt({
       ? showSender
       : showSender || retried || Boolean(runningStartedAt);
 
-  if (
-    ["cancelled", "superseded", "waiting_human"].includes(status) &&
-    execution
-  ) {
+  if (["cancelled", "superseded"].includes(status) && execution) {
     return (
-      <article
-        className="group flex min-w-0"
-        data-attempt-question={attempt.question ? id : undefined}
-      >
+      <article className="group flex min-w-0">
         <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
           <div className="mb-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
             <span className="font-semibold text-foreground/80">Cycle</span>
             <div className="inline-flex items-center gap-x-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-              <span className="select-none text-[10px] text-muted-foreground/40">•</span>
+              <span className="select-none text-[10px] text-muted-foreground/40">
+                •
+              </span>
               <AttemptMetadata
                 attempt={execution}
                 retryingAttemptID={retryingAttemptID}
@@ -186,13 +181,9 @@ function AgentAttempt({
             </div>
           </div>
           <div className="w-fit max-w-full rounded-2xl bg-muted px-4 py-2.5">
-            {attempt.question ? (
-              <RichText content={attempt.question} />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t("暂无已保存的正文")}
-              </p>
-            )}
+            <p className="text-sm text-muted-foreground">
+              {t("暂无已保存的正文")}
+            </p>
           </div>
         </div>
       </article>
@@ -201,18 +192,6 @@ function AgentAttempt({
 
   return (
     <>
-      {attempt.question && (
-        <article className="flex min-w-0" data-attempt-question={id}>
-          <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
-            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">
-              Cycle
-            </p>
-            <div className="w-fit max-w-full rounded-2xl bg-muted px-3.5 py-2.5">
-              <RichText content={attempt.question} />
-            </div>
-          </div>
-        </article>
-      )}
       <article
         className={
           status === "running"

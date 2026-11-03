@@ -449,18 +449,11 @@ func guardAttemptAppend(
 	if err != nil {
 		return fmt.Errorf("lock attempt for session append: %w", err)
 	}
-	if status != string(domain.AttemptStatusRunning) &&
-		status != string(domain.AttemptStatusWaitingHuman) {
+	if status != string(domain.AttemptStatusRunning) {
 		return domain.ErrAttemptNotCurrent
 	}
 
 	if invocationID == nil {
-		// The first ADK event must bind while the Attempt is still running.
-		// waiting_human may only persist tail events from an already-bound
-		// invocation (for example the FunctionResponse of wait_for_human).
-		if status != string(domain.AttemptStatusRunning) {
-			return domain.ErrAttemptNotCurrent
-		}
 		command, err := tx.Exec(ctx, `
 			UPDATE turn_attempts
 			SET invocation_id=$4, updated_at=now()

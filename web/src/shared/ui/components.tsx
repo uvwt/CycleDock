@@ -43,7 +43,9 @@ export { Input as TextInput } from "./input";
 export { Textarea as TextArea } from "./textarea";
 export { NativeSelect as Select } from "./native-select";
 export { Checkbox } from "./checkbox";
+export { Switch } from "./switch";
 export { Badge } from "./badge";
+export { Skeleton } from "./skeleton";
 export {
   Tooltip,
   TooltipTrigger,
@@ -109,8 +111,8 @@ export function Field({
   error?: string;
 }) {
   return (
-    <Label className="block space-y-1.5 font-normal leading-5 select-auto">
-      <span className="block text-xs font-semibold text-secondary-foreground">
+    <Label className="block min-w-0 space-y-1.5 font-normal leading-5 select-auto">
+      <span className="block truncate text-xs font-semibold text-secondary-foreground" title={label}>
         {label}
       </span>
       {children}
@@ -168,28 +170,54 @@ export function Sheet({
   children,
   side = "right",
   className,
+  padded = true,
+  bodyClassName,
+  onOpenAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  title: string;
+  title?: string;
   children: ReactNode;
   side?: "left" | "right";
   className?: string;
+  padded?: boolean;
+  bodyClassName?: string;
+  onOpenAutoFocus?: (event: Event) => void;
 }) {
   return (
     <UISheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side={side}
         aria-describedby={undefined}
+        onOpenAutoFocus={(event) => {
+          if (onOpenAutoFocus) {
+            onOpenAutoFocus(event);
+          } else {
+            // 抽屉弹出时默认阻止自动抢焦，避免首个元素误触发 Tooltip 或在移动端意外唤起软键盘
+            event.preventDefault();
+          }
+        }}
         className={cn(
           "w-[min(82vw,320px)] gap-0 sm:max-w-none",
           className,
         )}
       >
-        <SheetHeader className="min-h-17 shrink-0 justify-center border-b border-divider px-5 py-4 pr-12">
-          <SheetTitle>{title}</SheetTitle>
-        </SheetHeader>
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5">
+        {title ? (
+          <SheetHeader className="shrink-0 justify-center border-b border-divider bg-surface px-5 pt-[calc(env(safe-area-inset-top,0px)+0.875rem)] pb-3.5 pr-12">
+            <SheetTitle>{title}</SheetTitle>
+          </SheetHeader>
+        ) : (
+          <SheetTitle className="sr-only">详情</SheetTitle>
+        )}
+        <div
+          className={cn(
+            padded
+              ? "scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+              : "min-h-0 flex-1 flex flex-col overflow-hidden",
+            !title && padded && "pt-[calc(env(safe-area-inset-top,0px)+1.25rem)] pr-12",
+            bodyClassName,
+          )}
+        >
           {children}
         </div>
       </SheetContent>
@@ -347,7 +375,7 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
+    <section className="min-w-0 rounded-xl border border-line bg-surface p-4 sm:p-5">
       <div className="mb-5">
         <h2 className="text-[15px] font-semibold text-heading">{title}</h2>
         {description && (

@@ -14,7 +14,6 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 UPDATE projects
 SET name = sqlc.arg(name),
     description = sqlc.arg(description),
-    instructions = sqlc.arg(instructions),
     updated_at = now()
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id)
@@ -49,7 +48,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -99,7 +98,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -150,7 +149,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
- AND current_attempt.status IN ('queued', 'running', 'waiting_human')
+ AND current_attempt.status IN ('queued', 'running')
 LEFT JOIN LATERAL (
     SELECT a.status
     FROM turn_attempts a
@@ -390,11 +389,21 @@ WITH scoped_events AS (
     SELECT
         e.*,
         s.name AS actor_name,
-        s.kind AS actor_kind
+        s.kind AS actor_kind,
+        COALESCE(
+            CASE
+                WHEN sc.id IS NOT NULL THEN COALESCE(NULLIF(sc.title, ''), '讨论')
+                ELSE ''
+            END,
+            ''
+        )::text AS source_card_title
     FROM events e
     JOIN sources s
       ON s.workspace_id = e.workspace_id
      AND s.id = e.actor_source_id
+    LEFT JOIN cards sc
+      ON sc.workspace_id = e.workspace_id
+     AND sc.id = e.source_card_id
     WHERE e.workspace_id = sqlc.arg(workspace_id)
       AND e.card_id = sqlc.arg(card_id)
       AND (sqlc.narg(before_sequence)::bigint IS NULL OR e.sequence < sqlc.narg(before_sequence)::bigint)
@@ -417,11 +426,21 @@ ORDER BY sequence ASC;
 SELECT
     e.*,
     s.name AS actor_name,
-    s.kind AS actor_kind
+    s.kind AS actor_kind,
+    COALESCE(
+        CASE
+            WHEN sc.id IS NOT NULL THEN COALESCE(NULLIF(sc.title, ''), '讨论')
+            ELSE ''
+        END,
+        ''
+    )::text AS source_card_title
 FROM events e
 JOIN sources s
   ON s.workspace_id = e.workspace_id
  AND s.id = e.actor_source_id
+LEFT JOIN cards sc
+  ON sc.workspace_id = e.workspace_id
+ AND sc.id = e.source_card_id
 WHERE e.workspace_id = sqlc.arg(workspace_id)
   AND e.card_id = sqlc.arg(card_id)
   -- 取消的排队输入保留在事件账本中，不再作为已发送气泡展示。
@@ -467,6 +486,14 @@ SELECT EXISTS (
 -- name: SetCardPinned :one
 UPDATE cards
 SET pinned_at = sqlc.arg(pinned_at),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;
+
+-- name: SetCardPreferredModelRoute :one
+UPDATE cards
+SET preferred_model_route_id = sqlc.arg(preferred_model_route_id),
     updated_at = now()
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id)

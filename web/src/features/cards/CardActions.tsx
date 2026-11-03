@@ -109,6 +109,10 @@ export function CardActions({
   const remove = useMutation({
     mutationFn: () => api.deleteCard(card.id),
     onSuccess: async () => {
+      queryClient.setQueryData(keys.card(card.id), {
+        card: null,
+        notFound: true,
+      });
       await queryClient.invalidateQueries({
         queryKey: keys.cards(card.project_id),
       });
@@ -174,6 +178,7 @@ export function CardActions({
           <UISheet open={drawerOpen} onOpenChange={setDrawerOpen}>
             <SheetContent
               side="bottom"
+              onOpenAutoFocus={(e) => e.preventDefault()}
               className="max-h-[85vh] rounded-t-2xl border-line/70 bg-surface/98 p-0 pb-safe backdrop-blur-md"
             >
               <div className="mx-auto mt-2.5 h-1.5 w-12 rounded-full bg-muted-foreground/20" />

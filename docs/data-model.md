@@ -110,7 +110,7 @@ retry_of_attempt_id uuid nullable
 invocation_id text nullable
 runner_source_id uuid
 model_route_id nullable
-status queued | running | waiting_human |
+status queued | running |
        completed | failed | superseded | expired | cancelled
 current_stage text
 error_summary text
@@ -124,7 +124,7 @@ updated_at
 
 一个 Turn 可以有多个 Attempt；技术 retry 创建新 Attempt。
 
-一个 Card 同时最多一个 queued / running / waiting_human Attempt。
+一个 Card 同时最多一个 queued / running Attempt。
 
 invocation_id 必须能用于 Session Event stale-write 校验。
 
@@ -173,7 +173,7 @@ event 保存 ADK Session Event 的可恢复表示，包括 LLM content、functio
 - 不保存 chain-of-thought / secret。
 - terminal / stale Attempt 的迟到 Event 后续必须在写入层拒绝。
 
-当前实现已满足 ADK session.Service conformance，并已接入 Attempt / invocation ownership guard；running Attempt 首个 Event 绑定 invocation_id，waiting_human 仅允许已绑定的同 invocation 尾部 Event，terminal / superseded Attempt 的迟到写入会被拒绝。
+当前实现已满足 ADK session.Service conformance，并已接入 Attempt / invocation ownership guard；running Attempt 首个 Event 绑定 invocation_id，Runner 在结算前保存同 invocation 尾部 Event，terminal / superseded Attempt 的迟到写入会被拒绝。
 
 ## 7. scoped ADK state
 

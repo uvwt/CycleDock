@@ -44,12 +44,12 @@ export function LoginPage() {
         <div>
           <p className="mb-5 text-sm text-sky-300">Human × Agent</p>
           <h1 className="max-w-lg text-4xl leading-tight font-semibold tracking-tight">
-            {t("把讨论变成工作。")}
+            {t("把讨论变成任务。")}
             <br />
             {t("让进展清晰可见。")}
           </h1>
           <p className="mt-6 max-w-md text-slate-300">
-            {t("统一的对话时间线、看板、持续工作与 AI Agent。")}
+            {t("统一的对话时间线、看板、持续任务与 AI Agent。")}
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-slate-400">

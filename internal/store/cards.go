@@ -136,7 +136,7 @@ func (s *Store) ArchiveDiscussion(
 		    finished_at=now(),
 		    updated_at=now()
 		WHERE workspace_id=$1 AND card_id=$2
-		  AND status IN ('queued','running','waiting_human')
+		  AND status IN ('queued','running')
 	`, workspaceID, cardID); err != nil {
 		return err
 	}
@@ -239,6 +239,38 @@ func (s *Store) DeleteDiscussion(
 	workspaceID, cardID, actorSourceID uuid.UUID,
 ) error {
 	return s.DeleteCard(ctx, workspaceID, cardID, actorSourceID)
+}
+
+// SetCardPreferredModelRoute 为卡片（持久 Agent Session）绑定或清除优先模型路由。
+// 传入 Valid=false 的 routeID 表示恢复为跟随工作区与卡片类型默认模型。
+func (s *Store) SetCardPreferredModelRoute(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	preferredModelRouteID uuid.NullUUID,
+) (db.Card, error) {
+	if preferredModelRouteID.Valid && preferredModelRouteID.UUID != uuid.Nil {
+		var exists bool
+		err := s.pool.QueryRow(ctx, `
+			SELECT true FROM workspace_model_routes
+			WHERE workspace_id = $1 AND id = $2 AND enabled = true
+		`, workspaceID, preferredModelRouteID.UUID).Scan(&exists)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return db.Card{}, fmt.Errorf("%w: model route not found or disabled", domain.ErrNotFound)
+			}
+			return db.Card{}, err
+		}
+	}
+
+	card, err := s.queries.SetCardPreferredModelRoute(ctx, db.SetCardPreferredModelRouteParams{
+		WorkspaceID:           workspaceID,
+		ID:                    cardID,
+		PreferredModelRouteID: preferredModelRouteID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, domain.ErrNotFound
+	}
+	return card, err
 }
 
 func (s *Store) SetOngoingState(

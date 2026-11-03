@@ -20,7 +20,7 @@ import (
 
 type recordedPush struct {
 	endpoint string
-	payload []byte
+	payload  []byte
 }
 
 type recordingSender struct {
@@ -61,7 +61,7 @@ func TestPushWaitsUntilThePageCloses(t *testing.T) {
 	workspaceID := uuid.MustParse(me.Workspace.ID)
 	userID := uuid.MustParse(me.HumanAccountID)
 	sourceID := uuid.MustParse(me.Source.ID)
-	project, err := dataStore.CreateProject(ctx, workspaceID, "Push", "", "")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Push", "")
 	if err != nil {
 		t.Fatal(err)
 	}

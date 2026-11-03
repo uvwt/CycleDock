@@ -90,8 +90,8 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 				t.Errorf("built-in proactive turn must not expose mutating tool %s", forbidden)
 			}
 		}
-		if !requestIncludesTool(body, "reply_message") || !requestIncludesTool(body, "mcp_device_read_digest") {
-			t.Errorf("expected reply_message and mcp_device_read_digest tools, got %+v", body.Tools)
+		if !requestIncludesTool(body, "reply_message") || !requestIncludesTool(body, "call_mcp_tool") {
+			t.Errorf("expected reply_message and call_mcp_tool tools, got %+v", body.Tools)
 		}
 
 		modelMu.Lock()
@@ -115,8 +115,8 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 					ID:   "skill-mcp-1",
 					Type: "function",
 					Function: modelclient.ToolFunction{
-						Name:      "mcp_device_read_digest",
-						Arguments: `{"topic":"Rust async closure"}`,
+						Name:      "call_mcp_tool",
+						Arguments: `{"tool_id":"device:read_digest","arguments":{"topic":"Rust async closure"}}`,
 					},
 				},
 			})
@@ -144,7 +144,7 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Rust Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Rust Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

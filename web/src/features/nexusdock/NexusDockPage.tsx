@@ -157,7 +157,7 @@ export default function NexusDockPage() {
   const mcpCount = selectedDevice?.dynamic_mcp?.length || 0;
 
   return (
-    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-[1600px] space-y-7 px-5 py-8 md:min-h-dvh md:px-8">
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
       {/* 统一全局页面头部 */}
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>

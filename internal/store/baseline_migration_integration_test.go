@@ -78,7 +78,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	`).Scan(&migrationVersion); err != nil {
 		t.Fatal(err)
 	}
-	if migrationVersion != 20 {
-		t.Fatalf("migration version=%d want 20", migrationVersion)
+	if migrationVersion != 24 {
+		t.Fatalf("migration version=%d want 24", migrationVersion)
 	}
 }

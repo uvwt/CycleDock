@@ -27,6 +27,7 @@ make dev
 - Go 后端默认监听 127.0.0.1:8080，启动时编译到 tmp/dev/cycledock。运行期间不监听源码变化，不自动编译或重启，避免打断 Agent 执行。
 - 浏览器访问 http://127.0.0.1:5173；Vite 提供前端热更新，并将 API、SSE、OAuth/MCP 和回调请求代理到 Go。
 - HTTP_ADDR 可设为其他本机 host:port；DEV_WEB_PORT 可调整前端端口。端口被占用时直接报错，不自动换端口或终止已有服务。
+- 手机等局域网设备访问时，在 .env.local 设置 DEV_WEB_HOST=0.0.0.0，重启 make dev 后访问 http://电脑局域网IP:前端端口；设备需在同一局域网，系统防火墙需允许该端口。API 经 Vite 代理，后端可继续监听 127.0.0.1。
 - Ctrl+C 停止本次启动的前后端及其子进程；任一开发进程退出也会停止另一进程。
 - 需要应用后端 Go 代码、.env.local、go.mod、go.sum 或数据库迁移的变化时，手动 Ctrl+C 后重新运行 make dev；Go 依赖变化或前端 lockfile 更新后重新运行 make setup。
 - 配置本机 OAuth 时，CYCLEDOCK_PUBLIC_URL 使用浏览器入口（例如 http://127.0.0.1:5173）。本机密码登录无需配置。
@@ -90,7 +91,7 @@ CycleDock 在首次公开发布前完成 Session-first / Google ADK Go v2 Runtim
 - current Attempt 唯一。
 - FIFO pending Turn。
 - heartbeat / lease。
-- waiting_human。
+- 提问完成本轮，回答创建新 Turn。
 - retry = new Attempt。
 - stale invocation write guard。
 

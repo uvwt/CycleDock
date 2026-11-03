@@ -74,23 +74,35 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 		w.Header().Set("Content-Type", "application/json")
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "mcp_lab_inventory") {
-				t.Errorf("first turn did not expose inventory tool")
+			if !requestIncludesTool(body, "search_mcp_tools") || !requestIncludesTool(body, "call_mcp_tool") {
+				t.Errorf("first turn did not expose MCP discovery and call tools")
+			}
+			writeModelResponse(t, w, "Searching for container tools.", []modelclient.ToolCall{{
+				ID:   "search-call-1",
+				Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "search_mcp_tools",
+					Arguments: `{"query":"container inventory"}`,
+				},
+			}})
+		case 2:
+			if !strings.Contains(string(rawMessages), "lab:inventory") {
+				t.Errorf("search result missing lab:inventory tool: %s", rawMessages)
 			}
 			writeModelResponse(t, w, "I will inspect the inventory.", []modelclient.ToolCall{{
 				ID:   "inventory-call-1",
 				Type: "function",
 				Function: modelclient.ToolFunction{
-					Name:      "mcp_lab_inventory",
-					Arguments: "{}",
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:inventory","arguments":{}}`,
 				},
 			}})
-		case 2:
+		case 3:
 			if !hasInventoryEvidence {
 				t.Errorf("tool response missing from first turn follow-up request: %s", rawMessages)
 			}
 			writeModelResponse(t, w, "The nginx container uses nginx:1.25.", nil)
-		case 3:
+		case 4:
 			if !hasInventoryEvidence {
 				t.Errorf("second turn did not receive prior tool response: %s", rawMessages)
 			} else {
@@ -112,7 +124,7 @@ func TestADKRunnerReusesPriorTurnToolResultWithoutRepeatingToolCall(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,12 +311,15 @@ func TestADKRunnerExternalizesLargeToolResultAndReadsArtifactWithoutRepeatingMCP
 
 		switch current {
 		case 1:
-			if !requestIncludesTool(body, "mcp_lab_large_inventory") {
-				t.Errorf("large MCP tool missing")
+			if !requestIncludesTool(body, "call_mcp_tool") {
+				t.Errorf("call_mcp_tool missing")
 			}
 			writeModelResponse(t, w, "", []modelclient.ToolCall{{
 				ID: "large-call-1", Type: "function",
-				Function: modelclient.ToolFunction{Name: "mcp_lab_large_inventory", Arguments: "{}"},
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:large_inventory","arguments":{}}`,
+				},
 			}})
 		case 2:
 			artifactRef, artifactVersion = extractArtifactReference(body.Messages)
@@ -363,7 +378,7 @@ func TestADKRunnerExternalizesLargeToolResultAndReadsArtifactWithoutRepeatingMCP
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +574,7 @@ func TestADKTailCompactionKeepsPromptBoundedAndHistoryRecoversExactOldValue(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -726,7 +741,7 @@ func TestADKTailCompactionKeepsRecentToolCallResponsePair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +855,7 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,8 +902,8 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstAttempt.Status != domain.AttemptStatusWaitingHuman {
-		t.Fatalf("first attempt status=%s want waiting_human", firstAttempt.Status)
+	if firstAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("first attempt status=%s want completed", firstAttempt.Status)
 	}
 	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
 	if err != nil {
@@ -928,8 +943,8 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstAttempt.Status != domain.AttemptStatusSuperseded {
-		t.Fatalf("waiting attempt after reply=%s want superseded", firstAttempt.Status)
+	if firstAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("previous attempt after reply=%s want completed", firstAttempt.Status)
 	}
 
 	secondClaim, err := dataStore.ClaimNextTurnAttempt(

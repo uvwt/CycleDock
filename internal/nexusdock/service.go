@@ -154,7 +154,7 @@ func New(pool *pgxpool.Pool, config Config) (*Service, error) {
 		pool: pool, queries: db.New(pool), mcpURL: config.MCPURL, webURL: config.WebURL,
 		callbackURL: config.PublicURL + "/auth/nexusdock-device/callback",
 		aead:        aead, client: client,
-		fleetCache:  make(map[uuid.UUID]fleetCacheEntry),
+		fleetCache: make(map[uuid.UUID]fleetCacheEntry),
 	}, nil
 }
 

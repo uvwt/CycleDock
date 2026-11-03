@@ -66,7 +66,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       if (
         [
           "attempt.started",
-          // 跨实例轮询通过 stage 通知执行开始或等待状态，REST 须同步移除已领取输入。
+          // 跨实例轮询通过 stage 通知执行开始或阶段变化，REST 须同步移除已领取输入。
           "attempt.stage",
           "attempt.finished",
           "attempt.failed",

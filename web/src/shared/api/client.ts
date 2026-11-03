@@ -1,3 +1,4 @@
+import { safeRandomUUID } from "../lib/utils";
 import type {
   AgentSettings,
   AuthorizedAIClient,
@@ -48,7 +49,7 @@ async function request<T>(
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (idempotency)
     headers["Idempotency-Key"] =
-      typeof idempotency === "string" ? idempotency : crypto.randomUUID();
+      typeof idempotency === "string" ? idempotency : safeRandomUUID();
   const signal = AbortSignal.timeout(timeoutMS);
   try {
     const response = await fetch("/api/v1" + path, {
@@ -104,15 +105,10 @@ export const api = {
   switchWorkspace: (id: string) =>
     request<Identity>(`/workspaces/${id}/switch`, "POST", {}),
   projects: () => request<Project[]>("/projects"),
-  createProject: (value: {
-    name: string;
-    description: string;
-    instructions: string;
-  }) => request<Project>("/projects", "POST", value),
-  updateProject: (
-    id: string,
-    value: { name: string; description: string; instructions: string },
-  ) => request<Project>(`/projects/${id}`, "PATCH", value),
+  createProject: (value: { name: string; description: string }) =>
+    request<Project>("/projects", "POST", value),
+  updateProject: (id: string, value: { name: string; description: string }) =>
+    request<Project>(`/projects/${id}`, "PATCH", value),
   cards: (project: string, all = false) =>
     request<Card[]>(`/projects/${project}/cards${all ? "?all=true" : ""}`),
   projectDoneCards: (project: string, limit = 30, offset = 0) =>
@@ -127,8 +123,15 @@ export const api = {
     request<ProjectActivity[]>(
       `/projects/${project}/activity?limit=${encodeURIComponent(String(limit))}${sourceID ? `&source_id=${encodeURIComponent(sourceID)}` : ""}`,
     ),
-  createDiscussion: (project: string) =>
-    request<Card>(`/projects/${project}/discussions`, "POST", {}),
+  createDiscussion: (
+    project: string,
+    preferred_model_route_id?: string | null,
+  ) =>
+    request<Card>(
+      `/projects/${project}/discussions`,
+      "POST",
+      preferred_model_route_id ? { preferred_model_route_id } : {},
+    ),
   mainDiscussion: async (project: string) => {
     try {
       return await request<Card>(`/projects/${project}/main-discussion`);
@@ -170,6 +173,13 @@ export const api = {
   archiveDiscussion: (id: string) =>
     request<Card>(`/cards/${id}/discussion-state`, "POST", {
       state: "archived",
+    }),
+  setCardModelRoute: (
+    cardID: string,
+    preferred_model_route_id: string | null,
+  ) =>
+    request<Card>(`/cards/${cardID}/model-route`, "POST", {
+      preferred_model_route_id,
     }),
   deleteCard: (id: string) => request<void>(`/cards/${id}`, "DELETE"),
   deleteDiscussion: (id: string) => request<void>(`/cards/${id}`, "DELETE"),
@@ -234,6 +244,7 @@ export const api = {
     request<Schedule>(`/cards/${id}/schedules/${schedule}`, "PUT", input),
   deleteSchedule: (id: string, schedule: string) =>
     request<void>(`/cards/${id}/schedules/${schedule}`, "DELETE"),
+  agentStatus: () => request<{ model_configured: boolean }>("/agent/status"),
   agentSettings: () => request<AgentSettings>("/agent/settings"),
   saveAgent: (x: Omit<AgentSettings, "configured" | "source_id">) =>
     request<AgentSettings>("/agent/settings", "PUT", x),

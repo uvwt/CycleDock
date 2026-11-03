@@ -51,8 +51,8 @@ export function CardHeaderInfoCard({
 
   const kindLabel = useMemo(() => {
     if (card.kind === "discussion") return t("讨论");
-    if (card.kind === "ongoing") return t("定时任务");
-    return t("工作");
+    if (card.kind === "ongoing") return t("定时");
+    return t("任务");
   }, [card.kind, t]);
 
   const totalSteps = task?.step_count || task?.steps?.length || 0;
@@ -75,7 +75,7 @@ export function CardHeaderInfoCard({
       className={
         variant === "sheet"
           ? "w-full overflow-y-auto space-y-4"
-          : "w-80 sm:w-96 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
+          : "w-80 max-w-[calc(100vw-1.5rem)] max-h-[calc(100dvh-4.5rem)] overflow-y-auto scrollbar-thin rounded-2xl border border-line bg-surface/95 p-4 shadow-sm backdrop-blur transition-all space-y-3.5"
       }
       aria-label={t("任务详情")}
     >
@@ -105,7 +105,7 @@ export function CardHeaderInfoCard({
                     : card.todo_state === "working"
                       ? t("进行中")
                       : card.todo_state === "review"
-                        ? t("待审核")
+                        ? t("待验收")
                         : t("已完成")}
                 </span>
               </div>
@@ -135,7 +135,7 @@ export function CardHeaderInfoCard({
               </div>
             )}
           </div>
-          {onClose && (
+          {variant !== "sheet" && onClose && (
             <button
               type="button"
               onClick={onClose}
@@ -240,7 +240,7 @@ export function CardHeaderInfoCard({
                   </span>
                 </div>
                 <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0 h-4">
-                  {dCard.kind === "ongoing" ? t("定时任务") : t("工作")}
+                  {dCard.kind === "ongoing" ? t("定时") : t("任务")}
                 </Badge>
               </button>
             ))}

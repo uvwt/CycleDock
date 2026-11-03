@@ -9,17 +9,17 @@ VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: CreateProject :one
-INSERT INTO projects (id, workspace_id, name, description, instructions)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO projects (id, workspace_id, name, description)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: CreateCard :one
 INSERT INTO cards (
     id, workspace_id, project_id, kind, title, description,
     discussion_state, todo_state, ongoing_state, source_discussion_id,
-    required_confirmations, created_by_source_id
+    required_confirmations, created_by_source_id, preferred_model_route_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING *;
 
 -- name: GetCard :one

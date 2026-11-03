@@ -37,7 +37,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       const created = await api.createProject({
         name: defaultProjectName,
         description: "",
-        instructions: "",
       });
       return [created];
     },

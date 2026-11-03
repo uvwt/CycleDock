@@ -125,7 +125,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	var human identityResponse
 	decodeHTTPBody(t, loginResponse, &human)
 	workspaceID := uuid.MustParse(human.Workspace.ID)
-	project, err := dataStore.CreateProject(ctx, workspaceID, "MCP E2E Project", "created for protocol test", "Preserve durable findings.")
+	project, err := dataStore.CreateProject(ctx, workspaceID, "MCP E2E Project", "created for protocol test\n\nPreserve durable findings.")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Foreign Project", "", "")
+	foreignProject, err := dataStore.CreateProject(ctx, foreignWorkspace.ID, "Foreign Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherProject, err := dataStore.CreateProject(ctx, otherWorkspace.ID, "Private Project", "", "")
+	otherProject, err := dataStore.CreateProject(ctx, otherWorkspace.ID, "Private Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

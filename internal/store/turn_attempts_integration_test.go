@@ -346,7 +346,7 @@ func TestInterruptSupersedesCurrentAttemptAndRunsBeforeQueuedTurn(t *testing.T) 
 	}
 }
 
-func TestHumanReplySupersedesWaitingAttemptEvenWhenEnqueued(t *testing.T) {
+func TestHumanReplyKeepsPreviousAttemptCompleted(t *testing.T) {
 	s := requireIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
@@ -367,8 +367,8 @@ func TestHumanReplySupersedesWaitingAttemptEvenWhenEnqueued(t *testing.T) {
 	if claim.Turn.ID != turn.Turn.ID {
 		t.Fatalf("claim turn=%s want=%s", claim.Turn.ID, turn.Turn.ID)
 	}
-	if err := s.WaitAttemptForHuman(
-		ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, time.Now().UTC(),
+	if err := s.CompleteAttempt(
+		ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, f.AgentID, time.Now().UTC(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -384,8 +384,8 @@ func TestHumanReplySupersedesWaitingAttemptEvenWhenEnqueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldAttempt.Status != domain.AttemptStatusSuperseded {
-		t.Fatalf("waiting attempt status=%s want superseded", oldAttempt.Status)
+	if oldAttempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("previous attempt status=%s want completed", oldAttempt.Status)
 	}
 
 	replyClaim, err := s.ClaimNextTurnAttempt(

@@ -94,4 +94,3 @@ func (s *Store) GetModelRoute(ctx context.Context, workspaceID, routeID uuid.UUI
 	}
 	return db.WorkspaceModelRoute{}, domain.ErrNotFound
 }
-

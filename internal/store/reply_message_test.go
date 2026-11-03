@@ -61,7 +61,7 @@ func TestReplyMessageRejectsTextWidgetWithActionableError(t *testing.T) {
 	}
 }
 
-func TestPublishReplyMultipleBubblesAndWaitingHuman(t *testing.T) {
+func TestPublishReplyMultipleBubblesAndChoiceCompletion(t *testing.T) {
 	s := requireIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
@@ -77,7 +77,7 @@ func TestPublishReplyMultipleBubblesAndWaitingHuman(t *testing.T) {
 	}
 	p := PublishReplyParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
-		RunnerSourceID: f.AgentID, IdempotencyKey: "bubble-1",
+		RunnerSourceID: f.AgentID, IdempotencyKey: "bubble-1", FinishOnEnd: true,
 		Message: ReplyMessage{Type: "text", Content: "Looking at the server", EndTurn: false},
 	}
 	first, reused, err := s.PublishReply(ctx, p)
@@ -100,8 +100,8 @@ func TestPublishReplyMultipleBubblesAndWaitingHuman(t *testing.T) {
 		t.Fatalf("choice id=%s reused=%t err=%v", second, reused, err)
 	}
 	attempt, err := s.GetAttempt(ctx, f.WorkspaceID, claim.Attempt.ID)
-	if err != nil || attempt.Status != domain.AttemptStatusWaitingHuman {
-		t.Fatalf("waiting status=%s err=%v", attempt.Status, err)
+	if err != nil || attempt.Status != domain.AttemptStatusCompleted {
+		t.Fatalf("choice status=%s err=%v", attempt.Status, err)
 	}
 	rows, err := s.ListCardTimeline(ctx, f.WorkspaceID, f.CardID)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestChoiceRepliesRejectOldQuestionsAndAcceptOnlyOneAnswer(t *testing.T) {
 	}}
 	firstMessage, _, err := s.PublishReply(ctx, PublishReplyParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: first.Attempt.ID,
-		RunnerSourceID: f.AgentID, Message: message, IdempotencyKey: "question-1",
+		RunnerSourceID: f.AgentID, Message: message, FinishOnEnd: true, IdempotencyKey: "question-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestChoiceRepliesRejectOldQuestionsAndAcceptOnlyOneAnswer(t *testing.T) {
 	}
 	secondMessage, _, err := s.PublishReply(ctx, PublishReplyParams{
 		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: second.Attempt.ID,
-		RunnerSourceID: f.AgentID, Message: message, IdempotencyKey: "question-2",
+		RunnerSourceID: f.AgentID, Message: message, FinishOnEnd: true, IdempotencyKey: "question-2",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,7 +1,5 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
-import { ModelMenu } from "../models/ModelMenu";
-import { useModelSelection } from "../models/model-selection";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -12,13 +10,13 @@ import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
-import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
-import type { TimelineEvent } from "../../shared/api/types";
+import { ErrorView, Sheet } from "../../shared/ui/components";
+import type { Attempt, TimelineEvent } from "../../shared/api/types";
 import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
-import { CardActions } from "./CardActions";
+import { ConversationSkeleton } from "../timeline/ConversationSkeleton";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { PendingTurnQueue } from "./PendingTurnQueue";
@@ -29,7 +27,6 @@ import { WorkSidebar } from "../board/WorkSidebar";
 import type { Card, DeviceTarget, PendingTurn } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
-import { MobileGlobalNavMenu } from "../../shared/ui/MobileGlobalNavMenu";
 import { MobileQuickCardSwitcher } from "../../shared/ui/MobileQuickCardSwitcher";
 
 type NavigationState = {
@@ -39,22 +36,185 @@ type NavigationState = {
 };
 
 export default function CardPage() {
-  const { cardID = "" } = useParams();
-  return <CardPageContent key={cardID} />;
+  const { projectID = "", cardID = "" } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  const listVisible = useContextSidebarVisible();
+  const { projectID: activeProjectID } = useProject();
+  const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
+  const [activeAttemptStatus, setActiveAttemptStatus] = useState<string | undefined>();
+
+  // 监听屏幕断点（<1024px 为移动/平板端，对应 Tailwind lg 断点）
+  // 用于严格控制 Radix Dialog/Sheet 等 Portal 浮层组件的挂载，防止桌面端同时渲染出 body 浮层
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(max-width: 1023px)").matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    media.addEventListener("change", handler);
+    return () => media.removeEventListener("change", handler);
+  }, []);
+
+  const isDiscussion = location.pathname.startsWith("/chat");
+  const isOngoing = location.pathname.startsWith("/plans");
+  const actualProjectID = projectID || activeProjectID;
+
+  // 会话列表按项目缓存查询；会话间切换时直接复用，不重新挂载整个侧边栏
+  const projectCards = useQuery({
+    queryKey: keys.cards(actualProjectID),
+    queryFn: () => api.cards(actualProjectID),
+    enabled: Boolean(actualProjectID),
+  });
+
+  const discussions = useMemo(
+    () =>
+      (projectCards.data || []).filter(
+        (item) => item.kind === "discussion",
+      ) as Card[],
+    [projectCards.data],
+  );
+
+  function openDiscussion(item: Card) {
+    setContextSidebarOpen(false);
+    navigate(`/chat/${item.project_id}/${item.id}`);
+  }
+
+  function startDiscussion() {
+    setContextSidebarOpen(false);
+    navigate(`/chat?project=${encodeURIComponent(actualProjectID)}`);
+  }
+
+  function openWork(item: Card) {
+    setContextSidebarOpen(false);
+    navigate(
+      `/${item.kind === "ongoing" ? "plans" : "cards"}/${item.project_id}/${item.id}`,
+    );
+  }
+
+  const discussionSidebar =
+    isDiscussion && actualProjectID ? (
+      <DiscussionSidebar
+        discussions={discussions}
+        activeCardID={cardID}
+        activeAttemptStatus={activeAttemptStatus}
+        onSelect={openDiscussion}
+        onCreate={startDiscussion}
+        loading={projectCards.isPending}
+      />
+    ) : null;
+
+  const workSidebar =
+    !isDiscussion && !isOngoing && actualProjectID ? (
+      <WorkSidebar
+        cards={projectCards.data || []}
+        activeCardID={cardID}
+        activeAttemptStatus={activeAttemptStatus}
+        onSelect={openWork}
+        loading={projectCards.isPending}
+      />
+    ) : null;
+
+  const contextSidebar = isDiscussion ? (
+    discussionSidebar
+  ) : isOngoing ? (
+    <PlanSidebar
+      cards={projectCards.data || []}
+      activeCardID={cardID}
+      onSelect={openWork}
+      loading={projectCards.isPending}
+    />
+  ) : (
+    workSidebar
+  );
+
+  return (
+    <main
+      className={`flex flex-1 h-full min-h-0 w-full flex-col ${
+        isDiscussion ? "bg-canvas" : "bg-surface"
+      }`}
+    >
+      <div className="flex flex-1 h-full min-h-0 w-full overflow-hidden">
+        {/* 侧边栏：在会话切换或加载过程中始终保持挂载，绝不被遮挡或卸载 */}
+        <div
+          className={`${listVisible ? "hidden lg:block" : "hidden"} h-full min-h-0 w-[260px] xl:w-[280px] shrink-0 border-r border-line`}
+        >
+          {contextSidebar}
+        </div>
+
+        {/* 右侧会话主内容区：按 cardID 挂载，未加载完成时仅右侧展示骨架屏 */}
+        <CardPageContent
+          key={cardID}
+          cardID={cardID}
+          projectID={actualProjectID}
+          isDiscussion={isDiscussion}
+          isOngoing={isOngoing}
+          isMobile={isMobile}
+          projectCards={projectCards.data || []}
+          onOpenSidebar={() => setContextSidebarOpen(true)}
+          onAttemptStatusChange={setActiveAttemptStatus}
+          onStartDiscussion={startDiscussion}
+        />
+      </div>
+
+      {/* 移动端侧边栏抽屉：同样在切换会话时不被硬拔掉 */}
+      {isMobile && contextSidebar && (
+        <Sheet
+          open={contextSidebarOpen}
+          onOpenChange={setContextSidebarOpen}
+          side="left"
+          padded={false}
+          className="bg-canvas"
+          title={
+            isDiscussion
+              ? t("讨论列表")
+              : isOngoing
+                ? t("定时列表")
+                : t("任务列表")
+          }
+        >
+          {contextSidebar}
+        </Sheet>
+      )}
+    </main>
+  );
 }
 
-function CardPageContent() {
+function CardPageContent({
+  cardID,
+  projectID,
+  isDiscussion,
+  isOngoing,
+  isMobile,
+  projectCards,
+  onOpenSidebar,
+  onAttemptStatusChange,
+  onStartDiscussion,
+}: {
+  cardID: string;
+  projectID: string;
+  isDiscussion: boolean;
+  isOngoing: boolean;
+  isMobile: boolean;
+  projectCards: Card[];
+  onOpenSidebar: () => void;
+  onAttemptStatusChange: (status?: string) => void;
+  onStartDiscussion: () => void;
+}) {
   const { target } = useDeviceSelection();
-  const { selectedRouteId } = useModelSelection();
   const { t } = useTranslation();
-  const { projectID = "", cardID = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const navState = (location.state as NavigationState | null) || null;
   const [pendingInitialTurn, setPendingInitialTurn] = useState<string | null>(
     navState?.initialMessage?.trim() || null,
   );
-  const listVisible = useContextSidebarVisible();
   const { projectID: activeProjectID, setProjectID } = useProject();
 
   const detail = useQuery({
@@ -66,36 +226,30 @@ function CardPageContent() {
   const actualProjectID = card?.project_id || projectID;
   const stream = useCardStream(cardID, actualProjectID);
 
-  const projectCards = useQuery({
-    queryKey: keys.cards(actualProjectID),
-    queryFn: () => api.cards(actualProjectID),
-    enabled: Boolean(actualProjectID),
-  });
-  const discussions = useMemo(
-    () =>
-      (projectCards.data || []).filter(
-        (item) => item.kind === "discussion",
-      ) as Card[],
-    [projectCards.data],
-  );
+  useEffect(() => {
+    if (card?.project_id && card.project_id !== activeProjectID) {
+      setProjectID(card.project_id);
+    }
+  }, [card?.project_id, activeProjectID, setProjectID]);
 
-  const isDiscussion = card?.kind === "discussion";
-  const mainDiscussion = useQuery({
-    queryKey: keys.mainDiscussion(actualProjectID),
-    queryFn: () => api.mainDiscussion(actualProjectID),
-    enabled: Boolean(actualProjectID) && isDiscussion,
-  });
-  const isOngoing = card?.kind === "ongoing";
+  const activeAttemptStatus = stream.live
+    ? stream.live.finished
+      ? "completed"
+      : "running"
+    : detail.data?.current_attempt?.status;
+
+  useEffect(() => {
+    onAttemptStatusChange(activeAttemptStatus);
+  }, [activeAttemptStatus, onAttemptStatusChange]);
+
   const blocked = Boolean(
     isDiscussion && card?.discussion_state === "archived",
   );
   const current = detail.data?.current_attempt;
-  const waiting = current?.status === "waiting_human";
   const hasCurrent =
     Boolean(current) &&
-    ["queued", "running", "waiting_human"].includes(current?.status || "");
+    ["queued", "running"].includes(current?.status || "");
 
-  const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
@@ -107,23 +261,18 @@ function CardPageContent() {
 
   // 手机端滑动手势：右滑呼出左侧导航/卡片抽屉，左滑呼出右侧任务详情
   const handleSwipeRight = useCallback(() => {
-    // 仅在移动端屏幕（<1024px，对应 tailwind lg 断点）触发
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
+    if (!isMobile) return;
     if (infoOpen) {
       setInfoOpen(false);
     } else {
-      setContextSidebarOpen(true);
+      onOpenSidebar();
     }
-  }, [infoOpen]);
+  }, [infoOpen, isMobile, onOpenSidebar]);
 
   const handleSwipeLeft = useCallback(() => {
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) return;
-    if (contextSidebarOpen) {
-      setContextSidebarOpen(false);
-    } else {
-      setInfoOpen(true);
-    }
-  }, [contextSidebarOpen]);
+    if (!isMobile) return;
+    setInfoOpen(true);
+  }, [isMobile]);
 
   const containerRef = useSwipeGesture<HTMLElement>({
     onSwipeRight: handleSwipeRight,
@@ -154,26 +303,24 @@ function CardPageContent() {
   ]);
 
   const [olderEvents, setOlderEvents] = useState<TimelineEvent[]>([]);
+  const [olderAttempts, setOlderAttempts] = useState<Attempt[]>([]);
   const [hasMoreBefore, setHasMoreBefore] = useState(false);
   const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
 
   // 当切换卡片时重置向前分页状态
   useEffect(() => {
     setOlderEvents([]);
+    setOlderAttempts([]);
     setHasMoreBefore(false);
     setLoadingMoreBefore(false);
   }, [cardID]);
 
-  // detail 首次加载完毕时根据首条 sequence 判断是否还有更早的历史消息
+  // 当卡片详情更新时，若尚未加载过更早历史批次，则同步后端基于真实数据量判断的 has_more_before 分页标识
   useEffect(() => {
-    const timeline = detail.data?.timeline || [];
-    if (timeline.length > 0) {
-      const minSeq = timeline.reduce((min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min), timeline[0].sequence || 0);
-      if (minSeq > 1) {
-        setHasMoreBefore(true);
-      }
+    if (detail.data && olderEvents.length === 0) {
+      setHasMoreBefore(Boolean(detail.data.has_more_before));
     }
-  }, [detail.data?.timeline]);
+  }, [detail.data, olderEvents.length]);
 
   const loadMoreBefore = async () => {
     if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
@@ -189,6 +336,7 @@ function CardPageContent() {
       if (res.timeline && res.timeline.length > 0) {
         setOlderEvents((prev) => [...res.timeline, ...prev]);
       }
+      setOlderAttempts((prev) => [...(res.attempt_history || []), ...prev]);
       setHasMoreBefore(res.has_more_before);
     } catch (err) {
       console.error("Failed to load older timeline events", err);
@@ -196,6 +344,13 @@ function CardPageContent() {
       setLoadingMoreBefore(false);
     }
   };
+
+  const combinedAttempts = useMemo(() => {
+    const attempts = new Map(olderAttempts.map((attempt) => [attempt.id, attempt]));
+    for (const attempt of detail.data?.attempt_history || []) attempts.set(attempt.id, attempt);
+    if (detail.data?.current_attempt) attempts.delete(detail.data.current_attempt.id);
+    return [...attempts.values()];
+  }, [olderAttempts, detail.data?.attempt_history, detail.data?.current_attempt]);
 
   const combinedTimeline = useMemo(() => {
     const rawTimeline = detail.data?.timeline || [];
@@ -286,31 +441,18 @@ function CardPageContent() {
   };
 
   const send = useMutation({
-    mutationFn: (mode: "enqueue" | "reply") => {
+    mutationFn: () => {
       const text = comment.trim();
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
-      if (mode === "reply") {
-        if (!current || current.status !== "waiting_human") {
-          return Promise.reject(new Error(t("当前回复已失效，请刷新后重试")));
-        }
-        return api.reply(
-          cardID,
-          content,
-          current.id,
-          undefined,
-          target,
-          selectedRouteId || undefined,
-        );
-      }
       return api.send(
         cardID,
         content,
-        mode,
+        "enqueue",
         undefined,
         target,
-        selectedRouteId || undefined,
+        card?.preferred_model_route_id || undefined,
       );
     },
     onSuccess: async () => {
@@ -318,25 +460,6 @@ function CardPageContent() {
       setReplyTo(null);
       await sync();
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("发送失败")),
-  });
-
-  const choose = useMutation({
-    mutationFn: (choice: {
-      value: string;
-      attemptID: string;
-      messageID: string;
-    }) =>
-      api.reply(
-        cardID,
-        choice.value,
-        choice.attemptID,
-        choice.messageID,
-        target,
-        selectedRouteId || undefined,
-      ),
-    onSuccess: sync,
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
   });
@@ -379,7 +502,7 @@ function CardPageContent() {
     mutationFn: () => api.moveTodo(cardID, "done"),
     onSuccess: async () => {
       await sync();
-      toast.success(t("已通过审核"));
+      toast.success(t("已通过验收"));
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("状态更新失败")),
@@ -387,7 +510,7 @@ function CardPageContent() {
 
   function submit() {
     if (!comment.trim() || blocked || send.isPending) return;
-    send.mutate(waiting ? "reply" : "enqueue");
+    send.mutate();
   }
 
   // 当由首页新建讨论快速跳转进入时，承接并在后台自动发送首条消息
@@ -420,57 +543,40 @@ function CardPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardID]);
 
-  function openDiscussion(item: Card) {
-    setContextSidebarOpen(false);
-    navigate(`/chat/${item.project_id}/${item.id}`);
-  }
-
-  function startDiscussion() {
-    setContextSidebarOpen(false);
-    navigate(`/chat?project=${encodeURIComponent(actualProjectID)}`);
-  }
-
-  function back() {
-    navigate(
-      isDiscussion
-        ? "/chat?project=" + encodeURIComponent(actualProjectID)
-        : (isOngoing ? "/plans/" : "/board/") + actualProjectID,
-    );
-  }
-
-  function openWork(item: Card) {
-    setContextSidebarOpen(false);
-    navigate(
-      `/${item.kind === "ongoing" ? "plans" : "cards"}/${item.project_id}/${item.id}`,
-    );
-  }
-
   if (detail.isPending) {
     return (
-      <main className="grid h-dvh place-items-center bg-surface">
-        <Spinner text={t("正在加载会话…")} />
-      </main>
+      <section
+        ref={containerRef}
+        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+          isDiscussion ? "bg-canvas" : "bg-surface"
+        }`}
+      >
+        <ConversationSkeleton
+          isDiscussion={isDiscussion}
+          onOpenSidebar={onOpenSidebar}
+        />
+      </section>
     );
   }
 
   if (detail.error || !detail.data || !card) {
     return (
-      <main className="h-dvh bg-surface">
+      <section
+        ref={containerRef}
+        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+          isDiscussion ? "bg-canvas" : "bg-surface"
+        }`}
+      >
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
             error={detail.error}
             onRetry={() => void detail.refetch()}
           />
         </div>
-      </main>
+      </section>
     );
   }
 
-  const activeAttemptStatus = stream.live
-    ? stream.live.finished
-      ? "completed"
-      : "running"
-    : detail.data?.current_attempt?.status;
   const liveTask = stream.live?.task;
   const liveTaskTotal = liveTask?.step_count || liveTask?.steps?.length || 0;
   const liveTaskCompleted = Math.min(
@@ -478,63 +584,19 @@ function CardPageContent() {
     liveTaskTotal || liveTask?.completed_step_count || 0,
   );
 
-  const discussionSidebar =
-    isDiscussion && actualProjectID ? (
-      <DiscussionSidebar
-        discussions={discussions}
-        activeCardID={cardID}
-        activeAttemptStatus={activeAttemptStatus}
-        onSelect={openDiscussion}
-        onCreate={startDiscussion}
-      />
-    ) : null;
-
-  const workSidebar =
-    !isDiscussion && !isOngoing && actualProjectID ? (
-      <WorkSidebar
-        cards={projectCards.data || []}
-        activeCardID={cardID}
-        activeAttemptStatus={activeAttemptStatus}
-        onSelect={openWork}
-      />
-    ) : null;
-
-  const contextSidebar = isDiscussion ? (
-    discussionSidebar
-  ) : isOngoing ? (
-    <PlanSidebar
-      cards={projectCards.data || []}
-      activeCardID={cardID}
-      onSelect={openWork}
-    />
-  ) : (
-    workSidebar
-  );
-
   return (
-    <main
+    <section
       ref={containerRef}
-      className={`h-dvh min-h-0 ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
+      className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
+        isDiscussion ? "bg-canvas" : "bg-surface"
+      }`}
     >
-      <div
-        className={`flex h-full min-h-0 w-full overflow-hidden`}
-      >
-        <div
-          className={`${listVisible ? "hidden lg:block" : "hidden"} h-full min-h-0 w-[260px] xl:w-[280px] shrink-0 border-r border-line`}
-        >
-          {contextSidebar}
-        </div>
-
-        <section
-          className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${isDiscussion ? "bg-canvas" : "bg-surface"}`}
-        >
-          {/* 手机端固定顶部栏：常驻视口顶部，包含全局导航、抽屉菜单与操作按钮 */}
+          {/* 手机端悬浮顶部栏：透明悬浮在视口顶部，操作按钮带独立实底 */}
           <div
             data-mobile-top-surface
-            className="sticky top-0 z-20 flex shrink-0 items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden bg-transparent"
+            className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden pointer-events-none bg-transparent"
           >
-            <div className="flex items-center gap-1.5">
-              <MobileGlobalNavMenu />
+            <div className="flex items-center gap-1.5 pointer-events-auto">
               <MobileQuickCardSwitcher
                 projectID={card.project_id}
                 activeCardID={card.id}
@@ -546,33 +608,24 @@ function CardPageContent() {
                   isDiscussion
                     ? t("打开讨论列表")
                     : isOngoing
-                      ? t("打开定时任务列表")
-                      : t("打开工作列表")
+                      ? t("打开定时列表")
+                      : t("打开任务列表")
                 }
                 aria-label={
                   isDiscussion
                     ? t("打开讨论列表")
                     : isOngoing
-                      ? t("打开定时任务列表")
-                      : t("打开工作列表")
+                      ? t("打开定时列表")
+                      : t("打开任务列表")
                 }
-                onClick={() => setContextSidebarOpen(true)}
+                onClick={onOpenSidebar}
                 className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
               >
                 <PanelLeft className="size-4" />
               </button>
             </div>
 
-            <div className="relative flex items-center gap-1.5">
-              <button
-                type="button"
-                title={t("新建讨论")}
-                aria-label={t("新建讨论")}
-                onClick={startDiscussion}
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
-              >
-                <Plus className="size-4" />
-              </button>
+            <div className="relative flex items-center gap-1.5 pointer-events-auto">
               <button
                 type="button"
                 aria-expanded={infoOpen}
@@ -596,16 +649,15 @@ function CardPageContent() {
                 )}
               </button>
               {!isDiscussion && <CardStatusSwitch card={card} />}
-              <CardActions
-                card={card}
-                variant="toolbar"
-                preserve={card.id === mainDiscussion.data?.id}
-                taskDetails={{
-                  detail: detail.data,
-                  projectCards: projectCards.data || [],
-                }}
-                onDeleted={back}
-              />
+              <button
+                type="button"
+                title={t("新建会话")}
+                aria-label={t("新建会话")}
+                onClick={onStartDiscussion}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-4" />
+              </button>
             </div>
           </div>
 
@@ -635,44 +687,51 @@ function CardPageContent() {
                 )}
               </button>
               <DeviceMenu className="hidden md:inline-flex" />
-              <ModelMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
-              <CardActions
-                card={card}
-                variant="toolbar"
-                preserve={card.id === mainDiscussion.data?.id}
-                taskDetails={{
-                  detail: detail.data,
-                  projectCards: projectCards.data || [],
-                }}
-                onDeleted={back}
-              />
+              <button
+                type="button"
+                title={t("新建会话")}
+                aria-label={t("新建会话")}
+                onClick={onStartDiscussion}
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-4" />
+              </button>
             </div>
           </div>
 
-          {/* 手机端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭） */}
-          <div className="lg:hidden">
-            <Sheet
-              open={infoOpen}
-              onOpenChange={setInfoOpen}
-              side="right"
-              title={t("任务详情")}
-            >
-              <CardHeaderInfoCard
-                card={card}
-                detail={detail.data}
-                projectCards={projectCards.data || []}
-                task={stream.live?.task}
-                variant="sheet"
-                onSync={sync}
-                onClose={() => setInfoOpen(false)}
-              />
-            </Sheet>
-          </div>
+          {/* 移动/平板端窄屏：展开任务详情抽屉（使用 Sheet，支持右滑收起与遮罩关闭）。
+              注意：Radix UI 的 SheetContent 基于 Dialog.Portal 直接挂载到 document.body 根节点，
+              纯 CSS 类名 lg:hidden 无法阻止 Portal 渲染，必须在 React 逻辑层由 isMobile 控制挂载，
+              避免桌面端（>=1024px）展开详情时同时出现桌面嵌入卡片与全屏抽屉两个任务详情浮层。 */}
+          {isMobile && (
+            <div className="lg:hidden">
+              <Sheet
+                open={infoOpen}
+                onOpenChange={setInfoOpen}
+                side="right"
+                title={
+                  isDiscussion
+                    ? t("讨论详情")
+                    : isOngoing
+                      ? t("定时详情")
+                      : t("任务详情")
+                }
+              >
+                <CardHeaderInfoCard
+                  card={card}
+                  detail={detail.data}
+                  projectCards={projectCards}
+                  task={stream.live?.task}
+                  variant="sheet"
+                  onSync={sync}
+                />
+              </Sheet>
+            </div>
+          )}
 
           {/* 平板端呼出侧边栏悬浮在左上角 */}
           <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
-            <MobileGlobalNavMenu />
             <MobileQuickCardSwitcher
               projectID={card.project_id}
               activeCardID={card.id}
@@ -684,17 +743,17 @@ function CardPageContent() {
                 isDiscussion
                   ? t("打开讨论列表")
                   : isOngoing
-                    ? t("打开定时任务列表")
-                    : t("打开工作列表")
+                    ? t("打开定时列表")
+                    : t("打开任务列表")
               }
               aria-label={
                 isDiscussion
                   ? t("打开讨论列表")
                   : isOngoing
-                    ? t("打开定时任务列表")
-                    : t("打开工作列表")
+                    ? t("打开定时列表")
+                    : t("打开任务列表")
               }
-              onClick={() => setContextSidebarOpen(true)}
+              onClick={onOpenSidebar}
               className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
             >
               <PanelLeft className="size-4" />
@@ -728,14 +787,11 @@ function CardPageContent() {
                     : detail.data.pending_turns
                 }
                 currentAttempt={detail.data.current_attempt}
-                attemptHistory={detail.data.attempt_history}
+                attemptHistory={combinedAttempts}
                 bottomInsetPx={composerDockHeight}
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
-                waitingAttemptID={waiting ? current?.id : undefined}
-                choicePending={choose.isPending}
-                onChoose={(choice) => choose.mutate(choice)}
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
                 canApproveReview={
@@ -756,7 +812,7 @@ function CardPageContent() {
               >
                 <div
                   ref={composerDockRef}
-                  className="pointer-events-auto mx-auto w-full max-w-3xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-3"
+                  className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pt-2 pb-[max(0.5rem,calc(env(safe-area-inset-bottom,0px)*0.6))] sm:px-6 sm:pb-3"
                 >
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
@@ -775,12 +831,14 @@ function CardPageContent() {
                     }}
                   />
                   <ConversationComposer
+                    cardID={cardID}
+                    projectID={actualProjectID}
+                    selectedRouteId={card?.preferred_model_route_id}
                     comment={comment}
                     setComment={setComment}
                     replyTo={replyTo}
                     onCancelReply={() => setReplyTo(null)}
                     blocked={blocked}
-                    waiting={waiting}
                     hasCurrent={hasCurrent}
                     sendPending={send.isPending}
                     streamConnected={stream.connected}
@@ -794,37 +852,19 @@ function CardPageContent() {
             </div>
 
             {/* 桌面端：右上角嵌入圆角详情卡片（非全高侧边栏），展开时左侧聊天与输入框自动左移让位 */}
-            {infoOpen && (
+            {!isMobile && infoOpen && (
               <div className="hidden lg:block shrink-0 pt-14 pr-4 pb-4">
                 <CardHeaderInfoCard
                   card={card}
                   detail={detail.data}
-                  projectCards={projectCards.data || []}
+                  projectCards={projectCards}
                   task={stream.live?.task}
                   onSync={sync}
+                  onClose={() => setInfoOpen(false)}
                 />
               </div>
             )}
           </div>
         </section>
-      </div>
-
-      {contextSidebar && (
-        <Sheet
-          open={contextSidebarOpen}
-          onOpenChange={setContextSidebarOpen}
-          side="left"
-          title={
-            isDiscussion
-              ? t("讨论列表")
-              : isOngoing
-                ? t("定时任务列表")
-                : t("工作列表")
-          }
-        >
-          <div className="-m-5 h-[calc(100dvh-4.25rem)]">{contextSidebar}</div>
-        </Sheet>
-      )}
-    </main>
   );
 }

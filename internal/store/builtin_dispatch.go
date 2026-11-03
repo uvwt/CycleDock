@@ -13,7 +13,7 @@ import (
 )
 
 // ClaimNextBuiltInAttempt 跨 Workspace 公平领取，租户并发额度在所有后端实例之间共享。
-// 进程自己的执行槽位由 Dispatcher 控制；queued / waiting_human 不消耗正在执行的额度。
+// 进程自己的执行槽位由 Dispatcher 控制；queued 不消耗正在执行的额度。
 func (s *Store) ClaimNextBuiltInAttempt(
 	ctx context.Context, maxPerWorkspace int, now time.Time, leaseDuration time.Duration,
 ) (*AttemptClaim, error) {

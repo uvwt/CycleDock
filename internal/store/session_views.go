@@ -104,7 +104,7 @@ func (s *Store) CurrentAttemptView(
 		JOIN card_turns t
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
 		WHERE a.workspace_id=$1 AND a.card_id=$2
-		  AND a.status IN ('queued','running','waiting_human')
+		  AND a.status IN ('queued','running')
 		  AND COALESCE(t.idempotency_key, '') NOT LIKE 'builtin-proactive:%'
 		ORDER BY a.created_at DESC
 		LIMIT 1
@@ -171,6 +171,22 @@ func (s *Store) ListRecentAttempts(
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
+	return s.listAttempts(ctx, workspaceID, cardID, limit, 0, 1<<62-1)
+}
+
+// ListTimelineAttempts 与消息共用分页范围，避免把未加载消息的执行误列为孤立历史。
+func (s *Store) ListTimelineAttempts(
+	ctx context.Context, workspaceID, cardID uuid.UUID, oldestSequence, beforeSequence int64,
+) ([]SessionAttemptView, error) {
+	return s.listAttempts(ctx, workspaceID, cardID, 0, oldestSequence, beforeSequence)
+}
+
+func (s *Store) listAttempts(
+	ctx context.Context, workspaceID, cardID uuid.UUID, limit int, oldestSequence, beforeSequence int64,
+) ([]SessionAttemptView, error) {
+	if limit < 0 || limit > 100 {
+		limit = 50
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
@@ -190,7 +206,21 @@ func (s *Store) ListRecentAttempts(
 		JOIN card_turns t
 		  ON t.workspace_id=a.workspace_id AND t.card_id=a.card_id AND t.id=a.turn_id
 		WHERE a.workspace_id=$1 AND a.card_id=$2
-		  AND a.status NOT IN ('queued','running','waiting_human')
+		  AND a.status NOT IN ('queued','running')
+		  AND (
+			EXISTS (
+				SELECT 1 FROM events e
+				WHERE e.workspace_id=a.workspace_id AND e.card_id=a.card_id
+				  AND (e.attempt_id=a.id OR e.id=t.source_event_id)
+				  AND e.sequence >= $4 AND e.sequence < $5
+			)
+			OR (
+				t.source_event_id IS NULL
+				AND NOT EXISTS (SELECT 1 FROM events e WHERE e.workspace_id=a.workspace_id AND e.attempt_id=a.id)
+				AND a.created_at >= COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$4), '-infinity'::timestamptz)
+				AND a.created_at < COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$5), 'infinity'::timestamptz)
+			)
+		  )
 		  AND (
 			COALESCE(t.idempotency_key, '') NOT LIKE 'builtin-proactive:%'
 			OR (
@@ -206,8 +236,8 @@ func (s *Store) ListRecentAttempts(
 			)
 		  )
 		ORDER BY COALESCE(a.finished_at, a.created_at) DESC, a.created_at DESC
-		LIMIT $3
-	`, workspaceID, cardID, limit)
+		LIMIT NULLIF($3, 0)
+	`, workspaceID, cardID, limit, oldestSequence, beforeSequence)
 	if err != nil {
 		return nil, err
 	}

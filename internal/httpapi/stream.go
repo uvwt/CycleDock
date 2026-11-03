@@ -148,8 +148,6 @@ func (api *API) streamPoll(ctx context.Context, workspaceID, cardID uuid.UUID, l
 		eventType = "attempt.failed"
 	case "queued":
 		stage = "排队中"
-	case "waiting_human":
-		stage = "等待人工回复"
 	case "running":
 		if stage == "" {
 			stage = "正在执行"

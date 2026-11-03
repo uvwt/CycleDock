@@ -14,7 +14,8 @@ import { useProject } from "../../app/project-context";
 import { keys } from "../../app/query";
 import { api } from "../../shared/api/client";
 import type { ProjectActivity } from "../../shared/api/types";
-import { ErrorView, Spinner } from "../../shared/ui/components";
+import { ErrorView, Skeleton } from "../../shared/ui/components";
+import { ActivitySkeleton } from "./ActivitySkeleton";
 
 function localTime(value: string) {
   return new Date(value).toLocaleString([], {
@@ -28,7 +29,7 @@ function localTime(value: string) {
 function matchesView(item: ProjectActivity, view: string) {
   if (view === "running") return item.status === "running";
   if (view === "waiting") {
-    return item.status === "queued" || item.status === "waiting_human";
+    return item.status === "queued";
   }
   if (view === "completed") {
     return ["completed", "result", "checkin", "confirm"].includes(item.status);
@@ -44,8 +45,6 @@ function presentation(item: ProjectActivity) {
     return { label: "正在运行", icon: LoaderCircle, spin: true };
   }
   if (item.status === "queued") return { label: "等待执行", icon: Clock3 };
-  if (item.status === "waiting_human")
-    return { label: "等待回复", icon: Clock3 };
   if (["completed", "result", "checkin", "confirm"].includes(item.status)) {
     return { label: "已完成", icon: CircleCheck };
   }
@@ -95,8 +94,18 @@ export default function ActivityPage() {
 
   if (projectsPending) {
     return (
-      <main className="grid min-h-[calc(100dvh-3.5rem)] place-items-center md:min-h-dvh">
-        <Spinner text={t("读取项目…")} />
+      <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-heading">
+              {t("活动")}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("查看 Agent 正在做什么，以及最近发生了什么。")}
+            </p>
+          </div>
+        </header>
+        <ActivitySkeleton />
       </main>
     );
   }
@@ -129,7 +138,7 @@ export default function ActivityPage() {
   }
 
   return (
-    <main className="mx-auto min-h-[calc(100dvh-3.5rem)] max-w-[1600px] space-y-7 px-5 py-8 md:min-h-dvh md:px-8">
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
@@ -197,7 +206,12 @@ export default function ActivityPage() {
                 </button>
               ))}
             </div>
-            {agents.isPending && <Spinner />}
+            {agents.isPending && (
+              <div className="space-y-1.5 pt-1">
+                <Skeleton className="h-8 w-full rounded-xl" />
+                <Skeleton className="h-8 w-full rounded-xl" />
+              </div>
+            )}
             {agents.error && (
               <ErrorView
                 error={agents.error}
@@ -212,9 +226,7 @@ export default function ActivityPage() {
               {t("还没有项目")}
             </div>
           ) : activity.isPending ? (
-            <div className="py-20 grid place-items-center">
-              <Spinner />
-            </div>
+            <ActivitySkeleton />
           ) : activity.error ? (
             <div>
               <ErrorView error={activity.error} />
@@ -239,7 +251,7 @@ export default function ActivityPage() {
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="truncate text-sm font-semibold text-heading">
-                          {item.card_title || t("未命名工作")}
+                          {item.card_title || t("未命名任务")}
                         </span>
                         <span className="text-xs text-faint">
                           {t(state.label)}

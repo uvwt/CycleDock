@@ -63,9 +63,9 @@ func TestBuiltInDispatchAlternatesWorkspacesAndSkipsFullTenant(t *testing.T) {
 	if _, err := s.ClaimNextBuiltInAttempt(ctx, 2, now, time.Minute); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("full tenants accepted another execution: %v", err)
 	}
-	// waiting_human 不占运行额度，同一租户的其他卡片可以继续。
+	// 本轮完成即释放运行额度，同一租户的其他卡片可以继续。
 	first := claims[0].Attempt
-	if err := s.WaitAttemptForHuman(ctx, first.WorkspaceID, first.CardID, first.ID, now); err != nil {
+	if err := s.CompleteAttempt(ctx, first.WorkspaceID, first.CardID, first.ID, first.RunnerSourceID, now); err != nil {
 		t.Fatal(err)
 	}
 	next, err := s.ClaimNextBuiltInAttempt(ctx, 2, now.Add(5*time.Second), time.Minute)
@@ -169,5 +169,28 @@ func TestBuiltInDispatchSkipsLockedAndDisabledWorkspaces(t *testing.T) {
 	claim, err := s.ClaimNextBuiltInAttempt(claimCtx, 1, time.Now(), time.Minute)
 	if err != nil || claim.Attempt.WorkspaceID != ready.WorkspaceID {
 		t.Fatalf("available workspace blocked by other tenants: claim=%+v err=%v", claim, err)
+	}
+}
+
+func TestBuiltInDispatchResumesQueuedMessageAfterModelSetup(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindDiscussion)
+	ctx := context.Background()
+	turn, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID, "保留这条消息", "before-model-setup", domain.DispatchModeEnqueue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimNextBuiltInAttempt(ctx, 1, time.Now(), time.Minute); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("unconfigured workspace claim error=%v", err)
+	}
+	if _, err := s.SaveAgentSettings(ctx, f.WorkspaceID, testAgentSettings("https://example.com", "model", "")); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimNextBuiltInAttempt(ctx, 1, time.Now(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Turn.ID != turn.Turn.ID || claim.Turn.Content != "保留这条消息" {
+		t.Fatalf("queued message changed: %+v", claim.Turn)
 	}
 }

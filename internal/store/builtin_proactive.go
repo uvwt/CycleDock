@@ -203,7 +203,7 @@ func (s *Store) tryCreateBuiltInProactiveTurn(
 		return uuid.Nil, false, err
 	}
 
-	// 主聊天已有进行中/等待回复的 Attempt 或未认领的排队输入时，本轮礼让用户对话，稍后窗口内再试。
+	// 主聊天已有排队/进行中的 Attempt 或未认领的排队输入时，本轮礼让用户对话，稍后窗口内再试。
 	var busy bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -211,7 +211,7 @@ func (s *Store) tryCreateBuiltInProactiveTurn(
 			FROM turn_attempts a
 			WHERE a.workspace_id = $1
 			  AND a.card_id = $2
-			  AND a.status IN ('queued', 'running', 'waiting_human')
+			  AND a.status IN ('queued', 'running')
 		) OR EXISTS (
 			SELECT 1
 			FROM card_turns t

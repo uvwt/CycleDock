@@ -6,7 +6,8 @@ import { MessageSquareText, PanelLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys } from "../../app/query";
-import { ErrorView, Sheet, Spinner } from "../../shared/ui/components";
+import { ErrorView, Sheet, Skeleton } from "../../shared/ui/components";
+import { ContextSidebarSkeleton } from "../../shared/ui/ContextSidebar";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
@@ -71,8 +72,21 @@ export default function ChatHome() {
 
   if (projectsPending) {
     return (
-      <main className="grid h-[calc(100dvh-3.5rem)] place-items-center md:h-dvh">
-        <Spinner text={t("读取项目…")} />
+      <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface">
+        <div
+          className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
+        >
+          <div
+            className={`${listVisible ? "hidden md:block" : "hidden"} min-h-0 border-r border-line`}
+          >
+            <ContextSidebarSkeleton ariaLabel={t("讨论列表")} />
+          </div>
+          <div className="flex h-full min-h-0 flex-col items-center justify-center p-6 text-center">
+            <Skeleton className="size-14 rounded-2xl mb-4" />
+            <Skeleton className="h-5 w-44 mb-2" />
+            <Skeleton className="h-3.5 w-64" />
+          </div>
+        </div>
       </main>
     );
   }
@@ -86,7 +100,7 @@ export default function ChatHome() {
   }
 
   return (
-    <main className="relative h-[calc(100dvh-3.5rem)] min-h-0 bg-canvas md:h-dvh">
+    <main className="relative flex h-full min-h-0 flex-1 flex-col bg-surface">
       {projectID ? (
         <div
           className={`grid h-full min-h-0 ${listVisible ? "md:grid-cols-[280px_minmax(0,1fr)]" : "grid-cols-1"}`}
@@ -98,6 +112,7 @@ export default function ChatHome() {
               discussions={discussions}
               onSelect={selectDiscussion}
               onCreate={startDiscussion}
+              loading={cards.isPending}
             />
           </div>
 
@@ -137,13 +152,13 @@ export default function ChatHome() {
             <MessageSquareText className="mx-auto size-9 text-placeholder" />
             <h1 className="mt-4 text-xl font-semibold">{t("还没有项目")}</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {t("请先在工作区中创建一个项目。")}
+              {t("请先创建一个项目。")}
             </p>
             <Link
               className="mt-5 inline-block text-sm font-medium text-sky-700"
               to="/board"
             >
-              {t("前往工作")}
+              {t("前往任务")}
             </Link>
           </div>
         </div>
@@ -154,15 +169,15 @@ export default function ChatHome() {
           open={mobileListOpen}
           onOpenChange={setMobileListOpen}
           side="left"
+          padded={false}
+          className="bg-canvas"
           title={t("讨论列表")}
         >
-          <div className="-m-5 h-[calc(100dvh-4.25rem)]">
-            <DiscussionSidebar
-              discussions={discussions}
-              onSelect={selectDiscussion}
-              onCreate={startDiscussion}
-            />
-          </div>
+          <DiscussionSidebar
+            discussions={discussions}
+            onSelect={selectDiscussion}
+            onCreate={startDiscussion}
+          />
         </Sheet>
       )}
     </main>

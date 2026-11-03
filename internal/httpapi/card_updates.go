@@ -49,7 +49,7 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
      AND (
        (message->>'end_turn' = 'true')
        OR (message->>'type' = 'choice')
-       OR (a.status IN ('completed', 'waiting_human', 'failed'))
+       OR (a.status IN ('completed', 'failed'))
      )
    ORDER BY sequence DESC LIMIT 1
  ) m ON true

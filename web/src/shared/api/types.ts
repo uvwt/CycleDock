@@ -20,7 +20,6 @@ export type Project = {
   id: string;
   name: string;
   description: string;
-  instructions: string;
   created_at: string;
   updated_at: string;
 };
@@ -44,6 +43,7 @@ export type Card = {
   last_read_message_sequence?: number;
   unread?: boolean;
   pinned_at?: string;
+  preferred_model_route_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -51,6 +51,8 @@ export type TimelineEvent = {
   id: string;
   sequence: number;
   attempt_id?: string;
+  source_card_id?: string;
+  source_card_title?: string;
   type:
     | "comment"
     | "progress"
@@ -163,6 +165,7 @@ export type CardTimelinePaged = {
   timeline: TimelineEvent[];
   has_more_before: boolean;
   oldest_sequence?: number | null;
+  attempt_history: Attempt[];
 };
 
 export type DoneCardsPaged = {

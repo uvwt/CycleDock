@@ -28,6 +28,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { safeRandomUUID } from "../../shared/lib/utils";
 import { api } from "../../shared/api/client";
 import type {
   AgentSettings,
@@ -45,6 +46,7 @@ import {
   Section,
   Select,
   Spinner,
+  Switch,
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
@@ -192,10 +194,10 @@ function SortableRouteEditor({
       style={style}
       className={`rounded-xl border border-line bg-surface p-3.5 space-y-3 transition-all ${
         isDragging ? "z-10 opacity-70 shadow-lg ring-2 ring-primary/40" : ""
-      }`}
+      } ${route.enabled === false ? "opacity-75 bg-muted/20" : ""}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             className="cursor-grab active:cursor-grabbing rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground touch-none"
@@ -206,50 +208,69 @@ function SortableRouteEditor({
           >
             <GripVertical className="size-4" />
           </button>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <ProviderLogo
               provider={route.provider_type}
               className="size-4 shrink-0 text-foreground"
             />
-            <p className="text-sm font-semibold">
+            <p className="truncate text-sm font-semibold">
               {names[route.provider_type]}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
-            className="h-7 px-2.5 text-xs"
+            variant="ghost"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
             disabled={
               test.isPending ||
               !route.model.trim() ||
               (subscription && !route.credential_id)
             }
             onClick={() => test.mutate()}
-            title="测试此 Route"
+            title="测试此 Route 连通性"
           >
             <TestTube2 className="size-3.5" />
-            测试此 Route
+            测试
           </Button>
+
           <Button
+            variant="ghost"
             aria-label="删除模型 Route"
             onClick={onRemove}
-            className="h-7 px-2"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
             title="删除此 Route"
           >
             <Trash2 className="size-3.5" />
           </Button>
+
+          <div className="mx-1 h-3.5 w-px bg-line" aria-hidden="true" />
+
+          <Switch
+            id={`route-enabled-${route.id}`}
+            checked={route.enabled ?? true}
+            onCheckedChange={(checked) =>
+              onChange({ ...route, enabled: checked })
+            }
+            aria-label={route.enabled ?? true ? "停用此 Route" : "启用此 Route"}
+            title={
+              (route.enabled ?? true)
+                ? "已启用（点击停用）"
+                : "已停用（点击启用）"
+            }
+          />
         </div>
       </div>
 
       {subscription ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 min-w-0">
           <div
-            className="flex h-9 w-full items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none truncate"
+            className="flex h-9 w-full min-w-0 items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none"
             title={accountLabel}
             aria-label="账号"
           >
-            {accountLabel}
+            <span className="truncate">{accountLabel}</span>
           </div>
 
           {catalog.data?.length ? (
@@ -280,17 +301,17 @@ function SortableRouteEditor({
           )}
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 min-w-0">
           <div
-            className="flex h-9 w-full items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none truncate"
+            className="flex h-9 w-full min-w-0 items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none"
             title={route.provider_base_url || "未设置 Base URL"}
             aria-label="服务商 Endpoint"
           >
-            {route.provider_base_url || "未设置 Base URL"}
+            <span className="truncate">{route.provider_base_url || "未设置 Base URL"}</span>
           </div>
 
           {customCatalog.data && customCatalog.data.length > 0 && !manualInput ? (
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               <Select
                 value={
                   customCatalog.data.some((m) => m.id === route.model)
@@ -306,7 +327,7 @@ function SortableRouteEditor({
                   }
                 }}
                 aria-label="模型"
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 <option value="">选择模型</option>
                 {customCatalog.data.map((m) => (
@@ -318,9 +339,9 @@ function SortableRouteEditor({
               </Select>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               <TextInput
-                className="flex-1"
+                className="flex-1 min-w-0"
                 value={route.model}
                 onChange={(event) =>
                   onChange({ ...route, model: event.target.value })
@@ -331,7 +352,7 @@ function SortableRouteEditor({
               {customCatalog.data && customCatalog.data.length > 0 && (
                 <Button
                   type="button"
-                  className="h-9 px-2 text-xs shrink-0"
+                  className="h-9 shrink-0 px-2 text-xs"
                   onClick={() => setManualInput(false)}
                   title="切换回下拉选择"
                 >
@@ -386,7 +407,7 @@ export function ModelsSettings() {
           keys.models(provider, account.id),
         );
         return {
-          id: crypto.randomUUID(),
+          id: safeRandomUUID(),
           enabled: true,
           provider_type: provider,
           credential_id: account.id,
@@ -435,7 +456,7 @@ export function ModelsSettings() {
     );
     const defaultModel = cached?.[0]?.id ?? "";
     const newRouteItem: ModelRoute = {
-      id: crypto.randomUUID(),
+      id: safeRandomUUID(),
       enabled: true,
       provider_type: provider,
       credential_id: credentialID,
@@ -540,7 +561,7 @@ export function ModelsSettings() {
     );
 
     const newRouteItem: ModelRoute = {
-      id: crypto.randomUUID(),
+      id: safeRandomUUID(),
       enabled: true,
       provider_type: "openai_compatible",
       credential_id: "",
@@ -581,7 +602,7 @@ export function ModelsSettings() {
       // 显式提取持久化所需字段，避免将前端只读状态（如 api_key_configured）当作未知字段提交
       const routes = (input.routes || []).map((r) => ({
         id: r.id,
-        enabled: true,
+        enabled: r.enabled ?? true,
         provider_type: r.provider_type,
         credential_id: r.credential_id,
         provider_base_url: r.provider_base_url,
@@ -594,6 +615,7 @@ export function ModelsSettings() {
     },
     onSuccess: (result) => {
       queryClient.setQueryData(keys.agent, result);
+      void queryClient.invalidateQueries({ queryKey: keys.agentStatus });
       setDraft(result);
       toast.success("配置已保存");
     },
@@ -635,7 +657,7 @@ export function ModelsSettings() {
             { id: string; name: string }[]
           >(keys.models("chatgpt", account.id));
           return {
-            id: crypto.randomUUID(),
+            id: safeRandomUUID(),
             enabled: true,
             provider_type: "chatgpt",
             credential_id: account.id,
@@ -694,7 +716,7 @@ export function ModelsSettings() {
               { id: string; name: string }[]
             >(keys.models("grok", account.id));
             return {
-              id: crypto.randomUUID(),
+              id: safeRandomUUID(),
               enabled: true,
               provider_type: "grok",
               credential_id: account.id,
@@ -774,13 +796,43 @@ export function ModelsSettings() {
   const updateRoute = (index: number, route: ModelRoute) => {
     const routes = [...draft.routes];
     routes[index] = route;
-    setDraft({ ...draft, routes });
+    // 若停用了被指定为默认模型的 Route，自动清空对应的关联
+    let {
+      default_model_route_id,
+      discussion_model_route_id,
+      plan_model_route_id,
+    } = draft;
+    if (route.enabled === false) {
+      if (default_model_route_id === route.id) default_model_route_id = undefined;
+      if (discussion_model_route_id === route.id) discussion_model_route_id = undefined;
+      if (plan_model_route_id === route.id) plan_model_route_id = undefined;
+    }
+    setDraft({
+      ...draft,
+      routes,
+      default_model_route_id,
+      discussion_model_route_id,
+      plan_model_route_id,
+    });
   };
 
   const removeRoute = (index: number) => {
+    const removed = draft.routes[index];
     setDraft({
       ...draft,
       routes: draft.routes.filter((_, i) => i !== index),
+      default_model_route_id:
+        draft.default_model_route_id === removed?.id
+          ? undefined
+          : draft.default_model_route_id,
+      discussion_model_route_id:
+        draft.discussion_model_route_id === removed?.id
+          ? undefined
+          : draft.discussion_model_route_id,
+      plan_model_route_id:
+        draft.plan_model_route_id === removed?.id
+          ? undefined
+          : draft.plan_model_route_id,
     });
   };
 
@@ -820,12 +872,6 @@ export function ModelsSettings() {
                             ? "尚未连接账号"
                             : "当前部署未开放"}
                       </p>
-                      {status?.warning && (
-                        <p className="mt-2 text-xs text-warning">
-                          Hosted DEV 临时登录测试模式；正式使用仍需要批准的
-                          OAuth Client ID。
-                        </p>
-                      )}
                     </div>
                     {status?.available && (
                       <Button
@@ -1084,38 +1130,11 @@ export function ModelsSettings() {
       </Section>
 
       <Section
-        title="默认模型分配"
-        description="针对看板及不同卡片场景设置默认模型。若卡片单轮未手动选定模型，将优先匹配此处设定的场景默认或看板默认模型。"
+        title="默认模型"
+        description="未单独指定模型时自动使用。"
       >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field
-            label="看板默认模型"
-            hint="未指定场景或未设置特定场景默认模型时的兜底模型。"
-          >
-            <Select
-              value={draft.default_model_route_id ?? ""}
-              onChange={(e) =>
-                setDraft({
-                  ...draft,
-                  default_model_route_id: e.target.value || undefined,
-                })
-              }
-            >
-              <option value="">跟随路由首位 (自动默认)</option>
-              {draft.routes
-                .filter((r) => r.enabled && r.id)
-                .map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.model || "未命名模型"} ({names[r.provider_type] || r.provider_type})
-                  </option>
-                ))}
-            </Select>
-          </Field>
-
-          <Field
-            label="讨论默认模型"
-            hint="讨论卡片 (Discussion) 进行对话沟通与构思方案时的默认优先模型。"
-          >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 min-w-0">
+          <Field label="讨论卡片 (Discussion)">
             <Select
               value={draft.discussion_model_route_id ?? ""}
               onChange={(e) =>
@@ -1125,7 +1144,7 @@ export function ModelsSettings() {
                 })
               }
             >
-              <option value="">跟随看板默认</option>
+              <option value="">跟随路由设置</option>
               {draft.routes
                 .filter((r) => r.enabled && r.id)
                 .map((r) => (
@@ -1136,10 +1155,28 @@ export function ModelsSettings() {
             </Select>
           </Field>
 
-          <Field
-            label="定时任务默认模型"
-            hint="定时任务与周期监控卡片 (Ongoing) 执行任务时的默认优先模型。"
-          >
+          <Field label="任务卡片 (Todo)">
+            <Select
+              value={draft.default_model_route_id ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  default_model_route_id: e.target.value || undefined,
+                })
+              }
+            >
+              <option value="">跟随路由设置</option>
+              {draft.routes
+                .filter((r) => r.enabled && r.id)
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.model || "未命名模型"} ({names[r.provider_type] || r.provider_type})
+                  </option>
+                ))}
+            </Select>
+          </Field>
+
+          <Field label="定时任务 (Ongoing)">
             <Select
               value={draft.plan_model_route_id ?? ""}
               onChange={(e) =>
@@ -1149,7 +1186,7 @@ export function ModelsSettings() {
                 })
               }
             >
-              <option value="">跟随看板默认</option>
+              <option value="">跟随路由设置</option>
               {draft.routes
                 .filter((r) => r.enabled && r.id)
                 .map((r) => (
@@ -1167,29 +1204,24 @@ export function ModelsSettings() {
             onClick={() => save.mutate()}
             disabled={save.isPending}
           >
-            保存默认模型设置
+            保存设置
           </Button>
         </div>
       </Section>
 
       <Section
-        title="Agent全局指令"
-        description="整个工作空间的默认全局指令，与单个项目的指令分开保存，对所有 Agent 会话生效。"
+        title="全局指令"
+        description="在所有项目和对话中都会默认生效。适合设置通用的沟通习惯、回答偏好或开发规范。"
       >
         <div className="space-y-4">
-          <Field
-            label="Workspace Agent Instructions"
-            hint="设定工作区内 Agent 的通用行为准则、协作风格或基础角色上下文。"
-          >
-            <TextArea
-              rows={8}
-              value={draft.system_instructions}
-              onChange={(e) =>
-                setDraft({ ...draft, system_instructions: e.target.value })
-              }
-              placeholder="输入工作区 Agent 全局指令，例如设定 Agent 的行为准则、回答语言风格或上下文规则…"
-            />
-          </Field>
+          <TextArea
+            rows={8}
+            value={draft.system_instructions}
+            onChange={(e) =>
+              setDraft({ ...draft, system_instructions: e.target.value })
+            }
+            placeholder="例如：始终使用中文回复、给出代码时优先使用 diff 格式、遇到高风险操作必须先向我确认…"
+          />
           <div className="flex justify-start">
             <Button
               variant="primary"

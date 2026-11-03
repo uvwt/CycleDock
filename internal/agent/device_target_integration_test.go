@@ -50,7 +50,7 @@ func TestADKDeviceTarget_选择切换和不指定均进入对应Turn上下文(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Devices", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Devices", "")
 	if err != nil {
 		t.Fatal(err)
 	}

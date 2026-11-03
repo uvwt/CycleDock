@@ -49,6 +49,26 @@ type mcpConnectionResponse struct {
 	TimeoutMS       int32  `json:"timeout_ms"`
 }
 
+// 所有工作区成员都需要知道 Agent 是否可执行；这里只返回配置状态，不暴露路由或凭据。
+func (api *API) getAgentStatus(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		api.handleError(w, err)
+		return
+	}
+	configured := false
+	for _, route := range settings.Routes {
+		if route.Enabled {
+			configured = true
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		ModelConfigured bool `json:"model_configured"`
+	}{ModelConfigured: configured})
+}
+
 func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	identity := identityFromRequest(r)
 	if !requireWorkspaceOwner(w, identity.Role) {

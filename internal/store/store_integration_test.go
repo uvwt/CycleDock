@@ -138,7 +138,7 @@ func newFixture(t *testing.T, s *Store, kind domain.CardKind) testFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := s.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, err := s.CreateProject(ctx, workspace.ID, "Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

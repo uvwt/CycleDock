@@ -17,6 +17,7 @@ import {
   Modal,
   Section,
   Spinner,
+  Switch,
   TextInput,
 } from "../../shared/ui/components";
 
@@ -59,6 +60,22 @@ export function MCPSettings() {
       ),
     onError: (e) => toast.error(String(e)),
   });
+  const toggle = useMutation({
+    mutationFn: (connection: MCPConnection) =>
+      api.updateMCP(connection.id, {
+        name: connection.name,
+        url: connection.url,
+        enabled: !connection.enabled,
+        timeout_ms: connection.timeout_ms,
+        bearer_token: "",
+        clear_bearer_token: false,
+      }),
+    onSuccess: async (_, variables) => {
+      toast.success(variables.enabled ? "已停用此 MCP 连接" : "已启用此 MCP 连接");
+      await queryClient.invalidateQueries({ queryKey: keys.mcp });
+    },
+    onError: (e) => toast.error(String(e)),
+  });
   return (
     <Section
       title="MCP 服务"
@@ -88,26 +105,32 @@ export function MCPSettings() {
             </p>
           )}
           {list.data?.map((c) => (
-            <button
+            <div
               key={c.id}
-              onClick={() => {
-                setPicked(c);
-                setOpen(true);
-              }}
-              className="flex w-full items-center justify-between gap-4 rounded-xl border border-line p-4 text-left hover:border-sky-300"
+              className="flex w-full items-center justify-between gap-4 rounded-xl border border-line p-4 transition-colors hover:border-line-strong hover:bg-muted/30"
             >
-              <div className="min-w-0">
-                <p className="font-semibold">{c.name}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPicked(c);
+                  setOpen(true);
+                }}
+                className="flex-1 min-w-0 text-left cursor-pointer outline-none"
+              >
+                <p className="font-semibold text-foreground">{c.name}</p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {c.url}
                 </p>
+              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Switch
+                  checked={c.enabled}
+                  disabled={toggle.isPending}
+                  onCheckedChange={() => toggle.mutate(c)}
+                  aria-label={c.enabled ? "停用此 MCP 连接" : "启用此 MCP 连接"}
+                />
               </div>
-              <span
-                className={`text-xs ${c.enabled ? "text-emerald-700" : "text-faint"}`}
-              >
-                {c.enabled ? "启用" : "停用"}
-              </span>
-            </button>
+            </div>
           ))}
         </div>
       )}
@@ -122,7 +145,6 @@ export function MCPSettings() {
           onSave={(v) => save.mutate(v)}
           onTest={(v) => test.mutate(v)}
           onDelete={picked ? () => remove.mutate() : undefined}
-          onClose={() => setOpen(false)}
           busy={save.isPending || test.isPending || remove.isPending}
         />
       </Modal>
@@ -134,14 +156,12 @@ function MCPForm({
   onSave,
   onTest,
   onDelete,
-  onClose,
   busy,
 }: {
   initial: MCPInput | MCPConnection;
   onSave: (v: MCPInput) => void;
   onTest: (v: MCPInput) => void;
   onDelete?: () => void;
-  onClose?: () => void;
   busy: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -164,7 +184,6 @@ function MCPForm({
     },
   });
   const clearBearerToken = useWatch({ control, name: "clear_bearer_token" });
-  const enabled = useWatch({ control, name: "enabled" });
   const configured = "token_configured" in initial && initial.token_configured;
   return (
     <>
@@ -226,15 +245,6 @@ function MCPForm({
               aria-invalid={!!errors.timeout_ms}
             />
           </Field>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox
-              checked={enabled}
-              onCheckedChange={(checked) =>
-                setValue("enabled", Boolean(checked))
-              }
-            />
-            启用服务
-          </label>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div className="flex flex-wrap gap-2">
               <Button type="submit" variant="primary" disabled={busy}>
@@ -250,16 +260,6 @@ function MCPForm({
                 <TestTube2 className="size-4" />
                 测试
               </Button>
-              {onClose && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={onClose}
-                >
-                  取消
-                </Button>
-              )}
             </div>
             {onDelete && (
               <Button

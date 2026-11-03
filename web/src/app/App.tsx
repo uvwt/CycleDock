@@ -149,8 +149,15 @@ function Authenticated() {
             <NotificationPermissionPrompt />
             <Suspense
               fallback={
-                <div className="grid min-h-[50vh] place-items-center">
-                  <Spinner />
+                <div className="flex h-full min-h-0 w-full animate-pulse p-6">
+                  <div className="mx-auto w-full max-w-5xl space-y-6">
+                    <div className="flex items-center justify-between">
+                      <div className="h-8 w-44 rounded-xl bg-muted/70" />
+                      <div className="h-8 w-24 rounded-lg bg-muted/60" />
+                    </div>
+                    <div className="h-32 w-full rounded-2xl bg-muted/40" />
+                    <div className="h-64 w-full rounded-2xl bg-muted/30" />
+                  </div>
                 </div>
               }
             >

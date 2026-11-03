@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   DndContext,
+  DragOverlay,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
@@ -11,8 +12,8 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import { ListPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -27,7 +28,11 @@ import {
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
-import { CardStatusDot, getCardVisualStatus } from "../../shared/ui/CardStatusDot";
+import { BoardSkeleton } from "./BoardSkeleton";
+import {
+  CardStatusDot,
+  getCardVisualStatus,
+} from "../../shared/ui/CardStatusDot";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import type { Card, TodoState } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
@@ -36,7 +41,7 @@ const states: TodoState[] = ["todo", "working", "review", "done"];
 const labels: Record<TodoState, string> = {
   todo: "待办",
   working: "进行中",
-  review: "待审核",
+  review: "待验收",
   done: "已完成",
 };
 
@@ -111,7 +116,7 @@ function Lane({
         className
       }
     >
-      <header className="mb-3 flex shrink-0 items-center justify-between px-1">
+      <header className="mb-2 flex shrink-0 items-center justify-between px-1">
         <h2 className="text-sm font-semibold tracking-tight text-foreground">
           {t(labels[state])}
         </h2>
@@ -124,7 +129,7 @@ function Lane({
           {cards.length}
         </span>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto pr-1 pb-24 lg:pb-2">
+      <div className="scrollbar-thin flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto px-1 pt-1.5 pb-24 lg:pb-2">
         {cards.map((c) => (
           <TaskCard key={c.id} card={c} onOpen={onOpen} />
         ))}
@@ -157,23 +162,62 @@ function Lane({
   );
 }
 
-function TaskCard({ card, onOpen }: { card: Card; onOpen: (c: Card) => void }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useDraggable({ id: card.id });
+function TaskCard({
+  card,
+  onOpen,
+  isOverlay = false,
+}: {
+  card: Card;
+  onOpen?: (c: Card) => void;
+  isOverlay?: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: card.id,
+  });
   const visualStatus = getCardVisualStatus(card);
   const updatedTime = formatRelativeTime(card.updated_at);
   const summary = stripMarkdownSummary(card.description);
 
+  if (isOverlay) {
+    return (
+      <div
+        className="w-full rounded-xl border border-sky-400/80 bg-surface p-3 text-left shadow-2xl ring-2 ring-sky-400/20 rotate-1 cursor-grabbing select-none"
+      >
+        <div className="flex items-start gap-2.5">
+          <div className="mt-1 shrink-0">
+            <CardStatusDot status={visualStatus} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <h3 className="min-w-0 flex-1 line-clamp-2 text-sm font-medium leading-snug text-foreground">
+                {card.title}
+              </h3>
+              {updatedTime && (
+                <span className="shrink-0 text-[11px] font-normal tabular-nums text-faint/70">
+                  {updatedTime}
+                </span>
+              )}
+            </div>
+            {summary && (
+              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80">
+                {summary}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <button
       ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform) }}
       {...attributes}
       {...listeners}
-      onClick={() => onOpen(card)}
+      onClick={() => onOpen?.(card)}
       className={
         "group relative w-full rounded-xl border border-line bg-surface p-3 text-left shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md dark:hover:border-sky-700/80 " +
-        (isDragging ? "relative z-20 opacity-60 shadow-lg" : "")
+        (isDragging ? "opacity-25 border-dashed border-sky-400/80" : "")
       }
     >
       <div className="flex items-start gap-2.5">
@@ -388,7 +432,6 @@ export default function BoardPage() {
       api.createProject({
         name: name.trim(),
         description: description.trim(),
-        instructions: "",
       }),
     onSuccess: async (project) => {
       setCreating(false);
@@ -417,12 +460,48 @@ export default function BoardPage() {
   const move = useMutation({
     mutationFn: ({ id, state }: { id: string; state: TodoState }) =>
       api.moveTodo(id, state),
-    onSuccess: () =>
+    onMutate: async ({ id, state }) => {
+      // 1. 取消当前正在进行的重新获取，避免覆盖乐观更新
+      await queryClient.cancelQueries({
+        queryKey: keys.cards(projectID || ""),
+      });
+
+      // 2. 保存旧状态快照，用于网络异常时回滚
+      const previousCards = queryClient.getQueryData<Card[]>(
+        keys.cards(projectID || ""),
+      );
+
+      // 3. 乐观将卡片状态更新为目标列，让松手瞬间卡片立即出现在新列
+      if (previousCards) {
+        queryClient.setQueryData<Card[]>(
+          keys.cards(projectID || ""),
+          previousCards.map((c) =>
+            c.id === id ? { ...c, todo_state: state } : c,
+          ),
+        );
+      }
+
+      return { previousCards };
+    },
+    onError: (e, _, context) => {
+      // 失败时回滚到旧快照
+      if (context?.previousCards) {
+        queryClient.setQueryData(
+          keys.cards(projectID || ""),
+          context.previousCards,
+        );
+      }
+      toast.error(e instanceof Error ? e.message : t("移动失败"));
+    },
+    onSettled: () => {
+      // 无论成功还是失败，最终重新与服务端同步
       void queryClient.invalidateQueries({
         queryKey: keys.cards(projectID || ""),
-      }),
-    onError: (e) => toast.error(e instanceof Error ? e.message : t("移动失败")),
+      });
+    },
   });
+  const [activeCard, setActiveCard] = useState<Card | null>(null);
+
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, {
@@ -433,6 +512,21 @@ export default function BoardPage() {
     }),
     useSensor(KeyboardSensor),
   );
+
+  function handleDragStart(e: DragStartEvent) {
+    const card = cards.data?.find((c) => c.id === e.active.id) || null;
+    setActiveCard(card);
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    setActiveCard(null);
+    dragEnd(e);
+  }
+
+  function handleDragCancel() {
+    setActiveCard(null);
+  }
+
   function dragEnd(e: DragEndEvent) {
     const state = e.over?.id as TodoState | undefined;
     const card = cards.data?.find((c) => c.id === e.active.id);
@@ -456,11 +550,11 @@ export default function BoardPage() {
     );
   }
   return (
-    <main className="mx-auto flex h-[calc(100dvh-3.5rem)] max-w-[1600px] flex-col overflow-hidden px-5 py-6 md:h-dvh md:px-8 md:py-8">
-      <header className="mb-6 flex shrink-0 flex-wrap items-center justify-between gap-4">
+    <main className="mx-auto flex h-full w-full min-w-0 max-w-7xl flex-1 flex-col overflow-hidden px-5 py-6 md:px-8 md:py-8">
+      <header className="mb-7 flex shrink-0 flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
-            {t("工作")}
+            {t("任务")}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {t("查看任务执行状态，跟踪待办进度。")}
@@ -475,14 +569,14 @@ export default function BoardPage() {
           )}
         </div>
       </header>
-      {projectsPending && <Spinner />}
+      {projectsPending && <BoardSkeleton />}
       {Boolean(projectsError) && (
         <ErrorView error={projectsError} onRetry={refetchProjects} />
       )}
       {projectID && (
         <div className="flex min-h-0 flex-1 flex-col">
           {cards.isPending ? (
-            <Spinner />
+            <BoardSkeleton />
           ) : cards.error ? (
             <ErrorView error={cards.error} />
           ) : (
@@ -490,94 +584,105 @@ export default function BoardPage() {
               {/* 移动端 (lg:hidden)：顶部分段 Tabs + 左右平滑滚动单列容器 */}
               {!isDesktop && (
                 <div className="flex min-h-0 flex-1 flex-col">
-                {/* 顶部吸顶分段器 Tabs */}
-                <div className="shrink-0 pb-3">
-                  <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1.5 scrollbar-none">
-                    {states.map((state) => {
-                      const isActive = activeTab === state;
-                      const count = cardsByState[state].length;
-                      const accent = laneAccentMap[state];
-                      return (
-                        <button
-                          key={state}
-                          type="button"
-                          onClick={() => handleTabSelect(state)}
-                          className={
-                            "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all " +
-                            (isActive
-                              ? accent.activeTab
-                              : "text-muted-foreground hover:bg-muted hover:text-foreground")
-                          }
-                        >
-                          <span
+                  {/* 顶部吸顶分段器 Tabs */}
+                  <div className="shrink-0 pb-3">
+                    <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1.5 scrollbar-none">
+                      {states.map((state) => {
+                        const isActive = activeTab === state;
+                        const count = cardsByState[state].length;
+                        const accent = laneAccentMap[state];
+                        return (
+                          <button
+                            key={state}
+                            type="button"
+                            onClick={() => handleTabSelect(state)}
                             className={
-                              "size-1.5 shrink-0 rounded-full transition-opacity " +
-                              accent.dot +
-                              (isActive ? " opacity-100" : " opacity-40")
-                            }
-                          />
-                          <span>{t(labels[state])}</span>
-                          <span
-                            className={
-                              "ml-0.5 rounded-full px-1.5 py-0.2 text-[10px] tabular-nums " +
+                              "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all " +
                               (isActive
-                                ? "bg-muted font-semibold text-foreground"
-                                : "bg-muted/70 text-muted-foreground")
+                                ? accent.activeTab
+                                : "text-muted-foreground hover:bg-muted hover:text-foreground")
                             }
                           >
-                            {count}
-                          </span>
-                        </button>
-                      );
-                    })}
+                            <span
+                              className={
+                                "size-1.5 shrink-0 rounded-full transition-opacity " +
+                                accent.dot +
+                                (isActive ? " opacity-100" : " opacity-40")
+                              }
+                            />
+                            <span>{t(labels[state])}</span>
+                            <span
+                              className={
+                                "ml-0.5 rounded-full px-1.5 py-0.2 text-[10px] tabular-nums " +
+                                (isActive
+                                  ? "bg-muted font-semibold text-foreground"
+                                  : "bg-muted/70 text-muted-foreground")
+                              }
+                            >
+                              {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 移动端左右滑动单列卡片平铺容器 */}
+                  {/* w-full snap-center 配合 px-0.5，在右侧留足间隙与边界 */}
+                  <div
+                    ref={mobileContainerRef}
+                    onScroll={handleMobileScroll}
+                    className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth scrollbar-none"
+                  >
+                    {states.map((state) => (
+                      <div
+                        key={state}
+                        className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5 pb-2"
+                      >
+                        <Lane
+                          state={state}
+                          cards={cardsByState[state]}
+                          onOpen={open}
+                          className="h-full"
+                          hasMoreDone={state === "done" && hasMoreDone}
+                          loadingMoreDone={state === "done" && loadingMoreDone}
+                          onLoadMoreDone={handleLoadMoreDone}
+                        />
+                      </div>
+                    ))}
                   </div>
                 </div>
-
-                {/* 移动端左右滑动单列卡片平铺容器 */}{/* w-full snap-center 配合 px-0.5，在右侧留足间隙与边界 */}
-                <div
-                  ref={mobileContainerRef}
-                  onScroll={handleMobileScroll}
-                  className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth scrollbar-none"
-                >
-                  {states.map((state) => (
-                    <div
-                      key={state}
-                      className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5 pb-2"
-                    >
-                      <Lane
-                        state={state}
-                        cards={cardsByState[state]}
-                        onOpen={open}
-                        className="h-full"
-                        hasMoreDone={state === "done" && hasMoreDone}
-                        loadingMoreDone={state === "done" && loadingMoreDone}
-                        onLoadMoreDone={handleLoadMoreDone}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
               )}
 
               {/* 桌面端 (hidden lg:flex)：成熟的 4 列并行看板与拖拽视图 */}
               {isDesktop && (
                 <div className="flex min-h-0 flex-1 flex-col">
-                <DndContext sensors={sensors} onDragEnd={dragEnd}>
-                  <div className="grid min-h-0 flex-1 grid-cols-4 gap-3.5 overflow-visible">
-                    {states.map((state) => (
-                      <Lane
-                        key={state}
-                        state={state}
-                        cards={cardsByState[state]}
-                        onOpen={open}
-                        hasMoreDone={state === "done" && hasMoreDone}
-                        loadingMoreDone={state === "done" && loadingMoreDone}
-                        onLoadMoreDone={handleLoadMoreDone}
-                      />
-                    ))}
-                  </div>
-                </DndContext>
-              </div>
+                  <DndContext
+                    sensors={sensors}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragCancel={handleDragCancel}
+                  >
+                    <div className="grid min-h-0 flex-1 grid-cols-4 gap-3.5 overflow-visible">
+                      {states.map((state) => (
+                        <Lane
+                          key={state}
+                          state={state}
+                          cards={cardsByState[state]}
+                          onOpen={open}
+                          hasMoreDone={state === "done" && hasMoreDone}
+                          loadingMoreDone={state === "done" && loadingMoreDone}
+                          onLoadMoreDone={handleLoadMoreDone}
+                        />
+                      ))}
+                    </div>
+                    <DragOverlay dropAnimation={null}>
+                      {activeCard ? (
+                        <TaskCard card={activeCard} isOverlay />
+                      ) : null}
+                    </DragOverlay>
+                  </DndContext>
+                </div>
               )}
             </>
           )}

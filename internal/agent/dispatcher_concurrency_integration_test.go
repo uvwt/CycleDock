@@ -41,7 +41,7 @@ func TestDispatcherRunsMoreThanFourAcrossWorkspacesWithinConfiguredLimits(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+		project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestDispatcherDefaultWorkspaceLimitAllowsTenConcurrentAttempts(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "", "")
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
 	if err != nil {
 		t.Fatal(err)
 	}

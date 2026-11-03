@@ -22,7 +22,6 @@ type AgentCardContext struct {
 	ProjectID             uuid.UUID
 	ProjectName           string
 	ProjectDescription    string
-	ProjectInstructions   string
 	CardID                uuid.UUID
 	CardKind              domain.CardKind
 	CardTitle             string
@@ -64,11 +63,11 @@ func (s *Store) LoadAgentCardContext(
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			w.id, w.name,
-			p.id, p.name, p.description, p.instructions,
+			p.id, p.name, p.description,
 			c.id, c.kind, c.title, c.description, COALESCE(p.main_discussion_id = c.id, false),
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
-			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), t.preferred_model_route_id,
+			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
 				SELECT count(*)
@@ -101,7 +100,7 @@ func (s *Store) LoadAgentCardContext(
 		  AND a.status='running'
 	`, workspaceID, attemptID, runnerSourceID).Scan(
 		&out.WorkspaceID, &out.WorkspaceName,
-		&out.ProjectID, &out.ProjectName, &out.ProjectDescription, &out.ProjectInstructions,
+		&out.ProjectID, &out.ProjectName, &out.ProjectDescription,
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription, &out.IsMainDiscussion,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
 		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
@@ -290,91 +289,6 @@ func (s *Store) AddAttemptEvent(ctx context.Context, p AttemptEventParams) (uuid
 		return uuid.Nil, false, err
 	}
 	return eventID, reused, nil
-}
-
-func (s *Store) WaitAttemptForHumanWithPrompt(
-	ctx context.Context,
-	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
-	stage, summary string,
-	now time.Time,
-) error {
-	stage = strings.TrimSpace(stage)
-	summary = strings.TrimSpace(summary)
-	if stage == "" || summary == "" {
-		return fmt.Errorf("%w: stage and summary are required", domain.ErrConflict)
-	}
-	now = now.UTC()
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
-	}
-	var status domain.AttemptStatus
-	var actualRunner uuid.UUID
-	var currentStage, progressSummary string
-	err = tx.QueryRow(ctx, `
-		SELECT status, runner_source_id, current_stage, progress_summary
-		FROM turn_attempts
-		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		FOR UPDATE
-	`, workspaceID, cardID, attemptID).Scan(
-		&status, &actualRunner, &currentStage, &progressSummary,
-	)
-	if errors.Is(err, pgx.ErrNoRows) || actualRunner != runnerSourceID {
-		return domain.ErrAttemptNotCurrent
-	}
-	if err != nil {
-		return err
-	}
-	if status == domain.AttemptStatusWaitingHuman &&
-		currentStage == stage && progressSummary == summary {
-		return tx.Commit(ctx)
-	}
-	if status != domain.AttemptStatusRunning {
-		return domain.ErrAttemptNotCurrent
-	}
-	// 提问与等待状态一起提交；模型已发出的同一问题不再重复保存。
-	var promptAlreadySent bool
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE((
-			SELECT event_type='comment' AND content=$3
-			FROM events WHERE workspace_id=$1 AND attempt_id=$2
-			ORDER BY sequence DESC LIMIT 1
-		), false)
-	`, workspaceID, attemptID, summary).Scan(&promptAlreadySent); err != nil {
-		return err
-	}
-	if !promptAlreadySent {
-		if _, _, err := appendAttemptActivity(
-			ctx, tx, workspaceID, cardID, attemptID, runnerSourceID,
-			domain.EventTypeComment, summary, nil, "wait:"+attemptID.String(),
-			stableRequestHash("wait_prompt", attemptID.String(), stage, summary),
-		); err != nil {
-			return err
-		}
-	}
-	command, err := tx.Exec(ctx, `
-		UPDATE turn_attempts
-		SET status='waiting_human',
-		    current_stage=$5,
-		    progress_summary=$6,
-		    heartbeat_at=NULL,
-		    lease_expires_at=NULL,
-		    updated_at=$7
-		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		  AND runner_source_id=$4 AND status='running'
-	`, workspaceID, cardID, attemptID, runnerSourceID, stage, summary, now)
-	if err != nil {
-		return err
-	}
-	if command.RowsAffected() != 1 {
-		return domain.ErrAttemptNotCurrent
-	}
-	return tx.Commit(ctx)
 }
 
 // CompleteAttempt 只结算执行状态；用户回复由 Message 独立保存，重试不追加气泡。

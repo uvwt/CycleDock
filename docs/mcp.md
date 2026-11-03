@@ -133,7 +133,7 @@ rule 包含 frequency（daily/weekly/monthly/interval）与 timezone（IANA 名�
 
 `claim_attempt(card_id)` 在目标 Card 行锁中原子执行：
 
-1. 若 Card 已有同一 OAuth Source 拥有的 queued / running / waiting_human Attempt，则复用同一 Attempt。
+1. 若 Card 已有同一 OAuth Source 拥有的 queued / running Attempt，则复用同一 Attempt。
 2. 若 current Attempt 由另一个 Source 持有，返回 conflict。
 3. 否则只在该 Card 内选择最早 pending Turn。
 4. 创建 running Attempt，并记录当前 OAuth Source 为 `runner_source_id`。
@@ -142,7 +142,7 @@ rule 包含 frequency（daily/weekly/monthly/interval）与 timezone（IANA 名�
 
 `heartbeat_attempt` 只延长 running Attempt lease，不写 Timeline。
 
-`reply_message` 每调用一次生成独立用户消息气泡；`end_turn=true` 的文字/附件结束 Attempt，选择卡会原子进入 `waiting_human`，详情见 `docs/reply-message.md`。
+`reply_message` 每调用一次生成独立用户消息气泡；`end_turn=true` 的文字/附件结束 Attempt，选择卡同样结束 Attempt，详情见 `docs/reply-message.md`。
 
 `check_in` 仍记录 Ongoing 结构化健康事实；`confirm_card` 仍负责 Todo 审核。原始工具调用和 chain-of-thought 不写入产品 Timeline。
 
@@ -150,9 +150,8 @@ rule 包含 frequency（daily/weekly/monthly/interval）与 timezone（IANA 名�
 
 - `completed`：只将 Attempt 置为 completed，不接收结果正文、不生成气泡；用户回复应使用 `reply_message`。
 - `failed`：保存 failure summary，并将 Attempt 置为 failed。
-- `waiting_human`：保存 stage / summary，释放 lease，等待 Human reply。
 
-同一 Source 重试 completed 状态结算，或重试相同 failed / waiting_human 信息，均为幂等操作。
+同一 Source 重试 completed 状态结算，或重试相同 failed 信息，均为幂等操作。
 
 superseded / expired / cancelled Attempt，或另一个 Source 拥有的 Attempt，后续写入都会返回 `ATTEMPT_NOT_CURRENT`。
 
@@ -160,7 +159,7 @@ superseded / expired / cancelled Attempt，或另一个 Source 拥有的 Attempt
 
 Human Web reply 会：
 
-1. supersede 原 waiting_human Attempt；
+1. 校验所回答的 Attempt 已完成，且其后没有新的有效 Turn；
 2. 在同一个 Card 创建新的 Human Turn；
 3. 保持 Card Session 的连续上下文。
 
@@ -193,7 +192,6 @@ Attempt lifecycle 本身按 Attempt ID + owner + terminal value 提供幂等：
 - 重复 `claim_attempt`：同 owner 复用 current Attempt。
 - 重复 `finish_attempt(completed)`：复用 completed 终态，不写 Timeline Event。
 - 重复 `finish_attempt(failed)`：相同 summary 复用终态。
-- 重复 `finish_attempt(waiting_human)`：相同 stage / summary 复用 waiting 状态。
 
 ## 不兼容旧协议
 
@@ -234,6 +232,6 @@ External MCP cutover 至少验证：
 - 旧 Trigger / Run 工具名不再暴露。
 - 两个 OAuth Source 并发 Claim 同 Card 只有一个成功。
 - 非 owner heartbeat / progress / finish 被拒。
-- 同 owner claim / finish / waiting_human 网络重试幂等。
+- 同 owner claim / finish 网络重试幂等。
 - Human reply Turn 与 Schedule Turn 可被 External Agent Claim。
 - Workspace / Card tenant isolation。

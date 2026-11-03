@@ -71,7 +71,7 @@ Comment 请求要求 `Idempotency-Key` Header。
 - `enqueue`
 - `interrupt`
 
-Human Web 不提交 runner source。Dispatcher 从 Workspace 的 Built-in Agent settings 取得 runner source。interrupt 与 waiting_human reply 都在 Store 的 Card 锁内 supersede 旧 Attempt，避免 Handler “先查再写”造成并发竞态。
+Human Web 不提交 runner source。Dispatcher 从 Workspace 的 Built-in Agent settings 取得 runner source。interrupt 在 Store 的 Card 锁内 supersede 旧 Attempt；普通回复创建新 Turn，保持上一轮 completed，避免 Handler “先查再写”造成并发竞态。
 
 尚未创建 Attempt 的 Turn 即 pending queue item；pending Turn 在真正 Claim 前不得进入 ADK Session history。
 
@@ -85,12 +85,14 @@ Human Web 不提交 runner source。Dispatcher 从 Workspace 的 Built-in Agent 
 取消与 retry 不复写旧历史：
 
 - pending Turn cancel 只记录该 Turn 的取消元数据，不伪造 Attempt。
-- current queued / running / waiting_human Attempt cancel 后进入 `cancelled`。
+- current queued / running Attempt cancel 后进入 `cancelled`。
 - retry failed / expired / cancelled work 时，在同一个 Turn 下创建新的 Attempt，`reason=retry`。
 - 同一个原 Attempt 只允许一条 retry successor；重复 retry 请求复用已创建的新 Attempt。
 - `interrupt` 表达“立即换方向继续”，`cancel` 表达“停止当前工作”，两者不混用。
 
 ## Built-in Agent settings / connection test
+
+`GET /api/v1/agent/status` 对所有已登录工作区成员开放，仅返回 `model_configured`：是否存在已启用的模型路由。它不验证供应商实时连通性，也不暴露路由、指令或凭据。Web 在未配置时提示设置入口并保留草稿，已有排队 Turn 在配置恢复后继续执行。
 
 Workspace owner：
 
@@ -159,3 +161,5 @@ Hosted OIDC 只建立登录会话，不会自动进入设备 OAuth。Workspace O
 
 
 卡片 `timeline` 中的 Message 可能包含 `message.preview_id` 和 `message.preview=true`：表示已持久化、尚未由完整 `reply_message` 工具调用提交的可见正文。刷新及取消/替代后仍返回该正文；正式提交原地更新同一事件，并移除 `preview` 标记。客户端按 `preview_id` 合并 SSE 预览，避免重复气泡；该身份由服务端生成，外部工具不能指定。
+
+Card 详情及 `/timeline` 历史分页的 `attempt_history` 与各自消息范围对齐；前端累积历史消息时同步合并执行记录，未加载的旧消息不会产生孤立执行块。

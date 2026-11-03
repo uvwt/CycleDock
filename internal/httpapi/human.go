@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -50,6 +51,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteCard)
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
+	r.Post("/cards/{cardID}/model-route", api.setCardModelRoute)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
 	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
@@ -63,6 +65,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Put("/cards/{cardID}/schedules/{scheduleID}", api.updateSchedule)
 	r.Delete("/cards/{cardID}/schedules/{scheduleID}", api.deleteSchedule)
 
+	r.Get("/agent/status", api.getAgentStatus)
 	r.Get("/agent/settings", api.getAgentSettings)
 	r.Put("/agent/settings", api.saveAgentSettings)
 	r.Post("/agent/provider-test", api.testAgentProvider)
@@ -88,12 +91,11 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 }
 
 type projectResponse struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Instructions string    `json:"instructions"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type cardResponse struct {
@@ -112,6 +114,7 @@ type cardResponse struct {
 	LatestMessageSequence   *int64     `json:"latest_message_sequence,omitempty"`
 	LastReadMessageSequence *int64     `json:"last_read_message_sequence,omitempty"`
 	Unread                  *bool      `json:"unread,omitempty"`
+	PreferredModelRouteID   *string    `json:"preferred_model_route_id,omitempty"`
 	PinnedAt                *time.Time `json:"pinned_at,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
@@ -141,16 +144,18 @@ type attemptResponse struct {
 }
 
 type eventResponse struct {
-	ID            string          `json:"id"`
-	Sequence      int64           `json:"sequence"`
-	Type          string          `json:"type"`
-	AttemptID     string          `json:"attempt_id,omitempty"`
-	Content       string          `json:"content"`
-	CheckinStatus string          `json:"checkin_status,omitempty"`
-	Message       json.RawMessage `json:"message,omitempty"`
-	ActorName     string          `json:"actor_name"`
-	ActorKind     string          `json:"actor_kind"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID              string          `json:"id"`
+	Sequence        int64           `json:"sequence"`
+	Type            string          `json:"type"`
+	AttemptID       string          `json:"attempt_id,omitempty"`
+	SourceCardID    string          `json:"source_card_id,omitempty"`
+	SourceCardTitle string          `json:"source_card_title,omitempty"`
+	Content         string          `json:"content"`
+	CheckinStatus   string          `json:"checkin_status,omitempty"`
+	Message         json.RawMessage `json:"message,omitempty"`
+	ActorName       string          `json:"actor_name"`
+	ActorKind       string          `json:"actor_kind"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 type pendingTurnResponse struct {
@@ -232,9 +237,10 @@ type cardDetailResponse struct {
 }
 
 type cardTimelineResponse struct {
-	Timeline       []eventResponse `json:"timeline"`
-	HasMoreBefore  bool            `json:"has_more_before"`
-	OldestSequence int64           `json:"oldest_sequence"`
+	AttemptHistory []attemptResponse `json:"attempt_history"`
+	Timeline       []eventResponse   `json:"timeline"`
+	HasMoreBefore  bool              `json:"has_more_before"`
+	OldestSequence int64             `json:"oldest_sequence"`
 }
 
 type doneCardsResponse struct {
@@ -270,9 +276,8 @@ func (api *API) listProjects(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Name         string `json:"name"`
-		Description  string `json:"description"`
-		Instructions string `json:"instructions"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -285,7 +290,7 @@ func (api *API) createProject(w http.ResponseWriter, r *http.Request) {
 	identity := identityFromRequest(r)
 	project, err := api.store.CreateProject(
 		r.Context(), identity.WorkspaceID,
-		request.Name, strings.TrimSpace(request.Description), strings.TrimSpace(request.Instructions),
+		request.Name, strings.TrimSpace(request.Description),
 	)
 	if err != nil {
 		api.handleError(w, err)
@@ -314,9 +319,8 @@ func (api *API) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Name         string `json:"name"`
-		Description  string `json:"description"`
-		Instructions string `json:"instructions"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -329,7 +333,7 @@ func (api *API) updateProject(w http.ResponseWriter, r *http.Request) {
 	identity := identityFromRequest(r)
 	project, err := api.store.UpdateProject(
 		r.Context(), identity.WorkspaceID, projectID,
-		request.Name, strings.TrimSpace(request.Description), strings.TrimSpace(request.Instructions),
+		request.Name, strings.TrimSpace(request.Description),
 	)
 	if err != nil {
 		api.handleError(w, err)
@@ -577,13 +581,30 @@ func (api *API) createDiscussion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var preferredRouteID uuid.NullUUID
+	if r.Body != nil && r.ContentLength > 0 {
+		var request struct {
+			PreferredModelRouteID *string `json:"preferred_model_route_id,omitempty"`
+		}
+		if !decodeJSON(w, r, &request) {
+			return
+		}
+		if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+			id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+			if err != nil || id == uuid.Nil {
+				writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+				return
+			}
+			preferredRouteID = uuid.NullUUID{UUID: id, Valid: true}
+		}
+	}
 	identity := identityFromRequest(r)
 	if _, err := api.store.GetProject(r.Context(), identity.WorkspaceID, projectID); err != nil {
 		api.handleError(w, err)
 		return
 	}
 	card, err := api.store.CreateDiscussion(
-		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+		r.Context(), identity.WorkspaceID, projectID, identity.SourceID, preferredRouteID,
 	)
 	if err != nil {
 		api.handleError(w, err)
@@ -725,7 +746,7 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	attemptHistory, err := api.store.ListRecentAttempts(r.Context(), identity.WorkspaceID, cardID, 50)
+	attemptHistory, err := api.store.ListTimelineAttempts(r.Context(), identity.WorkspaceID, cardID, oldestSeq, 1<<62-1)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -821,7 +842,13 @@ func (api *API) getCardTimeline(w http.ResponseWriter, r *http.Request) {
 		oldestSeq = timelineResp[0].Sequence
 	}
 
+	attempts, err := api.store.ListTimelineAttempts(r.Context(), identity.WorkspaceID, cardID, oldestSeq, beforeSeq)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, cardTimelineResponse{
+		AttemptHistory: attemptsToResponse(attempts),
 		Timeline:       timelineResp,
 		HasMoreBefore:  hasMoreBefore,
 		OldestSequence: oldestSeq,
@@ -978,6 +1005,38 @@ func (api *API) setOngoingState(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		api.handleError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) setCardModelRoute(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		PreferredModelRouteID *string `json:"preferred_model_route_id"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	var routeID uuid.NullUUID
+	if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+			return
+		}
+		routeID = uuid.NullUUID{UUID: id, Valid: true}
+	}
+	identity := identityFromRequest(r)
+	card, err := api.store.SetCardPreferredModelRoute(r.Context(), identity.WorkspaceID, cardID, routeID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if api.live != nil {
+		api.live.Publish(card.ID, realtime.Event{Type: "card.updated"})
 	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
@@ -1372,7 +1431,7 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request, name string) (uuid.U
 func projectToResponse(project db.Project) projectResponse {
 	return projectResponse{
 		ID: project.ID.String(), Name: project.Name, Description: project.Description,
-		Instructions: project.Instructions, CreatedAt: project.CreatedAt.Time, UpdatedAt: project.UpdatedAt.Time,
+		CreatedAt: project.CreatedAt.Time, UpdatedAt: project.UpdatedAt.Time,
 	}
 }
 
@@ -1397,6 +1456,10 @@ func cardToResponse(card db.Card) cardResponse {
 	if card.PinnedAt.Valid {
 		pinnedAt := card.PinnedAt.Time.UTC()
 		response.PinnedAt = &pinnedAt
+	}
+	if card.PreferredModelRouteID.Valid && card.PreferredModelRouteID.UUID != uuid.Nil {
+		routeID := card.PreferredModelRouteID.UUID.String()
+		response.PreferredModelRouteID = &routeID
 	}
 	return response
 }
@@ -1435,6 +1498,10 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 		pinnedAt := card.PinnedAt.Time.UTC()
 		response.PinnedAt = &pinnedAt
 	}
+	if card.PreferredModelRouteID.Valid && card.PreferredModelRouteID.UUID != uuid.Nil {
+		routeID := card.PreferredModelRouteID.UUID.String()
+		response.PreferredModelRouteID = &routeID
+	}
 	return response
 }
 
@@ -1472,6 +1539,10 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 		pinnedAt := card.PinnedAt.Time.UTC()
 		response.PinnedAt = &pinnedAt
 	}
+	if card.PreferredModelRouteID.Valid && card.PreferredModelRouteID.UUID != uuid.Nil {
+		routeID := card.PreferredModelRouteID.UUID.String()
+		response.PreferredModelRouteID = &routeID
+	}
 	return response
 }
 
@@ -1508,6 +1579,10 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 	if card.PinnedAt.Valid {
 		pinnedAt := card.PinnedAt.Time.UTC()
 		response.PinnedAt = &pinnedAt
+	}
+	if card.PreferredModelRouteID.Valid && card.PreferredModelRouteID.UUID != uuid.Nil {
+		routeID := card.PreferredModelRouteID.UUID.String()
+		response.PreferredModelRouteID = &routeID
 	}
 	return response
 }
@@ -1562,6 +1637,12 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		if row.AttemptID.Valid {
 			item.AttemptID = row.AttemptID.UUID.String()
 		}
+		if row.SourceCardID.Valid {
+			item.SourceCardID = row.SourceCardID.UUID.String()
+		}
+		if row.SourceCardTitle != "" {
+			item.SourceCardTitle = row.SourceCardTitle
+		}
 		response = append(response, item)
 	}
 	return response
@@ -1583,6 +1664,12 @@ func timelineBeforeToResponse(rows []db.ListCardTimelineBeforeRow) []eventRespon
 		}
 		if row.AttemptID.Valid {
 			item.AttemptID = row.AttemptID.UUID.String()
+		}
+		if row.SourceCardID.Valid {
+			item.SourceCardID = row.SourceCardID.UUID.String()
+		}
+		if row.SourceCardTitle != "" {
+			item.SourceCardTitle = row.SourceCardTitle
 		}
 		response = append(response, item)
 	}

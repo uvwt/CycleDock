@@ -20,11 +20,20 @@ func (s *Store) SubmitAgentTurn(
 	ctx context.Context,
 	workspaceID, cardID, sourceID uuid.UUID,
 	content, idempotencyKey string,
+	sourceCardID uuid.NullUUID,
 ) (SubmitAgentTurnResult, error) {
 	content = strings.TrimSpace(content)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if content == "" || idempotencyKey == "" {
 		return SubmitAgentTurnResult{}, fmt.Errorf("%w: content and idempotency key are required", domain.ErrConflict)
+	}
+	if sourceCardID.Valid && sourceCardID.UUID == cardID {
+		return SubmitAgentTurnResult{}, fmt.Errorf("%w: target card must differ from source card", domain.ErrConflict)
+	}
+
+	var sourceCardIDStr string
+	if sourceCardID.Valid {
+		sourceCardIDStr = sourceCardID.UUID.String()
 	}
 
 	requestHash := stableRequestHash(
@@ -33,6 +42,7 @@ func (s *Store) SubmitAgentTurn(
 		cardID.String(),
 		sourceID.String(),
 		content,
+		sourceCardIDStr,
 	)
 
 	tx, err := s.pool.Begin(ctx)
@@ -76,10 +86,10 @@ func (s *Store) SubmitAgentTurn(
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events (
 			id, workspace_id, card_id, event_type, actor_source_id,
-			content, idempotency_key, request_hash
+			content, idempotency_key, request_hash, source_card_id
 		)
-		VALUES ($1,$2,$3,'comment',$4,$5,$6,$7)
-	`, eventID, workspaceID, cardID, sourceID, content, idempotencyKey, requestHash)
+		VALUES ($1,$2,$3,'comment',$4,$5,$6,$7,$8)
+	`, eventID, workspaceID, cardID, sourceID, content, idempotencyKey, requestHash, sourceCardID)
 	if err != nil {
 		return SubmitAgentTurnResult{}, mapConstraintError(err)
 	}

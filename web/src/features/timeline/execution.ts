@@ -3,7 +3,6 @@ import type { Attempt, TimelineEvent } from "../../shared/api/types";
 export type ExecutionAttempt = {
   kind: "current" | "history";
   value: Attempt;
-  question?: string;
 };
 
 function order(attempt: ExecutionAttempt) {
@@ -30,9 +29,7 @@ export function groupExecutionAttempts(
       replyEventByAttempt.set(event.attempt_id, event.id);
     if (
       (event.type === "result" ||
-        (event.type === "message" &&
-          event.message?.end_turn &&
-          event.message.type !== "choice")) &&
+        (event.type === "message" && event.message?.end_turn)) &&
       event.actor_kind !== "human" &&
       event.attempt_id
     ) {
@@ -64,44 +61,24 @@ export function groupExecutionAttempts(
 
   for (const attempt of attempts) {
     const execution = attempt.value;
-    const awaitingReply = execution.status === "waiting_human";
-    const humanReplied =
-      execution.status === "superseded" &&
-      execution.error_summary === "superseded by human reply";
-    const question = execution.progress_summary?.trim();
-    // 旧提问可能只保存在执行摘要中；同次执行已有正文消息时不重复展示。
-    if (
-      question &&
-      (awaitingReply || humanReplied) &&
-      !events.some(
-        (event) =>
-          event.attempt_id === execution.id &&
-          event.actor_kind !== "human" &&
-          ["comment", "finding", "result", "message"].includes(event.type) &&
-          (event.message?.widget?.question || event.content)?.trim() ===
-            question,
-      )
-    ) {
-      attempt.question = question;
-    }
-    // 等待回复、取消和替代都沿用正文上方的元信息，不再另起状态块。
+    // 终态执行的状态沿用对应回复，不为普通提问创建等待状态。
     const resultID =
       execution.status === "completed"
         ? resultEventByAttempt.get(execution.id)
-        : ["cancelled", "superseded", "waiting_human"].includes(
-              execution.status,
-            )
+        : ["cancelled", "superseded"].includes(execution.status)
           ? replyEventByAttempt.get(execution.id)
           : execution.status === "running"
             ? runningReply?.id
             : undefined;
-    if (resultID && !attempt.question) {
+    if (resultID) {
       statusByReply.set(resultID, attempt.value);
       continue;
     }
     const source =
       lastEventByAttempt.get(attempt.value.id) || attempt.value.source_event_id;
-    if (!source || !eventIDs.has(source)) {
+    // source_event_id 存在但消息尚未加载，不能据此认定为系统触发。
+    if (source && !eventIDs.has(source)) continue;
+    if (!source) {
       standalone.push(attempt);
       continue;
     }

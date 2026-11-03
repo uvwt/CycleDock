@@ -25,7 +25,7 @@ Project
 - ADK `user_id` 使用 Workspace ID；Session 不属于某一个 Human。
 - Discussion 是探索/澄清型 Session；只能派生 Todo / Ongoing，不能转换成 Todo / Ongoing。
 - Discussion 派生工作时创建新 Card / 新 Session，只传 Handoff Package，不共享完整 Session。
-- Todo 状态固定为 Todo → Working → Review → Done；Review → Done 只允许 Human。
+- Todo 状态固定为 Todo → Working → Review（待验收）→ Done；Review → Done 只允许 Human。
 - Ongoing 生命周期为 Active / Paused / Archived；Schedule 的每次执行进入同一 Card Session。
 - Turn 表示一次新的工作输入；排队 Turn 在真正 Claim 前不得 append 到 ADK Session。
 - Attempt 表示一次真实 invocation；技术重试创建新 Attempt，不制造新的业务 Turn。
@@ -36,7 +36,7 @@ Project
 - 长 Session 通过 ADK Context Compaction + history retrieval + Artifact 控制上下文，不通过丢弃跨 Turn 工具证据解决。
 - 不保存 chain-of-thought、明文 credential、Cookie、access token 或无必要 secret。
 - Card 保存业务状态；Attempt 保存执行状态；ADK Session 保存 Agent 连续上下文，三者职责不得混淆。
-- AI 可以推进 Todo 到 Review，最终 Done 由 Human 决定。
+- AI 可以推进 Todo 到 Review（待验收），最终 Done 由 Human 验收决定。
 
 ## Agent Runtime
 

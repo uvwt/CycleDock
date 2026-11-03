@@ -114,7 +114,7 @@ func (m *ReplyMessage) Validate() error {
 }
 
 // PublishReply 与 Attempt 状态变化共用 Card 行锁；一次调用只提交一条 Message。
-// 选择题在同一事务中进入 waiting_human，避免页面可点而 Attempt 尚未等待。
+// Built-in Runner 在 ADK 尾部事件保存后统一结算；外部调用在消息事务内结束执行。
 func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UUID, bool, error) {
 	if err := p.Message.Validate(); err != nil {
 		return uuid.Nil, false, err
@@ -194,21 +194,7 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 			return uuid.Nil, false, mapConstraintError(err)
 		}
 	}
-	if p.Message.Type == "choice" {
-		command, err := tx.Exec(ctx, `UPDATE turn_attempts
-			SET status='waiting_human', current_stage='等待用户选择', progress_summary=$5,
-			heartbeat_at=NULL,lease_expires_at=NULL,updated_at=$6
-			WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-				AND runner_source_id=$4 AND status='running'`,
-			p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID,
-			p.Message.Widget.Question, time.Now().UTC())
-		if err != nil {
-			return uuid.Nil, false, err
-		}
-		if command.RowsAffected() != 1 {
-			return uuid.Nil, false, domain.ErrAttemptNotCurrent
-		}
-	} else if p.Message.EndTurn && p.FinishOnEnd {
+	if p.Message.EndTurn && p.FinishOnEnd {
 		now := time.Now().UTC()
 		command, err := tx.Exec(ctx, `UPDATE turn_attempts
 			SET status='completed', heartbeat_at=NULL,
