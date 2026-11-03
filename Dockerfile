@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cycledock ./cmd/cy
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cycledock-migrate ./cmd/migrate
 
 FROM alpine:3.22
-RUN addgroup -S cycledock && adduser -S -G cycledock cycledock
+RUN apk add --no-cache tzdata && addgroup -S cycledock && adduser -S -G cycledock cycledock
 WORKDIR /app
 COPY --from=backend /out/cycledock /usr/local/bin/cycledock
 COPY --from=backend /out/cycledock-migrate /usr/local/bin/cycledock-migrate
