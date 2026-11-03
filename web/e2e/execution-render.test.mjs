@@ -256,14 +256,14 @@ test("连续消息只在组首展示发送者，切换后再次出现仍开启�
   for (let i = 1; i <= 6; i++) assert.match(html, new RegExp(`消息 ${i}`));
 });
 
-test("显示名同为 Cycle 的连续气泡合并，不再重复头像和名称", () => {
+test("显示名同为 Cycle 的连续气泡合并，不再重复名称", () => {
   const html = render([
     chatEvent(1, "cycle_agent", "Cycle Agent", 0),
     chatEvent(2, "cycle_agent", "Cycle", 1),
   ]);
   assert.deepEqual(groupStarts(html), [true, false]);
-  assert.equal((html.match(/<span>Cycle<\/span>/g) || []).length, 1);
-  assert.equal((html.match(/lucide-bot/g) || []).length, 1);
+  assert.equal((html.match(/>Cycle</g) || []).length, 1);
+  assert.doesNotMatch(html, /lucide-bot/);
 });
 
 test("同名但不同角色不能合并，五分钟内连续消息合并，超过五分钟重新展示发送者", () => {
@@ -277,14 +277,17 @@ test("同名但不同角色不能合并，五分钟内连续消息合并，超�
 });
 
 test("系统事件和未知时间不会把不同轮次合并", () => {
-  const html = render([
+  const system = render([
     chatEvent(1),
     { ...chatEvent(2), type: "status_change" },
     chatEvent(3),
-    { ...chatEvent(4), created_at: "invalid" },
-    chatEvent(5),
   ]);
-  assert.deepEqual(groupStarts(html), [true, true, true, true]);
+  assert.deepEqual(groupStarts(system), [true, true]);
+  const unknownTime = render([
+    chatEvent(1),
+    { ...chatEvent(2), created_at: "invalid" },
+  ]);
+  assert.deepEqual(groupStarts(unknownTime), [true, true]);
 });
 
 test("状态变化事件转为中文并带有状态圆点，不再展示英文原词", () => {
@@ -306,14 +309,16 @@ test("状态变化事件转为中文并带有状态圆点，不再展示英文�
 });
 
 test("完成状态和耗时位于消息组的 Agent 名称右侧", () => {
-  const first = chatEvent(1);
+  const first = { ...chatEvent(1), attempt_id: attempt.id };
   const final = {
     ...chatEvent(2),
     attempt_id: attempt.id,
     message: { type: "text", content: "已完成", end_turn: true },
   };
   const html = render([first, final]);
-  const header = html.match(/<p[^>]*><span>Agent A<\/span>(.*?)<\/p>/s)?.[1];
+  const header = html.match(
+    /<span[^>]*>Agent A<\/span>(.*?)<div class="flex flex-wrap items-end/s,
+  )?.[1];
   assert.ok(header, "消息组名称旁应包含完成信息");
   assert.match(header, /执行完成/);
   assert.match(header, /0:12/);
@@ -321,9 +326,24 @@ test("完成状态和耗时位于消息组的 Agent 名称右侧", () => {
   assert.deepEqual(groupStarts(html), [true, false]);
 });
 
-test("正在操作的设备位于正文气泡上方、耗时右侧", () => {
+test("正在操作的设备位于正文气泡右侧，耗时保留在名称旁", () => {
   const html = render(
-    [comment],
+    [
+      comment,
+      {
+        ...result,
+        id: "preview-event",
+        type: "message",
+        content: "正在生成",
+        message: {
+          type: "text",
+          content: "正在生成",
+          preview: true,
+          preview_id: "preview",
+          end_turn: false,
+        },
+      },
+    ],
     { ...attempt, status: "running" },
     {
       attemptID: attempt.id,
@@ -336,13 +356,13 @@ test("正在操作的设备位于正文气泡上方、耗时右侧", () => {
   const bubbleAt = html.indexOf("正在生成的正文");
   const deviceAt = html.indexOf('data-operating-device="RN"');
   const durationAt = html.indexOf("tabular-nums");
-  assert.ok(durationAt >= 0 && deviceAt > durationAt && deviceAt < bubbleAt);
-  assert.match(html.slice(durationAt, bubbleAt), /正在操作 RN/);
+  assert.ok(durationAt >= 0 && durationAt < bubbleAt && deviceAt > bubbleAt);
+  assert.match(html.slice(bubbleAt), /正在操作 <strong[^>]*>RN<\/strong>/);
   assert.equal((html.match(/正在生成的正文/g) || []).length, 1);
-  assert.doesNotMatch(html, /aria-label="正在执行"|live-dot/);
+  assert.doesNotMatch(html, /aria-label="正在思考并生成回复"/);
 });
 
-test("尚未输出正文时，正在操作位于运行气泡上方的耗时右侧", () => {
+test("尚未输出正文时，正在操作位于运行气泡右侧", () => {
   const html = render(
     [comment],
     { ...attempt, status: "running", progress_summary: "" },
@@ -353,13 +373,13 @@ test("尚未输出正文时，正在操作位于运行气泡上方的耗时右�
       replies: [],
     },
   );
-  const dotsAt = html.indexOf("live-dot");
+  const dotsAt = html.indexOf('aria-label="正在思考并生成回复"');
   const deviceAt = html.indexOf('data-operating-device="RN"');
-  assert.ok(deviceAt >= 0 && dotsAt > deviceAt);
-  assert.match(html.slice(0, dotsAt), /正在操作 RN/);
+  assert.ok(dotsAt >= 0 && deviceAt > dotsAt);
+  assert.match(html.slice(dotsAt), /正在操作 <strong[^>]*>RN<\/strong>/);
 });
 
-test("同一轮 Cycle 回复后面的运行气泡不再重复头像和名称", () => {
+test("同一轮 Cycle 回复后面的运行气泡不再重复名称", () => {
   const progress = {
     ...result,
     id: "progress-message",
@@ -381,18 +401,21 @@ test("同一轮 Cycle 回复后面的运行气泡不再重复头像和名称", (
     },
   );
   assert.match(html, /正在分析磁盘/);
-  assert.equal((html.match(/lucide-bot/g) || []).length, 1);
-  assert.equal((html.match(/<span>Cycle<\/span>/g) || []).length, 1);
-  assert.match(html, /pl-\[46px\]/);
-  const dotsAt = html.indexOf("live-dot");
+  assert.doesNotMatch(html, /lucide-bot/);
+  assert.equal((html.match(/>Cycle</g) || []).length, 1);
+
+  const dotsAt = html.indexOf('aria-label="正在思考并生成回复"');
   const deviceAt = html.indexOf(
     'data-operating-device="xxdeMacBook-Air.local"',
   );
-  assert.ok(deviceAt >= 0 && dotsAt > deviceAt);
-  assert.match(html.slice(0, dotsAt), /正在操作 xxdeMacBook-Air.local/);
+  assert.ok(dotsAt >= 0 && deviceAt > dotsAt);
+  assert.match(
+    html.slice(dotsAt),
+    /正在操作 <strong[^>]*>xxdeMacBook-Air.local<\/strong>/,
+  );
 });
 
-test("新一轮运行紧挨上一轮回复时仍展示头像和名称", () => {
+test("新一轮运行紧挨上一轮回复时仍展示名称", () => {
   const html = render(
     [comment, { ...result, created_at: new Date().toISOString() }],
     {
@@ -405,7 +428,7 @@ test("新一轮运行紧挨上一轮回复时仍展示头像和名称", () => {
     { attemptID: "next", startedAt: attempt.started_at, replies: [] },
   );
   assert.equal((html.match(/>Cycle</g) || []).length, 2);
-  assert.equal((html.match(/lucide-bot/g) || []).length, 2);
+  assert.doesNotMatch(html, /lucide-bot/);
 });
 
 test("正文流式输出时只展示正文，隐藏呼吸圆点和重复占位", () => {
@@ -419,7 +442,7 @@ test("正文流式输出时只展示正文，隐藏呼吸圆点和重复占位",
     },
   );
   assert.equal((html.match(/正在生成的正文/g) || []).length, 1);
-  assert.doesNotMatch(html, /aria-label="正在执行"|live-dot/);
+  assert.doesNotMatch(html, /aria-label="正在思考并生成回复"/);
   assert.match(html, /Cycle/);
 });
 
@@ -433,7 +456,7 @@ test("持久消息接替同一预览，不重复展示正文或残留呼吸圆�
     ],
   });
   assert.equal((html.match(/已生成卡片/g) || []).length, 1);
-  assert.doesNotMatch(html, /aria-label="正在执行"/);
+  assert.doesNotMatch(html, /aria-label="正在思考并生成回复"/);
   assert.match(html, /执行完成/);
   assert.doesNotMatch(html, /message-enter/);
 });
@@ -453,7 +476,7 @@ test("失败的临时回复明确标记未发送", () => {
   );
   assert.match(html, /未完成的正文/);
   assert.match(html, /消息未发送/);
-  assert.doesNotMatch(html, /aria-label="正在执行"/);
+  assert.doesNotMatch(html, /aria-label="正在思考并生成回复"/);
 });
 
 test("未领取的输入只在紧凑队列中显示，领取后恢复为用户消息", () => {
@@ -601,12 +624,15 @@ test("下一轮的运行气泡位于迟到的上一轮回复下方、排队列�
   assert.ok(inputAt >= 0 && inputAt < replyAt);
   assert.ok(replyAt < runningAt, "当前运行气泡必须在已经发送的回复下方");
   assert.ok(runningAt < queueAt, "当前运行气泡必须在排队输入上方");
-  assert.equal((html.match(/aria-label="正在执行"/g) || []).length, 1);
+  assert.equal(
+    (html.match(/aria-label="正在思考并生成回复"/g) || []).length,
+    1,
+  );
 });
 
 test("尚无消息的运行会话只显示运行状态，不展示开始协作占位", () => {
   const html = render([], { ...attempt, status: "running" });
-  assert.match(html, /aria-label="正在执行"/);
+  assert.match(html, /aria-label="正在思考并生成回复"/);
   assert.doesNotMatch(html, /从第一句话开始|开始协作|系统触发/);
 });
 
@@ -655,7 +681,9 @@ test("取消和替代仍显示正文，状态与耗时只出现在气泡上方",
       can_retry: status === "cancelled",
     });
     assert.match(html, /已生成卡片/);
-    const header = html.match(/<p[^>]*><span>Cycle<\/span>(.*?)<\/p>/s)?.[1];
+    const header = html.match(
+      /<span[^>]*>Cycle<\/span>(.*?)<div class="flex flex-wrap items-end/s,
+    )?.[1];
     assert.ok(header);
     assert.ok(header.includes(label));
     assert.match(header, /0:12/);
@@ -707,11 +735,11 @@ test("上一轮被替代的流式正文保留在新输入前，取消状态不�
   assert.doesNotMatch(html, /消息未发送|border-l-2/);
 });
 
-test("没有正文的取消和替代也保留头像、名称与气泡", () => {
+test("没有正文的取消和替代也保留名称与气泡", () => {
   for (const status of ["cancelled", "superseded"]) {
     const html = render([comment], { ...attempt, status });
-    assert.match(html, /lucide-bot/);
-    assert.match(html, /<span>Cycle<\/span>/);
+    assert.doesNotMatch(html, /lucide-bot/);
+    assert.match(html, />Cycle</);
     assert.match(html, /rounded-2xl bg-muted/);
     assert.match(html, /暂无已保存的正文/);
     assert.doesNotMatch(html, /border-l-2/);
@@ -763,8 +791,8 @@ test("刷新后从持久预览恢复取消和替代的正文，无需页面内�
     };
     const html = render([comment, preview], { ...attempt, status });
     assert.equal((html.match(/刷新后仍然可见的半篇正文/g) || []).length, 1);
-    assert.match(html, /lucide-bot/);
-    assert.match(html, /<span>Cycle<\/span>/);
+    assert.doesNotMatch(html, /lucide-bot/);
+    assert.match(html, />Cycle</);
     assert.doesNotMatch(html, /暂无已保存的正文|border-l-2/);
   }
 });
@@ -793,11 +821,11 @@ test("持久预览与 SSE 使用同一气泡，实时正文接替快照且不重
   const html = render([comment, preview], execution, live);
   assert.equal((html.match(/已保存/g) || []).length, 1);
   assert.match(html, /已保存以及最新的实时片段/);
-  assert.doesNotMatch(html, /aria-label="正在执行"|live-dot/);
+  assert.doesNotMatch(html, /aria-label="正在思考并生成回复"/);
   assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
   const refreshed = render([comment, preview], execution);
   assert.match(refreshed, /已保存/);
-  assert.doesNotMatch(refreshed, /aria-label="正在执行"|live-dot/);
+  assert.doesNotMatch(refreshed, /aria-label="正在思考并生成回复"/);
 });
 
 test("数据库快照比 SSE 更新时正文不倒退", () => {

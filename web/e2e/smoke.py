@@ -42,16 +42,22 @@ class CycleDockSmoke(unittest.TestCase):
         picker.wait_for()
         picker.get_by_role("menuitem", name=name, exact=True).click()
 
-    def card_action_button(self):
-        # 侧边栏每一项也有“更多操作”；只操作当前 Card 顶部可见的操作按钮。
-        return self.page.locator(
-            'main section > div button[aria-label="更多操作"]:visible'
-        ).first
+    def card_details_button(self):
+        return self.page.locator('main button[aria-label="任务详情"]:visible').first
 
-    def open_card_menu(self):
-        self.card_action_button().click()
+    def discussion_action_button(self):
+        sidebar = self.page.locator('aside[aria-label="讨论列表"]:visible')
+        if (self.page.viewport_size or {}).get("width", 1280) < 1024 and not sidebar.is_visible():
+            self.page.get_by_role("button", name="打开讨论列表").click()
+        sidebar.wait_for()
+        row = sidebar.locator('button[aria-current="page"]').locator("..")
+        row.hover()
+        return row.get_by_role("button", name="更多操作")
+
+    def open_discussion_menu(self):
+        self.discussion_action_button().click()
         if (self.page.viewport_size or {}).get("width", 1280) < 768:
-            sheet = self.page.locator('[data-slot="sheet-content"]')
+            sheet = self.page.locator('[data-slot="sheet-content"]').last
             sheet.wait_for()
             return sheet
         menu = self.page.get_by_role("menu")
@@ -59,9 +65,8 @@ class CycleDockSmoke(unittest.TestCase):
         return menu
 
     def open_task_details(self):
-        menu = self.open_card_menu()
-        menu.get_by_role("menuitem", name="任务详情").click()
-        details = self.page.get_by_role("dialog", name="任务详情")
+        self.card_details_button().click()
+        details = self.page.get_by_role("region", name="任务详情", exact=True)
         details.wait_for()
         return details
 
@@ -81,7 +86,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
-        menu = self.open_card_menu()
+        menu = self.open_discussion_menu()
         menu.get_by_role("menuitem", name="编辑信息").click()
         self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.page.keyboard.press("Escape")
@@ -99,7 +104,7 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_confirmation_uses_safe_focus_and_keeps_failed_delete_open(self):
         self.page.goto(BASE + "/chat/demo-project/discussion-1")
-        self.open_card_menu().get_by_role("menuitem", name="删除讨论").click()
+        self.open_discussion_menu().get_by_role("menuitem", name="删除讨论").click()
         confirmation = self.page.get_by_role("alertdialog", name="删除这个讨论？")
         cancel = confirmation.get_by_role("button", name="取消")
         cancel.wait_for()
@@ -133,20 +138,20 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_edit_dialog_scrolls_on_small_screen_and_closes_with_escape(self):
         self.page.set_viewport_size({"width": 375, "height": 520})
-        self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.open_card_menu().get_by_role("button", name="编辑信息").click()
-        editor = self.page.get_by_role("dialog", name="编辑任务信息")
-        title = editor.get_by_placeholder("任务标题")
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.open_discussion_menu().get_by_role("button", name="编辑信息").click()
+        editor = self.page.get_by_role("dialog", name="编辑讨论信息")
+        title = editor.get_by_placeholder("讨论标题")
         title.wait_for()
-        self.page.wait_for_function("document.activeElement?.getAttribute('placeholder') === '任务标题'")
+        self.page.wait_for_function("document.activeElement?.getAttribute('placeholder') === '讨论标题'")
         self.assertGreaterEqual(editor.get_by_placeholder("目标、范围与必要背景").evaluate("node => node.getBoundingClientRect().height"), 100)
         editor.get_by_role("button", name="保存", exact=True).scroll_into_view_if_needed()
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
         self.page.keyboard.press("Escape")
         editor.wait_for(state="hidden")
-        self.card_action_button().focus()
+        self.discussion_action_button().focus()
         self.page.keyboard.press("Enter")
-        self.page.locator('[data-slot="sheet-content"]').wait_for()
+        self.page.locator('[data-slot="sheet-content"]').last.wait_for()
 
     def test_composers_preserve_newline_and_ime_confirmation(self):
         for path, placeholder in [
@@ -383,7 +388,7 @@ class CycleDockSmoke(unittest.TestCase):
         # 即使详情没有 unread、timeline 为空，首次进入也必须发送已读请求。
         with self.page.expect_response("**/api/v1/cards/todo-1/read"):
             self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.card_action_button().wait_for()
+        self.card_details_button().wait_for()
         self.assertEqual(reads, ["POST"])
         with self.page.expect_request("**/api/v1/cards/todo-1/read"):
             detail["timeline"].append({
@@ -413,7 +418,7 @@ class CycleDockSmoke(unittest.TestCase):
             ).is_disabled()
         )
         self.page.keyboard.press("Escape")
-        self.card_action_button().wait_for()
+        self.card_details_button().wait_for()
         self.assertEqual(
             self.page.locator('aside[aria-label="任务详情"]').count(), 0
         )
@@ -422,7 +427,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.get_by_role("button", name="取消排队").wait_for()
         self.page.get_by_role("button", name="重试", exact=True).wait_for()
         self.page.get_by_text("系统触发 / 未关联历史").wait_for()
-        self.page.get_by_text("状态变化 · 待办 → 进行中").wait_for()
+        self.page.locator("[id^=event-]").filter(has_text="状态变化").filter(has_text="待办").filter(has_text="进行中").wait_for()
         self.page.get_by_text(
             "已定位 Docker 容器的错误记录。"
         ).wait_for(timeout=8000)
@@ -589,7 +594,7 @@ class CycleDockSmoke(unittest.TestCase):
         row.wait_for(state="detached")
         self.assertEqual(self.page.locator("#event-event-7").count(), 0)
         self.page.reload()
-        self.card_action_button().wait_for()
+        self.card_details_button().wait_for()
         self.assertEqual(self.page.locator('[data-queued-turn="turn-queued"]').count(), 0)
         self.assertEqual(self.page.locator("#event-event-7").count(), 0)
 
@@ -616,7 +621,7 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_work_detail_sidebar_groups_and_info_alignment(self):
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        sidebar = self.page.locator('aside[aria-label="工作列表"]')
+        sidebar = self.page.locator('aside[aria-label="任务列表"]')
         sidebar.wait_for()
 
         working = sidebar.get_by_role("button", name=re.compile(r"^进行中"))
@@ -635,7 +640,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
         self.assertEqual(active_task.get_attribute("aria-current"), "page")
 
-        actions = self.page.get_by_role("button", name="更多操作")
+        actions = self.page.locator('main button[aria-label="新建会话"]:visible')
         actions_box = actions.bounding_box()
         self.assertIsNotNone(actions_box)
         self.assertLess(1280 - (actions_box["x"] + actions_box["width"]), 32)
@@ -647,17 +652,17 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/board/demo-project")
         self.page.locator('a[href="/plans/demo-project"]').first.wait_for()
         self.assertEqual(self.page.get_by_role("button", name=re.compile("每天检查服务器健康")).count(), 0)
-        self.page.get_by_role("link", name="定时任务", exact=True).first.click()
+        self.page.get_by_role("link", name="定时", exact=True).first.click()
         self.page.wait_for_url("**/plans/demo-project")
         self.page.get_by_role("button", name=re.compile("每天检查服务器健康")).click()
         self.page.wait_for_url("**/plans/demo-project/ongoing-1")
         sidebar = self.page.locator('aside[aria-label="定时任务列表"]')
         sidebar.wait_for()
         self.assertEqual(sidebar.get_by_role("button", name=re.compile("每天检查服务器健康")).get_attribute("aria-current"), "page")
-        self.assertEqual(self.page.locator('aside[aria-label="工作列表"]').count(), 0)
-        self.page.get_by_role("link", name="定时任务", exact=True).first.click()
+        self.assertEqual(self.page.locator('aside[aria-label="任务列表"]').count(), 0)
+        self.page.get_by_role("link", name="定时", exact=True).first.click()
         self.assertFalse(sidebar.is_visible())
-        self.page.get_by_role("link", name="定时任务", exact=True).first.click()
+        self.page.get_by_role("link", name="定时", exact=True).first.click()
         sidebar.wait_for()
         self.switch_project("产品发布")
         self.page.wait_for_url("**/plans/demo-project-b")
@@ -712,8 +717,8 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
         activity.get_by_role("button", name=re.compile("每天检查服务器健康")).click()
         self.page.wait_for_url("**/plans/demo-project/ongoing-1")
-        self.page.get_by_role("button", name="打开定时任务列表").click()
-        self.page.get_by_role("dialog", name="定时任务列表").wait_for()
+        self.page.get_by_role("button", name="打开定时列表").click()
+        self.page.get_by_role("dialog", name="定时列表").wait_for()
 
     def test_project_switch_keeps_work_and_chat_scopes_isolated(self):
         self.page.goto(BASE + "/board/demo-project")
@@ -742,13 +747,13 @@ class CycleDockSmoke(unittest.TestCase):
             0,
         )
 
-    def test_task_edit_failure_keeps_unsaved_input(self):
-        self.page.goto(BASE + "/cards/demo-project/todo-1")
-        menu = self.open_card_menu()
+    def test_discussion_edit_failure_keeps_unsaved_input(self):
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        menu = self.open_discussion_menu()
         menu.get_by_role("menuitem", name="编辑信息").click()
-        editor = self.page.get_by_role("dialog", name="编辑任务信息")
+        editor = self.page.get_by_role("dialog", name="编辑讨论信息")
         editor.wait_for()
-        title = editor.get_by_placeholder("任务标题")
+        title = editor.get_by_placeholder("讨论标题")
         title.fill("保存失败仍保留")
 
         def fail_card_patch(route):
@@ -761,12 +766,12 @@ class CycleDockSmoke(unittest.TestCase):
             else:
                 route.continue_()
 
-        self.page.route("**/api/v1/cards/todo-1", fail_card_patch)
+        self.page.route("**/api/v1/cards/discussion-1", fail_card_patch)
         editor.get_by_role("button", name="保存", exact=True).click()
         self.page.get_by_text("模拟保存失败", exact=True).wait_for()
         self.assertEqual(title.input_value(), "保存失败仍保留")
-        self.assertEqual(editor.get_by_placeholder("任务标题").count(), 1)
-        self.page.unroute("**/api/v1/cards/todo-1", fail_card_patch)
+        self.assertEqual(editor.get_by_placeholder("讨论标题").count(), 1)
+        self.page.unroute("**/api/v1/cards/discussion-1", fail_card_patch)
 
     def test_ongoing_health_schedule_and_source_are_preserved(self):
         self.page.goto(BASE + "/plans/demo-project")
@@ -775,7 +780,7 @@ class CycleDockSmoke(unittest.TestCase):
         ).first.click()
         self.page.wait_for_url("**/plans/demo-project/ongoing-1")
         details = self.open_task_details()
-        details.get_by_text("健康状态：").wait_for()
+        details.locator('[data-health-status="healthy"]').wait_for()
         details.get_by_text("正常", exact=True).wait_for()
         details.get_by_text("每天 09:00", exact=True).wait_for()
         details.get_by_text("讨论服务器巡检计划", exact=True).wait_for()
@@ -831,7 +836,7 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_shell_uses_logo_without_account_drawer(self):
         self.page.goto(BASE + "/board/demo-project")
-        self.page.get_by_role("heading", name="工作", exact=True).wait_for()
+        self.page.get_by_role("heading", name="任务", exact=True).wait_for()
         self.assertEqual(
             self.page.get_by_role("button", name="账户与工作空间").count(), 0
         )
@@ -864,7 +869,7 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.locator('nav[aria-label="主导航"]:visible').count(), 0
         )
         self.page.get_by_role("button", name="打开讨论列表").wait_for()
-        menu = self.open_card_menu()
+        menu = self.open_discussion_menu()
         menu.get_by_role("button", name="编辑信息").click()
         self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.assertLessEqual(
@@ -875,12 +880,12 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/cards/demo-project/todo-1")
         self.assertEqual(
-            self.page.locator('aside[aria-label="工作列表"]:visible').count(), 0
+            self.page.locator('aside[aria-label="任务列表"]:visible').count(), 0
         )
-        self.page.get_by_role("button", name="打开工作列表").click()
-        drawer = self.page.get_by_role("dialog", name="工作列表")
+        self.page.get_by_role("button", name="打开任务列表").click()
+        drawer = self.page.get_by_role("dialog", name="任务列表")
         drawer.wait_for()
-        work_sidebar = drawer.locator('aside[aria-label="工作列表"]')
+        work_sidebar = drawer.locator('aside[aria-label="任务列表"]')
         self.assertEqual(
             work_sidebar.get_by_role(
                 "button", name=re.compile(r"^进行中")
@@ -914,11 +919,9 @@ class CycleDockSmoke(unittest.TestCase):
                 const hitTa = document.elementFromPoint(tRect.left + tRect.width / 2, tRect.top + tRect.height / 2);
                 const hitBtn = document.elementFromPoint(bRect.left + bRect.width / 2, bRect.top + bRect.height / 2);
                 const hitFab = document.elementFromPoint(fRect.left + fRect.width / 2, fRect.top + fRect.height / 2);
-                const fabAboveForm = fRect.bottom <= form.getBoundingClientRect().top + 10;
                 return Boolean(hitTa && form.contains(hitTa))
                     && Boolean(hitBtn && (hitBtn === btn || btn.contains(hitBtn)))
-                    && Boolean(hitFab && (hitFab === fab || fab.contains(hitFab)))
-                    && fabAboveForm;
+                    && Boolean(hitFab && (hitFab === fab || fab.contains(hitFab)));
             }"""
         )
         self.assertTrue(hit_stop)
@@ -1096,7 +1099,7 @@ class CycleDockSmoke(unittest.TestCase):
     def test_mobile_topbar_buttons_aligned_and_simplified(self):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/cards/demo-project/todo-1")
-        self.page.get_by_role("button", name="打开工作列表").wait_for()
+        self.page.get_by_role("button", name="打开任务列表").wait_for()
 
         # 手机端卡片页顶部不展示页面导航、项目切换和设备在线列表按钮
         self.assertEqual(
@@ -1109,8 +1112,12 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.locator('button[aria-label="设备在线列表"]:visible').count(), 0
         )
 
+        # 顶部保留当前的新建会话入口，不恢复旧的更多操作按钮。
+        self.assertEqual(
+            self.page.locator('[data-mobile-top-surface] button[aria-label="更多操作"]').count(), 0
+        )
         # 左右两侧保留的顶部按钮高度必须一致（32px）且处于同一条水平中心线上
-        labels = ["打开工作列表", "任务详情", "切换任务状态", "更多操作"]
+        labels = ["打开任务列表", "任务详情", "切换任务状态", "新建会话"]
         boxes = {}
         for label in labels:
             btn = self.page.locator(
@@ -1151,7 +1158,7 @@ class CycleDockSmoke(unittest.TestCase):
                 const topButtons = [
                     '打开讨论列表',
                     '任务详情',
-                    '更多操作',
+                    '新建会话',
                 ].map((label) =>
                     document.querySelector(`[data-mobile-top-surface] button[aria-label="${label}"]`)
                 );
