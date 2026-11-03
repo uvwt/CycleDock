@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { MessageSquareText, Pin, Plus, Search, Trash2 } from "lucide-react";
+import { MessageSquareText, Pencil, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import {
   HintTooltip,
   TextInput,
 } from "../../shared/ui/components";
+import { EditCardDialog } from "../../shared/ui/EditCardDialog";
 
 function formatRelativeTime(dateStr?: string) {
   if (!dateStr) return "";
@@ -60,6 +61,7 @@ export function DiscussionSidebar({
   const navigate = useNavigate();
   const [term, setTerm] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+  const [editTarget, setEditTarget] = useState<Card | null>(null);
 
   const projectID = discussions[0]?.project_id || "";
   const mainDiscussion = useQuery({
@@ -187,19 +189,33 @@ export function DiscussionSidebar({
         <div className="space-y-1">
           {filtered.map((card) => {
             const isMain = card.id === mainDiscussionID;
+            const isPinned = isMain || Boolean(card.pinned_at);
             const swipeActions = [
               ...(!isMain
                 ? [
                     {
                       key: "pin",
                       label: card.pinned_at ? t("取消置顶") : t("置顶"),
-                      icon: <Pin className="size-4 rotate-45" />,
+                      icon: card.pinned_at ? (
+                        <PinOff className="size-4" />
+                      ) : (
+                        <Pin className="size-4 rotate-45" />
+                      ),
                       variant: "primary" as const,
                       onClick: () => {
                         pinMutation.mutate({
                           id: card.id,
                           pinned: !card.pinned_at,
                         });
+                      },
+                    },
+                    {
+                      key: "edit",
+                      label: t("编辑"),
+                      icon: <Pencil className="size-4" />,
+                      variant: "secondary" as const,
+                      onClick: () => {
+                        setEditTarget(card);
                       },
                     },
                     {
@@ -219,6 +235,7 @@ export function DiscussionSidebar({
               <ContextSidebarItem
                 key={card.id}
                 active={card.id === activeCardID}
+                pinned={isPinned}
                 onClick={() => handleSelect(card)}
                 swipeActions={swipeActions.length ? swipeActions : undefined}
                 icon={
@@ -238,16 +255,8 @@ export function DiscussionSidebar({
                       {formatRelativeTime(card.updated_at)}
                     </span>
 
-                    {/* 置顶标识与置顶按钮统一在一个位置：主讨论始终置顶且不可取消；普通讨论置顶时常显，未置顶时悬浮显 */}
-                    {isMain ? (
-                      <span
-                        title={t("主讨论始终置顶")}
-                        aria-label={t("主讨论始终置顶")}
-                        className="grid size-6 place-items-center rounded-lg text-primary select-none cursor-default"
-                      >
-                        <Pin className="size-3.5 fill-primary/20 rotate-45" />
-                      </span>
-                    ) : (
+                    {/* 桌面端快捷置顶切换（仅悬浮或聚焦时显，常态由标题旁置顶徽标呈现） */}
+                    {!isMain && (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -259,17 +268,17 @@ export function DiscussionSidebar({
                         }}
                         title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
                         aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                        className={`grid size-6 place-items-center rounded-lg transition-all ${
+                        className={`hidden size-6 place-items-center rounded-lg transition-all group-hover:grid group-focus-within:grid ${
                           card.pinned_at
-                            ? "text-primary hover:text-primary/80 hover:bg-muted"
-                            : "hidden text-muted-foreground/60 hover:text-foreground hover:bg-muted group-hover:grid group-focus-within:grid"
+                            ? "text-amber-500 hover:text-amber-600 hover:bg-muted"
+                            : "text-muted-foreground/60 hover:text-foreground hover:bg-muted"
                         }`}
                       >
-                        <Pin
-                          className={`size-3.5 ${
-                            card.pinned_at ? "fill-primary/20 rotate-45" : ""
-                          }`}
-                        />
+                        {card.pinned_at ? (
+                          <PinOff className="size-3.5" />
+                        ) : (
+                          <Pin className="size-3.5" />
+                        )}
                       </button>
                     )}
 
@@ -322,6 +331,12 @@ export function DiscussionSidebar({
             deleteMutation.mutate(deleteTarget);
           }
         }}
+      />
+
+      <EditCardDialog
+        card={editTarget}
+        open={Boolean(editTarget)}
+        onOpenChange={(open) => !open && setEditTarget(null)}
       />
     </ContextSidebar>
   );

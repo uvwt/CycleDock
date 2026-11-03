@@ -830,6 +830,7 @@ function CardPageContent({
               >
                 <div
                   ref={composerDockRef}
+                  data-no-swipe="true"
                   className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pt-2 pb-[max(0.5rem,calc(env(safe-area-inset-bottom,0px)*0.6))] sm:px-6 sm:pb-3"
                 >
                   {blocked && (

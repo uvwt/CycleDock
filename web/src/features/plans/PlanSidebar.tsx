@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CalendarClock, Pin, Trash2 } from "lucide-react";
+import { CalendarClock, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Card } from "../../shared/api/types";
@@ -11,6 +11,7 @@ import {
   ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import { ConfirmDialog } from "../../shared/ui/components";
+import { EditCardDialog } from "../../shared/ui/EditCardDialog";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 
@@ -30,6 +31,7 @@ export function PlanSidebar({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+  const [editTarget, setEditTarget] = useState<Card | null>(null);
 
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
@@ -94,13 +96,26 @@ export function PlanSidebar({
               {
                 key: "pin",
                 label: card.pinned_at ? t("取消置顶") : t("置顶"),
-                icon: <Pin className="size-4 rotate-45" />,
+                icon: card.pinned_at ? (
+                  <PinOff className="size-4" />
+                ) : (
+                  <Pin className="size-4 rotate-45" />
+                ),
                 variant: "primary" as const,
                 onClick: () => {
                   pinMutation.mutate({
                     id: card.id,
                     pinned: !card.pinned_at,
                   });
+                },
+              },
+              {
+                key: "edit",
+                label: t("编辑"),
+                icon: <Pencil className="size-4" />,
+                variant: "secondary" as const,
+                onClick: () => {
+                  setEditTarget(card);
                 },
               },
               {
@@ -118,6 +133,7 @@ export function PlanSidebar({
               <ContextSidebarItem
                 key={card.id}
                 active={card.id === activeCardID}
+                pinned={Boolean(card.pinned_at)}
                 onClick={() => onSelect(card)}
                 swipeActions={swipeActions}
                 icon={<CalendarClock className="size-4 text-faint" />}
@@ -153,6 +169,12 @@ export function PlanSidebar({
             deleteMutation.mutate(deleteTarget);
           }
         }}
+      />
+
+      <EditCardDialog
+        card={editTarget}
+        open={Boolean(editTarget)}
+        onOpenChange={(open) => !open && setEditTarget(null)}
       />
     </ContextSidebar>
   );

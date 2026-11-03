@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Pencil,
   Pin,
+  PinOff,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -16,6 +18,7 @@ import {
   ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import { Badge, ConfirmDialog } from "../../shared/ui/components";
+import { EditCardDialog } from "../../shared/ui/EditCardDialog";
 import {
   CardStatusDot,
   getCardVisualStatus,
@@ -103,6 +106,7 @@ export function WorkSidebar({
 
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
+  const [editTarget, setEditTarget] = useState<Card | null>(null);
 
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
@@ -192,13 +196,26 @@ export function WorkSidebar({
                         {
                           key: "pin",
                           label: card.pinned_at ? t("取消置顶") : t("置顶"),
-                          icon: <Pin className="size-4 rotate-45" />,
+                          icon: card.pinned_at ? (
+                            <PinOff className="size-4" />
+                          ) : (
+                            <Pin className="size-4 rotate-45" />
+                          ),
                           variant: "primary" as const,
                           onClick: () => {
                             pinMutation.mutate({
                               id: card.id,
                               pinned: !card.pinned_at,
                             });
+                          },
+                        },
+                        {
+                          key: "edit",
+                          label: t("编辑"),
+                          icon: <Pencil className="size-4" />,
+                          variant: "secondary" as const,
+                          onClick: () => {
+                            setEditTarget(card);
                           },
                         },
                         {
@@ -216,6 +233,7 @@ export function WorkSidebar({
                         <ContextSidebarItem
                           key={card.id}
                           active={active}
+                          pinned={Boolean(card.pinned_at)}
                           onClick={() => onSelect(card)}
                           swipeActions={swipeActions}
                           icon={
@@ -258,6 +276,12 @@ export function WorkSidebar({
             deleteMutation.mutate(deleteTarget);
           }
         }}
+      />
+
+      <EditCardDialog
+        card={editTarget}
+        open={Boolean(editTarget)}
+        onOpenChange={(open) => !open && setEditTarget(null)}
       />
     </ContextSidebar>
   );

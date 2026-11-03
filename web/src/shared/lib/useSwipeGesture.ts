@@ -100,6 +100,13 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
       startX = touch.clientX;
       startY = touch.clientY;
 
+      // 1. 输入控件及禁止滑动区域（如会话输入窗口）绝对避让，杜绝手势误触
+      if (isInsideHorizontalScrollableOrInput(e.target)) {
+        isIgnored = true;
+        isTracking = false;
+        return;
+      }
+
       const winWidth = window.innerWidth;
       const effectiveEdge = edgeWidth && edgeWidth > 0 ? edgeWidth : 30; // 默认前 30px 为边缘滑动手势区
       const isNearLeftEdge = startX <= effectiveEdge;
@@ -117,12 +124,6 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
         isEdgeSwipe = true;
       } else {
         isEdgeSwipe = false;
-        // 普通区域滑动时进行避让检测
-        if (isInsideHorizontalScrollableOrInput(e.target)) {
-          isIgnored = true;
-          isTracking = false;
-          return;
-        }
       }
 
       isIgnored = false;

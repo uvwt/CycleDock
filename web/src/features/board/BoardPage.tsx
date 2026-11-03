@@ -14,7 +14,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { ListPlus } from "lucide-react";
+import { ListPlus, Pin } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -189,9 +189,14 @@ function TaskCard({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
-              <h3 className="min-w-0 flex-1 line-clamp-2 text-sm font-medium leading-snug text-foreground">
-                {card.title}
-              </h3>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <h3 className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
+                  {card.title}
+                </h3>
+                {card.pinned_at && (
+                  <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                )}
+              </div>
               {updatedTime && (
                 <span className="shrink-0 text-[11px] font-normal tabular-nums text-faint/70">
                   {updatedTime}
@@ -226,9 +231,14 @@ function TaskCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="min-w-0 flex-1 line-clamp-2 text-sm font-medium leading-snug text-foreground group-hover:text-primary">
-              {card.title}
-            </h3>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <h3 className="line-clamp-2 text-sm font-medium leading-snug text-foreground group-hover:text-primary">
+                {card.title}
+              </h3>
+              {card.pinned_at && (
+                <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+              )}
+            </div>
             {updatedTime && (
               <span className="shrink-0 text-[11px] font-normal tabular-nums text-faint/70">
                 {updatedTime}

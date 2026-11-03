@@ -434,6 +434,16 @@ const en = {
   "整个工作空间的默认指令，与单个项目的指令分开保存。":
     "Workspace-wide instructions; project instructions are saved separately.",
   "保存 Agent 设置": "Save Agent settings",
+  编辑: "Edit",
+  编辑任务: "Edit task",
+  编辑讨论: "Edit discussion",
+  编辑定时任务: "Edit scheduled task",
+  已保存: "Saved",
+  "保存失败": "Failed to save",
+  "保存中…": "Saving…",
+  讨论标题: "Discussion title",
+  任务标题: "Task title",
+  定时任务标题: "Scheduled task title",
 } as const;
 
 void i18n.use(initReactI18next).init({

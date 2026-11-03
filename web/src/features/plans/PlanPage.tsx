@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, CirclePause, Clock3 } from "lucide-react";
+import { CalendarClock, CirclePause, Clock3, Pin } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../../app/project-context";
@@ -180,8 +180,13 @@ export default function PlanPage() {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="truncate text-sm font-semibold text-heading">
-                      {card.title || t("未命名定时任务")}
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-sm font-semibold text-heading">
+                        {card.title || t("未命名定时任务")}
+                      </span>
+                      {card.pinned_at && (
+                        <Pin className="size-3.5 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <OngoingHealthBadge health={card.health} size="xs" />
