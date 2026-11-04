@@ -99,6 +99,7 @@ type SessionSet struct {
 }
 
 type serverSession struct {
+	mu      sync.Mutex
 	config  Connection
 	session *mcp.ClientSession
 }
@@ -404,20 +405,152 @@ func (s *SessionSet) callRemote(
 		s.mu.Unlock()
 		return nil, errors.New("MCP session set is closed")
 	}
-	connected := s.sessions[serverName]
+	server := s.sessions[serverName]
 	s.mu.Unlock()
-	if connected == nil {
+	if server == nil {
 		return nil, fmt.Errorf("MCP session %q is unavailable", serverName)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, connected.config.Timeout)
-	defer cancel()
-	result, err := connected.session.CallTool(callCtx, &mcp.CallToolParams{
-		Name: remoteName, Arguments: arguments,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("call MCP %s/%s: %w", serverName, remoteName, err)
+
+	timeout := server.config.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
 	}
-	return result, nil
+
+	maxAttempts := 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Respect caller cancellation before attempting
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		// Get current session under lock
+		server.mu.Lock()
+		currentSession := server.session
+		server.mu.Unlock()
+
+		if currentSession == nil {
+			// Session was cleared or needs initial connect
+			if err := s.reconnectServer(ctx, serverName); err != nil {
+				return nil, fmt.Errorf("reconnect MCP %s before call: %w", serverName, err)
+			}
+			server.mu.Lock()
+			currentSession = server.session
+			server.mu.Unlock()
+			if currentSession == nil {
+				return nil, fmt.Errorf("MCP session %q unavailable after reconnect", serverName)
+			}
+		}
+
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		result, err := currentSession.CallTool(callCtx, &mcp.CallToolParams{
+			Name: remoteName, Arguments: arguments,
+		})
+		cancel()
+
+		if err == nil {
+			return result, nil
+		}
+
+		category := ClassifyError(ctx, err)
+
+		switch category {
+		case CategoryCallerCanceled:
+			// The caller canceled the parent context; do not reconnect or retry
+			return nil, err
+
+		case CategoryTimeout:
+			// Tool execution reached timeout; return informative error to caller without killing session
+			return nil, fmt.Errorf("call MCP %s/%s timed out: %w", serverName, remoteName, err)
+
+		case CategoryConnectionClosed:
+			// Underlying connection broken/closed; trigger reconnect and retry if attempts remain
+			if attempt+1 < maxAttempts && ctx.Err() == nil {
+				if reconnErr := s.reconnectServer(ctx, serverName); reconnErr == nil {
+					continue
+				}
+			}
+			return nil, fmt.Errorf("call MCP %s/%s connection closed: %w", serverName, remoteName, err)
+
+		case CategoryTransient:
+			// 429/502/503/504 transient error; short backoff and retry
+			if attempt+1 < maxAttempts && ctx.Err() == nil {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(time.Duration(100*(1<<attempt)) * time.Millisecond):
+					continue
+				}
+			}
+			return nil, fmt.Errorf("call MCP %s/%s transient error: %w", serverName, remoteName, err)
+
+		default:
+			// Terminal or protocol error; fail immediately
+			return nil, fmt.Errorf("call MCP %s/%s: %w", serverName, remoteName, err)
+		}
+	}
+
+	return nil, fmt.Errorf("call MCP %s/%s exceeded max attempts", serverName, remoteName)
+}
+
+// reconnectServer synchronizes reconnection for a server, updates the session, and refreshes its catalog.
+func (s *SessionSet) reconnectServer(ctx context.Context, serverName string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("MCP session set is closed")
+	}
+	server := s.sessions[serverName]
+	s.mu.Unlock()
+	if server == nil {
+		return fmt.Errorf("MCP session %q is unavailable", serverName)
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	// Check if session set closed while acquiring server lock
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("MCP session set is closed")
+	}
+	s.mu.Unlock()
+
+	// Connect new session
+	timeout := server.config.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: "cycledock-agent", Title: "CycleDock Built-in Agent", Version: "0.4.0",
+	}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: server.config.URL, HTTPClient: mcpHTTPClient(server.config),
+		MaxRetries: 1, DisableStandaloneSSE: true,
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	newSession, err := client.Connect(connectCtx, transport, nil)
+	cancel()
+	if err != nil {
+		return &ConnectError{ServerName: server.config.Name, Phase: ConnectPhaseInitialize, Err: err}
+	}
+
+	// Close previous session asynchronously or safely
+	oldSession := server.session
+	server.session = newSession
+	if oldSession != nil {
+		go func(old *mcp.ClientSession) {
+			_ = old.Close()
+		}(oldSession)
+	}
+
+	// Refresh tool catalog using the new session
+	go func() {
+		// Run a non-blocking background refresh to update tools in catalog
+		_ = s.RefreshServer(context.Background(), serverName)
+	}()
+
+	return nil
 }
 
 // RefreshServer re-lists tools from an active server session and updates the catalog.
