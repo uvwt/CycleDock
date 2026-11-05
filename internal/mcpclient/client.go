@@ -90,6 +90,12 @@ func (e *ConnectError) Unwrap() error {
 	return e.Err
 }
 
+// SessionSet 管理一组已接入的 MCP 服务会话与统一工具目录。
+//
+// 锁约束：
+// 1. s.mu 保护 sessions、tools、ordered 与 closed。
+// 2. serverSession.mu 保护单个服务的 session 指针读写及重连串行化；config 在创建后只读。
+// 3. 严禁在持有 s.mu 的同时获取 serverSession.mu，避免与重连路径形成 AB-BA 死锁。
 type SessionSet struct {
 	sessions map[string]*serverSession
 	tools    map[string]Tool
@@ -118,24 +124,10 @@ func Connect(ctx context.Context, connections []Connection) (*SessionSet, error)
 	return set, nil
 }
 
-// AddConnection 独立接入一个服务；失败时不影响已连接服务，也不留下半份工具目录。
-// Connect 保持全量成功语义，运行时则可逐个接入并向用户报告不可用的服务。
-func (s *SessionSet) AddConnection(ctx context.Context, connection Connection) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("MCP session set is closed")
-	}
-	connection.Name = strings.TrimSpace(connection.Name)
-	connection.URL = strings.TrimSpace(connection.URL)
-	if connection.Name == "" || connection.URL == "" {
-		return errors.New("MCP connection name and URL are required")
-	}
-	if _, exists := s.sessions[connection.Name]; exists {
-		return fmt.Errorf("MCP connection %q already exists", connection.Name)
-	}
-	if connection.Timeout <= 0 {
-		connection.Timeout = 30 * time.Second
+func dialSession(ctx context.Context, connection Connection) (*mcp.ClientSession, error) {
+	timeout := connection.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
 	}
 	client := mcp.NewClient(&mcp.Implementation{
 		Name: "cycledock-agent", Title: "CycleDock Built-in Agent", Version: "0.4.0",
@@ -144,27 +136,18 @@ func (s *SessionSet) AddConnection(ctx context.Context, connection Connection) e
 		Endpoint: connection.URL, HTTPClient: mcpHTTPClient(connection),
 		MaxRetries: 1, DisableStandaloneSSE: true,
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	session, err := client.Connect(connectCtx, transport, nil)
-	cancel()
 	if err != nil {
-		return &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseInitialize, Err: err}
+		return nil, &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseInitialize, Err: err}
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			session.Close()
-		}
-	}()
-	listCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
-	result, err := session.ListTools(listCtx, nil)
-	cancel()
-	if err != nil {
-		return &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseListTools, Err: err}
-	}
+	return session, nil
+}
 
-	additions := make(map[string]Tool, len(result.Tools))
-	for _, remote := range result.Tools {
+func buildServerTools(connection Connection, existing map[string]Tool, remoteTools []*mcp.Tool) (map[string]Tool, error) {
+	additions := make(map[string]Tool, len(remoteTools))
+	for _, remote := range remoteTools {
 		if remote == nil {
 			continue
 		}
@@ -172,29 +155,100 @@ func (s *SessionSet) AddConnection(ctx context.Context, connection Connection) e
 		if connection.NativeToolNames {
 			name = nativeToolName(remote.Name)
 		}
-		previous, exists := s.tools[name]
-		if !exists {
-			previous, exists = additions[name]
+		if prev, exists := existing[name]; exists && prev.ServerName != connection.Name {
+			return nil, fmt.Errorf("MCP tool name collision %q between %s/%s and %s/%s", name, prev.ServerName, prev.RemoteName, connection.Name, remote.Name)
 		}
-		if exists {
-			return fmt.Errorf("MCP tool name collision %q between %s/%s and %s/%s", name, previous.ServerName, previous.RemoteName, connection.Name, remote.Name)
+		if prev, exists := additions[name]; exists {
+			return nil, fmt.Errorf("MCP tool name collision %q between %s/%s and %s/%s", name, prev.ServerName, prev.RemoteName, connection.Name, remote.Name)
 		}
 		tool := Tool{
-			ModelName: name, ServerName: connection.Name, RemoteName: remote.Name,
-			Description: strings.TrimSpace(remote.Description), InputSchema: jsonMap(remote.InputSchema),
-			Hidden: connection.HiddenRemoteTools[remote.Name],
+			ModelName:   name,
+			ServerName:  connection.Name,
+			RemoteName:  remote.Name,
+			Description: strings.TrimSpace(remote.Description),
+			InputSchema: jsonMap(remote.InputSchema),
+			Hidden:      connection.HiddenRemoteTools[remote.Name],
 		}
 		if tool.InputSchema == nil {
 			tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 		additions[name] = tool
 	}
-	s.sessions[connection.Name] = &serverSession{config: connection, session: session}
+	return additions, nil
+}
+
+func (s *SessionSet) replaceServerToolsLocked(serverName string, additions map[string]Tool) {
+	newOrdered := make([]Tool, 0, len(s.ordered)+len(additions))
+	for _, t := range s.ordered {
+		if t.ServerName != serverName {
+			newOrdered = append(newOrdered, t)
+		} else {
+			delete(s.tools, t.ModelName)
+		}
+	}
 	for name, tool := range additions {
 		s.tools[name] = tool
-		s.ordered = append(s.ordered, tool)
+		newOrdered = append(newOrdered, tool)
 	}
-	sort.Slice(s.ordered, func(i, j int) bool { return s.ordered[i].ModelName < s.ordered[j].ModelName })
+	sort.Slice(newOrdered, func(i, j int) bool { return newOrdered[i].ModelName < newOrdered[j].ModelName })
+	s.ordered = newOrdered
+}
+
+// AddConnection 独立接入一个服务；失败时不影响已连接服务，也不留下半份工具目录。
+// Connect 保持全量成功语义，运行时则可逐个接入并向用户报告不可用的服务。
+func (s *SessionSet) AddConnection(ctx context.Context, connection Connection) error {
+	connection.Name = strings.TrimSpace(connection.Name)
+	connection.URL = strings.TrimSpace(connection.URL)
+	if connection.Name == "" || connection.URL == "" {
+		return errors.New("MCP connection name and URL are required")
+	}
+	if connection.Timeout <= 0 {
+		connection.Timeout = 30 * time.Second
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("MCP session set is closed")
+	}
+	if _, exists := s.sessions[connection.Name]; exists {
+		s.mu.Unlock()
+		return fmt.Errorf("MCP connection %q already exists", connection.Name)
+	}
+	s.mu.Unlock()
+
+	session, err := dialSession(ctx, connection)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = session.Close()
+		}
+	}()
+
+	listCtx, cancel := context.WithTimeout(ctx, connection.Timeout)
+	result, err := session.ListTools(listCtx, nil)
+	cancel()
+	if err != nil {
+		return &ConnectError{ServerName: connection.Name, Phase: ConnectPhaseListTools, Err: err}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("MCP session set is closed")
+	}
+	if _, exists := s.sessions[connection.Name]; exists {
+		return fmt.Errorf("MCP connection %q already exists", connection.Name)
+	}
+	additions, err := buildServerTools(connection, s.tools, result.Tools)
+	if err != nil {
+		return err
+	}
+	s.sessions[connection.Name] = &serverSession{config: connection, session: session}
+	s.replaceServerToolsLocked(connection.Name, additions)
 	committed = true
 	return nil
 }
@@ -214,8 +268,16 @@ func (s *SessionSet) RemoveConnection(name string) error {
 	}
 	s.ordered = kept
 	s.mu.Unlock()
-	if server != nil {
-		return server.session.Close()
+
+	if server == nil {
+		return nil
+	}
+	server.mu.Lock()
+	sess := server.session
+	server.session = nil
+	server.mu.Unlock()
+	if sess != nil {
+		return sess.Close()
 	}
 	return nil
 }
@@ -416,23 +478,22 @@ func (s *SessionSet) callRemote(
 		timeout = 30 * time.Second
 	}
 
-	maxAttempts := 3
+	const maxAttempts = 3
+	reconnected := false
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Respect caller cancellation before attempting
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 
-		// Get current session under lock
 		server.mu.Lock()
 		currentSession := server.session
 		server.mu.Unlock()
 
 		if currentSession == nil {
-			// Session was cleared or needs initial connect
-			if err := s.reconnectServer(ctx, serverName); err != nil {
+			if err := s.reconnectServer(ctx, serverName, nil); err != nil {
 				return nil, fmt.Errorf("reconnect MCP %s before call: %w", serverName, err)
 			}
+			reconnected = true
 			server.mu.Lock()
 			currentSession = server.session
 			server.mu.Unlock()
@@ -445,34 +506,38 @@ func (s *SessionSet) callRemote(
 		result, err := currentSession.CallTool(callCtx, &mcp.CallToolParams{
 			Name: remoteName, Arguments: arguments,
 		})
+		category := classifyCallError(ctx, callCtx, err)
 		cancel()
 
 		if err == nil {
 			return result, nil
 		}
 
-		category := ClassifyError(ctx, err)
-
 		switch category {
 		case CategoryCallerCanceled:
-			// The caller canceled the parent context; do not reconnect or retry
 			return nil, err
 
 		case CategoryTimeout:
-			// Tool execution reached timeout; return informative error to caller without killing session
+			// 单次工具超时不主动拆毁会话，也不重试慢工具；
+			// 若此次超时发生在读取响应体阶段导致 go-sdk 将连接置为 failed，下一轮调用会在入口自动识别并重连。
 			return nil, fmt.Errorf("call MCP %s/%s timed out: %w", serverName, remoteName, err)
 
 		case CategoryConnectionClosed:
-			// Underlying connection broken/closed; trigger reconnect and retry if attempts remain
-			if attempt+1 < maxAttempts && ctx.Err() == nil {
-				if reconnErr := s.reconnectServer(ctx, serverName); reconnErr == nil {
+			// 请求尚未被服务端执行，最多触发一次重连并重发。
+			if !reconnected && attempt+1 < maxAttempts && ctx.Err() == nil {
+				if reconnErr := s.reconnectServer(ctx, serverName, currentSession); reconnErr == nil {
+					reconnected = true
 					continue
 				}
 			}
 			return nil, fmt.Errorf("call MCP %s/%s connection closed: %w", serverName, remoteName, err)
 
+		case CategoryConnectionDropped:
+			// 响应读取中途中断，服务端可能已执行副作用；淘汰已损坏的底层会话，但禁止静默重发本次调用。
+			s.invalidateSession(serverName, currentSession)
+			return nil, fmt.Errorf("call MCP %s/%s connection dropped during response: %w", serverName, remoteName, err)
+
 		case CategoryTransient:
-			// 429/502/503/504 transient error; short backoff and retry
 			if attempt+1 < maxAttempts && ctx.Err() == nil {
 				select {
 				case <-ctx.Done():
@@ -484,7 +549,9 @@ func (s *SessionSet) callRemote(
 			return nil, fmt.Errorf("call MCP %s/%s transient error: %w", serverName, remoteName, err)
 
 		default:
-			// Terminal or protocol error; fail immediately
+			if strings.Contains(strings.ToLower(err.Error()), "mcp response exceeds ") {
+				s.invalidateSession(serverName, currentSession)
+			}
 			return nil, fmt.Errorf("call MCP %s/%s: %w", serverName, remoteName, err)
 		}
 	}
@@ -492,8 +559,32 @@ func (s *SessionSet) callRemote(
 	return nil, fmt.Errorf("call MCP %s/%s exceeded max attempts", serverName, remoteName)
 }
 
-// reconnectServer synchronizes reconnection for a server, updates the session, and refreshes its catalog.
-func (s *SessionSet) reconnectServer(ctx context.Context, serverName string) error {
+func (s *SessionSet) invalidateSession(serverName string, broken *mcp.ClientSession) {
+	if broken == nil {
+		return
+	}
+	s.mu.Lock()
+	server := s.sessions[serverName]
+	s.mu.Unlock()
+	if server == nil {
+		return
+	}
+
+	server.mu.Lock()
+	if server.session != broken {
+		server.mu.Unlock()
+		return
+	}
+	server.session = nil
+	server.mu.Unlock()
+
+	go func(old *mcp.ClientSession) {
+		_ = old.Close()
+	}(broken)
+}
+
+// reconnectServer 串行化单个 MCP 服务的重连过程，传入触发失败的旧 session 以合并并发重连请求。
+func (s *SessionSet) reconnectServer(ctx context.Context, serverName string, failed *mcp.ClientSession) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -508,34 +599,41 @@ func (s *SessionSet) reconnectServer(ctx context.Context, serverName string) err
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
-	// Check if session set closed while acquiring server lock
+	// 若排在前面的并发协程已经换上了新会话，直接复用，避免惊群重连并误杀健康会话。
+	if server.session != nil && server.session != failed {
+		return nil
+	}
+
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	closedOrRemoved := s.closed || s.sessions[serverName] != server
+	s.mu.Unlock()
+	if closedOrRemoved {
 		return errors.New("MCP session set is closed")
+	}
+
+	newSession, err := dialSession(ctx, server.config)
+	if err != nil {
+		return err
+	}
+
+	// 趁新会话建立同步刷新工具目录；若刷新失败不阻断本次重连，后续按需搜索/校验仍可再刷新。
+	listCtx, cancel := context.WithTimeout(ctx, server.config.Timeout)
+	listResult, listErr := newSession.ListTools(listCtx, nil)
+	cancel()
+
+	s.mu.Lock()
+	if s.closed || s.sessions[serverName] != server {
+		s.mu.Unlock()
+		_ = newSession.Close()
+		return errors.New("MCP session set is closed")
+	}
+	if listErr == nil && listResult != nil {
+		if additions, err := buildServerTools(server.config, s.tools, listResult.Tools); err == nil {
+			s.replaceServerToolsLocked(server.config.Name, additions)
+		}
 	}
 	s.mu.Unlock()
 
-	// Connect new session
-	timeout := server.config.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	client := mcp.NewClient(&mcp.Implementation{
-		Name: "cycledock-agent", Title: "CycleDock Built-in Agent", Version: "0.4.0",
-	}, nil)
-	transport := &mcp.StreamableClientTransport{
-		Endpoint: server.config.URL, HTTPClient: mcpHTTPClient(server.config),
-		MaxRetries: 1, DisableStandaloneSSE: true,
-	}
-	connectCtx, cancel := context.WithTimeout(ctx, timeout)
-	newSession, err := client.Connect(connectCtx, transport, nil)
-	cancel()
-	if err != nil {
-		return &ConnectError{ServerName: server.config.Name, Phase: ConnectPhaseInitialize, Err: err}
-	}
-
-	// Close previous session asynchronously or safely
 	oldSession := server.session
 	server.session = newSession
 	if oldSession != nil {
@@ -543,17 +641,10 @@ func (s *SessionSet) reconnectServer(ctx context.Context, serverName string) err
 			_ = old.Close()
 		}(oldSession)
 	}
-
-	// Refresh tool catalog using the new session
-	go func() {
-		// Run a non-blocking background refresh to update tools in catalog
-		_ = s.RefreshServer(context.Background(), serverName)
-	}()
-
 	return nil
 }
 
-// RefreshServer re-lists tools from an active server session and updates the catalog.
+// RefreshServer 重新拉取指定服务的工具列表并原子更新目录（含跨服务工具名冲突校验）。
 func (s *SessionSet) RefreshServer(ctx context.Context, serverName string) error {
 	s.mu.Lock()
 	if s.closed {
@@ -566,8 +657,23 @@ func (s *SessionSet) RefreshServer(ctx context.Context, serverName string) error
 		return fmt.Errorf("MCP session %q is unavailable", serverName)
 	}
 
+	server.mu.Lock()
+	currentSession := server.session
+	server.mu.Unlock()
+	if currentSession == nil {
+		if err := s.reconnectServer(ctx, serverName, nil); err != nil {
+			return fmt.Errorf("refresh MCP tools for %q: %w", serverName, err)
+		}
+		server.mu.Lock()
+		currentSession = server.session
+		server.mu.Unlock()
+		if currentSession == nil {
+			return fmt.Errorf("MCP session %q is unavailable", serverName)
+		}
+	}
+
 	listCtx, cancel := context.WithTimeout(ctx, server.config.Timeout)
-	result, err := server.session.ListTools(listCtx, nil)
+	result, err := currentSession.ListTools(listCtx, nil)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("refresh MCP tools for %q: %w", serverName, err)
@@ -575,43 +681,14 @@ func (s *SessionSet) RefreshServer(ctx context.Context, serverName string) error
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.sessions[serverName] != server {
 		return errors.New("MCP session set is closed")
 	}
-
-	newOrdered := make([]Tool, 0, len(s.ordered))
-	for _, t := range s.ordered {
-		if t.ServerName != serverName {
-			newOrdered = append(newOrdered, t)
-		} else {
-			delete(s.tools, t.ModelName)
-		}
+	additions, err := buildServerTools(server.config, s.tools, result.Tools)
+	if err != nil {
+		return err
 	}
-
-	for _, remote := range result.Tools {
-		if remote == nil {
-			continue
-		}
-		name := modelToolName(server.config.Name, remote.Name)
-		if server.config.NativeToolNames {
-			name = nativeToolName(remote.Name)
-		}
-		tool := Tool{
-			ModelName:   name,
-			ServerName:  server.config.Name,
-			RemoteName:  remote.Name,
-			Description: strings.TrimSpace(remote.Description),
-			InputSchema: jsonMap(remote.InputSchema),
-			Hidden:      server.config.HiddenRemoteTools[remote.Name],
-		}
-		if tool.InputSchema == nil {
-			tool.InputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-		s.tools[name] = tool
-		newOrdered = append(newOrdered, tool)
-	}
-	sort.Slice(newOrdered, func(i, j int) bool { return newOrdered[i].ModelName < newOrdered[j].ModelName })
-	s.ordered = newOrdered
+	s.replaceServerToolsLocked(server.config.Name, additions)
 	return nil
 }
 
@@ -660,13 +737,23 @@ func (s *SessionSet) Close() error {
 		return nil
 	}
 	s.closed = true
-	sessions := make([]*mcp.ClientSession, 0, len(s.sessions))
+	servers := make([]*serverSession, 0, len(s.sessions))
 	for _, connected := range s.sessions {
-		if connected != nil && connected.session != nil {
-			sessions = append(sessions, connected.session)
+		if connected != nil {
+			servers = append(servers, connected)
 		}
 	}
 	s.mu.Unlock()
+
+	sessions := make([]*mcp.ClientSession, 0, len(servers))
+	for _, srv := range servers {
+		srv.mu.Lock()
+		if srv.session != nil {
+			sessions = append(sessions, srv.session)
+			srv.session = nil
+		}
+		srv.mu.Unlock()
+	}
 
 	var combined error
 	for _, session := range sessions {
