@@ -970,3 +970,157 @@ func TestADKRunnerWaitForHumanPersistsToolResponseAndContinuesSameSession(t *tes
 		t.Fatal("second Turn did not receive persisted reply_message FunctionResponse")
 	}
 }
+
+func TestADKRunnerPersistsToolResultsWithNullBytesAndContinuesWithoutOrphanedCalls(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	largeOutput := strings.Repeat("0123456789abcdef中文🚀\n", 800)
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "abnormal-unicode-test", Version: "1.0.0"}, nil)
+	type execInput struct{}
+	type execOutput struct {
+		Stdout string `json:"stdout"`
+		Stderr string `json:"stderr"`
+	}
+	mcp.AddTool(
+		mcpServer,
+		&mcp.Tool{Name: "exec_command", Description: "Run a command that emits NUL bytes and binary-like output."},
+		func(context.Context, *mcp.CallToolRequest, execInput) (*mcp.CallToolResult, execOutput, error) {
+			return nil, execOutput{
+				Stdout: "header\x00body-line\n\t中文🚀\x00" + largeOutput,
+				Stderr: "warn\x00" + string([]byte{0xff, 0xfe}) + "done",
+			}, nil
+		},
+	)
+	mcpHTTP := httptest.NewServer(
+		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil),
+	)
+	defer mcpHTTP.Close()
+
+	var modelMu sync.Mutex
+	modelCalls := 0
+	secondTurnSawToolResponse := false
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body modelRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode model request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+
+		modelMu.Lock()
+		modelCalls++
+		current := modelCalls
+		modelMu.Unlock()
+
+		rawMessages, _ := json.Marshal(body.Messages)
+		w.Header().Set("Content-Type", "application/json")
+		switch current {
+		case 1:
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID:   "call-exec-nul-1",
+				Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:exec_command","arguments":{}}`,
+				},
+			}})
+		case 2:
+			if !strings.Contains(string(rawMessages), "call-exec-nul-1") {
+				t.Errorf("follow-up model request missing tool response for call-exec-nul-1: %s", rawMessages)
+			}
+			writeModelResponse(t, w, "Command completed with sanitized NUL output.", nil)
+		case 3:
+			// 第二轮对话时，第一轮的 FunctionCall 与 FunctionResponse 均已完整落库，不应因为 22P05 被丢弃。
+			if strings.Contains(string(rawMessages), "call-exec-nul-1") {
+				secondTurnSawToolResponse = true
+			}
+			writeModelResponse(t, w, "Second turn verified prior tool output.", nil)
+		default:
+			t.Errorf("unexpected model call %d", current)
+			writeModelResponse(t, w, "unexpected", nil)
+		}
+	}))
+	defer modelHTTP.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "ADK Unicode Resilience")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(
+		ctx, workspace.ID, project.ID, human.ID,
+		"Run command with NUL output", "", uuid.NullUUID{}, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(
+		ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "unicode-model"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
+		Name: "lab", URL: mcpHTTP.URL, Enabled: true, TimeoutMS: 5000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
+		SessionService:    agentsession.NewPostgresService(pool),
+		ArtifactService:   agentartifact.NewPostgresService(pool),
+		HeartbeatInterval: 50 * time.Millisecond,
+		LeaseDuration:     time.Minute,
+	})
+
+	firstTurn, err := dataStore.CreateHumanTurn(
+		ctx, workspace.ID, card.ID, human.ID,
+		"Run exec_command with NUL output.", "unicode-turn-1", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstClaim, err := dataStore.ClaimNextTurnAttempt(
+		ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstClaim.Turn.ID != firstTurn.Turn.ID {
+		t.Fatalf("claimed turn=%s want=%s", firstClaim.Turn.ID, firstTurn.Turn.ID)
+	}
+	if err := runner.RunAttempt(ctx, *firstClaim); err != nil {
+		t.Fatalf("first RunAttempt failed on NUL tool output: %v", err)
+	}
+
+	secondTurn, err := dataStore.CreateHumanTurn(
+		ctx, workspace.ID, card.ID, human.ID,
+		"Confirm the previous tool output is still in session.", "unicode-turn-2", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondClaim, err := dataStore.ClaimNextTurnAttempt(
+		ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondClaim.Turn.ID != secondTurn.Turn.ID {
+		t.Fatalf("claimed second turn=%s want=%s", secondClaim.Turn.ID, secondTurn.Turn.ID)
+	}
+	if err := runner.RunAttempt(ctx, *secondClaim); err != nil {
+		t.Fatalf("second RunAttempt failed: %v", err)
+	}
+	if !secondTurnSawToolResponse {
+		t.Fatal("second turn did not see paired FunctionCall/FunctionResponse from first turn")
+	}
+}

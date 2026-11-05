@@ -198,4 +198,28 @@ func TestPostgresArtifactServiceVersionsAndIsolation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("cross-card artifact load unexpectedly succeeded")
 	}
+
+	// 大段工具输出被外置为 Artifact 时，若包含 NUL 或异常 Unicode 字符也必须能成功写入 PostgreSQL jsonb。
+	abnormalPayload := []byte(`{"stdout":"artifact\u0000line\n\t中文🚀","stderr":"ok"}`)
+	savedAbnormal, err := service.Save(ctx, &artifact.SaveRequest{
+		AppName:        appName,
+		UserID:         userID,
+		SessionID:      sessionID,
+		FileName:       "abnormal-tool-output.json",
+		Part:           genai.NewPartFromText("artifact text\x00with nul and 中文🚀"),
+		CustomMetadata: map[string]any{"tool\x00name": "exec\x00command", "preview": string(abnormalPayload)},
+	})
+	if err != nil {
+		t.Fatalf("save artifact with NUL characters: %v", err)
+	}
+	loadedAbnormal, err := service.Load(ctx, &artifact.LoadRequest{
+		AppName: appName, UserID: userID, SessionID: sessionID,
+		FileName: "abnormal-tool-output.json", Version: savedAbnormal.Version,
+	})
+	if err != nil {
+		t.Fatalf("load artifact with NUL characters: %v", err)
+	}
+	if loadedAbnormal.Part.Text != "artifact text\uFFFDwith nul and 中文🚀" {
+		t.Fatalf("loaded abnormal artifact text=%q", loadedAbnormal.Part.Text)
+	}
 }

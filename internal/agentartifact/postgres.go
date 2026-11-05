@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/genai"
+
+	"github.com/uvwt/CycleDock/internal/agentdata"
 )
 
 type PostgresService struct {
@@ -33,12 +35,12 @@ func (s *PostgresService) Save(ctx context.Context, req *artifact.SaveRequest) (
 		return nil, errors.New("artifact part is required")
 	}
 
-	rawPart, err := json.Marshal(req.Part)
+	rawPart, _, err := agentdata.MarshalJSONB(req.Part)
 	if err != nil {
 		return nil, fmt.Errorf("encode artifact part: %w", err)
 	}
 	metadata := normalizeMetadata(req.CustomMetadata)
-	rawMetadata, err := json.Marshal(metadata)
+	rawMetadata, _, err := agentdata.MarshalJSONB(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("encode artifact metadata: %w", err)
 	}
@@ -256,7 +258,9 @@ func (s *PostgresService) GetArtifactVersion(
 func normalizeMetadata(values map[string]any) map[string]any {
 	out := make(map[string]any, len(values))
 	for key, value := range values {
-		out[key] = fmt.Sprint(value)
+		cleanKey, _ := agentdata.NormalizeText(key)
+		cleanVal, _ := agentdata.NormalizeText(fmt.Sprint(value))
+		out[cleanKey] = cleanVal
 	}
 	return out
 }
