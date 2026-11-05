@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -69,8 +70,8 @@ func (s *Store) CreateHumanTurn(
 	content, idempotencyKey string,
 	dispatchMode domain.DispatchMode,
 ) (CreateTurnResult, error) {
-	content = strings.TrimSpace(content)
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
+	idempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(idempotencyKey))
 	if content == "" {
 		return CreateTurnResult{}, errors.New("turn content is required")
 	}
@@ -563,6 +564,7 @@ func (s *Store) FinishAttempt(
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
 		return err
 	}
+	errorSummary, _ = agentdata.NormalizeText(strings.TrimSpace(errorSummary))
 	command, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
 		SET status=$4,
@@ -573,7 +575,7 @@ func (s *Store) FinishAttempt(
 		    updated_at=$6
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		  AND status IN ('queued','running')
-	`, workspaceID, cardID, attemptID, string(status), strings.TrimSpace(errorSummary), now)
+	`, workspaceID, cardID, attemptID, string(status), errorSummary, now)
 	if err != nil {
 		return err
 	}
@@ -595,7 +597,7 @@ func (s *Store) EditPendingTurn(
 	workspaceID, cardID, turnID, humanSourceID uuid.UUID,
 	content string,
 ) error {
-	content = strings.TrimSpace(content)
+	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
 	if content == "" {
 		return fmt.Errorf("%w: turn content is required", domain.ErrConflict)
 	}
@@ -1115,6 +1117,10 @@ type insertTurnParams struct {
 
 func insertTurn(ctx context.Context, tx pgx.Tx, p insertTurnParams) (CardTurn, error) {
 	turnID := uuid.New()
+	p.Content, _ = agentdata.NormalizeText(p.Content)
+	p.IdempotencyKey, _ = agentdata.NormalizeText(p.IdempotencyKey)
+	p.DeviceNodeID, _ = agentdata.NormalizeText(p.DeviceNodeID)
+	p.DeviceName, _ = agentdata.NormalizeText(p.DeviceName)
 	var scheduledFor any
 	if p.ScheduledFor != nil {
 		scheduledFor = *p.ScheduledFor

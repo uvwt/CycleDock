@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -79,7 +80,7 @@ func (s *PostgresService) Create(ctx context.Context, req *session.CreateRequest
 		return nil, err
 	}
 
-	rawState, err := json.Marshal(sessionState)
+	rawState, _, err := agentdata.MarshalJSONB(agentdata.Sanitize(sessionState))
 	if err != nil {
 		return nil, fmt.Errorf("encode session state: %w", err)
 	}
@@ -227,15 +228,24 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 	}
 	event.Timestamp = event.Timestamp.UTC().Truncate(time.Microsecond)
 
-	persistedEvent := persistentEvent(event)
-	rawEvent, err := json.Marshal(persistedEvent)
+	persistedEvent, eventNormalized := persistentEvent(event)
+	rawEvent, eventJSONNormalized, err := agentdata.MarshalJSONB(persistedEvent)
 	if err != nil {
 		return fmt.Errorf("encode session event: %w", err)
 	}
-	appDelta, userDelta, sessionDelta := splitStateDelta(event.Actions.StateDelta)
-	rawSessionDelta, err := json.Marshal(sessionDelta)
+	appDelta, userDelta, sessionDelta := splitStateDelta(persistedEvent.Actions.StateDelta)
+	rawSessionDelta, deltaJSONNormalized, err := agentdata.MarshalJSONB(sessionDelta)
 	if err != nil {
 		return fmt.Errorf("encode session state delta: %w", err)
+	}
+	if eventNormalized || eventJSONNormalized || deltaJSONNormalized {
+		slog.Warn(
+			"normalized unsupported unicode in session event before persistence",
+			"session_id", local.id,
+			"event_id", persistedEvent.ID,
+			"invocation_id", persistedEvent.InvocationID,
+			"author", persistedEvent.Author,
+		)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -296,7 +306,7 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 			app_name, user_id, session_id, id, invocation_id, occurred_at, event
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-	`, local.appName, local.userID, local.id, event.ID, event.InvocationID, event.Timestamp, rawEvent); err != nil {
+	`, local.appName, local.userID, local.id, persistedEvent.ID, persistedEvent.InvocationID, persistedEvent.Timestamp, rawEvent); err != nil {
 		return fmt.Errorf("append session event: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -570,7 +580,7 @@ func mergeScopedState(
 	if len(delta) == 0 {
 		return nil
 	}
-	raw, err := json.Marshal(delta)
+	raw, _, err := agentdata.MarshalJSONB(agentdata.Sanitize(delta))
 	if err != nil {
 		return fmt.Errorf("encode %s delta: %w", table, err)
 	}
@@ -645,8 +655,34 @@ func decodeState(raw []byte) (map[string]any, error) {
 	return out, nil
 }
 
-func persistentEvent(event *session.Event) *session.Event {
+func persistentEvent(event *session.Event) (*session.Event, bool) {
 	out := *event
+	normalized := false
+
+	normStr := func(s string) string {
+		clean, changed := agentdata.NormalizeText(s)
+		if changed {
+			normalized = true
+		}
+		return clean
+	}
+
+	out.ID = normStr(out.ID)
+	out.InvocationID = normStr(out.InvocationID)
+	out.Author = normStr(out.Author)
+	out.Branch = normStr(out.Branch)
+	out.IsolationScope = normStr(out.IsolationScope)
+	out.ErrorCode = normStr(out.ErrorCode)
+	out.ErrorMessage = normStr(out.ErrorMessage)
+	out.Actions.TransferToAgent = normStr(out.Actions.TransferToAgent)
+
+	if len(out.CustomMetadata) > 0 {
+		sanitizedMeta, changed := agentdata.SanitizeWithReport(out.CustomMetadata)
+		if changed {
+			normalized = true
+		}
+		out.CustomMetadata = sanitizedMeta.(map[string]any)
+	}
 
 	if len(event.Actions.StateDelta) > 0 {
 		filtered := make(map[string]any, len(event.Actions.StateDelta))
@@ -655,40 +691,88 @@ func persistentEvent(event *session.Event) *session.Event {
 				filtered[key] = value
 			}
 		}
-		out.Actions.StateDelta = filtered
+		sanitizedDelta, changed := agentdata.SanitizeWithReport(filtered)
+		if changed {
+			normalized = true
+		}
+		out.Actions.StateDelta = sanitizedDelta.(map[string]any)
+	}
+
+	if event.Actions.Compaction != nil && event.Actions.Compaction.CompactedContent != nil {
+		compactionCopy := *event.Actions.Compaction
+		compactedContent, changed := normalizeGenaiContent(event.Actions.Compaction.CompactedContent)
+		if changed {
+			normalized = true
+		}
+		compactionCopy.CompactedContent = compactedContent
+		out.Actions.Compaction = &compactionCopy
 	}
 
 	if event.Content != nil {
-		content := *event.Content
-		content.Parts = make([]*genai.Part, 0, len(event.Content.Parts))
-		for _, part := range event.Content.Parts {
-			if part == nil || part.Thought {
-				continue
-			}
-			copyPart := *part
-			// Thought signatures are opaque reasoning metadata and are not needed
-			// to resume a persisted CycleDock Session.
-			copyPart.ThoughtSignature = nil
-			if part.FunctionCall != nil {
-				call := *part.FunctionCall
-				if part.FunctionCall.Args != nil {
-					call.Args = agentdata.Sanitize(part.FunctionCall.Args).(map[string]any)
-				}
-				copyPart.FunctionCall = &call
-			}
-			if part.FunctionResponse != nil {
-				response := *part.FunctionResponse
-				if part.FunctionResponse.Response != nil {
-					response.Response = agentdata.Sanitize(part.FunctionResponse.Response).(map[string]any)
-				}
-				copyPart.FunctionResponse = &response
-			}
-			content.Parts = append(content.Parts, &copyPart)
+		content, changed := normalizeGenaiContent(event.Content)
+		if changed {
+			normalized = true
 		}
-		out.Content = &content
+		out.Content = content
 	}
 
-	return &out
+	return &out, normalized
+}
+
+func normalizeGenaiContent(input *genai.Content) (*genai.Content, bool) {
+	if input == nil {
+		return nil, false
+	}
+	normalized := false
+	normStr := func(s string) string {
+		clean, changed := agentdata.NormalizeText(s)
+		if changed {
+			normalized = true
+		}
+		return clean
+	}
+
+	content := *input
+	content.Role = normStr(content.Role)
+	content.Parts = make([]*genai.Part, 0, len(input.Parts))
+	for _, part := range input.Parts {
+		if part == nil || part.Thought {
+			continue
+		}
+		copyPart := *part
+		// Thought signatures are opaque reasoning metadata and are not needed
+		// to resume a persisted CycleDock Session.
+		copyPart.ThoughtSignature = nil
+		copyPart.Text = normStr(copyPart.Text)
+		if part.FunctionCall != nil {
+			call := *part.FunctionCall
+			call.ID = normStr(call.ID)
+			call.Name = normStr(call.Name)
+			if part.FunctionCall.Args != nil {
+				sanitizedArgs, changed := agentdata.SanitizeWithReport(part.FunctionCall.Args)
+				if changed {
+					normalized = true
+				}
+				call.Args = sanitizedArgs.(map[string]any)
+			}
+			copyPart.FunctionCall = &call
+		}
+		if part.FunctionResponse != nil {
+			response := *part.FunctionResponse
+			response.ID = normStr(response.ID)
+			response.Name = normStr(response.Name)
+			if part.FunctionResponse.Response != nil {
+				sanitizedResp, changed := agentdata.SanitizeWithReport(part.FunctionResponse.Response)
+				if changed {
+					normalized = true
+				}
+				response.Response = sanitizedResp.(map[string]any)
+			}
+			copyPart.FunctionResponse = &response
+		}
+		content.Parts = append(content.Parts, &copyPart)
+	}
+	return &content, normalized
 }
 
 type storedSession struct {

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -180,7 +181,7 @@ func (s *Store) FailAttemptOwned(
 	summary string,
 	now time.Time,
 ) error {
-	summary = strings.TrimSpace(summary)
+	summary, _ = agentdata.NormalizeText(strings.TrimSpace(summary))
 	if summary == "" {
 		return fmt.Errorf("%w: failure summary is required", domain.ErrConflict)
 	}

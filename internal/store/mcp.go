@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -133,9 +134,9 @@ func (s *Store) GenerateWorkFromDiscussion(
 	ctx context.Context,
 	p GenerateWorkParams,
 ) (AgentCardCreateResult, error) {
-	p.Title = strings.TrimSpace(p.Title)
-	p.Description = strings.TrimSpace(p.Description)
-	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	p.Title, _ = agentdata.NormalizeText(strings.TrimSpace(p.Title))
+	p.Description, _ = agentdata.NormalizeText(strings.TrimSpace(p.Description))
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
 	if p.Title == "" || p.IdempotencyKey == "" {
 		return AgentCardCreateResult{}, fmt.Errorf("%w: title and idempotency key are required", domain.ErrConflict)
 	}
@@ -253,8 +254,8 @@ func (s *Store) AddAgentComment(
 	workspaceID, cardID, sourceID uuid.UUID,
 	content, idempotencyKey string,
 ) (uuid.UUID, bool, error) {
-	content = strings.TrimSpace(content)
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
+	idempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(idempotencyKey))
 	if content == "" || idempotencyKey == "" {
 		return uuid.Nil, false, fmt.Errorf("%w: content and idempotency key are required", domain.ErrConflict)
 	}
@@ -325,8 +326,8 @@ func (s *Store) ConfirmCard(
 	workspaceID, cardID, sourceID uuid.UUID,
 	content, idempotencyKey string,
 ) (ConfirmResult, error) {
-	content = strings.TrimSpace(content)
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
+	idempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(idempotencyKey))
 	if content == "" || idempotencyKey == "" {
 		return ConfirmResult{}, fmt.Errorf("%w: content and idempotency key are required", domain.ErrConflict)
 	}

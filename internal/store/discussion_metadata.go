@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -45,7 +46,8 @@ func (s *Store) ListDiscussionsNeedingMetadata(ctx context.Context, workspaceID 
 }
 
 func (s *Store) SaveGeneratedDiscussionMetadata(ctx context.Context, workspaceID, cardID uuid.UUID, title, description string) (bool, error) {
-	title, description = strings.TrimSpace(title), strings.TrimSpace(description)
+	title, _ = agentdata.NormalizeText(strings.TrimSpace(title))
+	description, _ = agentdata.NormalizeText(strings.TrimSpace(description))
 	if title == "" || description == "" {
 		return false, fmt.Errorf("%w: generated discussion title and description are required", domain.ErrConflict)
 	}

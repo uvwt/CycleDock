@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -59,15 +59,15 @@ func validReplyURL(raw string) bool {
 }
 
 func (m *ReplyMessage) Validate() error {
-	m.Type = strings.TrimSpace(m.Type)
-	m.Content = strings.TrimSpace(m.Content)
-	m.URL = strings.TrimSpace(m.URL)
-	m.Alt = strings.TrimSpace(m.Alt)
+	m.Type, _ = agentdata.NormalizeText(strings.TrimSpace(m.Type))
+	m.Content, _ = agentdata.NormalizeText(strings.TrimSpace(m.Content))
+	m.URL, _ = agentdata.NormalizeText(strings.TrimSpace(m.URL))
+	m.Alt, _ = agentdata.NormalizeText(strings.TrimSpace(m.Alt))
 	if len(m.Content) > 20000 || len(m.Alt) > 500 || len(m.Images) > 8 {
 		return fmt.Errorf("%w: reply exceeds size limit", domain.ErrConflict)
 	}
 	for i := range m.Images {
-		m.Images[i] = strings.TrimSpace(m.Images[i])
+		m.Images[i], _ = agentdata.NormalizeText(strings.TrimSpace(m.Images[i]))
 		if len(m.Images[i]) > 2048 || !validReplyURL(m.Images[i]) {
 			return fmt.Errorf("%w: invalid image URL", domain.ErrConflict)
 		}
@@ -88,7 +88,7 @@ func (m *ReplyMessage) Validate() error {
 		if !m.EndTurn || m.Widget == nil || m.URL != "" || len(m.Images) != 0 {
 			return fmt.Errorf("%w: choice requires widget and end_turn", domain.ErrConflict)
 		}
-		m.Widget.Question = strings.TrimSpace(m.Widget.Question)
+		m.Widget.Question, _ = agentdata.NormalizeText(strings.TrimSpace(m.Widget.Question))
 		if m.Widget.Question == "" || len(m.Widget.Question) > 1000 ||
 			len(m.Widget.Options) < 2 || len(m.Widget.Options) > 8 {
 			return fmt.Errorf("%w: invalid choice question or options", domain.ErrConflict)
@@ -96,8 +96,8 @@ func (m *ReplyMessage) Validate() error {
 		values := map[string]bool{}
 		for i := range m.Widget.Options {
 			o := &m.Widget.Options[i]
-			o.Value = strings.TrimSpace(o.Value)
-			o.Label = strings.TrimSpace(o.Label)
+			o.Value, _ = agentdata.NormalizeText(strings.TrimSpace(o.Value))
+			o.Label, _ = agentdata.NormalizeText(strings.TrimSpace(o.Label))
 			if o.Value == "" || o.Label == "" || len(o.Value) > 200 ||
 				len(o.Label) > 200 || values[o.Value] {
 				return fmt.Errorf("%w: invalid or duplicate option", domain.ErrConflict)
@@ -119,16 +119,17 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 	if err := p.Message.Validate(); err != nil {
 		return uuid.Nil, false, err
 	}
-	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
+	p.PreviewID, _ = agentdata.NormalizeText(p.PreviewID)
 	if p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 {
 		return uuid.Nil, false, fmt.Errorf("%w: idempotency key required", domain.ErrConflict)
 	}
-	payload, err := json.Marshal(replyPayload{ReplyMessage: p.Message, PreviewID: p.PreviewID})
+	payload, _, err := agentdata.MarshalJSONB(replyPayload{ReplyMessage: p.Message, PreviewID: p.PreviewID})
 	if err != nil {
 		return uuid.Nil, false, err
 	}
 	// 预览身份不改变业务幂等语义；模型路由重试可能为同一回复创建新预览。
-	requestPayload, err := json.Marshal(p.Message)
+	requestPayload, _, err := agentdata.MarshalJSONB(p.Message)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
@@ -223,10 +224,12 @@ type ReplyPreviewParams struct {
 // SaveReplyPreview 先保存已经可以展示的正文，再允许 SSE 对外发布。
 // 与取消/替代共用 Card 行锁：停止后的迟到片段既不能落库，也不能重新打开气泡。
 func (s *Store) SaveReplyPreview(ctx context.Context, p ReplyPreviewParams) error {
+	p.PreviewID, _ = agentdata.NormalizeText(p.PreviewID)
+	p.Content, _ = agentdata.NormalizeText(p.Content)
 	if p.PreviewID == "" || len(p.PreviewID) > 512 || p.Content == "" || len(p.Content) > 20000 {
 		return fmt.Errorf("%w: invalid reply preview", domain.ErrConflict)
 	}
-	payload, err := json.Marshal(replyPayload{
+	payload, _, err := agentdata.MarshalJSONB(replyPayload{
 		ReplyMessage: ReplyMessage{Type: "text", Content: p.Content}, PreviewID: p.PreviewID, Preview: true,
 	})
 	if err != nil {

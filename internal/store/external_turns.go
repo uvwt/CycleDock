@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -22,8 +23,8 @@ func (s *Store) SubmitAgentTurn(
 	content, idempotencyKey string,
 	sourceCardID uuid.NullUUID,
 ) (SubmitAgentTurnResult, error) {
-	content = strings.TrimSpace(content)
-	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
+	idempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(idempotencyKey))
 	if content == "" || idempotencyKey == "" {
 		return SubmitAgentTurnResult{}, fmt.Errorf("%w: content and idempotency key are required", domain.ErrConflict)
 	}
