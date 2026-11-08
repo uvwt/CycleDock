@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { Link2, ListChecks, Calendar, Activity, CheckCircle2, Clock, AlertCircle, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link2, ListChecks, Calendar, Activity, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import type { Card, CardDetail } from "../../shared/api/types";
@@ -9,6 +9,44 @@ import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { ScheduleEditor } from "./TaskDetailsPanel";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { RichText } from "../timeline/RichText";
+
+function CardDescriptionCollapsible({ description }: { description: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  // 描述文本超过 180 字符或换行超过 3 行时显示折叠/展开
+  const isLong = description.length > 180 || description.split("\n").length > 3;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground">
+        <span>{t("描述")}</span>
+        {isLong && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            <span>{expanded ? t("收起") : t("展开全部")}</span>
+            {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          </button>
+        )}
+      </div>
+      <div
+        className={`relative rounded-lg bg-canvas/60 p-2.5 text-xs leading-relaxed text-secondary-foreground break-words border border-line/40 transition-all ${
+          !expanded && isLong ? "max-h-24 overflow-hidden" : ""
+        }`}
+      >
+        <RichText
+          content={description}
+          className="text-xs leading-relaxed text-secondary-foreground"
+        />
+        {!expanded && isLong && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-canvas/90 to-transparent" />
+        )}
+      </div>
+    </div>
+  );
+}
 
 const statusLabels: Record<string, string> = {
   active: "进行中",
@@ -113,17 +151,7 @@ export function CardHeaderInfoCard({
 
       {/* 详细描述 */}
       {card.description?.trim() ? (
-        <div className="space-y-1.5">
-          <div className="text-[11px] font-medium text-muted-foreground">
-            {t("描述")}
-          </div>
-          <div className="rounded-lg bg-canvas/60 p-2.5 text-xs leading-relaxed text-secondary-foreground break-words border border-line/40">
-            <RichText
-              content={card.description.trim()}
-              className="text-xs leading-relaxed text-secondary-foreground"
-            />
-          </div>
-        </div>
+        <CardDescriptionCollapsible description={card.description.trim()} />
       ) : null}
 
       {card.kind === "ongoing" && detail?.last_checkin && (
