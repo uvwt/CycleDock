@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -62,8 +63,8 @@ func (s *Store) submitSessionComment(
 	p SubmitSessionCommentParams,
 	replyToMessage bool,
 ) (SubmitSessionCommentResult, error) {
-	p.Content = strings.TrimSpace(p.Content)
-	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
 	if p.Content == "" {
 		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content is required", domain.ErrConflict)
 	}
@@ -77,8 +78,8 @@ func (s *Store) submitSessionComment(
 
 	var deviceNodeID, deviceName string
 	if p.DeviceTarget != nil {
-		deviceNodeID = strings.TrimSpace(p.DeviceTarget.NodeID)
-		deviceName = strings.TrimSpace(p.DeviceTarget.Name)
+		deviceNodeID, _ = agentdata.NormalizeText(strings.TrimSpace(p.DeviceTarget.NodeID))
+		deviceName, _ = agentdata.NormalizeText(strings.TrimSpace(p.DeviceTarget.Name))
 		if deviceNodeID == "" || len([]rune(deviceNodeID)) > 200 || len([]rune(deviceName)) > 200 {
 			return SubmitSessionCommentResult{}, fmt.Errorf("%w: invalid device target", domain.ErrConflict)
 		}

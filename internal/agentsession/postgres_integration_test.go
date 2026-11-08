@@ -562,6 +562,130 @@ func TestDeletedSessionRejectsLateEvent(t *testing.T) {
 	}
 }
 
+func TestPostgresServiceNormalizesUnsupportedUnicodeWithoutCorruptingValidText(t *testing.T) {
+	service := requirePostgresService(t)
+	ctx := context.Background()
+	workspaceID := uuid.New()
+	cardID := uuid.New()
+	appName, userID, sessionID := Identity(workspaceID, cardID)
+
+	// 先验证真实 PostgreSQL jsonb 对未规范化的 \u0000 确实拒绝并返回 SQLSTATE 22P05。
+	var rejected string
+	rawNullJSONErr := integrationPool.QueryRow(ctx, `SELECT '{"stdout":"before\u0000after"}'::jsonb::text`).Scan(&rejected)
+	if rawNullJSONErr == nil || !strings.Contains(rawNullJSONErr.Error(), "22P05") {
+		t.Fatalf("expected PostgreSQL jsonb to reject \\u0000 with SQLSTATE 22P05, got: %v", rawNullJSONErr)
+	}
+
+	created, err := service.Create(ctx, &session.CreateRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+		State: map[string]any{
+			"init_state":         "正常初始化\x00状态🚀",
+			"app:global_marker":  "global\x00marker",
+			"user:scoped_marker": "user\x00" + string([]byte{0xff}) + "marker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session with abnormal unicode state: %v", err)
+	}
+
+	largeChunk := strings.Repeat("日志输出 line with 中文 and 🚀\t", 600)
+	invalidUTF8 := string([]byte{0xff, 0xfe})
+	loneSurrogateUTF8 := string([]byte{0xed, 0xa0, 0x80})
+
+	toolEvent := &session.Event{
+		ID:           "unicode-tool-event",
+		InvocationID: "unicode-invocation-1",
+		Author:       "cycle_agent",
+		Timestamp:    time.Now().UTC(),
+		Actions: session.EventActions{
+			StateDelta: map[string]any{
+				"last_tool\x00output": "state\x00value\n\t中文✅",
+			},
+		},
+		LLMResponse: model.LLMResponse{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{
+					Text: "模型说明：执行命令检查日志 🚀\n\t第一行\x00第二行" + invalidUTF8 + `保留字面量 \u0000`,
+				},
+				{
+					FunctionCall: &genai.FunctionCall{
+						ID:   "exec-call-1",
+						Name: "exec_command",
+						Args: map[string]any{
+							"cmd": "printf 'hello\\0world' && echo '中文🚀'",
+						},
+					},
+				},
+				genai.NewPartFromFunctionResponse("exec_command", map[string]any{
+					"stdout":        "stdout-prefix\x00stdout-suffix\n\t中文🚀",
+					"stderr":        "stderr-prefix\x00" + invalidUTF8 + loneSurrogateUTF8 + "stderr-suffix",
+					"literal_check": `literal \u0000 should stay literal`,
+					"nested_json":   `{"content":[{"type":"text","text":"nested\u0000stdout\n\t中文🚀"}],"access_token":"secret-123"}`,
+					"large_stdout":  largeChunk + "\x00tail-marker",
+				}),
+			}, genai.RoleModel),
+		},
+	}
+
+	if err := service.AppendEvent(ctx, created.Session, toolEvent); err != nil {
+		t.Fatalf("AppendEvent with NUL and invalid UTF-8 failed: %v", err)
+	}
+
+	got, err := service.Get(ctx, &session.GetRequest{
+		AppName: appName, UserID: userID, SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("Get session after abnormal unicode append: %v", err)
+	}
+	if got.Session.Events().Len() != 1 {
+		t.Fatalf("events=%d, want 1", got.Session.Events().Len())
+	}
+
+	persisted := got.Session.Events().At(0)
+	if len(persisted.Content.Parts) != 3 {
+		t.Fatalf("parts=%d, want 3", len(persisted.Content.Parts))
+	}
+
+	textPart := persisted.Content.Parts[0].Text
+	wantText := "模型说明：执行命令检查日志 🚀\n\t第一行\uFFFD第二行\uFFFD" + `保留字面量 \u0000`
+	if textPart != wantText {
+		t.Fatalf("text part=%q, want %q", textPart, wantText)
+	}
+
+	respMap := persisted.Content.Parts[2].FunctionResponse.Response
+	if respMap["stdout"] != "stdout-prefix\uFFFDstdout-suffix\n\t中文🚀" {
+		t.Fatalf("stdout=%q", respMap["stdout"])
+	}
+	if respMap["stderr"] != "stderr-prefix\uFFFD\uFFFDstderr-suffix" {
+		t.Fatalf("stderr=%q", respMap["stderr"])
+	}
+	if respMap["literal_check"] != `literal \u0000 should stay literal` {
+		t.Fatalf("literal_check=%q", respMap["literal_check"])
+	}
+	if !strings.Contains(respMap["nested_json"].(string), "nested\uFFFDstdout") ||
+		!strings.Contains(respMap["nested_json"].(string), "[REDACTED]") {
+		t.Fatalf("nested_json=%q", respMap["nested_json"])
+	}
+	if respMap["large_stdout"] != largeChunk+"\uFFFDtail-marker" {
+		t.Fatalf("large_stdout mismatch")
+	}
+
+	stateVal, err := got.Session.State().Get("last_tool\uFFFDoutput")
+	if err != nil || stateVal != "state\uFFFDvalue\n\t中文✅" {
+		t.Fatalf("state last_tool output=%v (err=%v)", stateVal, err)
+	}
+
+	hits, err := service.SearchHistory(ctx, workspaceID, cardID, "tail-marker", 4)
+	if err != nil {
+		t.Fatalf("SearchHistory after abnormal unicode append: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("SearchHistory hits=%d, want 1", len(hits))
+	}
+}
+
 func requirePostgresService(t *testing.T) *PostgresService {
 	t.Helper()
 	if integrationPool == nil {

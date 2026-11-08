@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
@@ -146,10 +147,10 @@ func (s *Store) ReportAttemptProgress(
 	ctx context.Context,
 	p AttemptProgressParams,
 ) (uuid.UUID, bool, error) {
-	p.Stage = strings.TrimSpace(p.Stage)
-	p.Summary = strings.TrimSpace(p.Summary)
-	p.EventContent = strings.TrimSpace(p.EventContent)
-	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	p.Stage, _ = agentdata.NormalizeText(strings.TrimSpace(p.Stage))
+	p.Summary, _ = agentdata.NormalizeText(strings.TrimSpace(p.Summary))
+	p.EventContent, _ = agentdata.NormalizeText(strings.TrimSpace(p.EventContent))
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
 	if p.Stage == "" || p.Summary == "" {
 		return uuid.Nil, false, fmt.Errorf("%w: stage and summary are required", domain.ErrConflict)
 	}
@@ -234,8 +235,8 @@ func (s *Store) AddAttemptEvent(ctx context.Context, p AttemptEventParams) (uuid
 	default:
 		return uuid.Nil, false, fmt.Errorf("unsupported attempt event type %q", p.Type)
 	}
-	p.Content = strings.TrimSpace(p.Content)
-	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
 	if p.Content == "" || p.IdempotencyKey == "" {
 		return uuid.Nil, false, fmt.Errorf("%w: content and idempotency key are required", domain.ErrConflict)
 	}
