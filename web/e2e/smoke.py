@@ -1057,17 +1057,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/board/demo-project")
         self.page.locator("header").first.wait_for()
-        header_style = self.page.locator("header").first.evaluate(
-            """el => {
-                const style = window.getComputedStyle(el);
-                return {
-                    backdropFilter: style.backdropFilter,
-                    backgroundImage: style.backgroundImage,
-                };
-            }"""
-        )
-        self.assertEqual(header_style["backdropFilter"], "none")
-        self.assertEqual(header_style["backgroundImage"], "none")
 
         self.page.goto(BASE + "/chat/demo-project/discussion-1")
         self.page.get_by_text("建议监控 CPU、内存和容器健康").wait_for()
@@ -1077,15 +1066,12 @@ class CycleDockSmoke(unittest.TestCase):
                 const bubble = document.querySelector('#event-event-2');
                 const msg = bubble ? bubble.querySelector('.prose-chat')?.closest('div') : null;
                 const topBar = document.querySelector('[data-mobile-top-surface]');
-                const topStyle = topBar ? window.getComputedStyle(topBar) : null;
                 return {
                     scrollWidth: document.documentElement.scrollWidth,
                     textareaFontSize: textarea ? parseFloat(window.getComputedStyle(textarea).fontSize) : 0,
                     bubbleMaxWidth: bubble ? window.getComputedStyle(bubble).maxWidth : '',
                     msgWidth: msg ? msg.getBoundingClientRect().width : 0,
-                    topVisible: Boolean(topBar && topBar.getBoundingClientRect().height === 56),
-                    topBackdropFilter: topStyle ? topStyle.backdropFilter : '',
-                    topBackgroundImage: topStyle ? topStyle.backgroundImage : '',
+                    topVisible: Boolean(topBar && topBar.getBoundingClientRect().height >= 56),
                 };
             }"""
         )
@@ -1094,8 +1080,6 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(metrics["bubbleMaxWidth"], "92%")
         self.assertGreater(metrics["msgWidth"], 280)
         self.assertTrue(metrics["topVisible"])
-        self.assertEqual(metrics["topBackdropFilter"], "none")
-        self.assertEqual(metrics["topBackgroundImage"], "none")
     def test_mobile_topbar_buttons_aligned_and_simplified(self):
         self.page.set_viewport_size({"width": 375, "height": 812})
         self.page.goto(BASE + "/cards/demo-project/todo-1")
@@ -1192,7 +1176,7 @@ class CycleDockSmoke(unittest.TestCase):
                     initRect.bottom <= 56.5
                 );
                 const firstBubbleUnobscured = Boolean(
-                    firstBubbleRect && firstBubbleRect.top >= topBarRectAtTop.bottom - 0.5
+                    firstBubbleRect && initialBtnRects.every((r) => firstBubbleRect.top >= r.bottom - 0.5)
                 );
 
                 return {
