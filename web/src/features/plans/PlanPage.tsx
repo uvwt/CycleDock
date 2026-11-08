@@ -89,9 +89,9 @@ export default function PlanPage() {
     );
   }
 
-  if (projectsError) {
+  if (projectsError && !projectID) {
     return (
-      <main className="mx-auto max-w-xl p-8">
+      <main className="mx-auto w-full max-w-xl p-8">
         <ErrorView error={projectsError} onRetry={refetchProjects} />
       </main>
     );
@@ -155,9 +155,16 @@ export default function PlanPage() {
         </div>
       ) : cards.isPending || schedules.isPending ? (
         <PlanSkeleton />
-      ) : cards.error || schedules.error ? (
+      ) : (cards.error && !cards.data) ||
+        (schedules.error && !schedules.data) ? (
         <div>
-          <ErrorView error={cards.error || schedules.error} />
+          <ErrorView
+            error={cards.error || schedules.error}
+            onRetry={() => {
+              void cards.refetch();
+              void schedules.refetch();
+            }}
+          />
         </div>
       ) : items.length ? (
         <div className="overflow-hidden rounded-2xl border border-line bg-surface">
