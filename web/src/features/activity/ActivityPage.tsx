@@ -316,7 +316,10 @@ export default function ActivityPage() {
                         </span>
                       </span>
                       {summary && (
-                        <span className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
+                        <span
+                          title={summary}
+                          className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground"
+                        >
                           {summary}
                         </span>
                       )}
