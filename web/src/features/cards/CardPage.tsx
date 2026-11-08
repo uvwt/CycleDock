@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Info, PanelLeft, Plus } from "lucide-react";
+import { Check, Info, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -42,7 +42,6 @@ export default function CardPage() {
   const { projectID = "", cardID = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { t } = useTranslation();
   const listVisible = useContextSidebarVisible();
   const { projectID: activeProjectID } = useProject();
   const [contextSidebarOpen, setContextSidebarOpen] = useState(false);
@@ -130,6 +129,7 @@ export default function CardPage() {
     <PlanSidebar
       cards={projectCards.data || []}
       activeCardID={cardID}
+      activeAttemptStatus={activeAttemptStatus}
       onSelect={openWork}
       loading={projectCards.isPending}
     />
@@ -138,11 +138,7 @@ export default function CardPage() {
   );
 
   return (
-    <main
-      className={`flex flex-1 h-full min-h-0 w-full flex-col ${
-        isDiscussion ? "bg-canvas" : "bg-surface"
-      }`}
-    >
+    <main className="flex flex-1 h-full min-h-0 w-full flex-col bg-canvas">
       <div className="flex flex-1 h-full min-h-0 w-full overflow-hidden">
         {/* 侧边栏：在会话切换或加载过程中始终保持挂载，绝不被遮挡或卸载 */}
         <div
@@ -162,7 +158,6 @@ export default function CardPage() {
           projectCards={projectCards.data || []}
           onOpenSidebar={() => setContextSidebarOpen(true)}
           onAttemptStatusChange={setActiveAttemptStatus}
-          onStartDiscussion={startDiscussion}
         />
       </div>
 
@@ -173,16 +168,19 @@ export default function CardPage() {
           onOpenChange={setContextSidebarOpen}
           side="left"
           padded={false}
+          showCloseButton={false}
           className="bg-canvas"
-          title={
-            isDiscussion
-              ? t("讨论列表")
-              : isOngoing
-                ? t("定时列表")
-                : t("任务列表")
-          }
         >
-          {contextSidebar}
+          <div
+            className="flex h-full min-h-0 flex-col"
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest("a")) {
+                setContextSidebarOpen(false);
+              }
+            }}
+          >
+            {contextSidebar}
+          </div>
         </Sheet>
       )}
     </main>
@@ -198,7 +196,6 @@ function CardPageContent({
   projectCards,
   onOpenSidebar,
   onAttemptStatusChange,
-  onStartDiscussion,
 }: {
   cardID: string;
   projectID: string;
@@ -208,7 +205,6 @@ function CardPageContent({
   projectCards: Card[];
   onOpenSidebar: () => void;
   onAttemptStatusChange: (status?: string) => void;
-  onStartDiscussion: () => void;
 }) {
   const { target } = useDeviceSelection();
   const { t } = useTranslation();
@@ -308,6 +304,7 @@ function CardPageContent({
     return () => observer.disconnect();
   }, [
     card?.id,
+    card?.todo_state,
     blocked,
     replyTo?.id,
     detail.data?.pending_turns?.length,
@@ -558,9 +555,7 @@ function CardPageContent({
     return (
       <section
         ref={containerRef}
-        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
-          isDiscussion ? "bg-canvas" : "bg-surface"
-        }`}
+        className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-canvas"
       >
         <ConversationSkeleton
           isDiscussion={isDiscussion}
@@ -574,9 +569,7 @@ function CardPageContent({
     return (
       <section
         ref={containerRef}
-        className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
-          isDiscussion ? "bg-canvas" : "bg-surface"
-        }`}
+        className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-canvas"
       >
         <div className="mx-auto max-w-xl p-5 pt-12">
           <ErrorView
@@ -594,24 +587,34 @@ function CardPageContent({
     liveTask?.completed_step_count || 0,
     liveTaskTotal || liveTask?.completed_step_count || 0,
   );
+  const titleStatusDotClass =
+    card.kind === "todo"
+      ? card.todo_state === "working"
+        ? "bg-sky-500"
+        : card.todo_state === "review"
+          ? "bg-amber-500"
+          : card.todo_state === "done"
+            ? "bg-emerald-500"
+            : "bg-slate-400"
+      : card.kind === "ongoing"
+        ? card.ongoing_state === "active"
+          ? "bg-emerald-500"
+          : card.ongoing_state === "paused"
+            ? "bg-amber-500"
+            : "bg-slate-400"
+        : null;
 
   return (
     <section
       ref={containerRef}
-      className={`relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden ${
-        isDiscussion ? "bg-canvas" : "bg-surface"
-      }`}
+      className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-canvas"
     >
-          {/* 手机端悬浮顶部栏：透明悬浮在视口顶部，操作按钮带独立实底 */}
+          {/* 手机端悬浮顶部栏：统一极简对称 左 [侧栏] | 中 [● 标题 ⓘ] | 右 [快速切换] */}
           <div
             data-mobile-top-surface
-            className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden pointer-events-none bg-transparent"
+            className="absolute top-0 inset-x-0 z-20 flex items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-4 sm:px-4 md:hidden pointer-events-none bg-gradient-to-b from-canvas/95 via-canvas/75 to-transparent"
           >
-            <div className="flex items-center gap-1.5 pointer-events-auto">
-              <QuickCardSwitcherTrigger
-                projectID={card.project_id}
-                onClick={() => setQuickSwitcherOpen(true)}
-              />
+            <div className="flex shrink-0 items-center gap-1.5 pointer-events-auto">
               <button
                 type="button"
                 title={
@@ -635,49 +638,52 @@ function CardPageContent({
               </button>
             </div>
 
-            <div className="relative flex items-center gap-1.5 pointer-events-auto">
-              <button
-                type="button"
-                aria-expanded={infoOpen}
-                aria-label={t("任务详情")}
-                title={t("任务详情")}
-                onClick={() => setInfoOpen((prev) => !prev)}
-                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
-                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
-                } ${
-                  infoOpen
-                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
-                    : "border-line bg-surface text-muted-foreground hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                <Info className="size-4 sm:size-3.5" />
-                <span className="hidden sm:inline">{t("任务详情")}</span>
-                {liveTaskTotal > 0 && (
-                  <span className="tabular-nums text-[11px] opacity-80">
-                    {liveTaskCompleted}/{liveTaskTotal}
-                  </span>
-                )}
-              </button>
-              {!isDiscussion && <CardStatusSwitch card={card} />}
-              <button
-                type="button"
-                title={t("新建会话")}
-                aria-label={t("新建会话")}
-                onClick={onStartDiscussion}
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
-              >
-                <Plus className="size-4" />
-              </button>
+            <button
+              type="button"
+              aria-expanded={infoOpen}
+              aria-label={t("任务详情")}
+              onClick={() => setInfoOpen((prev) => !prev)}
+              title={card.title || t("任务详情")}
+              className={`pointer-events-auto inline-flex h-8 min-w-0 max-w-[64vw] items-center gap-1.5 rounded-lg border px-2.5 text-xs shadow-xs transition ${
+                infoOpen
+                  ? "border-primary/40 bg-primary/10 text-primary font-semibold"
+                  : "border-line bg-surface text-foreground hover:bg-muted"
+              }`}
+            >
+              {titleStatusDotClass && (
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 shrink-0 rounded-full ${titleStatusDotClass}`}
+                />
+              )}
+              <span className="truncate font-medium">
+                {card.title ||
+                  (isDiscussion
+                    ? t("未命名讨论")
+                    : isOngoing
+                      ? t("未命名定时任务")
+                      : t("未命名卡片"))}
+              </span>
+              {liveTaskTotal > 0 && (
+                <span className="shrink-0 tabular-nums text-[11px] opacity-80">
+                  {liveTaskCompleted}/{liveTaskTotal}
+                </span>
+              )}
+            </button>
+
+            <div className="relative flex shrink-0 items-center gap-1.5 pointer-events-auto">
+              <QuickCardSwitcherTrigger
+                projectID={card.project_id}
+                activeCardID={cardID}
+                activeAttemptStatus={activeAttemptStatus}
+                onClick={() => setQuickSwitcherOpen(true)}
+              />
             </div>
           </div>
 
           {/* 平板/桌面端：操作按钮悬浮在右上角 */}
           <div className="hidden md:flex absolute top-3 right-3 z-20 max-w-[calc(100vw-1.5rem)] flex-col items-end gap-2 sm:right-4">
             <div className="flex items-center gap-1.5">
-              <QuickCardSwitcherTrigger
-                projectID={card.project_id}
-                onClick={() => setQuickSwitcherOpen(true)}
-              />
               <button
                 type="button"
                 aria-expanded={infoOpen}
@@ -702,15 +708,6 @@ function CardPageContent({
               </button>
               <DeviceMenu className="hidden md:inline-flex" />
               {!isDiscussion && <CardStatusSwitch card={card} />}
-              <button
-                type="button"
-                title={t("新建会话")}
-                aria-label={t("新建会话")}
-                onClick={onStartDiscussion}
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
-              >
-                <Plus className="size-4" />
-              </button>
             </div>
           </div>
 
@@ -753,8 +750,8 @@ function CardPageContent({
             </div>
           )}
 
-          {/* 平板端呼出侧边栏悬浮在左上角 */}
-          <div className="hidden md:flex lg:hidden absolute top-3 left-3 z-20 items-center gap-1.5 sm:left-4">
+          {/* 平板/桌面端：左上角悬浮当前卡片标题胶囊与侧栏切换 */}
+          <div className="hidden md:flex absolute top-3 left-3 z-20 max-w-[42%] items-center gap-1.5 sm:left-4">
             <button
               type="button"
               title={
@@ -772,9 +769,30 @@ function CardPageContent({
                     : t("打开任务列表")
               }
               onClick={onOpenSidebar}
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground lg:hidden"
             >
               <PanelLeft className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setInfoOpen((prev) => !prev)}
+              title={card.title || t("任务详情")}
+              className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-line/80 bg-surface/90 px-3 text-xs font-medium text-foreground shadow-xs backdrop-blur-xs transition hover:bg-muted"
+            >
+              {titleStatusDotClass && (
+                <span
+                  aria-hidden="true"
+                  className={`size-1.5 shrink-0 rounded-full ${titleStatusDotClass}`}
+                />
+              )}
+              <span className="truncate">
+                {card.title ||
+                  (isDiscussion
+                    ? t("未命名讨论")
+                    : isOngoing
+                      ? t("未命名定时任务")
+                      : t("未命名卡片"))}
+              </span>
             </button>
           </div>
 
@@ -818,21 +836,52 @@ function CardPageContent({
                 approvingReview={approveReview.isPending}
                 onApproveReview={() => approveReview.mutate()}
                 onReply={(quote) => setReplyTo(quote)}
+                onEditMessage={
+                  !blocked && card.todo_state !== "done"
+                    ? async (eventID, content) => {
+                        await api.editComment(cardID, eventID, content);
+                        setOlderEvents([]);
+                        setOlderAttempts([]);
+                        await sync();
+                      }
+                    : undefined
+                }
               />
 
               <div
                 data-composer-dock
-                className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t ${
-                  isDiscussion
-                    ? "from-canvas via-canvas/95"
-                    : "from-surface via-surface/95"
-                } to-transparent pt-8`}
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col justify-end bg-gradient-to-t from-canvas via-canvas/95 to-transparent pt-8"
               >
                 <div
                   ref={composerDockRef}
                   data-no-swipe="true"
                   className="pointer-events-auto mx-auto w-full max-w-3xl px-2.5 pt-2 pb-[max(0.5rem,calc(env(safe-area-inset-bottom,0px)*0.6))] sm:px-6 sm:pb-3"
                 >
+                  {card.kind === "todo" && card.todo_state === "review" && (
+                    <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-amber-500/25 bg-surface/95 px-3 py-1.5 text-xs shadow-2xs backdrop-blur-xs">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="size-2 shrink-0 rounded-full bg-amber-500" />
+                        <span className="truncate font-medium text-foreground/90">
+                          {t("任务待验收")}
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <CardStatusSwitch
+                          card={card}
+                          className="h-7 px-2 text-[11px]"
+                        />
+                        <button
+                          type="button"
+                          disabled={approveReview.isPending}
+                          onClick={() => approveReview.mutate()}
+                          className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:opacity-50"
+                        >
+                          <Check className="size-3.5" />
+                          <span>{t("通过验收")}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
                       {t("此讨论已归档，不能继续发送消息")}

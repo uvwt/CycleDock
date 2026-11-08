@@ -227,6 +227,8 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 			}
 			delete(h.live, cardID)
 		}
+	case "timeline.truncated":
+		delete(h.live, cardID)
 	}
 
 	for ch := range h.subscribers[cardID] {

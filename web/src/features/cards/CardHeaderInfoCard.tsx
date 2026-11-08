@@ -7,6 +7,7 @@ import type { TaskProgress } from "../../shared/realtime/cardStreamState";
 import { Badge } from "../../shared/ui/badge";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { ScheduleEditor } from "./TaskDetailsPanel";
+import { CardStatusSwitch } from "./CardStatusSwitch";
 import { RichText } from "../timeline/RichText";
 
 const statusLabels: Record<string, string> = {
@@ -83,56 +84,15 @@ export function CardHeaderInfoCard({
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-normal">
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 font-normal">
               {kindLabel}
             </Badge>
-            {card.kind === "todo" && card.todo_state && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span
-                  className={`inline-block size-1.5 rounded-full ${
-                    card.todo_state === "todo"
-                      ? "bg-slate-400"
-                      : card.todo_state === "working"
-                        ? "bg-sky-500"
-                        : card.todo_state === "review"
-                          ? "bg-amber-500"
-                          : "bg-emerald-500"
-                  }`}
-                />
-                <span className="text-[11px]">
-                  {card.todo_state === "todo"
-                    ? t("待办")
-                    : card.todo_state === "working"
-                      ? t("进行中")
-                      : card.todo_state === "review"
-                        ? t("待验收")
-                        : t("已完成")}
-                </span>
-              </div>
-            )}
-            {card.kind === "ongoing" && card.ongoing_state && (
-              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                <span
-                  className={`inline-block size-1.5 rounded-full ${
-                    card.ongoing_state === "active"
-                      ? "bg-emerald-500"
-                      : card.ongoing_state === "paused"
-                        ? "bg-amber-500"
-                        : "bg-slate-400"
-                  }`}
-                />
-                <span className="text-[11px]">
-                  {card.ongoing_state === "active"
-                    ? t("运行中")
-                    : card.ongoing_state === "paused"
-                      ? t("已暂停")
-                      : t("已归档")}
-                </span>
-                <OngoingHealthBadge
-                  health={detail?.health ?? card.health}
-                  size="xs"
-                />
-              </div>
+            {card.kind !== "discussion" && <CardStatusSwitch card={card} />}
+            {card.kind === "ongoing" && (
+              <OngoingHealthBadge
+                health={detail?.health ?? card.health}
+                size="xs"
+              />
             )}
           </div>
           {variant !== "sheet" && onClose && (

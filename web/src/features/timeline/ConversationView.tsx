@@ -7,8 +7,8 @@ import {
   Clock,
   Copy,
   MoreHorizontal,
+  Pencil,
   Reply,
-  RotateCcw,
   ClipboardCheck,
   AlertCircle,
   Activity,
@@ -238,6 +238,7 @@ type ExecutionActions = {
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
   onReply?: (quote: QuotedMessage) => void;
+  onEditMessage?: (eventID: string, content: string) => Promise<void>;
   canApproveReview?: boolean;
   approvingReview?: boolean;
   onApproveReview?: () => void;
@@ -271,6 +272,7 @@ function EventRow({
   showSender,
   preview,
   previewStatus,
+  replyModel,
   live,
   isLatest = false,
   compact = false,
@@ -282,6 +284,7 @@ function EventRow({
   showSender: boolean;
   preview?: LiveReply;
   previewStatus?: string;
+  replyModel?: string;
   live: LiveAttempt | null;
   isLatest?: boolean;
   compact?: boolean;
@@ -289,6 +292,33 @@ function EventRow({
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [showTime, setShowTime] = useState(false);
+  const [touchActive, setTouchActive] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!touchActive) return;
+    function handleOutsidePointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (bubbleRef.current?.contains(target)) return;
+      if (
+        target.closest(
+          "[data-radix-popper-content-wrapper], [role='menu'], [role='dialog']",
+        )
+      ) {
+        return;
+      }
+      setTouchActive(false);
+    }
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown);
+    };
+  }, [touchActive]);
+
   const system = systemTypes.has(event.type);
   const human = event.actor_kind === "human";
   const isDelegate = !human && event.type === "comment";
@@ -528,9 +558,96 @@ function EventRow({
     });
   }
 
+  const canEdit = Boolean(
+    human && event.type === "comment" && actions.onEditMessage,
+  );
+
+  function handleStartEdit() {
+    if (!canEdit) return;
+    setEditDraft(rawText);
+    setEditing(true);
+    setTouchActive(false);
+  }
+
+  async function handleSubmitEdit() {
+    const trimmed = editDraft.trim();
+    if (!trimmed || !actions.onEditMessage || submittingEdit) return;
+    setSubmittingEdit(true);
+    try {
+      await actions.onEditMessage(event.id, trimmed);
+      setEditing(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("编辑失败"));
+    } finally {
+      setSubmittingEdit(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div
+        id={"event-" + event.id}
+        data-sequence={event.sequence}
+        className={`ml-auto w-full ${compact ? "max-w-[92%]" : "max-w-[94%] sm:max-w-xl"}`}
+      >
+        <div className="rounded-2xl border border-primary/40 bg-surface p-3 shadow-xs">
+          <textarea
+            value={editDraft}
+            onChange={(e) => setEditDraft(e.target.value)}
+            disabled={submittingEdit}
+            autoFocus
+            rows={Math.min(8, Math.max(2, editDraft.split("\n").length))}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && !submittingEdit) {
+                e.preventDefault();
+                setEditing(false);
+              } else if (
+                e.key === "Enter" &&
+                (e.metaKey || e.ctrlKey) &&
+                !submittingEdit
+              ) {
+                e.preventDefault();
+                void handleSubmitEdit();
+              }
+            }}
+            className="w-full resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-faint"
+            placeholder={t("输入修改后的消息内容...")}
+          />
+          <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-line/60 pt-2">
+            <span className="text-[11px] text-faint">
+              {t("修改后将清除后续记录并重新回答")}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={submittingEdit}
+                onClick={() => setEditing(false)}
+                className="rounded-lg px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                {t("取消")}
+              </button>
+              <button
+                type="button"
+                disabled={submittingEdit || !editDraft.trim()}
+                onClick={() => void handleSubmitEdit()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow-2xs transition hover:bg-primary/90 disabled:opacity-50"
+              >
+                {submittingEdit && (
+                  <Loader2 className="size-3 animate-spin" />
+                )}
+                <span>{t("重新发送")}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <ChatBubble
+        ref={bubbleRef}
         id={"event-" + event.id}
         data-sequence={event.sequence}
         data-message-group-start={showSender}
@@ -568,10 +685,10 @@ function EventRow({
               )}
               {hasMetadata && (
                 <div
-                  className={`inline-flex items-center gap-x-2 ${
-                    hasActiveAttempt
-                      ? ""
-                      : "opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                  className={`inline-flex items-center gap-x-2 transition-opacity duration-150 ${
+                    hasActiveAttempt || touchActive
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                   }`}
                 >
                   <span className="select-none text-[10px] text-muted-foreground/40">
@@ -608,6 +725,23 @@ function EventRow({
           <div className="flex flex-wrap items-end gap-2.5 max-w-full">
             <ChatBubbleMessage
               variant={human ? "sent" : "received"}
+              onClick={(e) => {
+                const target = e.target as HTMLElement;
+                if (
+                  target.closest(
+                    "a, button, input, textarea, [role='menuitem']",
+                  )
+                ) {
+                  return;
+                }
+                if (
+                  typeof window !== "undefined" &&
+                  window.getSelection()?.toString().trim()
+                ) {
+                  return;
+                }
+                setTouchActive((prev) => !prev);
+              }}
               className={`w-fit max-w-full ${
                 isDelegate
                   ? "border border-indigo-200/70 bg-indigo-50/40 text-foreground dark:border-indigo-800/60 dark:bg-indigo-950/20"
@@ -671,8 +805,8 @@ function EventRow({
           <ChatBubbleActionWrapper
             className={
               compact
-                ? `pointer-events-none absolute -bottom-3 z-10 pb-0 group-hover:pointer-events-auto group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "right-1" : "left-1"}`
-                : `max-sm:pointer-events-none max-sm:absolute max-sm:-bottom-3 max-sm:z-10 max-sm:pb-0 max-sm:group-hover:pointer-events-auto max-sm:group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-sm:has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "max-sm:right-1" : "max-sm:left-1"}`
+                ? `${touchActive ? "pointer-events-auto opacity-100" : "pointer-events-none"} absolute -bottom-3 z-10 pb-0 group-hover:pointer-events-auto group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "right-1" : "left-1"}`
+                : `${touchActive ? "opacity-100 max-sm:pointer-events-auto" : "max-sm:pointer-events-none"} max-sm:absolute max-sm:-bottom-3 max-sm:z-10 max-sm:pb-0 max-sm:group-hover:pointer-events-auto max-sm:group-focus-within:pointer-events-auto group-focus-within:opacity-100 max-sm:has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 ${human ? "max-sm:right-1" : "max-sm:left-1"}`
             }
           >
             <ChatBubbleAction
@@ -687,20 +821,20 @@ function EventRow({
               aria-label={t("复制全文")}
               onClick={handleCopy}
             />
+            {canEdit && (
+              <ChatBubbleAction
+                icon={<Pencil className="size-3.5" />}
+                title={t("编辑并重新回答")}
+                aria-label={t("编辑并重新回答")}
+                onClick={handleStartEdit}
+              />
+            )}
             {actions.onReply && (
               <ChatBubbleAction
                 icon={<Reply className="size-3.5" />}
                 title={t("引用回复")}
                 aria-label={t("引用回复")}
                 onClick={handleReply}
-              />
-            )}
-            {!human && event.attempt_id && actions.onRetryAttempt && (
-              <ChatBubbleAction
-                icon={<RotateCcw className="size-3.5" />}
-                title={t("重新生成")}
-                aria-label={t("重新生成")}
-                onClick={() => actions.onRetryAttempt(event.attempt_id!)}
               />
             )}
             <DropdownMenu>
@@ -715,6 +849,19 @@ function EventRow({
                 align={human ? "end" : "start"}
                 className="w-auto min-w-[170px] p-1.5 shadow-md"
               >
+                {!human && replyModel && (
+                  <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground select-none">
+                    <Bot className="size-3.5 text-primary shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] text-faint">
+                        {t("回复模型")}
+                      </span>
+                      <span className="font-semibold text-foreground text-xs break-all">
+                        {replyModel}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground select-none">
                   <Clock className="size-3.5 text-primary shrink-0" />
                   <div className="flex flex-col">
@@ -801,7 +948,12 @@ export function ConversationView({
       (event) => !pendingEventIDs.has(event.id),
     );
   }, [events, pendingTurns, executions]);
-  const outputs = [...(live?.previous || []), ...(live ? [live] : [])];
+  const outputs = [
+    ...(live?.previous || []).filter((item) =>
+      executions.some((attempt) => attempt.id === item.attemptID),
+    ),
+    ...(live ? [live] : []),
+  ];
   // 预览转正式消息后仍保留原 key；SSE 重连或下一轮开始也不能重建已显示的气泡。
   const [previewKeys, setPreviewKeys] = useState(
     () => new Map<string, string>(),
@@ -1069,7 +1221,7 @@ export function ConversationView({
         onScroll={onScroll}
         aria-label={t("统一消息时间线")}
         className={
-          compact ? "px-3.5 pt-3.5 pb-4 sm:px-3.5 sm:pt-3.5" : undefined
+          compact ? "px-3 pt-11 pb-2 sm:px-3.5 sm:pt-11" : undefined
         }
       >
         {hasMoreBefore && (
@@ -1211,22 +1363,28 @@ export function ConversationView({
           const isConsecutiveStatusChange =
             previous?.type === "status_change" &&
             event.type === "status_change";
+          const matchedAttempt = executions.find(
+            (attempt) => attempt.id === event.attempt_id,
+          );
+          const rowHeaderAttempts = statusByHeader.get(event.id) || [];
+          const replyModel =
+            event.message?.model ||
+            matchedAttempt?.model ||
+            rowHeaderAttempts.find((attempt) => attempt.model)?.model;
           return (
             <div
               key={key}
-              className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : isConsecutiveStatusChange ? "mt-0.5" : continuesGroup ? "mt-1" : "mt-2.5"}`}
+              className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : isConsecutiveStatusChange ? "mt-0.5" : continuesGroup ? "mt-2.5" : "mt-4"}`}
             >
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
                 event={event}
                 preview={preview}
-                previewStatus={
-                  executions.find((attempt) => attempt.id === event.attempt_id)
-                    ?.status
-                }
+                previewStatus={matchedAttempt?.status}
+                replyModel={replyModel}
                 showSender={!continuesGroup}
                 attempts={byEvent.get(event.id) || []}
-                headerAttempts={statusByHeader.get(event.id) || []}
+                headerAttempts={rowHeaderAttempts}
                 live={displayLive}
                 isLatest={!running && index === rows.length - 1}
                 compact={compact}

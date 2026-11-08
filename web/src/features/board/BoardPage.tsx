@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -376,9 +376,9 @@ export default function BoardPage() {
   const mobileContainerRef = useRef<HTMLDivElement>(null);
   const isProgrammaticScrollRef = useRef(false);
 
-  // 初始化或当激活 Tab 变化时自动对齐移动端滑动容器
-  useEffect(() => {
-    if (isDesktop) return;
+  // 初始化或当激活 Tab 变化时无动画同步对齐移动端滑动容器（首屏渲染前直接到位，避免每次进页面播滑动动画）
+  useLayoutEffect(() => {
+    if (isDesktop || isProgrammaticScrollRef.current) return;
     const container = mobileContainerRef.current;
     if (!container) return;
     const targetIndex = states.indexOf(activeTab);
@@ -387,11 +387,11 @@ export default function BoardPage() {
       if (Math.abs(container.scrollLeft - targetScrollLeft) > 2) {
         container.scrollTo({
           left: targetScrollLeft,
-          behavior: isProgrammaticScrollRef.current ? "smooth" : "auto",
+          behavior: "instant",
         });
       }
     }
-  }, [activeTab, isDesktop]);
+  }, [activeTab, isDesktop, cards.isPending]);
 
   function handleTabSelect(state: TodoState) {
     setSelectedTab(state);
@@ -560,8 +560,8 @@ export default function BoardPage() {
     );
   }
   return (
-    <main className="mx-auto flex h-full w-full min-w-0 max-w-7xl flex-1 flex-col overflow-hidden px-5 py-6 md:px-8 md:py-8">
-      <header className="mb-7 flex shrink-0 flex-wrap items-center justify-between gap-4">
+    <main className="mx-auto flex h-full w-full min-w-0 max-w-7xl flex-1 flex-col overflow-hidden px-4 py-3 md:px-8 md:py-8">
+      <header className="mb-7 hidden shrink-0 flex-wrap items-center justify-between gap-4 md:flex">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("任务")}
@@ -595,8 +595,8 @@ export default function BoardPage() {
               {!isDesktop && (
                 <div className="flex min-h-0 flex-1 flex-col">
                   {/* 顶部吸顶分段器 Tabs */}
-                  <div className="shrink-0 pb-3">
-                    <div className="flex items-center gap-1.5 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1.5 scrollbar-none">
+                  <div className="flex shrink-0 items-center gap-2 pb-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1 scrollbar-none">
                       {states.map((state) => {
                         const isActive = activeTab === state;
                         const count = cardsByState[state].length;
@@ -607,7 +607,7 @@ export default function BoardPage() {
                             type="button"
                             onClick={() => handleTabSelect(state)}
                             className={
-                              "flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all " +
+                              "flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs font-medium transition-all " +
                               (isActive
                                 ? accent.activeTab
                                 : "text-muted-foreground hover:bg-muted hover:text-foreground")
@@ -635,19 +635,29 @@ export default function BoardPage() {
                         );
                       })}
                     </div>
+                    <Button
+                      variant="primary"
+                      size="icon-sm"
+                      title={t("新建待办")}
+                      aria-label={t("新建待办")}
+                      onClick={() => setCreatingTodo(true)}
+                      className="size-9 shrink-0 rounded-xl md:hidden"
+                    >
+                      <ListPlus className="size-4" />
+                    </Button>
                   </div>
 
                   {/* 移动端左右滑动单列卡片平铺容器 */}
-                  {/* w-full snap-center 配合 px-0.5，在右侧留足间隙与边界 */}
+                  {/* -mx-4 贴齐屏幕边缘消除滑动时的两侧裁切空白，单列内用 px-4 保持对齐 */}
                   <div
                     ref={mobileContainerRef}
                     onScroll={handleMobileScroll}
-                    className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth scrollbar-none"
+                    className="-mx-4 flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden scrollbar-none"
                   >
                     {states.map((state) => (
                       <div
                         key={state}
-                        className="min-h-0 w-full shrink-0 snap-center snap-always px-0.5 pb-2"
+                        className="min-h-0 w-full shrink-0 snap-center snap-always px-4 pb-2"
                       >
                         <Lane
                           state={state}

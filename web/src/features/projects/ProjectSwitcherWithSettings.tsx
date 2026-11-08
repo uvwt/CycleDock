@@ -21,6 +21,7 @@ export function ProjectSwitcherWithSettings({
   onCreate,
   compact = false,
   compactSize = "md",
+  minimal = false,
 }: {
   projects: Project[];
   projectID: string;
@@ -28,8 +29,10 @@ export function ProjectSwitcherWithSettings({
   onCreate?: () => void;
   compact?: boolean;
   compactSize?: "sm" | "md";
+  minimal?: boolean;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const project = projects.find((item) => item.id === projectID);
 
   return (
@@ -38,10 +41,16 @@ export function ProjectSwitcherWithSettings({
         projects={projects}
         projectID={projectID}
         onChange={onChange}
-        onCreate={onCreate}
+        onCreate={onCreate ?? (() => setCreateOpen(true))}
         onManage={project ? () => setSettingsOpen(true) : undefined}
         compact={compact}
         compactSize={compactSize}
+        minimal={minimal}
+      />
+      <ProjectCreateDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={onChange}
       />
       {project && (
         <ProjectSettingsDialog
@@ -52,6 +61,90 @@ export function ProjectSwitcherWithSettings({
         />
       )}
     </>
+  );
+}
+
+function ProjectCreateDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (projectID: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createProject({
+        name: name.trim(),
+        description: description.trim(),
+      }),
+    onSuccess: async (created) => {
+      setName("");
+      setDescription("");
+      await queryClient.invalidateQueries({ queryKey: keys.projects });
+      toast.success(t("项目已创建"));
+      onOpenChange(false);
+      onCreated(created.id);
+    },
+    onError: (error) => toast.error(String(error)),
+  });
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t("新建项目")}
+      description={t("创建一个新的项目看板来组织任务与 Agent 会话。")}
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name.trim() && !create.isPending) {
+            create.mutate();
+          }
+        }}
+        className="space-y-4 pt-1"
+      >
+        <Field label={t("项目名称")}>
+          <TextInput
+            autoFocus
+            required
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={t("输入项目名称")}
+          />
+        </Field>
+        <Field label={t("项目描述")}>
+          <TextArea
+            rows={4}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder={t("描述该项目的工作范围或目标")}
+          />
+        </Field>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => onOpenChange(false)}
+          >
+            {t("取消")}
+          </Button>
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!name.trim() || create.isPending}
+          >
+            {t("创建项目")}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

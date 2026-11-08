@@ -56,6 +56,7 @@ export function applyCardStreamEvent(
   type: string,
   event: CardStreamEvent,
 ): LiveAttempt | null {
+  if (type === "timeline.truncated") return null;
   if (!event.attempt_id) return live;
   if (type === "attempt.started" || type === "attempt.snapshot") {
     // 下一次执行可以接替运行状态，但不能撤回用户已经看见的正文。

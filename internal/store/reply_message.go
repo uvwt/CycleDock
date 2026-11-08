@@ -41,6 +41,7 @@ type replyPayload struct {
 	ReplyMessage
 	PreviewID string `json:"preview_id,omitempty"`
 	Preview   bool   `json:"preview,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 type PublishReplyParams struct {
@@ -48,6 +49,7 @@ type PublishReplyParams struct {
 	Message                                        ReplyMessage
 	IdempotencyKey                                 string
 	PreviewID                                      string
+	Model                                          string
 	// 外部 MCP 没有 ADK Runner 善后，最后一条消息同时结算 Attempt。
 	FinishOnEnd bool
 }
@@ -121,10 +123,15 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 	}
 	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
 	p.PreviewID, _ = agentdata.NormalizeText(p.PreviewID)
+	p.Model, _ = agentdata.NormalizeText(strings.TrimSpace(p.Model))
 	if p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 {
 		return uuid.Nil, false, fmt.Errorf("%w: idempotency key required", domain.ErrConflict)
 	}
-	payload, _, err := agentdata.MarshalJSONB(replyPayload{ReplyMessage: p.Message, PreviewID: p.PreviewID})
+	payload, _, err := agentdata.MarshalJSONB(replyPayload{
+		ReplyMessage: p.Message,
+		PreviewID:    p.PreviewID,
+		Model:        p.Model,
+	})
 	if err != nil {
 		return uuid.Nil, false, err
 	}

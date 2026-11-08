@@ -16,6 +16,17 @@ export interface SwipeGestureOptions {
 }
 
 /**
+ * 检查当前页面是否存在非空的文本选中状态（避免选中文字或拖拽选区手柄时误触滑动手势）
+ */
+function hasActiveTextSelection(): boolean {
+  if (typeof window === "undefined" || !window.getSelection) return false;
+  const selection = window.getSelection();
+  return Boolean(
+    selection && !selection.isCollapsed && selection.toString().length > 0,
+  );
+}
+
+/**
  * 检查触摸事件的起始目标是否处于不可被打断横向滚动的子元素内（如代码块、表格、横向滚动栏、输入框等）
  */
 function isInsideHorizontalScrollableOrInput(target: EventTarget | null): boolean {
@@ -73,22 +84,50 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
   const containerRef = useRef<T | null>(null);
 
   // 使用 ref 避免闭包捕获旧回调与配置
-  const callbacksRef = useRef({ onSwipeRight, onSwipeLeft });
+  const stateRef = useRef({
+    onSwipeRight,
+    onSwipeLeft,
+    threshold,
+    horizontalRatio,
+    edgeWidth,
+  });
   useEffect(() => {
-    callbacksRef.current = { onSwipeRight, onSwipeLeft };
+    stateRef.current = {
+      onSwipeRight,
+      onSwipeLeft,
+      threshold,
+      horizontalRatio,
+      edgeWidth,
+    };
   });
 
+  const boundRef = useRef<{ el: T; cleanup: () => void } | null>(null);
+
   useEffect(() => {
-    if (!enabled) return;
-    const el = containerRef.current;
+    const el = enabled ? containerRef.current : null;
+    if (boundRef.current?.el === el) return;
+
+    if (boundRef.current) {
+      boundRef.current.cleanup();
+      boundRef.current = null;
+    }
     if (!el) return;
 
     let startX = 0;
     let startY = 0;
+    let startTime = 0;
     let isTracking = false;
     let isLockedHorizontal = false;
     let isIgnored = false;
     let isEdgeSwipe = false;
+
+    const handleSelectionChange = () => {
+      if (isTracking) {
+        isIgnored = true;
+        isTracking = false;
+        isLockedHorizontal = false;
+      }
+    };
 
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) {
@@ -96,9 +135,17 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
         return;
       }
 
+      // 0. 若当前已有选中文本（用户正在拖拽选区手柄或调整选区），禁止触发左右滑抽屉
+      if (hasActiveTextSelection()) {
+        isIgnored = true;
+        isTracking = false;
+        return;
+      }
+
       const touch = e.touches[0];
       startX = touch.clientX;
       startY = touch.clientY;
+      startTime = Date.now();
 
       // 1. 输入控件及禁止滑动区域（如会话输入窗口）绝对避让，杜绝手势误触
       if (isInsideHorizontalScrollableOrInput(e.target)) {
@@ -108,12 +155,19 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
       }
 
       const winWidth = window.innerWidth;
-      const effectiveEdge = edgeWidth && edgeWidth > 0 ? edgeWidth : 30; // 默认前 30px 为边缘滑动手势区
+      const curEdgeWidth = stateRef.current.edgeWidth;
+      const effectiveEdge =
+        curEdgeWidth && curEdgeWidth > 0 ? curEdgeWidth : 30; // 默认前 30px 为边缘滑动手势区
       const isNearLeftEdge = startX <= effectiveEdge;
       const isNearRightEdge = startX >= winWidth - effectiveEdge;
 
       // 如果明确指定了 edgeWidth 选项，则必须在边缘内才跟踪
-      if (edgeWidth && edgeWidth > 0 && !isNearLeftEdge && !isNearRightEdge) {
+      if (
+        curEdgeWidth &&
+        curEdgeWidth > 0 &&
+        !isNearLeftEdge &&
+        !isNearRightEdge
+      ) {
         isIgnored = true;
         isTracking = false;
         return;
@@ -134,6 +188,12 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
     const handleTouchMove = (e: TouchEvent) => {
       if (!isTracking || isIgnored || e.touches.length !== 1) return;
 
+      if (hasActiveTextSelection()) {
+        isIgnored = true;
+        isTracking = false;
+        return;
+      }
+
       const touch = e.touches[0];
       const deltaX = touch.clientX - startX;
       const deltaY = touch.clientY - startY;
@@ -143,8 +203,15 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
       // 初期判断（前 8px~10px）：判断是否是小角度横滑还是纵向滚动浏览
       if (!isLockedHorizontal) {
         if (absX > 8 || absY > 8) {
+          // 若非屏幕边缘滑动且手指按住停顿超过 220ms 才开始移动（典型长按选词特征），视为文本选择操作并放弃手势
+          if (!isEdgeSwipe && Date.now() - startTime > 220) {
+            isIgnored = true;
+            isTracking = false;
+            return;
+          }
+
           // 边缘手势放宽判定比例至 1.0；非边缘手势使用 horizontalRatio (默认 1.2)
-          const ratio = isEdgeSwipe ? 1.0 : horizontalRatio;
+          const ratio = isEdgeSwipe ? 1.0 : stateRef.current.horizontalRatio;
           if (absX < absY * ratio) {
             isTracking = false;
             return;
@@ -156,9 +223,17 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (!isTracking || isIgnored || !isLockedHorizontal) {
+      if (
+        !isTracking ||
+        isIgnored ||
+        !isLockedHorizontal ||
+        hasActiveTextSelection() ||
+        Date.now() - startTime > 500
+      ) {
         isTracking = false;
         isLockedHorizontal = false;
+        isIgnored = false;
+        isEdgeSwipe = false;
         return;
       }
 
@@ -168,14 +243,18 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
 
-      const ratio = isEdgeSwipe ? 1.0 : horizontalRatio;
-      const effectiveThreshold = isEdgeSwipe ? Math.min(threshold, 35) : threshold;
+      const { threshold: curThreshold, horizontalRatio: curRatio } =
+        stateRef.current;
+      const ratio = isEdgeSwipe ? 1.0 : curRatio;
+      const effectiveThreshold = isEdgeSwipe
+        ? Math.min(curThreshold, 35)
+        : curThreshold;
 
       if (absX >= effectiveThreshold && absX >= absY * ratio) {
         if (deltaX > 0) {
-          callbacksRef.current.onSwipeRight?.();
+          stateRef.current.onSwipeRight?.();
         } else {
-          callbacksRef.current.onSwipeLeft?.();
+          stateRef.current.onSwipeLeft?.();
         }
       }
 
@@ -197,14 +276,26 @@ export function useSwipeGesture<T extends HTMLElement = HTMLElement>({
     el.addEventListener("touchmove", handleTouchMove, { passive: true });
     el.addEventListener("touchend", handleTouchEnd, { passive: true });
     el.addEventListener("touchcancel", handleTouchCancel, { passive: true });
+    document.addEventListener("selectionchange", handleSelectionChange);
 
-    return () => {
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove", handleTouchMove);
-      el.removeEventListener("touchend", handleTouchEnd);
-      el.removeEventListener("touchcancel", handleTouchCancel);
+    boundRef.current = {
+      el,
+      cleanup: () => {
+        el.removeEventListener("touchstart", handleTouchStart);
+        el.removeEventListener("touchmove", handleTouchMove);
+        el.removeEventListener("touchend", handleTouchEnd);
+        el.removeEventListener("touchcancel", handleTouchCancel);
+        document.removeEventListener("selectionchange", handleSelectionChange);
+      },
     };
-  }, [enabled, threshold, horizontalRatio, edgeWidth]);
+  });
+
+  useEffect(() => {
+    return () => {
+      boundRef.current?.cleanup();
+      boundRef.current = null;
+    };
+  }, []);
 
   return containerRef;
 }
@@ -231,43 +322,97 @@ export interface SwipeUpGestureOptions<T extends HTMLElement = HTMLElement> {
 export function useSwipeUpGesture<T extends HTMLElement = HTMLElement>({
   targetRef,
   onSwipeUp,
-  threshold = 40,
+  threshold = 28,
   enabled = true,
 }: SwipeUpGestureOptions<T>) {
   const internalRef = useRef<T | null>(null);
   const ref = targetRef || internalRef;
 
-  const callbacksRef = useRef({ onSwipeUp });
+  const stateRef = useRef({ onSwipeUp, threshold });
   useEffect(() => {
-    callbacksRef.current = { onSwipeUp };
+    stateRef.current = { onSwipeUp, threshold };
   });
 
+  const boundRef = useRef<{ el: T; cleanup: () => void } | null>(null);
+
   useEffect(() => {
-    if (!enabled) return;
-    const el = ref.current;
+    const el = enabled ? ref.current : null;
+    if (boundRef.current?.el === el) return;
+
+    if (boundRef.current) {
+      boundRef.current.cleanup();
+      boundRef.current = null;
+    }
     if (!el) return;
 
     let startX = 0;
     let startY = 0;
+    let startTime = 0;
     let isTracking = false;
-    let hasTriggered = false;
     let targetElement: HTMLElement | null = null;
 
+    const canTextareaScrollDown = (target: HTMLElement | null) => {
+      if (!(target instanceof HTMLTextAreaElement)) return false;
+      return (
+        target.scrollHeight > target.clientHeight + 4 &&
+        target.scrollTop + target.clientHeight < target.scrollHeight - 6
+      );
+    };
+
+    const triggerSwipeUp = () => {
+      stateRef.current.onSwipeUp?.();
+      if (
+        document.activeElement instanceof HTMLElement &&
+        (document.activeElement.tagName === "TEXTAREA" ||
+          document.activeElement.tagName === "INPUT")
+      ) {
+        document.activeElement.blur();
+      }
+      try {
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          navigator.vibrate(10);
+        }
+      } catch {
+        // 忽略不支持或权限错误
+      }
+    };
+
     const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) {
+      if (e.touches.length !== 1 || hasActiveTextSelection()) {
         isTracking = false;
         return;
       }
       const touch = e.touches[0];
+
+      // 1. 避让全面屏底部系统手势区（iOS Home Indicator / Android 全面屏返回桌面与多任务手势区，底部 38px）
+      const viewportHeight =
+        window.visualViewport?.height || window.innerHeight || 0;
+      if (viewportHeight > 0 && touch.clientY >= viewportHeight - 38) {
+        isTracking = false;
+        return;
+      }
+
+      // 2. 若容器内包含输入表单 <form>，仅响应表单卡片本体内的上滑，忽略表单外侧及底部安全区内边距的触摸
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const formEl = el.querySelector("form");
+      if (formEl && target && !formEl.contains(target)) {
+        isTracking = false;
+        return;
+      }
+
       startX = touch.clientX;
       startY = touch.clientY;
+      startTime = Date.now();
       isTracking = true;
-      hasTriggered = false;
-      targetElement = e.target instanceof HTMLElement ? e.target : null;
+      targetElement = target;
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (!isTracking || hasTriggered || e.touches.length !== 1) return;
+      if (!isTracking || e.touches.length !== 1) return;
+      if (hasActiveTextSelection()) {
+        isTracking = false;
+        return;
+      }
       const touch = e.touches[0];
       const deltaX = touch.clientX - startX;
       const deltaY = touch.clientY - startY;
@@ -275,89 +420,47 @@ export function useSwipeUpGesture<T extends HTMLElement = HTMLElement>({
       const absY = Math.abs(deltaY);
 
       // 上滑判定：向上滑动且纵向位移明显大于横向位移
-      if (deltaY < 0 && absY > absX * 1.1) {
-        // 如果是从多行可滚动的输入框内部拖动，且未滚动到底部，则放行输入框自身的纵向滚动
-        if (targetElement instanceof HTMLTextAreaElement) {
-          const canScrollDown =
-            targetElement.scrollHeight > targetElement.clientHeight &&
-            targetElement.scrollTop + targetElement.clientHeight <
-              targetElement.scrollHeight - 6;
-          if (canScrollDown) {
-            return;
-          }
+      if (deltaY < 0 && absY >= absX * 1.2) {
+        if (canTextareaScrollDown(targetElement)) {
+          return;
         }
 
-        if (absY >= 10 && e.cancelable) {
+        // 仅阻止输入框原生滚动，不在 touchmove 中提前触发打开抽屉，等待 touchend 抬手确认（避免全面屏上滑悬停或系统手势触发 touchcancel 前抢先误触）
+        if (absY >= 6 && e.cancelable) {
           e.preventDefault();
-        }
-
-        if (absY >= threshold) {
-          hasTriggered = true;
-          isTracking = false;
-
-          callbacksRef.current.onSwipeUp?.();
-
-          // 触发上滑后若输入框处于聚焦状态，收起软键盘确保弹窗完整呈现
-          if (
-            document.activeElement instanceof HTMLElement &&
-            (document.activeElement.tagName === "TEXTAREA" ||
-              document.activeElement.tagName === "INPUT")
-          ) {
-            document.activeElement.blur();
-          }
-
-          try {
-            if (typeof navigator !== "undefined" && navigator.vibrate) {
-              navigator.vibrate(10);
-            }
-          } catch {
-            // 忽略不支持或权限错误
-          }
         }
       }
     };
 
     const handleTouchEnd = (e: TouchEvent) => {
-      if (isTracking && !hasTriggered && e.changedTouches.length === 1) {
+      if (
+        isTracking &&
+        !hasActiveTextSelection() &&
+        Date.now() - startTime <= 450 &&
+        e.changedTouches.length === 1
+      ) {
         const touch = e.changedTouches[0];
         const deltaX = touch.clientX - startX;
         const deltaY = touch.clientY - startY;
         const absX = Math.abs(deltaX);
         const absY = Math.abs(deltaY);
 
-        if (deltaY < 0 && absY > absX * 1.1 && absY >= threshold) {
-          let shouldTrigger = true;
-          if (targetElement instanceof HTMLTextAreaElement) {
-            const canScrollDown =
-              targetElement.scrollHeight > targetElement.clientHeight &&
-              targetElement.scrollTop + targetElement.clientHeight <
-                targetElement.scrollHeight - 6;
-            if (canScrollDown) {
-              shouldTrigger = false;
-            }
-          }
-
-          if (shouldTrigger) {
-            callbacksRef.current.onSwipeUp?.();
-            if (
-              document.activeElement instanceof HTMLElement &&
-              (document.activeElement.tagName === "TEXTAREA" ||
-                document.activeElement.tagName === "INPUT")
-            ) {
-              document.activeElement.blur();
-            }
-          }
+        if (
+          deltaY < 0 &&
+          absY >= absX * 1.2 &&
+          absY >= stateRef.current.threshold &&
+          !canTextareaScrollDown(targetElement)
+        ) {
+          triggerSwipeUp();
         }
       }
 
       isTracking = false;
-      hasTriggered = false;
       targetElement = null;
     };
 
     const handleTouchCancel = () => {
       isTracking = false;
-      hasTriggered = false;
       targetElement = null;
     };
 
@@ -366,13 +469,23 @@ export function useSwipeUpGesture<T extends HTMLElement = HTMLElement>({
     el.addEventListener("touchend", handleTouchEnd, { passive: true });
     el.addEventListener("touchcancel", handleTouchCancel, { passive: true });
 
-    return () => {
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove", handleTouchMove);
-      el.removeEventListener("touchend", handleTouchEnd);
-      el.removeEventListener("touchcancel", handleTouchCancel);
+    boundRef.current = {
+      el,
+      cleanup: () => {
+        el.removeEventListener("touchstart", handleTouchStart);
+        el.removeEventListener("touchmove", handleTouchMove);
+        el.removeEventListener("touchend", handleTouchEnd);
+        el.removeEventListener("touchcancel", handleTouchCancel);
+      },
     };
-  }, [enabled, threshold, ref]);
+  });
+
+  useEffect(() => {
+    return () => {
+      boundRef.current?.cleanup();
+      boundRef.current = null;
+    };
+  }, []);
 
   return ref;
 }

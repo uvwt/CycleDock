@@ -54,45 +54,48 @@ export function useCardNotifications(workspaceID: string) {
   const enabled = useNotificationsEnabled();
   const query = useQueryClient();
   useEffect(() => {
-    if (
-      !workspaceID ||
-      !enabled ||
-      !notificationsSupported() ||
-      Notification.permission !== "granted"
-    )
-      return;
+    if (!workspaceID) return;
+    const canNotify =
+      enabled &&
+      notificationsSupported() &&
+      Notification.permission === "granted";
+
     let active = true;
     const controller = new AbortController();
-    // 页面还开着时由这里收快照并通知。心跳告诉服务端先别推送，避免和这条路径重复，
-    // 也避免 Safari 收到一条不展示的推送后收回权限。
-    // iOS 主屏幕应用切回桌面或锁屏只触发 visibilitychange 而不触发 pagehide，
-    // 必须在 hidden 时立刻解除在线抑制，切回 visible 时再恢复心跳。
+    // 页面还开着时由这里收快照并刷新全局卡片状态（导航栏绿点/蓝点、焦点列表、看板与定时任务）。
+    // 若同时开启了浏览器通知权限，则额外维护推送心跳与 Service Worker 弹窗通知。
     const syncPresenceWithVisibility = () => {
+      if (!canNotify) return;
       if (document.visibilityState === "visible") {
         void beatPushPresence();
       } else {
         markPushIdle();
       }
     };
-    void syncPushSubscription();
-    syncPresenceWithVisibility();
-    const presence = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void beatPushPresence();
-      }
-    }, 20_000);
-    document.addEventListener("visibilitychange", syncPresenceWithVisibility);
-    window.addEventListener("pagehide", markPushIdle);
-    window.addEventListener("pageshow", syncPresenceWithVisibility);
+    let presence: number | undefined;
+    if (canNotify) {
+      void syncPushSubscription();
+      syncPresenceWithVisibility();
+      presence = window.setInterval(() => {
+        if (document.visibilityState === "visible") {
+          void beatPushPresence();
+        }
+      }, 20_000);
+      document.addEventListener("visibilitychange", syncPresenceWithVisibility);
+      window.addEventListener("pagehide", markPushIdle);
+      window.addEventListener("pageshow", syncPresenceWithVisibility);
+    }
+
     let release: (() => void) | undefined;
     let channel: BroadcastChannel | undefined;
     let stream: EventSource | undefined;
     let previousCards: Map<string, CardUpdate> | undefined;
     let stopWatchingLocation = () => {};
     let stopReporting = () => {};
-    void notificationWorker()
-      .then(async (registration) => {
-        if (!active) return;
+
+    const startStream = async (registration?: ServiceWorkerRegistration) => {
+      if (!active) return;
+      if (registration) {
         const reportViewing = () => {
           const cardID = viewedCardID();
           registration.active?.postMessage({
@@ -106,43 +109,51 @@ export function useCardNotifications(workspaceID: string) {
         stopReporting = () =>
           document.removeEventListener("visibilitychange", reportViewing);
         stopWatchingLocation = watchLocation(reportViewing);
-        const onSnapshot = (event: MessageEvent<string>) => {
-          const cards = JSON.parse(event.data) as CardUpdate[];
-          // 页面处于前台可见状态时才确认看过这些版本。
-          // 若页面处于后台或锁屏（hidden），严禁自动 ack，保留让 Web Push 触达的机会。
-          // 待切回前台（visible）时再补发已阅确认。
-          if (document.visibilityState === "visible") {
-            void api.ackPushCards(
-              cards.map((card) => ({ id: card.id, revision: card.revision })),
-            );
-          }
-          // 首次快照只建立基线；原生 SSE 重连保留基线，补齐断线期间变化。
-          if (previousCards) {
-            for (const card of cards) {
-              const previous = previousCards.get(card.id);
-              if (previous?.revision === card.revision) continue;
-              const viewingCardID = viewedCardID();
-              void query.invalidateQueries({ queryKey: keys.card(card.id) });
-              void query.invalidateQueries({
-                queryKey: keys.cards(card.project_id),
-              });
-              void query.invalidateQueries({
-                queryKey: keys.activity(card.project_id),
-              });
-              void query.invalidateQueries({
-                queryKey: keys.schedules(card.project_id),
-              });
-              const body = cardNotificationBody(card, previous);
-              if (!body) continue;
-              const detail: CardMessageDetail = {
-                ...card,
-                body,
-                viewing:
-                  document.visibilityState === "visible" &&
-                  viewingCardID === card.id,
-              };
-              window.dispatchEvent(new CustomEvent(cardMessageEvent, { detail }));
-              const section = card.kind === "discussion" ? "chat" : "cards";
+      }
+
+      const onSnapshot = (event: MessageEvent<string>) => {
+        const cards = JSON.parse(event.data) as CardUpdate[];
+        // 页面处于前台可见状态时才确认看过这些版本。
+        // 若页面处于后台或锁屏（hidden），严禁自动 ack，保留让 Web Push 触达的机会。
+        // 待切回前台（visible）时再补发已阅确认。
+        if (canNotify && document.visibilityState === "visible") {
+          void api.ackPushCards(
+            cards.map((card) => ({ id: card.id, revision: card.revision })),
+          );
+        }
+        // 首次快照只建立基线；原生 SSE 重连保留基线，补齐断线期间变化。
+        if (previousCards) {
+          for (const card of cards) {
+            const previous = previousCards.get(card.id);
+            if (previous?.revision === card.revision) continue;
+            const viewingCardID = viewedCardID();
+            void query.invalidateQueries({ queryKey: keys.card(card.id) });
+            void query.invalidateQueries({
+              queryKey: keys.cards(card.project_id),
+            });
+            void query.invalidateQueries({
+              queryKey: keys.activity(card.project_id),
+            });
+            void query.invalidateQueries({
+              queryKey: keys.schedules(card.project_id),
+            });
+            const body = cardNotificationBody(card, previous);
+            if (!body) continue;
+            const detail: CardMessageDetail = {
+              ...card,
+              body,
+              viewing:
+                document.visibilityState === "visible" &&
+                viewingCardID === card.id,
+            };
+            window.dispatchEvent(new CustomEvent(cardMessageEvent, { detail }));
+            if (registration) {
+              const section =
+                card.kind === "discussion"
+                  ? "chat"
+                  : card.kind === "ongoing"
+                    ? "plans"
+                    : "cards";
               registration.active?.postMessage({
                 type: "card.updated",
                 workspaceID,
@@ -157,8 +168,11 @@ export function useCardNotifications(workspaceID: string) {
               });
             }
           }
-          previousCards = new Map(cards.map((card) => [card.id, card]));
-        };
+        }
+        previousCards = new Map(cards.map((card) => [card.id, card]));
+      };
+
+      if (canNotify) {
         const syncAckOnVisible = () => {
           if (document.visibilityState === "visible" && previousCards) {
             const cards = Array.from(previousCards.values());
@@ -175,49 +189,66 @@ export function useCardNotifications(workspaceID: string) {
           previousStopReporting();
           document.removeEventListener("visibilitychange", syncAckOnVisible);
         };
-        const connect = () => {
-          stream = new EventSource("/api/v1/cards/updates/stream", {
-            withCredentials: true,
-          });
-          stream.addEventListener("cards.snapshot", (event) => {
-            channel?.postMessage((event as MessageEvent<string>).data);
-            onSnapshot(event as MessageEvent<string>);
-          });
-        };
-        if (navigator.locks && typeof BroadcastChannel !== "undefined") {
-          // 同域只保留一条通知 SSE；其他标签页通过广播获得同一份更新。
-          channel = new BroadcastChannel(
-            `cycledock:card-updates:${workspaceID}`,
-          );
-          channel.onmessage = onSnapshot;
-          await navigator.locks.request(
-            "cycledock:card-notifications",
-            { signal: controller.signal },
-            () =>
-              new Promise<void>((resolve) => {
-                release = resolve;
-                connect();
-              }),
-          );
-        } else {
-          connect();
-        }
-      })
-      .catch((error: unknown) => {
-        if (active)
-          toast.error(`${i18n.t("浏览器通知启动失败")}: ${String(error)}`);
-      });
+      }
+
+      const connect = () => {
+        stream = new EventSource("/api/v1/cards/updates/stream", {
+          withCredentials: true,
+        });
+        stream.addEventListener("cards.snapshot", (event) => {
+          channel?.postMessage((event as MessageEvent<string>).data);
+          onSnapshot(event as MessageEvent<string>);
+        });
+      };
+
+      if (navigator.locks && typeof BroadcastChannel !== "undefined") {
+        // 同域只保留一条通知 SSE；其他标签页通过广播获得同一份更新。
+        channel = new BroadcastChannel(
+          `cycledock:card-updates:${workspaceID}`,
+        );
+        channel.onmessage = onSnapshot;
+        await navigator.locks.request(
+          "cycledock:card-notifications",
+          { signal: controller.signal },
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+              connect();
+            }),
+        );
+      } else {
+        connect();
+      }
+    };
+
+    if (canNotify) {
+      void notificationWorker()
+        .then((registration) => startStream(registration))
+        .catch((error: unknown) => {
+          if (active) {
+            toast.error(`${i18n.t("浏览器通知启动失败")}: ${String(error)}`);
+            void startStream();
+          }
+        });
+    } else {
+      void startStream();
+    }
+
     return () => {
       active = false;
       stopReporting();
       stopWatchingLocation();
-      window.clearInterval(presence);
-      document.removeEventListener(
-        "visibilitychange",
-        syncPresenceWithVisibility,
-      );
-      window.removeEventListener("pagehide", markPushIdle);
-      window.removeEventListener("pageshow", syncPresenceWithVisibility);
+      if (presence !== undefined) {
+        window.clearInterval(presence);
+      }
+      if (canNotify) {
+        document.removeEventListener(
+          "visibilitychange",
+          syncPresenceWithVisibility,
+        );
+        window.removeEventListener("pagehide", markPushIdle);
+        window.removeEventListener("pageshow", syncPresenceWithVisibility);
+      }
       controller.abort();
       stream?.close();
       channel?.close();

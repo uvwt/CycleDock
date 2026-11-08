@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -24,6 +25,7 @@ import {
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
+import { CardActions } from "../cards/CardActions";
 
 type WorkGroup = TodoState;
 
@@ -51,6 +53,7 @@ export function WorkSidebar({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const workCards = useMemo(
     () =>
@@ -141,6 +144,7 @@ export function WorkSidebar({
     <ContextSidebar
       ariaLabel={t("任务列表")}
       className={className}
+      hideHeaderOnMobile
       header={
         <div className="px-1 text-xs font-medium text-muted-foreground">
           {t("任务")}
@@ -247,6 +251,46 @@ export function WorkSidebar({
                           }
                           title={card.title || t("未命名任务")}
                           description={summary || undefined}
+                          actions={
+                            <div className="flex items-center gap-0.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  pinMutation.mutate({
+                                    id: card.id,
+                                    pinned: !card.pinned_at,
+                                  });
+                                }}
+                                title={card.pinned_at ? t("取消置顶") : t("置顶")}
+                                aria-label={
+                                  card.pinned_at ? t("取消置顶") : t("置顶")
+                                }
+                                className={`grid size-6 place-items-center rounded-lg transition-all ${
+                                  card.pinned_at
+                                    ? "text-amber-500 hover:bg-muted hover:text-amber-600"
+                                    : "text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                                }`}
+                              >
+                                {card.pinned_at ? (
+                                  <PinOff className="size-3.5" />
+                                ) : (
+                                  <Pin className="size-3.5" />
+                                )}
+                              </button>
+                              <CardActions
+                                card={card}
+                                menuSide="right"
+                                onDeleted={() => {
+                                  if (card.id === activeCardID) {
+                                    navigate(
+                                      `/board/${encodeURIComponent(card.project_id)}`,
+                                    );
+                                  }
+                                }}
+                              />
+                            </div>
+                          }
                         />
                       );
                     })

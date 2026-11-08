@@ -226,6 +226,12 @@ export const api = {
     ),
   cancelAttempt: (id: string, attemptID: string) =>
     request<void>(`/cards/${id}/attempts/${attemptID}/cancel`, "POST", {}),
+  editComment: (id: string, eventID: string, content: string) =>
+    request<{ event_id: string; turn_id: string }>(
+      `/cards/${id}/comments/${eventID}`,
+      "PATCH",
+      { content },
+    ),
   editTurn: (id: string, turnID: string, content: string) =>
     request<void>(`/cards/${id}/turns/${turnID}`, "PATCH", { content }),
   steerTurn: (id: string, turnID: string) =>

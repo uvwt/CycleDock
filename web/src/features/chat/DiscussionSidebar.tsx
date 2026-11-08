@@ -149,7 +149,7 @@ export function DiscussionSidebar({
       className={className}
       header={
         <>
-          <div className="flex items-center justify-between gap-2 px-1">
+          <div className="hidden items-center justify-between gap-2 px-1 md:flex">
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-semibold text-foreground/80 tracking-wide">
                 {t("讨论")}
@@ -172,16 +172,27 @@ export function DiscussionSidebar({
               </Button>
             </HintTooltip>
           </div>
-          <label className="relative block">
-            <span className="sr-only">{t("搜索讨论…")}</span>
-            <Search className="pointer-events-none absolute top-2 left-2.5 size-3.5 text-muted-foreground/50" />
-            <TextInput
-              value={term}
-              onChange={(event) => setTerm(event.target.value)}
-              placeholder={t("搜索讨论…")}
-              className="h-7.5 rounded-lg border-transparent bg-muted/50 pl-8 text-xs shadow-none placeholder:text-muted-foreground/50 transition-all focus:bg-surface focus:border-line/70 focus:shadow-2xs"
-            />
-          </label>
+          <div className="flex items-center gap-1.5">
+            <label className="relative block min-w-0 flex-1">
+              <span className="sr-only">{t("搜索讨论…")}</span>
+              <Search className="pointer-events-none absolute top-2 left-2.5 size-3.5 text-muted-foreground/50" />
+              <TextInput
+                value={term}
+                onChange={(event) => setTerm(event.target.value)}
+                placeholder={t("搜索讨论…")}
+                className="h-7.5 rounded-lg border-transparent bg-muted/50 pl-8 text-xs shadow-none placeholder:text-muted-foreground/50 transition-all focus:bg-surface focus:border-line/70 focus:shadow-2xs"
+              />
+            </label>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t("新建讨论")}
+              onClick={onCreate}
+              className="size-7.5 shrink-0 rounded-lg border border-line/70 bg-surface text-muted-foreground shadow-2xs transition-all hover:bg-muted hover:text-foreground md:hidden"
+            >
+              <Plus className="size-3.5" />
+            </Button>
+          </div>
         </>
       }
     >
@@ -251,11 +262,11 @@ export function DiscussionSidebar({
                 actions={
                   <div className="flex items-center gap-0.5">
                     {/* 时间：悬浮时展示，与置顶按钮水平排列不冲突 */}
-                    <span className="mr-0.5 hidden select-none text-[11px] font-normal tabular-nums text-faint group-hover:inline-block group-focus-within:inline-block">
+                    <span className="mr-0.5 select-none text-[11px] font-normal tabular-nums text-faint">
                       {formatRelativeTime(card.updated_at)}
                     </span>
 
-                    {/* 桌面端快捷置顶切换（仅悬浮或聚焦时显，常态由标题旁置顶徽标呈现） */}
+                    {/* 桌面端快捷置顶切换（显隐由 ContextSidebarItem 的 opacity 统一控制，避免 display:none 导致关闭菜单瞬间坐标归零） */}
                     {!isMain && (
                       <button
                         type="button"
@@ -268,7 +279,7 @@ export function DiscussionSidebar({
                         }}
                         title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
                         aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                        className={`hidden size-6 place-items-center rounded-lg transition-all group-hover:grid group-focus-within:grid ${
+                        className={`grid size-6 place-items-center rounded-lg transition-all ${
                           card.pinned_at
                             ? "text-amber-500 hover:text-amber-600 hover:bg-muted"
                             : "text-muted-foreground/60 hover:text-foreground hover:bg-muted"
@@ -282,21 +293,18 @@ export function DiscussionSidebar({
                       </button>
                     )}
 
-                    {/* 更多操作菜单：悬浮时显 */}
-                    <div className="hidden group-hover:block group-focus-within:block has-[[data-state=open]]:block">
-                      <CardActions
-                        card={card}
-                        menuSide="right"
-                        preserve={isMain}
-                        onDeleted={() => {
-                          if (card.id === activeCardID) {
-                            navigate(
-                              `/chat?project=${encodeURIComponent(card.project_id)}`,
-                            );
-                          }
-                        }}
-                      />
-                    </div>
+                    <CardActions
+                      card={card}
+                      menuSide="right"
+                      preserve={isMain}
+                      onDeleted={() => {
+                        if (card.id === activeCardID) {
+                          navigate(
+                            `/chat?project=${encodeURIComponent(card.project_id)}`,
+                          );
+                        }
+                      }}
+                    />
                   </div>
                 }
               />

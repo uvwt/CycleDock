@@ -1,16 +1,232 @@
-import type { ReactNode } from "react";
-import { Pin } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Activity,
+  BriefcaseBusiness,
+  CalendarClock,
+  Cpu,
+  MessageCircle,
+  Pin,
+  Settings,
+} from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { useProject } from "../../app/project-context";
+import { keys } from "../../app/query";
+import { api } from "../api/client";
+import { ProjectSwitcherWithSettings } from "../../features/projects/ProjectSwitcherWithSettings";
+import { CardStatusDot, type CardVisualStatus } from "./CardStatusDot";
+import { getKindVisualStatus } from "../lib/card-focus";
 import { SwipeableRow, type SwipeActionItem } from "./SwipeableRow";
 import { Skeleton } from "./skeleton";
+
+function MobileSidebarHeader() {
+  const { t } = useTranslation();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { projects, projectID, setProjectID } = useProject();
+
+  function switchProject(nextProjectID: string) {
+    setProjectID(nextProjectID);
+    if (location.pathname.startsWith("/chat")) {
+      navigate(`/chat?project=${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (
+      location.pathname.startsWith("/board") ||
+      location.pathname.startsWith("/cards/")
+    ) {
+      navigate(`/board/${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (location.pathname.startsWith("/plans")) {
+      navigate(`/plans/${encodeURIComponent(nextProjectID)}`);
+      return;
+    }
+    if (location.pathname.startsWith("/activity")) {
+      navigate(`/activity/${encodeURIComponent(nextProjectID)}`);
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-2 px-2.5 pt-[calc(env(safe-area-inset-top,0px)+0.5rem)] pb-1 md:hidden">
+      <div className="min-w-0 flex-1">
+        <ProjectSwitcherWithSettings
+          minimal
+          projects={projects}
+          projectID={projectID}
+          onChange={switchProject}
+        />
+      </div>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <NavLink
+          to="/nexusdock"
+          title={t("设备")}
+          aria-label={t("设备")}
+          className={({ isActive }) =>
+            `inline-flex size-8 items-center justify-center rounded-lg transition ${
+              isActive
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+            }`
+          }
+        >
+          <Cpu className="size-4" />
+        </NavLink>
+        <NavLink
+          to="/settings/general"
+          onClick={() => projectID && setProjectID(projectID)}
+          title={t("设置")}
+          aria-label={t("设置")}
+          className={({ isActive }) =>
+            `inline-flex size-8 items-center justify-center rounded-lg transition ${
+              isActive
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+            }`
+          }
+        >
+          <Settings className="size-4" />
+        </NavLink>
+      </div>
+    </div>
+  );
+}
+
+function MobileSidebarFooter() {
+  const { t } = useTranslation();
+  const location = useLocation();
+  const { projectID } = useProject();
+
+  const viewedCardID = useMemo(() => {
+    const match = /^\/(?:chat|cards|plans)\/[^/]+\/([^/]+)\/?$/.exec(
+      location.pathname,
+    );
+    if (!match?.[1]) return "";
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }, [location.pathname]);
+
+  const cardsQuery = useQuery({
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
+    enabled: Boolean(projectID),
+  });
+  const projectCards = useMemo(
+    () => cardsQuery.data || [],
+    [cardsQuery.data],
+  );
+
+  const primaryNav: {
+    to: string;
+    activePath: string;
+    label: string;
+    icon: typeof MessageCircle;
+    visualStatus?: CardVisualStatus;
+  }[] = [
+    {
+      to: projectID
+        ? `/chat?project=${encodeURIComponent(projectID)}`
+        : "/chat",
+      activePath: "/chat",
+      label: t("聊天"),
+      icon: MessageCircle,
+      visualStatus: getKindVisualStatus(
+        projectCards,
+        "discussion",
+        viewedCardID,
+      ),
+    },
+    {
+      to: projectID ? `/board/${encodeURIComponent(projectID)}` : "/board",
+      activePath: "/board",
+      label: t("任务"),
+      icon: BriefcaseBusiness,
+      visualStatus: getKindVisualStatus(projectCards, "todo", viewedCardID),
+    },
+    {
+      to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
+      activePath: "/plans",
+      label: t("定时"),
+      icon: CalendarClock,
+      visualStatus: getKindVisualStatus(projectCards, "ongoing", viewedCardID),
+    },
+    {
+      to: projectID
+        ? `/activity/${encodeURIComponent(projectID)}`
+        : "/activity",
+      activePath: "/activity",
+      label: t("活动"),
+      icon: Activity,
+    },
+  ];
+
+  function isNavActive(activePath: string) {
+    if (activePath === "/board") {
+      return (
+        location.pathname.startsWith("/board") ||
+        location.pathname.startsWith("/cards/")
+      );
+    }
+    if (activePath === "/plans") {
+      return location.pathname.startsWith("/plans");
+    }
+    if (activePath === "/activity") {
+      return location.pathname.startsWith("/activity");
+    }
+    return location.pathname.startsWith("/chat");
+  }
+
+  return (
+    <div className="shrink-0 px-2.5 pt-1.5 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] md:hidden">
+      <nav
+        aria-label={t("工作区导航")}
+        className="grid grid-cols-4 gap-1 rounded-2xl border border-line/70 bg-muted/60 p-1 shadow-2xs"
+      >
+        {primaryNav.map((item) => {
+          const active = isNavActive(item.activePath);
+          return (
+            <NavLink
+              key={item.activePath}
+              to={item.to}
+              className={`relative flex items-center justify-center gap-1 rounded-xl py-2 text-xs transition-all ${
+                active
+                  ? "bg-surface font-semibold text-heading shadow-xs ring-1 ring-line/60"
+                  : "font-medium text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <item.icon
+                className={`size-3.5 shrink-0 ${
+                  active ? "text-primary" : "opacity-75"
+                }`}
+              />
+              <span className="truncate">{item.label}</span>
+              {item.visualStatus && item.visualStatus !== "idle" && (
+                <span className="pointer-events-none absolute top-1 right-1.5">
+                  <CardStatusDot status={item.visualStatus} />
+                </span>
+              )}
+            </NavLink>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
 
 export function ContextSidebar({
   ariaLabel,
   header,
+  hideHeaderOnMobile = false,
   children,
   className = "",
 }: {
   ariaLabel: string;
   header?: ReactNode;
+  hideHeaderOnMobile?: boolean;
   children: ReactNode;
   className?: string;
 }) {
@@ -19,12 +235,20 @@ export function ContextSidebar({
       className={`flex h-full min-h-0 w-full flex-col bg-canvas ${className}`}
       aria-label={ariaLabel}
     >
+      <MobileSidebarHeader />
       {header ? (
-        <div className="space-y-2 px-3 pt-3.5 pb-2">{header}</div>
+        <div
+          className={`space-y-2 px-3 pt-2.5 pb-1.5 md:pt-3.5 md:pb-2 ${
+            hideHeaderOnMobile ? "hidden md:block" : ""
+          }`}
+        >
+          {header}
+        </div>
       ) : null}
-      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]">
+      <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pt-1.5 pb-3 md:pt-0">
         {children}
       </div>
+      <MobileSidebarFooter />
     </aside>
   );
 }
@@ -115,12 +339,22 @@ export function ContextSidebarItem({
         type="button"
         onClick={onClick}
         aria-current={active ? "page" : undefined}
-        className={`min-w-0 flex-1 rounded-xl px-3 py-2 text-left transition-colors ${actions ? "group-hover:pr-16 [@media(hover:hover)]:pr-16" : ""}`}
+        className={`min-w-0 flex-1 rounded-xl px-3 py-2 text-left transition-colors ${
+          actions && !description
+            ? "group-hover:pr-14 group-focus-within:pr-14 has-[[data-state=open]]:pr-14"
+            : ""
+        }`}
       >
         <div className={`flex gap-2.5 ${description ? "items-start" : "items-center"}`}>
           {icon ? <div className={`shrink-0 ${description ? "mt-0.5" : ""}`}>{icon}</div> : null}
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-1.5">
+            <div
+              className={`flex items-center justify-between gap-1.5 ${
+                actions && description
+                  ? "group-hover:pr-14 group-focus-within:pr-14"
+                  : ""
+              }`}
+            >
               <div className="flex min-w-0 items-center gap-1.5">
                 <p className="truncate text-[13px] leading-5">
                   {title}
@@ -162,7 +396,11 @@ export function ContextSidebarItem({
       </button>
       {/* 桌面端 hover 时展示 actions，移动端触控屏避免与手势冲突；滑开抽屉时隐藏 */}
       {actions ? (
-        <div className="hidden [@media(hover:hover)]:flex opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto absolute top-1/2 right-1.5 -translate-y-1/2 items-center group-data-[swipe-open=true]/swipe:hidden">
+        <div
+          className={`hidden [@media(hover:hover)]:flex opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto absolute right-1.5 items-center rounded-lg bg-surface/90 backdrop-blur-xs group-data-[swipe-open=true]/swipe:hidden ${
+            description ? "top-1.5" : "top-1/2 -translate-y-1/2"
+          }`}
+        >
           {actions}
         </div>
       ) : null}

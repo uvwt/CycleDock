@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { CalendarClock, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -13,22 +14,30 @@ import {
 import { ConfirmDialog } from "../../shared/ui/components";
 import { EditCardDialog } from "../../shared/ui/EditCardDialog";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
+import {
+  CardStatusDot,
+  getCardVisualStatus,
+} from "../../shared/ui/CardStatusDot";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
+import { CardActions } from "../cards/CardActions";
 
 export function PlanSidebar({
   cards,
   activeCardID,
+  activeAttemptStatus,
   onSelect,
   loading = false,
   className = "",
 }: {
   cards: Card[];
   activeCardID: string;
+  activeAttemptStatus?: string;
   onSelect: (card: Card) => void;
   loading?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
   const [editTarget, setEditTarget] = useState<Card | null>(null);
@@ -77,6 +86,7 @@ export function PlanSidebar({
   return (
     <ContextSidebar
       ariaLabel={t("定时任务列表")}
+      hideHeaderOnMobile
       header={
         <div className="px-1 text-xs font-medium text-muted-foreground">
           {t("定时任务")}
@@ -129,6 +139,12 @@ export function PlanSidebar({
               },
             ];
 
+            const visualStatus = getCardVisualStatus(
+              card,
+              card.id === activeCardID,
+              activeAttemptStatus,
+            );
+
             return (
               <ContextSidebarItem
                 key={card.id}
@@ -136,13 +152,57 @@ export function PlanSidebar({
                 pinned={Boolean(card.pinned_at)}
                 onClick={() => onSelect(card)}
                 swipeActions={swipeActions}
-                icon={<CalendarClock className="size-4 text-faint" />}
+                icon={
+                  visualStatus !== "idle" ? (
+                    <CardStatusDot status={visualStatus} />
+                  ) : (
+                    <CalendarClock className="size-4 text-faint" />
+                  )
+                }
                 title={card.title || t("未命名定时任务")}
                 description={summary || undefined}
                 meta={
                   showHealth ? (
                     <OngoingHealthBadge health={card.health} size="xs" />
                   ) : undefined
+                }
+                actions={
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pinMutation.mutate({
+                          id: card.id,
+                          pinned: !card.pinned_at,
+                        });
+                      }}
+                      title={card.pinned_at ? t("取消置顶") : t("置顶")}
+                      aria-label={card.pinned_at ? t("取消置顶") : t("置顶")}
+                      className={`grid size-6 place-items-center rounded-lg transition-all ${
+                        card.pinned_at
+                          ? "text-amber-500 hover:bg-muted hover:text-amber-600"
+                          : "text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+                      }`}
+                    >
+                      {card.pinned_at ? (
+                        <PinOff className="size-3.5" />
+                      ) : (
+                        <Pin className="size-3.5" />
+                      )}
+                    </button>
+                    <CardActions
+                      card={card}
+                      menuSide="right"
+                      onDeleted={() => {
+                        if (card.id === activeCardID) {
+                          navigate(
+                            `/plans/${encodeURIComponent(card.project_id)}`,
+                          );
+                        }
+                      }}
+                    />
+                  </div>
                 }
               />
             );

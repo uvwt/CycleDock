@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, CirclePause, Clock3, Pin } from "lucide-react";
+import { CalendarClock, CirclePause, Pin } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../../app/project-context";
@@ -8,7 +8,10 @@ import { api } from "../../shared/api/client";
 import type { ProjectSchedule, OngoingState } from "../../shared/api/types";
 import { ErrorView } from "../../shared/ui/components";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
-import { getAttemptStatusLabelKey } from "../../shared/lib/ongoing-health";
+import {
+  CardStatusDot,
+  getCardVisualStatus,
+} from "../../shared/ui/CardStatusDot";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { PlanSkeleton } from "./PlanSkeleton";
 
@@ -106,13 +109,12 @@ export default function PlanPage() {
     { id: "all", label: t("全部定时任务") },
     { id: "active", label: t("运行中") },
     { id: "paused", label: t("已暂停") },
-    { id: "archived", label: t("已归档") },
   ];
 
   return (
-    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-4 overflow-y-auto px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
       <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
+        <div className="hidden md:block">
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("定时任务")}
           </h1>
@@ -161,6 +163,7 @@ export default function PlanPage() {
         <div className="overflow-hidden rounded-2xl border border-line bg-surface">
           {items.map((card) => {
             const active = card.ongoing_state === "active";
+            const visualStatus = getCardVisualStatus(card);
             const cardSchedules = (schedules.data || []).filter(
               (item) => item.card_id === card.id,
             );
@@ -171,11 +174,16 @@ export default function PlanPage() {
                 onClick={() => navigate(`/plans/${projectID}/${card.id}`)}
                 className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
               >
-                <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-foreground">
+                <span className="relative mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-foreground">
                   {active ? (
                     <CalendarClock className="size-[18px]" />
                   ) : (
                     <CirclePause className="size-[18px]" />
+                  )}
+                  {visualStatus !== "idle" && (
+                    <span className="pointer-events-none absolute -top-0.5 -right-0.5 rounded-full bg-surface p-0.5">
+                      <CardStatusDot status={visualStatus} />
+                    </span>
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -187,11 +195,25 @@ export default function PlanPage() {
                       {card.pinned_at && (
                         <Pin className="size-3.5 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
                       )}
+                      {visualStatus === "answering" && (
+                        <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                          {t("正在执行")}
+                        </span>
+                      )}
+                      {visualStatus === "unread" && (
+                        <span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                          {t("新消息")}
+                        </span>
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
-                      <OngoingHealthBadge health={card.health} size="xs" />
-                      {card.ongoing_state && (
-                        <span className="text-xs text-faint">
+                      {(card.health === "healthy" ||
+                        card.health === "warning" ||
+                        card.health === "critical") && (
+                        <OngoingHealthBadge health={card.health} size="xs" />
+                      )}
+                      {card.ongoing_state && card.ongoing_state !== "active" && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                           {t(planStateLabels[card.ongoing_state])}
                         </span>
                       )}
@@ -206,31 +228,25 @@ export default function PlanPage() {
                     cardSchedules.map((item) => (
                       <span
                         key={item.id}
-                        className="mt-2 block text-xs text-faint"
+                        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint"
                       >
-                        {scheduleText(item)} · {item.timezone}
-                        {!item.enabled && <> · {t("日程已停用")}</>}
-                        {active && item.enabled && (
-                          <span className="ml-3">
-                            <Clock3 className="mr-1 inline size-3.5" />
-                            {t("下次")} {localTime(item.next_trigger_at)}
+                        <span>{scheduleText(item)}</span>
+                        {!item.enabled ? (
+                          <span>· {t("已停用")}</span>
+                        ) : active && item.next_trigger_at ? (
+                          <span>
+                            · {t("下次")} {localTime(item.next_trigger_at)}
                           </span>
-                        )}
-                        {item.last_triggered_at && (
-                          <span className="ml-3">
-                            {t("上次")} {localTime(item.last_triggered_at)}
-                          </span>
-                        )}
-                        {item.last_attempt_status && (
-                          <span className="ml-3">
-                            {t("最近运行")} ·{" "}
-                            {t(getAttemptStatusLabelKey(item.last_attempt_status))}
+                        ) : null}
+                        {item.last_attempt_status === "failed" && (
+                          <span className="text-danger">
+                            · {t("上次执行失败")}
                           </span>
                         )}
                       </span>
                     ))
                   ) : (
-                    <span className="mt-2 block text-xs text-faint">
+                    <span className="mt-1.5 block text-xs text-faint">
                       {t("未设置自动执行时间")}
                     </span>
                   )}

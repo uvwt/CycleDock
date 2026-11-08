@@ -32,8 +32,10 @@ export const ChatInput = React.forwardRef<HTMLTextAreaElement, ChatInputProps>(
       const el = textareaRef.current;
       if (!el) return;
       el.style.height = "auto";
-      const nextHeight = Math.min(Math.max(el.scrollHeight, 36), 160);
+      const rawScrollHeight = el.scrollHeight;
+      const nextHeight = Math.min(Math.max(rawScrollHeight, 36), 160);
       el.style.height = `${nextHeight}px`;
+      el.style.overflowY = rawScrollHeight > 160 ? "auto" : "hidden";
     }, [value, textareaRef]);
 
     return (
@@ -47,7 +49,7 @@ export const ChatInput = React.forwardRef<HTMLTextAreaElement, ChatInputProps>(
         readOnly={readOnly}
         onChange={(event) => onChange(event.target.value)}
         className={cn(
-          "max-h-40 min-h-[36px] w-full resize-none bg-transparent py-1.5 px-2 text-base md:text-[15px] outline-none placeholder:text-muted-foreground focus-visible:outline-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 read-only:text-secondary-foreground overflow-y-auto overscroll-contain",
+          "max-h-40 min-h-[36px] w-full resize-none bg-transparent py-1.5 px-2 text-base md:text-[15px] outline-none placeholder:text-muted-foreground focus-visible:outline-none focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 read-only:text-secondary-foreground overflow-y-hidden overscroll-contain",
           className,
         )}
         onKeyDown={(event) => {

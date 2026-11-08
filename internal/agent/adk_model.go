@@ -79,7 +79,7 @@ func newADKRouteModel(
 	dataStore *store.Store,
 	workspaceID uuid.UUID,
 	routes []db.WorkspaceModelRoute,
-) (model.LLM, error) {
+) (*adkRouteModel, error) {
 	if client == nil {
 		client = modelclient.New()
 	}
@@ -102,6 +102,21 @@ func newADKRouteModel(
 
 func (m *adkRouteModel) Name() string {
 	return "cycledock-route"
+}
+
+func (m *adkRouteModel) ActiveModel() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.activeRoute >= 0 && m.activeRoute < len(m.routes) {
+		return strings.TrimSpace(m.routes[m.activeRoute].Model)
+	}
+	if len(m.routes) > 0 {
+		return strings.TrimSpace(m.routes[0].Model)
+	}
+	return ""
 }
 
 func (m *adkRouteModel) GenerateContent(

@@ -1,19 +1,36 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   BriefcaseBusiness,
   CalendarClock,
   Cpu,
   MessageCircle,
+  PanelLeft,
   Settings,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
+import { keys } from "../app/query";
+import { api } from "../shared/api/client";
+import type { Card } from "../shared/api/types";
 import { ProjectSwitcherWithSettings } from "../features/projects/ProjectSwitcherWithSettings";
 import { ContextSidebarVisibility } from "../app/context-sidebar";
-import { HintTooltip } from "../shared/ui/components";
+import {
+  CardStatusDot,
+  type CardVisualStatus,
+} from "../shared/ui/CardStatusDot";
+import { getKindVisualStatus } from "../shared/lib/card-focus";
+import {
+  QuickCardSwitcherModal,
+  QuickCardSwitcherTrigger,
+} from "../shared/ui/MobileQuickCardSwitcher";
+import { HintTooltip, Sheet } from "../shared/ui/components";
 import { MainChatDock } from "../features/chat/MainChatDock";
+import { DiscussionSidebar } from "../features/chat/DiscussionSidebar";
+import { WorkSidebar } from "../features/board/WorkSidebar";
+import { PlanSidebar } from "../features/plans/PlanSidebar";
 
 function getResetPath(pathname: string, projectID: string): string {
   if (pathname.startsWith("/board") || pathname.startsWith("/cards/")) {
@@ -39,6 +56,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { projects, projectID, setProjectID } = useProject();
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [listVisibility, setListVisibility] = useState({
     "/chat": true,
     "/board": true,
@@ -58,7 +77,35 @@ export function Shell({ children }: { children: ReactNode }) {
   const isChatHome =
     location.pathname === "/chat" || location.pathname === "/chat/";
 
-  const primaryNav = [
+  const viewedCardID = useMemo(() => {
+    const match = /^\/(?:chat|cards|plans)\/[^/]+\/([^/]+)\/?$/.exec(
+      location.pathname,
+    );
+    if (!match?.[1]) return "";
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }, [location.pathname]);
+
+  const cardsQuery = useQuery({
+    queryKey: keys.cards(projectID),
+    queryFn: () => api.cards(projectID),
+    enabled: Boolean(projectID),
+  });
+  const projectCards = useMemo(
+    () => cardsQuery.data || [],
+    [cardsQuery.data],
+  );
+
+  const primaryNav: {
+    to: string;
+    activePath: string;
+    label: string;
+    icon: typeof MessageCircle;
+    visualStatus?: CardVisualStatus;
+  }[] = [
     {
       to: projectID
         ? `/chat?project=${encodeURIComponent(projectID)}`
@@ -66,18 +113,25 @@ export function Shell({ children }: { children: ReactNode }) {
       activePath: "/chat",
       label: t("聊天"),
       icon: MessageCircle,
+      visualStatus: getKindVisualStatus(
+        projectCards,
+        "discussion",
+        viewedCardID,
+      ),
     },
     {
       to: projectID ? `/board/${encodeURIComponent(projectID)}` : "/board",
       activePath: "/board",
       label: t("任务"),
       icon: BriefcaseBusiness,
+      visualStatus: getKindVisualStatus(projectCards, "todo", viewedCardID),
     },
     {
       to: projectID ? `/plans/${encodeURIComponent(projectID)}` : "/plans",
       activePath: "/plans",
       label: t("定时"),
       icon: CalendarClock,
+      visualStatus: getKindVisualStatus(projectCards, "ongoing", viewedCardID),
     },
     {
       to: projectID
@@ -152,14 +206,6 @@ export function Shell({ children }: { children: ReactNode }) {
     }
   }
 
-  function createProject() {
-    navigate(
-      projectID
-        ? `/board/${encodeURIComponent(projectID)}?new=project`
-        : "/board?new=project",
-    );
-  }
-
   const logo = (
     <img
       src="/cycledock-logo.png"
@@ -175,7 +221,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div
-      className={`flex h-full min-h-0 w-full flex-col overflow-hidden text-strong md:flex-row ${
+      className={`relative flex h-full min-h-0 w-full flex-col overflow-hidden text-strong md:flex-row ${
         focusedConversation ? "bg-surface" : "bg-canvas"
       }`}
     >
@@ -224,6 +270,11 @@ export function Shell({ children }: { children: ReactNode }) {
                         <span className="absolute -left-3 top-2.5 bottom-2.5 w-1 rounded-r-full bg-primary transition-all" />
                       )}
                       <item.icon className="size-5 transition-transform duration-150 group-hover:scale-105" />
+                      {item.visualStatus && item.visualStatus !== "idle" && (
+                        <span className="pointer-events-none absolute top-1.5 right-1.5">
+                          <CardStatusDot status={item.visualStatus} />
+                        </span>
+                      )}
                     </>
                   );
                 }}
@@ -233,12 +284,31 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="mt-auto flex flex-col items-center gap-1.5">
+          {projectID && (
+            <HintTooltip content={t("快速切换卡片 (⌘K)")} side="right">
+              <div>
+                <QuickCardSwitcherTrigger
+                  projectID={projectID}
+                  activeCardID={viewedCardID || undefined}
+                  onClick={() => {
+                    if (focusedConversation || isChatHome) {
+                      window.dispatchEvent(
+                        new CustomEvent("cycledock:open-quick-switcher"),
+                      );
+                    } else {
+                      setQuickSwitcherOpen(true);
+                    }
+                  }}
+                  className="size-10 rounded-xl border-transparent bg-transparent shadow-none hover:bg-muted/70"
+                />
+              </div>
+            </HintTooltip>
+          )}
           <ProjectSwitcherWithSettings
             compact
             projects={projects}
             projectID={projectID}
             onChange={switchProject}
-            onCreate={createProject}
           />
           <HintTooltip content={t("设置")} side="right">
             <NavLink
@@ -267,62 +337,111 @@ export function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
-        {!focusedConversation && (
-          <header
-            className={`sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top,0px))] items-center justify-between px-3 pt-[env(safe-area-inset-top,0px)] md:hidden ${
-              isChatHome ? "bg-transparent" : "border-b border-line bg-surface"
-            }`}
-          >
+        {!focusedConversation && !isChatHome && (
+          <header className="sticky top-0 z-30 grid h-[calc(3.25rem+env(safe-area-inset-top,0px))] grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 bg-surface/90 px-3 pt-[env(safe-area-inset-top,0px)] backdrop-blur-md md:hidden">
             <button
               type="button"
-              onClick={handleLogoClick}
-              title="CycleDock"
-              aria-label="CycleDock"
-              className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl"
+              onClick={() => setMobileDrawerOpen(true)}
+              title={t("打开侧栏")}
+              aria-label={t("打开侧栏")}
+              className="inline-flex size-8 items-center justify-center rounded-lg border border-line bg-surface text-muted-foreground shadow-xs transition hover:bg-muted hover:text-foreground"
             >
-              {logo}
+              <PanelLeft className="size-4" />
             </button>
-            <nav aria-label={t("主导航")} className="flex items-center gap-1">
-              {primaryNav.map((item) => (
-                <NavLink
-                  key={item.activePath}
-                  to={item.to}
-                  title={item.label}
-                  aria-label={item.label}
-                  className={({ isActive }) =>
-                    `inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition ${
-                      primaryActive(item.activePath, isActive)
-                        ? "bg-muted text-heading"
-                        : "text-faint"
-                    }`
-                  }
-                >
-                  <item.icon className="size-[18px]" />
-                </NavLink>
-              ))}
-              <ProjectSwitcherWithSettings
-                compact
-                compactSize="sm"
-                projects={projects}
-                projectID={projectID}
-                onChange={switchProject}
-                onCreate={createProject}
-              />
-              <NavLink
-                to="/settings/general"
-                onClick={() => projectID && setProjectID(projectID)}
-                title={t("设置")}
-                aria-label={t("设置")}
-                className={({ isActive }) =>
-                  `inline-flex size-9 shrink-0 items-center justify-center rounded-xl transition ${
-                    isActive ? "bg-muted text-heading" : "text-faint"
-                  }`
-                }
-              >
-                <Settings className="size-[18px]" />
-              </NavLink>
-            </nav>
+            <div className="truncate text-center text-sm font-semibold text-heading">
+              {location.pathname.startsWith("/board")
+                ? t("任务")
+                : location.pathname.startsWith("/plans")
+                  ? t("定时")
+                  : location.pathname.startsWith("/activity")
+                    ? t("活动")
+                    : location.pathname.startsWith("/nexusdock")
+                      ? t("设备")
+                      : location.pathname.startsWith("/settings")
+                        ? t("设置")
+                        : "CycleDock"}
+            </div>
+            <div className="flex items-center justify-end">
+              {projectID && (
+                <QuickCardSwitcherTrigger
+                  projectID={projectID}
+                  onClick={() => setQuickSwitcherOpen(true)}
+                />
+              )}
+            </div>
           </header>
+        )}
+        {!focusedConversation && !isChatHome && (
+          <Sheet
+            open={mobileDrawerOpen}
+            onOpenChange={setMobileDrawerOpen}
+            side="left"
+            padded={false}
+            showCloseButton={false}
+            className="bg-canvas"
+          >
+            <div
+              className="flex h-full min-h-0 flex-col"
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest("a")) {
+                  setMobileDrawerOpen(false);
+                }
+              }}
+            >
+              {location.pathname.startsWith("/board") ? (
+                <WorkSidebar
+                  cards={projectCards}
+                  onSelect={(card: Card) => {
+                    setMobileDrawerOpen(false);
+                    navigate(
+                      `/cards/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                    );
+                  }}
+                  loading={cardsQuery.isPending}
+                />
+              ) : location.pathname.startsWith("/plans") ? (
+                <PlanSidebar
+                  cards={projectCards.filter((card) => card.kind === "ongoing")}
+                  activeCardID=""
+                  onSelect={(card: Card) => {
+                    setMobileDrawerOpen(false);
+                    navigate(
+                      `/plans/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                    );
+                  }}
+                  loading={cardsQuery.isPending}
+                />
+              ) : (
+                <DiscussionSidebar
+                  discussions={projectCards
+                    .filter((card) => card.kind === "discussion")
+                    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))}
+                  onSelect={(card: Card) => {
+                    setMobileDrawerOpen(false);
+                    navigate(
+                      `/chat/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                    );
+                  }}
+                  onCreate={() => {
+                    setMobileDrawerOpen(false);
+                    navigate(
+                      projectID
+                        ? `/chat?project=${encodeURIComponent(projectID)}`
+                        : "/chat",
+                    );
+                  }}
+                  loading={cardsQuery.isPending}
+                />
+              )}
+            </div>
+          </Sheet>
+        )}
+        {!focusedConversation && !isChatHome && projectID && (
+          <QuickCardSwitcherModal
+            projectID={projectID}
+            open={quickSwitcherOpen}
+            onOpenChange={setQuickSwitcherOpen}
+          />
         )}
         <ContextSidebarVisibility.Provider value={listVisible}>
           {children}
