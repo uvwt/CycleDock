@@ -25,6 +25,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 const (
@@ -146,6 +147,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
+	llm.budgetPolicy = r.compactionBudgetPolicy.withDefaults()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
 	replies := &replyState{}
@@ -214,13 +216,14 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err := ensureADKSession(runCtx, r.sessionService, appName, userID, sessionID); err != nil {
 		return err
 	}
+	compactionThreshold := r.resolveAttemptCompactionThreshold(routes)
 	adkRunner, err := adkrunner.New(adkrunner.Config{
 		AppName:         appName,
 		Agent:           rootAgent,
 		SessionService:  r.sessionService,
 		ArtifactService: r.artifactService,
 		Compaction: &compaction.Config{
-			TokenThreshold:     r.compactionTokenThreshold,
+			TokenThreshold:     compactionThreshold,
 			EventRetentionSize: r.compactionEventRetention,
 			Summarizer:         summarizer,
 		},
@@ -345,6 +348,28 @@ func ensureADKSession(
 		return fmt.Errorf("create ADK session: %w", err)
 	}
 	return nil
+}
+
+func (r *Runner) resolveAttemptCompactionThreshold(routes []db.WorkspaceModelRoute) int {
+	if r.compactionTokenThreshold > 0 && r.compactionTokenThreshold != defaultCompactionTokenThreshold {
+		return r.compactionTokenThreshold
+	}
+	policy := r.compactionBudgetPolicy.withDefaults()
+	for _, route := range routes {
+		if !route.Enabled {
+			continue
+		}
+		limits := ResolveRouteModelLimits(route, r.model)
+		budget := ComputeRouteCompactionBudget(limits, policy)
+		if budget.CompactAtTokens > 0 {
+			return budget.CompactAtTokens
+		}
+		break
+	}
+	if r.compactionTokenThreshold > 0 {
+		return r.compactionTokenThreshold
+	}
+	return defaultCompactionTokenThreshold
 }
 
 type deviceToolCallbacks struct {

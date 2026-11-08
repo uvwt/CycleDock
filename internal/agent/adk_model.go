@@ -52,11 +52,12 @@ type RouteCallObservation struct {
 // tool loop; CycleDock keeps credential refresh, route failover and converts
 // provider argument deltas into ADK partial responses.
 type adkRouteModel struct {
-	client      *modelclient.Client
-	modelAuth   *modelauth.Service
-	store       *store.Store
-	workspaceID uuid.UUID
-	routes      []db.WorkspaceModelRoute
+	client       *modelclient.Client
+	modelAuth    *modelauth.Service
+	store        *store.Store
+	workspaceID  uuid.UUID
+	routes       []db.WorkspaceModelRoute
+	budgetPolicy CompactionBudgetPolicy
 
 	mu              sync.Mutex
 	activeRoute     int
@@ -121,10 +122,12 @@ func newADKRouteModel(
 		return nil, errors.New("built-in agent has no enabled model route")
 	}
 	return &adkRouteModel{
-		client: client, modelAuth: auth,
-		store:       dataStore,
-		workspaceID: workspaceID,
-		routes:      enabled,
+		client:       client,
+		modelAuth:    auth,
+		store:        dataStore,
+		workspaceID:  workspaceID,
+		routes:       enabled,
+		budgetPolicy: DefaultCompactionBudgetPolicy(),
 	}, nil
 }
 
@@ -197,8 +200,25 @@ func (m *adkRouteModel) GenerateContent(
 			return
 		}
 
+		estimatedPromptTokens := estimateADKRequestTokens(req)
 		var lastErr error
 		for i := start; i < len(m.routes); i++ {
+			routeLimits := ResolveRouteModelLimits(m.routes[i], m.client)
+			routeBudget := ComputeRouteCompactionBudget(routeLimits, m.budgetPolicy)
+			if capErr := ValidateRoutePromptCapacity(
+				m.routes[i],
+				routeBudget,
+				estimatedPromptTokens,
+				i > start,
+				m.budgetPolicy,
+			); capErr != nil {
+				lastErr = capErr
+				if i+1 < len(m.routes) && stream && !yield(modelStageResponse("备用模型上下文窗口不足，正在尝试下一模型"), nil) {
+					return
+				}
+				continue
+			}
+
 			config, err := m.routeConfig(ctx, m.routes[i])
 			if err != nil {
 				if !isRetryableModelRouteError(ctx, err) {
@@ -267,6 +287,10 @@ func (m *adkRouteModel) GenerateContent(
 					m.mu.Unlock()
 					yield(response, nil)
 					return
+				}
+				if modelclient.IsContextTooLargeError(err) {
+					lastErr = fmt.Errorf("%w: %v", ErrRouteContextCapacityExceeded, err)
+					break
 				}
 				if !isRetryableModelRouteError(ctx, err) {
 					yield(nil, err)
