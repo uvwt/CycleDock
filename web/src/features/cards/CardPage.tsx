@@ -516,12 +516,62 @@ function CardPageContent({
 
   const approveReview = useMutation({
     mutationFn: () => api.moveTodo(cardID, "done"),
-    onSuccess: async () => {
-      await sync();
+    onMutate: async () => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: keys.card(cardID) }),
+        card?.project_id
+          ? queryClient.cancelQueries({ queryKey: keys.cards(card.project_id) })
+          : Promise.resolve(),
+      ]);
+      const prevCard = queryClient.getQueryData<Card>(keys.card(cardID));
+      const prevCards = card?.project_id
+        ? queryClient.getQueryData<Card[]>(keys.cards(card.project_id))
+        : undefined;
+
+      if (prevCard) {
+        queryClient.setQueryData<Card>(keys.card(cardID), {
+          ...prevCard,
+          todo_state: "done",
+          updated_at: new Date().toISOString(),
+        });
+      }
+      if (prevCards && card?.project_id) {
+        queryClient.setQueryData<Card[]>(
+          keys.cards(card.project_id),
+          prevCards.map((c) =>
+            c.id === cardID
+              ? { ...c, todo_state: "done", updated_at: new Date().toISOString() }
+              : c,
+          ),
+        );
+      }
+      return { prevCard, prevCards };
+    },
+    onError: (error, _variables, context) => {
+      if (context?.prevCard) {
+        queryClient.setQueryData(keys.card(cardID), context.prevCard);
+      }
+      if (context?.prevCards && card?.project_id) {
+        queryClient.setQueryData(keys.cards(card.project_id), context.prevCards);
+      }
+      toast.error(error instanceof Error ? error.message : t("状态更新失败"));
+    },
+    onSuccess: (updatedCard) => {
+      if (updatedCard) {
+        queryClient.setQueryData<Card>(keys.card(cardID), (old) =>
+          old ? { ...old, ...updatedCard } : updatedCard,
+        );
+        if (card?.project_id) {
+          queryClient.setQueryData<Card[]>(keys.cards(card.project_id), (old) =>
+            old
+              ? old.map((c) => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c))
+              : old,
+          );
+        }
+      }
+      void sync();
       toast.success(t("已通过验收"));
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("状态更新失败")),
   });
 
   function submit() {
