@@ -363,6 +363,7 @@ export default function ChatHome() {
         <Sheet
           open={mobileListOpen}
           onOpenChange={setMobileListOpen}
+          title={t("讨论列表")}
           side="left"
           padded={false}
           showCloseButton={false}

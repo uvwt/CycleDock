@@ -39,6 +39,7 @@ type NavigationState = {
 };
 
 export default function CardPage() {
+  const { t } = useTranslation();
   const { projectID = "", cardID = "" } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -166,6 +167,13 @@ export default function CardPage() {
         <Sheet
           open={contextSidebarOpen}
           onOpenChange={setContextSidebarOpen}
+          title={
+            isDiscussion
+              ? t("讨论列表")
+              : isOngoing
+                ? t("定时列表")
+                : t("任务列表")
+          }
           side="left"
           padded={false}
           showCloseButton={false}
@@ -612,7 +620,7 @@ function CardPageContent({
           {/* 手机端悬浮顶部栏：统一极简对称 左 [侧栏] | 中 [● 标题 ⓘ] | 右 [快速切换] */}
           <div
             data-mobile-top-surface
-            className="absolute top-0 inset-x-0 z-20 flex items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-4 sm:px-4 md:hidden pointer-events-none bg-gradient-to-b from-canvas/95 via-canvas/75 to-transparent"
+            className="absolute top-0 inset-x-0 z-20 flex items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden pointer-events-none bg-canvas"
           >
             <div className="flex shrink-0 items-center gap-1.5 pointer-events-auto">
               <button
