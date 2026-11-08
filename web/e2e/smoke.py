@@ -640,7 +640,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
         self.assertEqual(active_task.get_attribute("aria-current"), "page")
 
-        actions = self.page.locator('aside button[aria-label="新建会话"]:visible')
+        actions = self.page.locator('aside button[aria-label="快速切换卡片 (⌘K)"]:visible')
         actions_box = actions.bounding_box()
         self.assertIsNotNone(actions_box)
         self.assertLess(actions_box["x"], 64)
@@ -855,7 +855,7 @@ class CycleDockSmoke(unittest.TestCase):
         discussion_dialog = self.page.get_by_role("dialog", name="讨论列表")
         discussion_dialog.wait_for()
         self.assertEqual(
-            discussion_dialog.locator('nav[aria-label="主导航"]:visible').count(), 1
+            discussion_dialog.locator('nav[aria-label="工作区导航"]:visible').count(), 1
         )
         discussion_dialog.get_by_role(
             "button", name=re.compile("讨论服务器巡检计划")
@@ -1117,7 +1117,7 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.locator('[data-mobile-top-surface] button[aria-label="更多操作"]').count(), 0
         )
         # 左右两侧保留的顶部按钮高度必须一致（32px）且处于同一条水平中心线上
-        labels = ["打开任务列表", "任务详情", "新建会话"]
+        labels = ["打开任务列表", "任务详情", "快速切换卡片 (⌘K)"]
         boxes = {}
         for label in labels:
             btn = self.page.locator(
@@ -1158,7 +1158,7 @@ class CycleDockSmoke(unittest.TestCase):
                 const topButtons = [
                     '打开讨论列表',
                     '任务详情',
-                    '新建会话',
+                    '快速切换卡片 (⌘K)',
                 ].map((label) =>
                     document.querySelector(`[data-mobile-top-surface] button[aria-label="${label}"]`)
                 );
