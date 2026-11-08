@@ -32,6 +32,10 @@ type Connection struct {
 	Name              string
 	URL               string
 	BearerToken       string
+	// BearerTokenFunc 在每次发出 MCP HTTP 请求前按需获取最新 Token（用于 OAuth 长会话自动续期）。
+	BearerTokenFunc   func(ctx context.Context) (string, error)
+	// RefreshBearerFunc 在收到 HTTP 401 时强制刷新 Token 并重放一次请求。
+	RefreshBearerFunc func(ctx context.Context) (string, error)
 	Timeout           time.Duration
 	NativeToolNames   bool
 	HiddenRemoteTools map[string]bool
@@ -809,9 +813,13 @@ func mcpHTTPClient(connection Connection) *http.Client {
 	var transport http.RoundTripper = &boundedTransport{
 		base: http.DefaultTransport, maxBytes: maxMCPResponseBytes,
 	}
-	if connection.BearerToken != "" {
+	if connection.BearerToken != "" || connection.BearerTokenFunc != nil {
 		transport = &bearerTransport{
-			base: transport, token: connection.BearerToken, allowedOrigin: origin,
+			base:          transport,
+			token:         connection.BearerToken,
+			tokenFunc:     connection.BearerTokenFunc,
+			refreshFunc:   connection.RefreshBearerFunc,
+			allowedOrigin: origin,
 		}
 	}
 	return &http.Client{
@@ -839,6 +847,8 @@ func endpointOrigin(raw string) string {
 type bearerTransport struct {
 	base          http.RoundTripper
 	token         string
+	tokenFunc     func(ctx context.Context) (string, error)
+	refreshFunc   func(ctx context.Context) (string, error)
 	allowedOrigin string
 }
 
@@ -846,10 +856,40 @@ func (t *bearerTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	if request == nil || t.allowedOrigin == "" || endpointOrigin(request.URL.String()) != t.allowedOrigin {
 		return t.base.RoundTrip(request)
 	}
+	token := t.token
+	if t.tokenFunc != nil {
+		var err error
+		token, err = t.tokenFunc(request.Context())
+		if err != nil {
+			return nil, fmt.Errorf("resolve MCP bearer token: %w", err)
+		}
+	}
 	clone := request.Clone(request.Context())
 	clone.Header = request.Header.Clone()
-	clone.Header.Set("Authorization", "Bearer "+t.token)
-	return t.base.RoundTrip(clone)
+	clone.Header.Set("Authorization", "Bearer "+token)
+	resp, err := t.base.RoundTrip(clone)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || t.refreshFunc == nil {
+		return resp, err
+	}
+	if request.Body != nil && request.GetBody == nil {
+		return resp, nil
+	}
+	refreshedToken, refreshErr := t.refreshFunc(request.Context())
+	if refreshErr != nil || refreshedToken == "" {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	retryReq := request.Clone(request.Context())
+	retryReq.Header = request.Header.Clone()
+	if request.GetBody != nil {
+		bodyCopy, bodyErr := request.GetBody()
+		if bodyErr != nil {
+			return nil, bodyErr
+		}
+		retryReq.Body = bodyCopy
+	}
+	retryReq.Header.Set("Authorization", "Bearer "+refreshedToken)
+	return t.base.RoundTrip(retryReq)
 }
 
 type boundedTransport struct {

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
+	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
@@ -177,7 +178,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		Model:               summaryLLM,
 		MaxToolContentChars: 4000,
 		MaxTranscriptChars:  120000,
-		Timeout:             20 * time.Second,
+		Timeout:             agentconfig.DefaultModelRequestTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("create ADK context summarizer: %w", err)
@@ -430,7 +431,23 @@ func (r *Runner) openADKMCPSessions(ctx context.Context, workspaceID uuid.UUID) 
 	}
 	if err == nil {
 		err = sessions.AddConnection(ctx, mcpclient.Connection{
-			Name: firstPartyNexusDockServerName, URL: connection.URL, BearerToken: connection.AccessToken,
+			Name:        firstPartyNexusDockServerName,
+			URL:         connection.URL,
+			BearerToken: connection.AccessToken,
+			BearerTokenFunc: func(reqCtx context.Context) (string, error) {
+				conn, err := r.nexusDock.Runtime(reqCtx, workspaceID)
+				if err != nil {
+					return "", err
+				}
+				return conn.AccessToken, nil
+			},
+			RefreshBearerFunc: func(reqCtx context.Context) (string, error) {
+				conn, err := r.nexusDock.ForceRefresh(reqCtx, workspaceID)
+				if err != nil {
+					return "", err
+				}
+				return conn.AccessToken, nil
+			},
 			Timeout: 30 * time.Second, NativeToolNames: true,
 			HiddenRemoteTools: map[string]bool{"agentdock_context": true},
 		})
