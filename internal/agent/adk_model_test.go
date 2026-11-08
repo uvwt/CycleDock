@@ -342,3 +342,119 @@ func TestPrioritizeRoutes(t *testing.T) {
 	}
 }
 
+func TestADKRouteModelUsageActualEstimatedAndFailoverRouteTracking(t *testing.T) {
+	primaryID := uuid.New()
+	backupID := uuid.New()
+	relayID := uuid.New()
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "quota exhausted", http.StatusPaymentRequired)
+	}))
+	defer primary.Close()
+
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{"message":{"content":"backup response with usage"}}],
+			"usage":{
+				"prompt_tokens":420,
+				"completion_tokens":85,
+				"prompt_tokens_details":{"cached_tokens":120},
+				"completion_tokens_details":{"reasoning_tokens":30}
+			}
+		}`))
+	}))
+	defer backup.Close()
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"relay response without usage"}}]}`))
+	}))
+	defer relay.Close()
+
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+		{ID: primaryID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: primary.URL, Model: "primary-model"},
+		{ID: backupID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: backup.URL, Model: "backup-model"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if obs, ok := llm.LastObservation(); ok || obs.UsageSource != TokenUsageSourceUnknown {
+		t.Fatalf("initial observation=%+v ok=%v, want unknown/false", obs, ok)
+	}
+
+	var finalResp *model.LLMResponse
+	for resp, err := range llm.GenerateContent(context.Background(), &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("测试故障切换后的真实 Token 统计与路由记录", genai.RoleUser)},
+	}, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.Partial {
+			finalResp = resp
+		}
+	}
+	if finalResp == nil || finalResp.UsageMetadata == nil {
+		t.Fatalf("finalResp=%+v, expected UsageMetadata", finalResp)
+	}
+	if finalResp.UsageMetadata.PromptTokenCount != 420 ||
+		finalResp.UsageMetadata.CandidatesTokenCount != 85 ||
+		finalResp.UsageMetadata.CachedContentTokenCount != 120 ||
+		finalResp.UsageMetadata.ThoughtsTokenCount != 30 ||
+		finalResp.UsageMetadata.TotalTokenCount != 505 {
+		t.Fatalf("unexpected UsageMetadata=%+v", finalResp.UsageMetadata)
+	}
+	if finalResp.ModelVersion != "backup-model" {
+		t.Fatalf("ModelVersion=%q, want backup-model", finalResp.ModelVersion)
+	}
+	if finalResp.CustomMetadata[tokenUsageSourceKey] != string(TokenUsageSourceActual) {
+		t.Fatalf("token_usage_source=%v, want actual", finalResp.CustomMetadata[tokenUsageSourceKey])
+	}
+	if finalResp.CustomMetadata[modelRouteIDKey] != backupID.String() {
+		t.Fatalf("model_route_id=%v, want %s", finalResp.CustomMetadata[modelRouteIDKey], backupID)
+	}
+
+	activeRoute, ok := llm.ActiveRoute()
+	if !ok || activeRoute.ID != backupID || llm.ActiveModel() != "backup-model" {
+		t.Fatalf("ActiveRoute=%+v ActiveModel=%q, want backup route %s", activeRoute, llm.ActiveModel(), backupID)
+	}
+	obs, ok := llm.LastObservation()
+	if !ok || obs.RouteIndex != 1 || obs.RouteID != backupID || obs.Model != "backup-model" || obs.UsageSource != TokenUsageSourceActual || obs.Usage.InputTokens != 420 {
+		t.Fatalf("LastObservation=%+v ok=%v", obs, ok)
+	}
+
+	// 验证中转不返回 Usage 时，回退为本地估算（estimated）并同样写入 UsageMetadata。
+	relayLLM, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+		{ID: relayID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: relay.URL, Model: "relay-model"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var relayResp *model.LLMResponse
+	for resp, err := range relayLLM.GenerateContent(context.Background(), &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("这是一段需要本地估算 Token 用量的输入内容", genai.RoleUser)},
+	}, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.Partial {
+			relayResp = resp
+		}
+	}
+	if relayResp == nil || relayResp.UsageMetadata == nil {
+		t.Fatalf("relayResp=%+v, expected estimated UsageMetadata", relayResp)
+	}
+	if relayResp.UsageMetadata.PromptTokenCount <= 0 || relayResp.UsageMetadata.CandidatesTokenCount <= 0 {
+		t.Fatalf("estimated UsageMetadata must be positive: %+v", relayResp.UsageMetadata)
+	}
+	if relayResp.CustomMetadata[tokenUsageSourceKey] != string(TokenUsageSourceEstimated) {
+		t.Fatalf("token_usage_source=%v, want estimated", relayResp.CustomMetadata[tokenUsageSourceKey])
+	}
+	relayObs, ok := relayLLM.LastObservation()
+	if !ok || relayObs.RouteID != relayID || relayObs.UsageSource != TokenUsageSourceEstimated || relayObs.Usage.InputTokens <= 0 {
+		t.Fatalf("relay LastObservation=%+v ok=%v", relayObs, ok)
+	}
+}
+
+

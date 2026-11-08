@@ -47,7 +47,7 @@ func TestResponsesTransportStreamsTextAndToolCalls(t *testing.T) {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, `data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"id\":7}"}}`)
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[]}}`)
+		fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[],"usage":{"input_tokens":520,"output_tokens":90,"input_tokens_details":{"cached_tokens":128},"output_tokens_details":{"reasoning_tokens":24}}}}`)
 		fmt.Fprintln(w)
 	}))
 	defer server.Close()
@@ -97,6 +97,15 @@ func TestResponsesTransportStreamsTextAndToolCalls(t *testing.T) {
 	}
 	if completion.ToolCalls[0].ID != "call_1" || completion.ToolCalls[0].Function.Name != "lookup" {
 		t.Fatalf("unexpected tool call: %#v", completion.ToolCalls[0])
+	}
+	wantUsage := TokenUsage{
+		InputTokens:           520,
+		OutputTokens:          90,
+		CachedInputTokens:     128,
+		ReasoningOutputTokens: 24,
+	}
+	if completion.Usage == nil || *completion.Usage != wantUsage {
+		t.Fatalf("completion.Usage = %#v, want %#v", completion.Usage, wantUsage)
 	}
 	if requestBody.Model != "subscription-model" || requestBody.Instructions != "Follow workspace rules." {
 		t.Fatalf("unexpected request metadata: %#v", requestBody)
