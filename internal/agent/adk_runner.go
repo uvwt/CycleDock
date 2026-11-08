@@ -178,6 +178,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	}
 	summarizer, err := compaction.NewLLMSummarizer(compaction.LLMSummarizerConfig{
 		Model:               summaryLLM,
+		PromptTemplate:      compactionPromptTemplate,
 		MaxToolContentChars: 4000,
 		MaxTranscriptChars:  120000,
 		Timeout:             agentconfig.DefaultModelRequestTimeout,
