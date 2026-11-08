@@ -338,7 +338,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
         {!focusedConversation && !isChatHome && (
-          <header className="sticky top-0 z-30 grid h-[calc(3.25rem+env(safe-area-inset-top,0px))] grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 bg-surface px-3 pt-[env(safe-area-inset-top,0px)] md:hidden">
+          <header className="sticky top-0 z-30 grid h-[calc(3.25rem+env(safe-area-inset-top,0px))] grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-2 bg-surface/90 px-3 pt-[env(safe-area-inset-top,0px)] backdrop-blur-md md:hidden">
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
