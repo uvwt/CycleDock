@@ -9,33 +9,44 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createWorkspaceModelRoute = `-- name: CreateWorkspaceModelRoute :one
 INSERT INTO workspace_model_routes (
     id, workspace_id, position, enabled, provider_type, credential_id,
-    provider_base_url, model, api_key_env, api_key_ciphertext
+    provider_base_url, model, base_model, api_key_env, api_key_ciphertext,
+    context_window_tokens, max_input_tokens, max_output_tokens,
+    limits_source, limits_verified_at
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6,
-    $7, $8, $9,
-    $10
+    $7, $8, $9, $10,
+    $11,
+    $12, $13, $14,
+    COALESCE(NULLIF(btrim($15::text), ''), 'unknown'), $16
 )
-RETURNING id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext
+RETURNING id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext, base_model, context_window_tokens, max_input_tokens, max_output_tokens, limits_source, limits_verified_at
 `
 
 type CreateWorkspaceModelRouteParams struct {
-	ID               uuid.UUID     `json:"id"`
-	WorkspaceID      uuid.UUID     `json:"workspace_id"`
-	Position         int32         `json:"position"`
-	Enabled          bool          `json:"enabled"`
-	ProviderType     string        `json:"provider_type"`
-	CredentialID     uuid.NullUUID `json:"credential_id"`
-	ProviderBaseUrl  string        `json:"provider_base_url"`
-	Model            string        `json:"model"`
-	ApiKeyEnv        string        `json:"api_key_env"`
-	ApiKeyCiphertext []byte        `json:"api_key_ciphertext"`
+	ID                  uuid.UUID          `json:"id"`
+	WorkspaceID         uuid.UUID          `json:"workspace_id"`
+	Position            int32              `json:"position"`
+	Enabled             bool               `json:"enabled"`
+	ProviderType        string             `json:"provider_type"`
+	CredentialID        uuid.NullUUID      `json:"credential_id"`
+	ProviderBaseUrl     string             `json:"provider_base_url"`
+	Model               string             `json:"model"`
+	BaseModel           string             `json:"base_model"`
+	ApiKeyEnv           string             `json:"api_key_env"`
+	ApiKeyCiphertext    []byte             `json:"api_key_ciphertext"`
+	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
+	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
+	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
+	LimitsSource        string             `json:"limits_source"`
+	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
 }
 
 func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorkspaceModelRouteParams) (WorkspaceModelRoute, error) {
@@ -48,8 +59,14 @@ func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorks
 		arg.CredentialID,
 		arg.ProviderBaseUrl,
 		arg.Model,
+		arg.BaseModel,
 		arg.ApiKeyEnv,
 		arg.ApiKeyCiphertext,
+		arg.ContextWindowTokens,
+		arg.MaxInputTokens,
+		arg.MaxOutputTokens,
+		arg.LimitsSource,
+		arg.LimitsVerifiedAt,
 	)
 	var i WorkspaceModelRoute
 	err := row.Scan(
@@ -65,6 +82,12 @@ func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorks
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ApiKeyCiphertext,
+		&i.BaseModel,
+		&i.ContextWindowTokens,
+		&i.MaxInputTokens,
+		&i.MaxOutputTokens,
+		&i.LimitsSource,
+		&i.LimitsVerifiedAt,
 	)
 	return i, err
 }
@@ -225,7 +248,7 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 }
 
 const listWorkspaceModelRoutes = `-- name: ListWorkspaceModelRoutes :many
-SELECT id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext
+SELECT id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext, base_model, context_window_tokens, max_input_tokens, max_output_tokens, limits_source, limits_verified_at
 FROM workspace_model_routes
 WHERE workspace_id = $1
 ORDER BY position, id
@@ -253,6 +276,12 @@ func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ApiKeyCiphertext,
+			&i.BaseModel,
+			&i.ContextWindowTokens,
+			&i.MaxInputTokens,
+			&i.MaxOutputTokens,
+			&i.LimitsSource,
+			&i.LimitsVerifiedAt,
 		); err != nil {
 			return nil, err
 		}

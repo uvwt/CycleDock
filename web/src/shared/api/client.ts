@@ -12,6 +12,7 @@ import type {
   MCPInput,
   ModelAuth,
   ModelAuthStart,
+  ModelCatalogItem,
   NexusConnection,
   NexusDevices,
   NexusFleetResponse,
@@ -256,7 +257,7 @@ export const api = {
     request<AgentSettings>("/agent/settings", "PUT", x),
   authStatuses: () => request<ModelAuth[]>("/agent/model-auth"),
   models: (p: "chatgpt" | "grok", credentialID?: string) =>
-    request<{ id: string; name: string }[]>(
+    request<ModelCatalogItem[]>(
       `/agent/models?provider=${p}${credentialID ? `&credential_id=${encodeURIComponent(credentialID)}` : ""}`,
     ),
   providerModels: (value: {
@@ -264,7 +265,7 @@ export const api = {
     api_key?: string;
     api_key_env?: string;
   }) =>
-    request<{ id: string; name: string }[]>(
+    request<ModelCatalogItem[]>(
       "/agent/provider-models",
       "POST",
       value,

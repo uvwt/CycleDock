@@ -33,13 +33,17 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 -- name: CreateWorkspaceModelRoute :one
 INSERT INTO workspace_model_routes (
     id, workspace_id, position, enabled, provider_type, credential_id,
-    provider_base_url, model, api_key_env, api_key_ciphertext
+    provider_base_url, model, base_model, api_key_env, api_key_ciphertext,
+    context_window_tokens, max_input_tokens, max_output_tokens,
+    limits_source, limits_verified_at
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(position), sqlc.arg(enabled),
     sqlc.arg(provider_type), sqlc.narg(credential_id),
-    sqlc.arg(provider_base_url), sqlc.arg(model), sqlc.arg(api_key_env),
-    sqlc.narg(api_key_ciphertext)
+    sqlc.arg(provider_base_url), sqlc.arg(model), sqlc.arg(base_model), sqlc.arg(api_key_env),
+    sqlc.narg(api_key_ciphertext),
+    sqlc.narg(context_window_tokens), sqlc.narg(max_input_tokens), sqlc.narg(max_output_tokens),
+    COALESCE(NULLIF(btrim(sqlc.arg(limits_source)::text), ''), 'unknown'), sqlc.narg(limits_verified_at)
 )
 RETURNING *;
 

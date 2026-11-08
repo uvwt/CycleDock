@@ -30,14 +30,20 @@ type agentSettingsResponse struct {
 }
 
 type modelRouteResponse struct {
-	ID               string `json:"id"`
-	Enabled          bool   `json:"enabled"`
-	ProviderType     string `json:"provider_type"`
-	CredentialID     string `json:"credential_id,omitempty"`
-	ProviderBaseURL  string `json:"provider_base_url"`
-	Model            string `json:"model"`
-	APIKeyEnv        string `json:"api_key_env"`
-	APIKeyConfigured bool   `json:"api_key_configured"`
+	ID                  string     `json:"id"`
+	Enabled             bool       `json:"enabled"`
+	ProviderType        string     `json:"provider_type"`
+	CredentialID        string     `json:"credential_id,omitempty"`
+	ProviderBaseURL     string     `json:"provider_base_url"`
+	Model               string     `json:"model"`
+	BaseModel           string     `json:"base_model,omitempty"`
+	APIKeyEnv           string     `json:"api_key_env"`
+	APIKeyConfigured    bool       `json:"api_key_configured"`
+	ContextWindowTokens int        `json:"context_window_tokens,omitempty"`
+	MaxInputTokens      int        `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens     int        `json:"max_output_tokens,omitempty"`
+	LimitsSource        string     `json:"limits_source"`
+	LimitsVerifiedAt    *time.Time `json:"limits_verified_at,omitempty"`
 }
 
 type mcpConnectionResponse struct {
@@ -95,16 +101,21 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		Routes []struct {
-			ID               string `json:"id"`
-			Enabled          bool   `json:"enabled"`
-			ProviderType     string `json:"provider_type"`
-			CredentialID     string `json:"credential_id"`
-			ProviderBaseURL  string `json:"provider_base_url"`
-			Model            string `json:"model"`
-			APIKey           string `json:"api_key"`
-			APIKeyEnv        string `json:"api_key_env"`
-			ClearAPIKey      bool   `json:"clear_api_key"`
-			APIKeyConfigured bool   `json:"api_key_configured"`
+			ID                  string `json:"id"`
+			Enabled             bool   `json:"enabled"`
+			ProviderType        string `json:"provider_type"`
+			CredentialID        string `json:"credential_id"`
+			ProviderBaseURL     string `json:"provider_base_url"`
+			Model               string `json:"model"`
+			BaseModel           string `json:"base_model"`
+			APIKey              string `json:"api_key"`
+			APIKeyEnv           string `json:"api_key_env"`
+			ClearAPIKey         bool   `json:"clear_api_key"`
+			APIKeyConfigured    bool   `json:"api_key_configured"`
+			ContextWindowTokens int    `json:"context_window_tokens"`
+			MaxInputTokens      int    `json:"max_input_tokens"`
+			MaxOutputTokens     int    `json:"max_output_tokens"`
+			LimitsSource        string `json:"limits_source"`
 		} `json:"routes"`
 		SystemInstructions     string `json:"system_instructions"`
 		DefaultModelRouteID    string `json:"default_model_route_id"`
@@ -134,12 +145,53 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			credentialID = &parsed
 		}
+		providerType := strings.TrimSpace(route.ProviderType)
+		limitsSource := strings.TrimSpace(route.LimitsSource)
+		contextWindow := route.ContextWindowTokens
+		maxInput := route.MaxInputTokens
+		maxOutput := route.MaxOutputTokens
+		var limitsVerifiedAt *time.Time
+
+		// 当非用户手动覆盖时，优先检查短时缓存中是否已有服务商返回的模型容量信息。
+		if limitsSource != modelclient.LimitsSourceUser && api.model != nil {
+			lookupBaseURL := strings.TrimSpace(route.ProviderBaseURL)
+			if providerType != "openai_compatible" && api.modelAuth != nil && credentialID != nil {
+				if cfg, err := api.modelAuth.ModelConfigForCredential(
+					r.Context(),
+					identity.WorkspaceID,
+					modelauth.Provider(providerType),
+					*credentialID,
+					route.Model,
+					10*time.Second,
+				); err == nil {
+					lookupBaseURL = cfg.BaseURL
+				}
+			}
+			if cached, ok := api.model.CachedProviderModelLimits(lookupBaseURL, route.Model); ok && cached != nil {
+				contextWindow = cached.ContextWindowTokens
+				maxInput = cached.MaxInputTokens
+				maxOutput = cached.MaxOutputTokens
+				limitsSource = modelclient.LimitsSourceProvider
+				limitsVerifiedAt = cached.VerifiedAt
+			}
+		}
+
 		routes = append(routes, store.ModelRouteInput{
-			ID: routeID, Enabled: route.Enabled,
-			ProviderType: strings.TrimSpace(route.ProviderType),
-			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseURL,
-			Model: route.Model, APIKey: route.APIKey,
-			APIKeyEnv: route.APIKeyEnv, ClearAPIKey: route.ClearAPIKey,
+			ID:                  routeID,
+			Enabled:             route.Enabled,
+			ProviderType:        providerType,
+			CredentialID:        credentialID,
+			ProviderBaseURL:     route.ProviderBaseURL,
+			Model:               route.Model,
+			BaseModel:           route.BaseModel,
+			APIKey:              route.APIKey,
+			APIKeyEnv:           route.APIKeyEnv,
+			ClearAPIKey:         route.ClearAPIKey,
+			ContextWindowTokens: contextWindow,
+			MaxInputTokens:      maxInput,
+			MaxOutputTokens:     maxOutput,
+			LimitsSource:        limitsSource,
+			LimitsVerifiedAt:    limitsVerifiedAt,
 		})
 	}
 	parseRouteID := func(raw, field string) (*uuid.UUID, error) {
@@ -462,16 +514,51 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 
 func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse {
 	routes := make([]modelRouteResponse, 0, len(settings.Routes))
+	now := time.Now().UTC()
 	for _, route := range settings.Routes {
 		credentialID := ""
 		if route.CredentialID.Valid {
 			credentialID = route.CredentialID.UUID.String()
 		}
+		contextWindow := int(route.ContextWindowTokens.Int32)
+		maxInput := int(route.MaxInputTokens.Int32)
+		maxOutput := int(route.MaxOutputTokens.Int32)
+		limitsSource := route.LimitsSource
+		if limitsSource == "" {
+			limitsSource = modelclient.LimitsSourceUnknown
+		}
+		var verifiedAt *time.Time
+		if route.LimitsVerifiedAt.Valid {
+			ts := route.LimitsVerifiedAt.Time.UTC()
+			verifiedAt = &ts
+		}
+		// 对存量尚未回填限制的记录，在读取时尝试按注册表规则补齐精确识别模型的限制展示。
+		if limitsSource == modelclient.LimitsSourceUnknown && contextWindow == 0 && maxInput == 0 && maxOutput == 0 {
+			if reg, ok := modelclient.LookupRegistryModelLimits(route.Model, route.BaseModel); ok {
+				contextWindow = reg.ContextWindowTokens
+				maxInput = reg.MaxInputTokens
+				maxOutput = reg.MaxOutputTokens
+				limitsSource = reg.Source
+				if verifiedAt == nil {
+					verifiedAt = &now
+				}
+			}
+		}
 		routes = append(routes, modelRouteResponse{
-			ID: route.ID.String(), Enabled: route.Enabled, ProviderType: route.ProviderType,
-			CredentialID: credentialID, ProviderBaseURL: route.ProviderBaseUrl,
-			Model: route.Model, APIKeyEnv: route.ApiKeyEnv,
-			APIKeyConfigured: len(route.ApiKeyCiphertext) > 0 || route.ApiKeyEnv != "",
+			ID:                  route.ID.String(),
+			Enabled:             route.Enabled,
+			ProviderType:        route.ProviderType,
+			CredentialID:        credentialID,
+			ProviderBaseURL:     route.ProviderBaseUrl,
+			Model:               route.Model,
+			BaseModel:           route.BaseModel,
+			APIKeyEnv:           route.ApiKeyEnv,
+			APIKeyConfigured:    len(route.ApiKeyCiphertext) > 0 || route.ApiKeyEnv != "",
+			ContextWindowTokens: contextWindow,
+			MaxInputTokens:      maxInput,
+			MaxOutputTokens:     maxOutput,
+			LimitsSource:        limitsSource,
+			LimitsVerifiedAt:    verifiedAt,
 		})
 	}
 	defaultRouteID := ""

@@ -221,7 +221,14 @@ ADK LLM Agent 负责 agent/tool loop。
 
 CycleDock model adapter 仍负责 OpenAI-compatible、ChatGPT SIWC、Grok OAuth、多账号 credential、ordered routes、retryability classification、failover、partial stream reset。
 
-模型适配层同时解析 Chat Completions（非流式 `usage` 与流式 `stream_options.include_usage` 尾部统计块；遇到不支持 `stream_options` 的兼容端点时自动降级重发并按 `BaseURL` 缓存能力）和 Responses（`response.completed` 的 `usage`）中的输入、输出、缓存输入与推理输出 Token，并映射为 ADK `UsageMetadata`（`PromptTokenCount`、`CandidatesTokenCount`、`CachedContentTokenCount`、`ThoughtsTokenCount`、`TotalTokenCount`）。若上游中转未返回 `Usage`，则基于当前请求内容与输出写入本地估算值，并在响应元数据与路由观测状态中明確区分 `actual`（实际统计）、`estimated`（本地估算）与 `unknown`（未知），同时记录真正命中响应的模型路由（`RouteID` / `Provider` / `Model`），避免发生故障切换后仍将原始路由的用量用于后续判断。
+每条 `workspace_model_routes` 记录维护自身的上下文容量与输入/输出上限（`base_model`、`context_window_tokens`、`max_input_tokens`、`max_output_tokens`、`limits_source`、`limits_verified_at`；空值表示未知，不自动解释为固定默认容量）。解析优先级固定为：
+
+1. 用户手动覆盖（`user`）
+2. 服务商 `/models` 返回并经校验的模型元数据（`provider`，带超时、2 MiB 响应上限、禁止重定向、SSRF 目标 IP 校验与短时缓存）
+3. 内置模型注册表精确匹配（`registry`，支持 `model` 或用户为自定义代理别名显式指定的 `base_model`）
+4. 未知（`unknown`，保留空值交由下游保守策略处理，不伪造模型容量）
+
+模型适配层同时解析 Chat Completions（非流式 `usage` 与流式 `stream_options.include_usage` 尾部统计块；遇到不支持 `stream_options` 的兼容端点时自动降级重发并按 `BaseURL` 缓存能力）和 Responses（`response.completed` 的 `usage`）中的输入、输出、缓存输入与推理输出 Token，并映射为 ADK `UsageMetadata`（`PromptTokenCount`、`CandidatesTokenCount`、`CachedContentTokenCount`、`ThoughtsTokenCount`、`TotalTokenCount`）。若上游中转未返回 `Usage`，则基于当前请求内容与输出写入本地估算值，并在响应元数据与路由观测状态中明确区分 `actual`（实际统计）、`estimated`（本地估算）与 `unknown`（未知），同时记录真正命中响应的模型路由（`RouteID` / `Provider` / `Model`），避免发生故障切换后仍将原始路由的用量用于后续判断。
 
 同一路由遇到空响应、响应格式异常、网络错误、超时或 HTTP 408 / 429 / 5xx 时，退避 500ms 后再请求一次，仍失败才尝试后续路由。认证、额度及路由不存在等路由级错误直接切换备用路由。重试沿用原始模型输入，每次重新建立流式预览批次；不重复执行工具、不创建新 Turn / Attempt，也不额外消耗工具轮数。
 

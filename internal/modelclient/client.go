@@ -160,6 +160,8 @@ type Client struct {
 	httpClient    *http.Client
 	mu            sync.Mutex
 	noStreamUsage map[string]bool
+	catalogMu     sync.Mutex
+	catalogCache  map[string]catalogCacheEntry
 }
 
 func New() *Client {
