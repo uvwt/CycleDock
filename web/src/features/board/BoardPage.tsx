@@ -580,15 +580,18 @@ export default function BoardPage() {
         </div>
       </header>
       {projectsPending && <BoardSkeleton />}
-      {Boolean(projectsError) && (
+      {Boolean(projectsError) && !projectID && (
         <ErrorView error={projectsError} onRetry={refetchProjects} />
       )}
       {projectID && (
         <div className="flex min-h-0 flex-1 flex-col">
           {cards.isPending ? (
             <BoardSkeleton />
-          ) : cards.error ? (
-            <ErrorView error={cards.error} />
+          ) : cards.error && !cards.data ? (
+            <ErrorView
+              error={cards.error}
+              onRetry={() => void cards.refetch()}
+            />
           ) : (
             <>
               {/* 移动端 (lg:hidden)：顶部分段 Tabs + 左右平滑滚动单列容器 */}

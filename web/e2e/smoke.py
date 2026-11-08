@@ -1349,6 +1349,104 @@ class CycleDockSmoke(unittest.TestCase):
         finally:
             pwa_ctx.close()
 
+    def test_background_refetch_preserves_page_and_401_redirects_to_login(self):
+        self.page.goto(BASE + "/chat/demo-project/discussion-1")
+        self.page.get_by_text("我们需要每天自动检查服务器状态。").wait_for()
+
+        # 1. 后台静默重刷（如 SSE 重连触发 sync）若偶发 500 报错，已有会话内容与输入草稿应保持可见，不被 ErrorView 整屏覆盖
+        composer = self.page.locator(
+            'textarea[aria-label="发送消息，继续推进任务…"]'
+        )
+        composer.fill("保留中的未发送草稿")
+        card_500_calls = []
+
+        def fail_card_500(route):
+            if route.request.url.endswith("/stream"):
+                route.continue_()
+                return
+            card_500_calls.append(route.request.url)
+            route.fulfill(
+                status=500,
+                content_type="application/json",
+                body='{"error":{"code":"internal_error","message":"temporary network blip"}}',
+            )
+
+        self.page.route("**/api/v1/cards/discussion-1*", fail_card_500)
+        # 模拟手机锁屏再亮屏触发 useCardStream 重连并调用 sync() 刷新卡片
+        self.page.evaluate(
+            """
+            Object.defineProperty(document, "visibilityState", {
+              value: "hidden",
+              configurable: true,
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            """
+        )
+        self.page.wait_for_timeout(50)
+        self.page.evaluate(
+            """
+            Object.defineProperty(document, "visibilityState", {
+              value: "visible",
+              configurable: true,
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            """
+        )
+        self.page.wait_for_timeout(300)
+        self.assertGreaterEqual(len(card_500_calls), 1)
+        expect(self.page.get_by_text("我们需要每天自动检查服务器状态。")).to_be_visible()
+        expect(composer).to_have_value("保留中的未发送草稿")
+        self.assertEqual(
+            self.page.get_by_text("temporary network blip").count(), 0
+        )
+
+        # 2. 静置期间若会话过期导致业务接口返回 401 unauthorized，应自动联动 keys.me 切回登录页，不裸露 authentication required 红框
+        self.page.unroute("**/api/v1/cards/discussion-1*")
+        unauthorized_body = '{"error":{"code":"unauthorized","message":"authentication required"}}'
+        self.page.route(
+            "**/api/v1/me",
+            lambda route: route.fulfill(
+                status=401,
+                content_type="application/json",
+                body=unauthorized_body,
+            ),
+        )
+
+        def fail_card_401(route):
+            if route.request.url.endswith("/stream"):
+                route.continue_()
+                return
+            route.fulfill(
+                status=401,
+                content_type="application/json",
+                body=unauthorized_body,
+            )
+
+        self.page.route("**/api/v1/cards/discussion-1*", fail_card_401)
+        self.page.evaluate(
+            """
+            Object.defineProperty(document, "visibilityState", {
+              value: "hidden",
+              configurable: true,
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            """
+        )
+        self.page.wait_for_timeout(50)
+        self.page.evaluate(
+            """
+            Object.defineProperty(document, "visibilityState", {
+              value: "visible",
+              configurable: true,
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+            """
+        )
+        self.page.get_by_role("heading", name="登录 CycleDock").wait_for()
+        self.assertEqual(
+            self.page.get_by_text("authentication required").count(), 0
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

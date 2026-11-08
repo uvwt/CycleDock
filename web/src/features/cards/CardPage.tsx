@@ -559,7 +559,16 @@ function CardPageContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardID]);
 
-  if (detail.isPending) {
+  // 首次加载或会话 401 正在切回登录页时展示骨架屏；
+  // 若已有卡片缓存数据（如 SSE 重连或切回前台触发的后台静默刷新），偶发报错不卸载当前会话界面。
+  if (
+    detail.isPending ||
+    (!detail.data &&
+      detail.error &&
+      typeof detail.error === "object" &&
+      "status" in detail.error &&
+      detail.error.status === 401)
+  ) {
     return (
       <section
         ref={containerRef}
@@ -573,13 +582,13 @@ function CardPageContent({
     );
   }
 
-  if (detail.error || !detail.data || !card) {
+  if (!detail.data || !card) {
     return (
       <section
         ref={containerRef}
         className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-canvas"
       >
-        <div className="mx-auto max-w-xl p-5 pt-12">
+        <div className="mx-auto w-full max-w-xl p-5 pt-12">
           <ErrorView
             error={detail.error}
             onRetry={() => void detail.refetch()}

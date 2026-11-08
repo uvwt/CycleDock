@@ -135,9 +135,10 @@ function Authenticated() {
     );
   if (me.error instanceof APIError && me.error.status === 401)
     return <LoginPage />;
-  if (me.error || !me.data)
+  // 仅当首次加载尚无身份数据时展示全屏错误；后台重刷若偶发网络波动，保留当前已渲染的工作台与草稿。
+  if (!me.data)
     return (
-      <main className="mx-auto mt-20 max-w-xl p-4">
+      <main className="mx-auto mt-20 w-full max-w-xl p-4">
         <ErrorView error={me.error} onRetry={() => void me.refetch()} />
       </main>
     );

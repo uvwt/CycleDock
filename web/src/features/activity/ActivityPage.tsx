@@ -140,9 +140,9 @@ export default function ActivityPage() {
     );
   }
 
-  if (projectsError) {
+  if (projectsError && !projectID) {
     return (
-      <main className="mx-auto max-w-xl p-8">
+      <main className="mx-auto w-full max-w-xl p-8">
         <ErrorView error={projectsError} onRetry={refetchProjects} />
       </main>
     );
@@ -261,7 +261,7 @@ export default function ActivityPage() {
                 <Skeleton className="h-8 w-full rounded-xl" />
               </div>
             )}
-            {agents.error && (
+            {agents.error && !agents.data && (
               <ErrorView
                 error={agents.error}
                 onRetry={() => void agents.refetch()}
@@ -276,9 +276,12 @@ export default function ActivityPage() {
             </div>
           ) : activity.isPending ? (
             <ActivitySkeleton />
-          ) : activity.error ? (
+          ) : activity.error && !activity.data ? (
             <div>
-              <ErrorView error={activity.error} />
+              <ErrorView
+                error={activity.error}
+                onRetry={() => void activity.refetch()}
+              />
             </div>
           ) : items.length ? (
             <div className="overflow-hidden rounded-2xl border border-line bg-surface">

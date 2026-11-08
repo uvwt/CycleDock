@@ -240,7 +240,7 @@ export default function NexusDockPage() {
         <div className="grid place-items-center py-20">
           <Spinner text={t("正在检查远程设备连接状态…")} />
         </div>
-      ) : connection.error ? (
+      ) : connection.error && !connection.data ? (
         <ErrorView error={connection.error} onRetry={() => void connection.refetch()} />
       ) : !isConnected ? (
         /* 未连接：引导连接卡片 */
@@ -280,7 +280,7 @@ export default function NexusDockPage() {
         <div className="grid place-items-center py-20">
           <Spinner text={t("正在连接远程设备并拉取能力快照…")} />
         </div>
-      ) : fleet.error ? (
+      ) : fleet.error && !fleet.data ? (
         <div className="mx-auto max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xs">
           <ErrorView error={fleet.error} onRetry={() => void fleet.refetch()} />
         </div>

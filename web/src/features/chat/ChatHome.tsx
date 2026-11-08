@@ -131,9 +131,9 @@ export default function ChatHome() {
     );
   }
 
-  if (projectsError) {
+  if (projectsError && !projectID) {
     return (
-      <main className="mx-auto max-w-xl p-6">
+      <main className="mx-auto w-full max-w-xl p-6">
         <ErrorView error={projectsError} onRetry={refetchProjects} />
       </main>
     );
