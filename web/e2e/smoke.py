@@ -870,7 +870,7 @@ class CycleDockSmoke(unittest.TestCase):
         )
         self.page.get_by_role("button", name="打开讨论列表").wait_for()
         menu = self.open_discussion_menu()
-        menu.get_by_role("menuitem", name="编辑信息").click()
+        menu.get_by_role("button", name="编辑信息").click()
         self.page.get_by_role("dialog", name="编辑讨论信息").wait_for()
         self.assertLessEqual(
             self.page.evaluate("document.documentElement.scrollWidth"), 390
