@@ -529,3 +529,78 @@ func TestRefreshServer_RejectsCrossServerToolCollision(t *testing.T) {
 		t.Fatalf("existing tool was corrupted after collision: res=%q err=%v", res, err)
 	}
 }
+
+func TestSessionSet_DynamicBearerTokenAndReactiveRefreshOn401(t *testing.T) {
+	ctx := context.Background()
+	var requiredToken atomic.Value
+	requiredToken.Store("token-v1")
+
+	var currentClientToken atomic.Value
+	currentClientToken.Store("token-v1")
+	var forcedRefreshCount atomic.Int32
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "auth-server", Version: "1.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "ping", Description: "ping tool"},
+		func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]string, error) {
+			return nil, map[string]string{"status": "ok"}, nil
+		},
+	)
+	baseHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expected := "Bearer " + requiredToken.Load().(string)
+		if r.Header.Get("Authorization") != expected {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+			return
+		}
+		baseHandler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	set, err := Connect(ctx, []Connection{{
+		Name:    "nexus",
+		URL:     httpServer.URL,
+		Timeout: 5 * time.Second,
+		BearerTokenFunc: func(ctx context.Context) (string, error) {
+			return currentClientToken.Load().(string), nil
+		},
+		RefreshBearerFunc: func(ctx context.Context) (string, error) {
+			forcedRefreshCount.Add(1)
+			currentClientToken.Store("token-v3")
+			return "token-v3", nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer set.Close()
+
+	// 1. 主动轮换（Proactive）：模拟长会话中途临期已刷新为 token-v2，下次工具调用直接携带新 Token。
+	requiredToken.Store("token-v2")
+	currentClientToken.Store("token-v2")
+	res, err := set.CallExternal(ctx, "nexus", "ping", nil)
+	if err != nil || !strings.Contains(res, `"ok"`) {
+		t.Fatalf("expected proactive token rotation to succeed, got res=%q err=%v", res, err)
+	}
+	if got := forcedRefreshCount.Load(); got != 0 {
+		t.Fatalf("expected 0 forced refreshes during proactive rotation, got %d", got)
+	}
+
+	// 2. 被动兜底（Reactive 401）：模拟服务端提前吊销 token-v2 并要求 token-v3，客户端本地仍持有 token-v2，
+	// 收到 401 后自动触发 RefreshBearerFunc 换取 token-v3 并重放当次请求。
+	requiredToken.Store("token-v3")
+	res, err = set.CallExternal(ctx, "nexus", "ping", nil)
+	if err != nil || !strings.Contains(res, `"ok"`) {
+		t.Fatalf("expected reactive 401 refresh and replay to succeed, got res=%q err=%v", res, err)
+	}
+	if got := forcedRefreshCount.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 forced refresh on 401, got %d", got)
+	}
+
+	// 3. 底层断线重连后同样使用动态获取的最新 token-v3。
+	closeUnderlyingSessionForTest(set, "nexus")
+	res, err = set.CallExternal(ctx, "nexus", "ping", nil)
+	if err != nil || !strings.Contains(res, `"ok"`) {
+		t.Fatalf("expected reconnect with dynamic token to succeed, got res=%q err=%v", res, err)
+	}
+}

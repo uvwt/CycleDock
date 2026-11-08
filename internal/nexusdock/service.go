@@ -314,7 +314,15 @@ func (s *Service) Runtime(ctx context.Context, workspaceID uuid.UUID) (RuntimeCo
 		}
 		return RuntimeConnection{URL: row.Resource, AccessToken: token}, nil
 	}
-	return s.refresh(ctx, workspaceID)
+	return s.refresh(ctx, workspaceID, false)
+}
+
+// ForceRefresh 在上游返回 401 时跳过本地过期时间缓存，直接加锁用 refresh_token 换取新令牌。
+func (s *Service) ForceRefresh(ctx context.Context, workspaceID uuid.UUID) (RuntimeConnection, error) {
+	if s == nil {
+		return RuntimeConnection{}, ErrDisabled
+	}
+	return s.refresh(ctx, workspaceID, true)
 }
 
 func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
@@ -350,7 +358,7 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 	return nil
 }
 
-func (s *Service) refresh(ctx context.Context, workspaceID uuid.UUID) (RuntimeConnection, error) {
+func (s *Service) refresh(ctx context.Context, workspaceID uuid.UUID, force bool) (RuntimeConnection, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return RuntimeConnection{}, fmt.Errorf("acquire NexusDock refresh lock connection: %w", err)
@@ -373,7 +381,7 @@ func (s *Service) refresh(ctx context.Context, workspaceID uuid.UUID) (RuntimeCo
 	if err != nil {
 		return RuntimeConnection{}, fmt.Errorf("reload NexusDock connection: %w", err)
 	}
-	if row.AccessExpiresAt.Valid && time.Until(row.AccessExpiresAt.Time) > accessRefreshSkew {
+	if !force && row.AccessExpiresAt.Valid && time.Until(row.AccessExpiresAt.Time) > accessRefreshSkew {
 		token, err := s.decryptToken(workspaceID, "access", row.AccessTokenCiphertext)
 		if err != nil {
 			return RuntimeConnection{}, err

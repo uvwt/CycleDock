@@ -430,7 +430,23 @@ func (r *Runner) openADKMCPSessions(ctx context.Context, workspaceID uuid.UUID) 
 	}
 	if err == nil {
 		err = sessions.AddConnection(ctx, mcpclient.Connection{
-			Name: firstPartyNexusDockServerName, URL: connection.URL, BearerToken: connection.AccessToken,
+			Name:        firstPartyNexusDockServerName,
+			URL:         connection.URL,
+			BearerToken: connection.AccessToken,
+			BearerTokenFunc: func(reqCtx context.Context) (string, error) {
+				conn, err := r.nexusDock.Runtime(reqCtx, workspaceID)
+				if err != nil {
+					return "", err
+				}
+				return conn.AccessToken, nil
+			},
+			RefreshBearerFunc: func(reqCtx context.Context) (string, error) {
+				conn, err := r.nexusDock.ForceRefresh(reqCtx, workspaceID)
+				if err != nil {
+					return "", err
+				}
+				return conn.AccessToken, nil
+			},
 			Timeout: 30 * time.Second, NativeToolNames: true,
 			HiddenRemoteTools: map[string]bool{"agentdock_context": true},
 		})
