@@ -53,6 +53,7 @@ const (
 	EventTypeConfirm      EventType = "confirm"
 	EventTypeReject       EventType = "reject"
 	EventTypeStatusChange EventType = "status_change"
+	EventTypeCheckinAck   EventType = "checkin_ack"
 )
 
 type CheckinStatus string
@@ -60,8 +61,9 @@ type CheckinStatus string
 const (
 	CheckinHealthy  CheckinStatus = "healthy"
 	CheckinWarning  CheckinStatus = "warning"
-	CheckinCritical CheckinStatus = "critical"
-	CheckinUnknown  CheckinStatus = "unknown"
+	CheckinCritical     CheckinStatus = "critical"
+	CheckinAcknowledged CheckinStatus = "acknowledged"
+	CheckinUnknown      CheckinStatus = "unknown"
 )
 
 type DispatchMode string

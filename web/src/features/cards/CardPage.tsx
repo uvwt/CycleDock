@@ -19,6 +19,7 @@ import {
 import { ConversationSkeleton } from "../timeline/ConversationSkeleton";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
+import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { PendingTurnQueue } from "./PendingTurnQueue";
 import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
@@ -524,6 +525,16 @@ function CardPageContent({
       toast.error(error instanceof Error ? error.message : t("状态更新失败")),
   });
 
+  const acknowledgeCheckin = useMutation({
+    mutationFn: () => api.acknowledgeCheckin(cardID),
+    onSuccess: async () => {
+      await sync();
+      toast.success(t("已标记为已确认"));
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("状态更新失败")),
+  });
+
   function submit() {
     if (!comment.trim() || blocked || send.isPending) return;
     send.mutate();
@@ -811,6 +822,14 @@ function CardPageContent({
                       : t("未命名卡片"))}
               </span>
             </button>
+            {isOngoing && (
+              <OngoingHealthBadge
+                health={detail.data.health ?? card.health}
+                hideWhenUnknown
+                size="xs"
+                className="shrink-0 shadow-xs"
+              />
+            )}
           </div>
 
           <div className="flex flex-1 min-h-0 min-w-0">
@@ -852,6 +871,13 @@ function CardPageContent({
                 }
                 approvingReview={approveReview.isPending}
                 onApproveReview={() => approveReview.mutate()}
+                canAcknowledgeCheckin={
+                  card.kind === "ongoing" &&
+                  ((detail.data.health ?? card.health) === "warning" ||
+                    (detail.data.health ?? card.health) === "critical")
+                }
+                acknowledgingCheckin={acknowledgeCheckin.isPending}
+                onAcknowledgeCheckin={() => acknowledgeCheckin.mutate()}
                 onReply={(quote) => setReplyTo(quote)}
                 onEditMessage={
                   !blocked && card.todo_state !== "done"
@@ -899,6 +925,43 @@ function CardPageContent({
                       </div>
                     </div>
                   )}
+                  {card.kind === "ongoing" &&
+                    ((detail.data.health ?? card.health) === "warning" ||
+                      (detail.data.health ?? card.health) === "critical") && (
+                      <div
+                        className={`mb-2 flex items-center justify-between gap-2 rounded-xl border bg-surface/95 px-3 py-1.5 text-xs shadow-2xs backdrop-blur-xs ${
+                          (detail.data.health ?? card.health) === "critical"
+                            ? "border-rose-500/25"
+                            : "border-amber-500/25"
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={`size-2 shrink-0 rounded-full ${
+                              (detail.data.health ?? card.health) === "critical"
+                                ? "bg-rose-500"
+                                : "bg-amber-500"
+                            }`}
+                          />
+                          <span className="truncate font-medium text-foreground/90">
+                            {(detail.data.health ?? card.health) === "critical"
+                              ? t("巡检状态：异常")
+                              : t("巡检状态：需留意")}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={acknowledgeCheckin.isPending}
+                            onClick={() => acknowledgeCheckin.mutate()}
+                            className="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:opacity-50"
+                          >
+                            <Check className="size-3.5" />
+                            <span>{t("已确认")}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   {blocked && (
                     <p className="mb-2 text-center text-xs text-faint">
                       {t("此讨论已归档，不能继续发送消息")}

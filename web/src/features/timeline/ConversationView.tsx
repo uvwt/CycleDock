@@ -63,6 +63,7 @@ const systemTypes = new Set([
   "status_change",
   "progress",
   "checkin",
+  "checkin_ack",
   "confirm",
   "reject",
 ]);
@@ -70,6 +71,7 @@ const labels: Record<string, string> = {
   status_change: "状态变化",
   progress: "阶段进度",
   checkin: "巡检",
+  checkin_ack: "巡检已确认",
   confirm: "提交验收",
   reject: "驳回",
 };
@@ -89,6 +91,10 @@ const statusInfoMap: Record<string, { label: string; dot: string }> = {
   open: { label: "进行中", dot: "bg-sky-500" },
   closed: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
   resolved: { label: "已完成", dot: "bg-emerald-500" },
+  healthy: { label: "正常", dot: "bg-emerald-500" },
+  warning: { label: "需留意", dot: "bg-amber-500" },
+  critical: { label: "异常", dot: "bg-rose-500" },
+  acknowledged: { label: "已确认", dot: "bg-slate-400 dark:bg-slate-500" },
   // 中文别名容错
   待办: { label: "待办", dot: "bg-slate-400 dark:bg-slate-500" },
   进行中: { label: "进行中", dot: "bg-sky-500" },
@@ -98,6 +104,10 @@ const statusInfoMap: Record<string, { label: string; dot: string }> = {
   已暂停: { label: "已暂停", dot: "bg-amber-500" },
   已归档: { label: "已归档", dot: "bg-slate-400 dark:bg-slate-500" },
   已关闭: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
+  正常: { label: "正常", dot: "bg-emerald-500" },
+  需留意: { label: "需留意", dot: "bg-amber-500" },
+  异常: { label: "异常", dot: "bg-rose-500" },
+  已确认: { label: "已确认", dot: "bg-slate-400 dark:bg-slate-500" },
 };
 
 /** 解析形如 "review -> working" 或 "待审核 → 进行中" 的状态流转字串 */
@@ -242,6 +252,9 @@ type ExecutionActions = {
   canApproveReview?: boolean;
   approvingReview?: boolean;
   onApproveReview?: () => void;
+  canAcknowledgeCheckin?: boolean;
+  acknowledgingCheckin?: boolean;
+  onAcknowledgeCheckin?: () => void;
 };
 
 function TimeSeparator({ value }: { value: string }) {
@@ -330,6 +343,14 @@ function EventRow({
       const showApproveAction = Boolean(
         isConfirm && actions.canApproveReview && actions.onApproveReview,
       );
+      const isCheckin = event.type === "checkin";
+      const showAcknowledgeAction = Boolean(
+        isCheckin &&
+          (event.checkin_status === "warning" ||
+            event.checkin_status === "critical") &&
+          actions.canAcknowledgeCheckin &&
+          actions.onAcknowledgeCheckin,
+      );
       return (
         <>
           <ChatBubble
@@ -395,6 +416,20 @@ function EventRow({
                     </button>
                   </div>
                 )}
+
+                {showAcknowledgeAction && (
+                  <div className="mt-3 flex items-center justify-end border-t border-line/60 pt-2.5">
+                    <button
+                      type="button"
+                      disabled={actions.acknowledgingCheckin}
+                      onClick={actions.onAcknowledgeCheckin}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Check className="size-3.5" />
+                      <span>{t("已确认")}</span>
+                    </button>
+                  </div>
+                )}
               </ChatBubbleMessage>
             </div>
           </ChatBubble>
@@ -406,7 +441,7 @@ function EventRow({
         </>
       );
     }
-    if (event.type === "status_change") {
+    if (event.type === "status_change" || event.type === "checkin_ack") {
       const transition = parseStatusTransition(event.content);
       const fromMeta = transition ? getStatusDisplay(transition.from, t) : null;
       const toMeta = transition ? getStatusDisplay(transition.to, t) : null;
@@ -425,7 +460,7 @@ function EventRow({
           >
             <span className="inline-flex max-w-[90%] items-center gap-1.5 rounded-full border border-line/50 bg-muted/20 dark:bg-muted/10 px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/30">
               <span className="text-muted-foreground/60 font-normal">
-                {t("状态变化")}
+                {t(labels[event.type] || "状态变化")}
               </span>
               <span className="text-muted-foreground/30 font-normal">·</span>
               {fromMeta && toMeta ? (
@@ -1099,6 +1134,9 @@ export function ConversationView({
   const latestConfirmID = displayEvents.findLast(
     (event) => event.type === "confirm",
   )?.id;
+  const latestCheckinID = displayEvents.findLast(
+    (event) => event.type === "checkin",
+  )?.id;
   // 运行圆点是当前 Attempt 的下一条气泡。紧挨着本轮 Cycle 回复时不再重复头像和名称。
   // 必须是同一 Attempt：新的一轮即使发送者仍是 Cycle，也要重新带头像。
   const runningContinues = Boolean(
@@ -1392,6 +1430,10 @@ export function ConversationView({
                 canApproveReview={
                   Boolean(actions.canApproveReview) &&
                   event.id === latestConfirmID
+                }
+                canAcknowledgeCheckin={
+                  Boolean(actions.canAcknowledgeCheckin) &&
+                  event.id === latestCheckinID
                 }
               />
             </div>

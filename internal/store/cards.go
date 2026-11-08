@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
@@ -342,5 +344,119 @@ func (s *Store) Health(ctx context.Context, workspaceID, cardID uuid.UUID) (doma
 	if !event.CheckinStatus.Valid {
 		return domain.CheckinUnknown, nil
 	}
-	return domain.CheckinStatus(event.CheckinStatus.String), nil
+	status := domain.CheckinStatus(event.CheckinStatus.String)
+	if status == domain.CheckinWarning || status == domain.CheckinCritical {
+		var acked bool
+		err := s.pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM events
+				WHERE workspace_id = $1
+				  AND card_id = $2
+				  AND event_type = 'checkin_ack'
+				  AND sequence > $3
+			)
+		`, workspaceID, cardID, event.Sequence).Scan(&acked)
+		if err != nil {
+			return "", err
+		}
+		if acked {
+			return domain.CheckinAcknowledged, nil
+		}
+	}
+	return status, nil
+}
+
+func (s *Store) AcknowledgeCheckin(
+	ctx context.Context,
+	workspaceID, cardID, actorSourceID uuid.UUID,
+	content string,
+) error {
+	content = strings.TrimSpace(content)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
+		return err
+	}
+	if err := requireHumanSource(ctx, tx, workspaceID, actorSourceID); err != nil {
+		return err
+	}
+
+	var kind string
+	if err := tx.QueryRow(ctx, `
+		SELECT kind
+		FROM cards
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, cardID).Scan(&kind); err != nil {
+		return err
+	}
+	if domain.CardKind(kind) != domain.CardKindOngoing {
+		return domain.ErrInvalidTransition
+	}
+
+	var latestSeq int64
+	var latestStatus pgtype.Text
+	err = tx.QueryRow(ctx, `
+		SELECT sequence, checkin_status
+		FROM events
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND event_type = 'checkin'
+		ORDER BY sequence DESC
+		LIMIT 1
+	`, workspaceID, cardID).Scan(&latestSeq, &latestStatus)
+	if errors.Is(err, pgx.ErrNoRows) || !latestStatus.Valid {
+		return domain.ErrInvalidTransition
+	}
+	if err != nil {
+		return err
+	}
+
+	status := domain.CheckinStatus(latestStatus.String)
+	if status != domain.CheckinWarning && status != domain.CheckinCritical {
+		return domain.ErrInvalidTransition
+	}
+
+	var alreadyAcked bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM events
+			WHERE workspace_id = $1
+			  AND card_id = $2
+			  AND event_type = 'checkin_ack'
+			  AND sequence > $3
+		)
+	`, workspaceID, cardID, latestSeq).Scan(&alreadyAcked); err != nil {
+		return err
+	}
+	if alreadyAcked {
+		return domain.ErrInvalidTransition
+	}
+
+	if content == "" {
+		content = fmt.Sprintf("%s -> %s", status, domain.CheckinAcknowledged)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE cards
+		SET updated_at = now()
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, cardID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content)
+		VALUES ($1, $2, $3, 'checkin_ack', $4, $5)
+	`, uuid.New(), workspaceID, cardID, actorSourceID, content); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }

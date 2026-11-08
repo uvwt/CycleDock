@@ -60,6 +60,7 @@ export type TimelineEvent = {
     | "result"
     | "message"
     | "checkin"
+    | "checkin_ack"
     | "confirm"
     | "reject"
     | "status_change";

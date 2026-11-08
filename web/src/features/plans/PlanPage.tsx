@@ -216,7 +216,8 @@ export default function PlanPage() {
                     <span className="flex shrink-0 items-center gap-2">
                       {(card.health === "healthy" ||
                         card.health === "warning" ||
-                        card.health === "critical") && (
+                        card.health === "critical" ||
+                        card.health === "acknowledged") && (
                         <OngoingHealthBadge health={card.health} size="xs" />
                       )}
                       {card.ongoing_state && card.ongoing_state !== "active" && (

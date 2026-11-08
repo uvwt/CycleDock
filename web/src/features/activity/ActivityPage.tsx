@@ -56,7 +56,9 @@ function matchesView(item: ProjectActivity, view: string) {
     return item.status === "queued";
   }
   if (view === "completed") {
-    return ["completed", "result", "checkin", "confirm"].includes(item.status);
+    return ["completed", "result", "checkin", "checkin_ack", "confirm"].includes(
+      item.status,
+    );
   }
   if (view === "failed") {
     return ["failed", "expired", "reject"].includes(item.status);
@@ -73,6 +75,9 @@ function presentation(item: ProjectActivity) {
   }
   if (item.status === "queued") return { label: "等待执行", icon: Clock3 };
   if (item.status === "checkin") return { label: "定时巡检", icon: CircleCheck };
+  if (item.status === "checkin_ack") {
+    return { label: "巡检已确认", icon: CircleCheck };
+  }
   if (item.status === "confirm") return { label: "提交验收", icon: CircleCheck };
   if (item.status === "result") return { label: "执行结果", icon: CircleCheck };
   if (item.status === "completed") {

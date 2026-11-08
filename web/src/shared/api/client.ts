@@ -185,6 +185,8 @@ export const api = {
   deleteDiscussion: (id: string) => request<void>(`/cards/${id}`, "DELETE"),
   ongoingState: (id: string, state: string) =>
     request<Card>(`/cards/${id}/ongoing-state`, "POST", { state }),
+  acknowledgeCheckin: (id: string) =>
+    request<Card>(`/cards/${id}/acknowledge-checkin`, "POST", {}),
   send: (
     id: string,
     content: string,

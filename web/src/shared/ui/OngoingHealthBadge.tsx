@@ -1,3 +1,4 @@
+import { Check } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getOngoingHealthInfo } from "../lib/ongoing-health";
 
@@ -41,10 +42,14 @@ export function OngoingHealthBadge({
         data-health-status={info.kind}
         className={`inline-flex items-center gap-1 leading-none ${inlineTextClass} ${className}`}
       >
-        <span
-          aria-hidden
-          className={`size-1.5 shrink-0 rounded-full ${info.dotClassName}`}
-        />
+        {info.kind === "acknowledged" ? (
+          <Check aria-hidden className="size-3 shrink-0" />
+        ) : (
+          <span
+            aria-hidden
+            className={`size-1.5 shrink-0 rounded-full ${info.dotClassName}`}
+          />
+        )}
         <span>{t(info.labelKey)}</span>
       </span>
     );
@@ -60,10 +65,17 @@ export function OngoingHealthBadge({
       data-health-status={info.kind}
       className={`inline-flex items-center rounded-full border font-medium leading-none ${sizeClass} ${info.badgeClassName} ${className}`}
     >
-      <span
-        aria-hidden
-        className={`size-1.5 shrink-0 rounded-full ${info.dotClassName}`}
-      />
+      {info.kind === "acknowledged" ? (
+        <Check
+          aria-hidden
+          className={size === "xs" ? "size-2.5 shrink-0" : "size-3 shrink-0"}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className={`size-1.5 shrink-0 rounded-full ${info.dotClassName}`}
+        />
+      )}
       <span>{t(info.labelKey)}</span>
     </span>
   );
