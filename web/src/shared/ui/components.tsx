@@ -172,6 +172,7 @@ export function Sheet({
   className,
   padded = true,
   bodyClassName,
+  showCloseButton = true,
   onOpenAutoFocus,
 }: {
   open: boolean;
@@ -182,12 +183,14 @@ export function Sheet({
   className?: string;
   padded?: boolean;
   bodyClassName?: string;
+  showCloseButton?: boolean;
   onOpenAutoFocus?: (event: Event) => void;
 }) {
   return (
     <UISheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side={side}
+        showCloseButton={showCloseButton}
         aria-describedby={undefined}
         onOpenAutoFocus={(event) => {
           if (onOpenAutoFocus) {
@@ -202,12 +205,12 @@ export function Sheet({
           className,
         )}
       >
-        {title ? (
+        {title && showCloseButton ? (
           <SheetHeader className="shrink-0 justify-center border-b border-divider bg-surface px-5 pt-[calc(env(safe-area-inset-top,0px)+0.875rem)] pb-3.5 pr-12">
             <SheetTitle>{title}</SheetTitle>
           </SheetHeader>
         ) : (
-          <SheetTitle className="sr-only">详情</SheetTitle>
+          <SheetTitle className="sr-only">{title || "详情"}</SheetTitle>
         )}
         <div
           className={cn(

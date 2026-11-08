@@ -25,6 +25,7 @@ export function ProjectSwitcher({
   onManage,
   compact = false,
   compactSize = "md",
+  minimal = false,
 }: {
   projects: Project[];
   projectID: string;
@@ -33,6 +34,7 @@ export function ProjectSwitcher({
   onManage?: () => void;
   compact?: boolean;
   compactSize?: "sm" | "md";
+  minimal?: boolean;
 }) {
   const { t } = useTranslation();
   const current = projects.find((project) => project.id === projectID);
@@ -50,7 +52,9 @@ export function ProjectSwitcher({
               ? `${
                   compactSize === "sm" ? "size-9" : "size-10"
                 } inline-flex shrink-0 items-center justify-center rounded-xl text-faint transition hover:bg-canvas hover:text-strong data-[state=open]:bg-muted data-[state=open]:text-heading disabled:opacity-40`
-              : "flex min-h-10 w-full items-center justify-between gap-2.5 rounded-xl border border-line bg-surface px-3 text-left text-sm text-foreground shadow-xs transition hover:border-line-strong hover:bg-canvas data-[state=open]:border-line-strong disabled:opacity-40"
+              : minimal
+                ? "inline-flex h-9 max-w-full items-center gap-2 rounded-lg px-2 text-left text-[15px] font-semibold text-heading transition hover:bg-muted/70 data-[state=open]:bg-muted/70 disabled:opacity-40"
+                : "flex min-h-10 w-full items-center justify-between gap-2.5 rounded-xl border border-line bg-surface px-3 text-left text-sm text-foreground shadow-xs transition hover:border-line-strong hover:bg-canvas data-[state=open]:border-line-strong disabled:opacity-40"
           }
         >
           {compact ? (

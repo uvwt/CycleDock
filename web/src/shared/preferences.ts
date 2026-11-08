@@ -444,6 +444,19 @@ const en = {
   讨论标题: "Discussion title",
   任务标题: "Task title",
   定时任务标题: "Scheduled task title",
+  焦点: "Focus",
+  当前焦点: "In focus",
+  "{{count}} 运行中": "{{count}} running",
+  "{{count}} 未读": "{{count}} unread",
+  "{{count}} 待验收": "{{count}} in review",
+  "全部 ({{count}})": "All ({{count}})",
+  "查看全部 {{count}} 个焦点事项": "View all {{count}} focus items",
+  "当前没有正在运行、未读或待处理的事项":
+    "No running, unread, or pending items right now",
+  "搜索卡片标题或描述...": "Search card title or description...",
+  清空搜索: "Clear search",
+  未找到匹配的卡片: "No matching cards found",
+  返回上级: "Back",
 } as const;
 
 void i18n.use(initReactI18next).init({

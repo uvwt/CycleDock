@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  ArrowRight,
   Bot,
   CircleCheck,
   CircleSlash,
@@ -14,8 +15,31 @@ import { useProject } from "../../app/project-context";
 import { keys } from "../../app/query";
 import { api } from "../../shared/api/client";
 import type { ProjectActivity } from "../../shared/api/types";
+import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { ErrorView, Skeleton } from "../../shared/ui/components";
 import { ActivitySkeleton } from "./ActivitySkeleton";
+
+const stateNameMap: Record<string, string> = {
+  todo: "待办",
+  working: "进行中",
+  review: "待验收",
+  done: "已完成",
+  active: "运行中",
+  paused: "已暂停",
+  archived: "已归档",
+};
+
+function parseTransition(content: string): { from: string; to: string } | null {
+  const match = /^\s*([a-z_]+)\s*->\s*([a-z_]+)\s*$/i.exec(content);
+  if (!match) return null;
+  const fromKey = match[1].toLowerCase();
+  const toKey = match[2].toLowerCase();
+  if (!stateNameMap[fromKey] && !stateNameMap[toKey]) return null;
+  return {
+    from: stateNameMap[fromKey] || match[1],
+    to: stateNameMap[toKey] || match[2],
+  };
+}
 
 function localTime(value: string) {
   return new Date(value).toLocaleString([], {
@@ -41,22 +65,28 @@ function matchesView(item: ProjectActivity, view: string) {
 }
 
 function presentation(item: ProjectActivity) {
+  if (item.status === "status_change" || parseTransition(item.content)) {
+    return { label: "状态变更", icon: ArrowRight };
+  }
   if (item.status === "running") {
     return { label: "正在运行", icon: LoaderCircle, spin: true };
   }
   if (item.status === "queued") return { label: "等待执行", icon: Clock3 };
-  if (["completed", "result", "checkin", "confirm"].includes(item.status)) {
+  if (item.status === "checkin") return { label: "定时巡检", icon: CircleCheck };
+  if (item.status === "confirm") return { label: "提交验收", icon: CircleCheck };
+  if (item.status === "result") return { label: "执行结果", icon: CircleCheck };
+  if (item.status === "completed") {
     return { label: "已完成", icon: CircleCheck };
   }
   if (["failed", "expired", "reject"].includes(item.status)) {
     return { label: "失败", icon: CircleX };
   }
   if (["cancelled", "superseded"].includes(item.status)) {
-    return { label: "已结束", icon: CircleSlash };
+    return { label: "已取消", icon: CircleSlash };
   }
   if (item.status === "finding") return { label: "发现", icon: Activity };
   if (item.status === "progress") return { label: "进展", icon: Activity };
-  return { label: "活动", icon: Activity };
+  return { label: "动态", icon: Activity };
 }
 
 export default function ActivityPage() {
@@ -94,8 +124,8 @@ export default function ActivityPage() {
 
   if (projectsPending) {
     return (
-      <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
-        <header className="flex flex-wrap items-center justify-between gap-4">
+      <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-4 overflow-y-auto px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
+        <header className="hidden flex-wrap items-center justify-between gap-4 md:flex">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight text-heading">
               {t("活动")}
@@ -118,7 +148,26 @@ export default function ActivityPage() {
     );
   }
 
-  const items = (activity.data || []).filter((item) => matchesView(item, view));
+  const rawItems = (activity.data || []).filter((item) => matchesView(item, view));
+  // 过滤掉与相邻业务事件重复的空白技术 Attempt 完成记录，避免同一操作出现两条重复动态
+  const items = rawItems.filter((item, index, arr) => {
+    if (
+      item.activity_type === "attempt" &&
+      item.status === "completed" &&
+      !item.content?.trim()
+    ) {
+      const itemTime = new Date(item.occurred_at).getTime();
+      const hasNearbyCardEvent = arr.some(
+        (other, otherIdx) =>
+          otherIdx !== index &&
+          other.card_id === item.card_id &&
+          other.activity_type === "event" &&
+          Math.abs(new Date(other.occurred_at).getTime() - itemTime) < 60_000,
+      );
+      if (hasNearbyCardEvent) return false;
+    }
+    return true;
+  });
   const filters = [
     { id: "all", label: t("全部活动") },
     { id: "running", label: t("正在运行") },
@@ -138,9 +187,9 @@ export default function ActivityPage() {
   }
 
   return (
-    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-4 overflow-y-auto px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
       <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
+        <div className="hidden md:block">
           <h1 className="text-3xl font-semibold tracking-tight text-heading">
             {t("活动")}
           </h1>
@@ -236,42 +285,41 @@ export default function ActivityPage() {
               {items.map((item) => {
                 const state = presentation(item);
                 const Icon = state.icon;
+                const transition = parseTransition(item.content || "");
+                const summary = transition
+                  ? `${t(transition.from)} → ${t(transition.to)}`
+                  : stripMarkdownSummary(item.content || "");
                 return (
                   <button
                     key={`${item.activity_type}-${item.id}`}
                     type="button"
                     onClick={() => open(item)}
-                    className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
+                    className="flex w-full items-start gap-3.5 border-b border-divider px-4 py-3.5 text-left transition last:border-b-0 hover:bg-canvas sm:px-5 sm:py-4"
                   >
-                    <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground">
+                    <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl bg-muted text-secondary-foreground sm:size-9">
                       <Icon
-                        className={`size-[18px] ${state.spin ? "animate-spin" : ""}`}
+                        className={`size-4 sm:size-[18px] ${state.spin ? "animate-spin" : ""}`}
                       />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <span className="truncate text-sm font-semibold text-heading">
-                          {item.card_title || t("未命名任务")}
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-semibold text-heading">
+                            {item.card_title || t("未命名任务")}
+                          </span>
+                          <span className="shrink-0 rounded-md bg-muted/70 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                            {t(state.label)}
+                          </span>
                         </span>
-                        <span className="text-xs text-faint">
-                          {t(state.label)}
+                        <span className="shrink-0 text-xs tabular-nums text-faint">
+                          {localTime(item.occurred_at)}
                         </span>
                       </span>
-                      {item.content && (
-                        <span className="mt-1 line-clamp-2 block text-[13px] leading-5 text-muted-foreground">
-                          {item.content}
+                      {summary && (
+                        <span className="mt-1 line-clamp-2 block text-[13px] leading-relaxed text-muted-foreground">
+                          {summary}
                         </span>
                       )}
-                      <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
-                        {item.actor_name && (
-                          <span>
-                            {item.source_kind === "cycle_agent"
-                              ? "Cycle"
-                              : item.actor_name}
-                          </span>
-                        )}
-                        <span>{localTime(item.occurred_at)}</span>
-                      </span>
                     </span>
                   </button>
                 );

@@ -21,11 +21,10 @@ export function ConversationSkeleton({
       {/* 手机端悬浮顶部栏 */}
       <div
         data-mobile-top-surface
-        className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-4 md:hidden pointer-events-none bg-transparent"
+        className="absolute top-0 inset-x-0 z-20 flex items-center justify-between gap-2 px-3 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-4 sm:px-4 md:hidden pointer-events-none bg-gradient-to-b from-canvas/95 via-canvas/75 to-transparent"
       >
         <div className="flex items-center gap-1.5 pointer-events-auto">
-          <Skeleton className="h-7 w-24 rounded-lg" />
-          {onOpenSidebar && (
+          {onOpenSidebar ? (
             <button
               type="button"
               onClick={onOpenSidebar}
@@ -34,10 +33,12 @@ export function ConversationSkeleton({
             >
               <PanelLeft className="size-4" />
             </button>
+          ) : (
+            <Skeleton className="size-8 rounded-lg" />
           )}
         </div>
+        <Skeleton className="h-8 w-28 rounded-lg pointer-events-auto" />
         <div className="flex items-center gap-1.5 pointer-events-auto">
-          <Skeleton className="size-8 rounded-lg" />
           <Skeleton className="size-8 rounded-lg" />
         </div>
       </div>
@@ -45,7 +46,6 @@ export function ConversationSkeleton({
       {/* 桌面端右上角悬浮操作按钮占位 */}
       <div className="hidden md:flex absolute top-3 right-3 z-20 items-center gap-1.5 sm:right-4">
         <Skeleton className="h-8 w-20 rounded-lg" />
-        <Skeleton className="size-8 rounded-lg" />
       </div>
 
       {/* 消息时间线灰白气泡流 */}

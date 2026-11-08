@@ -122,21 +122,6 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		deviceNames[cardContext.DeviceNodeID] = metadataString(cardContext.DeviceName, 120)
 	}
 
-	historyService, _ := r.sessionService.(*agentsession.PostgresService)
-	replies := &replyState{}
-	toolRuntime := attemptToolRuntime{
-		store:           r.store,
-		context:         cardContext,
-		mcpSessions:     mcpSessions,
-		artifactService: r.artifactService,
-		historyService:  historyService,
-		replies:         replies,
-		live:            liveForAttempt,
-	}
-	tools, err := buildADKTools(toolRuntime)
-	if err != nil {
-		return err
-	}
 	var kindDefaultID uuid.NullUUID
 	switch cardContext.CardKind {
 	case domain.CardKindDiscussion:
@@ -158,6 +143,23 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		cardContext.WorkspaceID,
 		routes,
 	)
+	if err != nil {
+		return err
+	}
+
+	historyService, _ := r.sessionService.(*agentsession.PostgresService)
+	replies := &replyState{}
+	toolRuntime := attemptToolRuntime{
+		store:           r.store,
+		context:         cardContext,
+		mcpSessions:     mcpSessions,
+		artifactService: r.artifactService,
+		historyService:  historyService,
+		replies:         replies,
+		live:            liveForAttempt,
+		activeModel:     llm.ActiveModel,
+	}
+	tools, err := buildADKTools(toolRuntime)
 	if err != nil {
 		return err
 	}
@@ -277,6 +279,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	}
 
 	attempt, err := r.store.GetAttempt(runCtx, cardContext.WorkspaceID, cardContext.AttemptID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.ErrAttemptNotCurrent
+	}
 	if err != nil {
 		return err
 	}
@@ -293,6 +298,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 				AttemptID: cardContext.AttemptID, RunnerSourceID: cardContext.RunnerSourceID,
 				Message:        store.ReplyMessage{Type: "text", Content: finalText, EndTurn: true},
 				IdempotencyKey: "runner-final-" + cardContext.AttemptID.String(),
+				Model:          llm.ActiveModel(),
 			}); err != nil {
 				return err
 			}

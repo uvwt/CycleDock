@@ -35,7 +35,7 @@ export function LoginPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "登录失败"),
   });
   return (
-    <main className="grid min-h-screen bg-canvas lg:grid-cols-[1fr_1fr]">
+    <main className="scrollbar-thin grid h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas lg:grid-cols-[1fr_1fr]">
       <section className="hidden flex-col justify-between bg-slate-900 p-12 text-white lg:flex">
         <Link to="/chat" className="flex items-center gap-3 text-xl font-bold">
           <img src="/cycledock-logo.png" alt="" className="size-10 shrink-0" />
@@ -57,7 +57,7 @@ export function LoginPage() {
           {t("工作空间权限由服务端维护")}
         </div>
       </section>
-      <section className="flex items-center justify-center px-6 py-16">
+      <section className="flex min-h-full items-center justify-center px-6 pt-[calc(env(safe-area-inset-top,0px)+2rem)] pb-[max(2rem,env(safe-area-inset-bottom,0px))] sm:py-16">
         <div className="w-full max-w-sm space-y-6">
           <h2 className="text-3xl font-semibold text-heading">
             {t("登录 CycleDock")}

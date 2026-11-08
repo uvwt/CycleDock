@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
-  Archive,
   FileText,
   MoreHorizontal,
   Pencil,
@@ -93,15 +92,6 @@ export function CardActions({
     onSuccess: async (updated) => {
       await sync();
       toast.success(updated.pinned_at ? "已置顶" : "已取消置顶");
-    },
-    onError: showError,
-  });
-
-  const archive = useMutation({
-    mutationFn: () => api.archiveDiscussion(card.id),
-    onSuccess: async () => {
-      await sync();
-      toast.success("讨论已归档");
     },
     onError: showError,
   });
@@ -234,24 +224,15 @@ export function CardActions({
                     ) : (
                       <>
                         <Pin className="size-4 text-muted-foreground" />
-                        <span>{t("置顶讨论")}</span>
+                        <span>
+                          {card.kind === "discussion"
+                            ? t("置顶讨论")
+                            : card.kind === "ongoing"
+                              ? t("置顶定时任务")
+                              : t("置顶任务")}
+                        </span>
                       </>
                     )}
-                  </button>
-                )}
-
-                {card.kind === "discussion" && !preserve && card.discussion_state === "active" && (
-                  <button
-                    type="button"
-                    disabled={archive.isPending}
-                    onClick={() => {
-                      setDrawerOpen(false);
-                      archive.mutate();
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80 disabled:opacity-50"
-                  >
-                    <Archive className="size-4 text-muted-foreground" />
-                    <span>{t("归档讨论")}</span>
                   </button>
                 )}
 
@@ -315,24 +296,14 @@ export function CardActions({
               ) : (
                 <>
                   <Pin className="size-4" />
-                  {t("置顶讨论")}
+                  {card.kind === "discussion"
+                    ? t("置顶讨论")
+                    : card.kind === "ongoing"
+                      ? t("置顶定时任务")
+                      : t("置顶任务")}
                 </>
               )}
             </MenuItem>
-          )}
-
-          {card.kind === "discussion" && !preserve && (
-            <>
-              {card.discussion_state === "active" && (
-                <MenuItem
-                  disabled={archive.isPending}
-                  onSelect={() => archive.mutate()}
-                >
-                  <Archive className="size-4" />
-                  {t("归档讨论")}
-                </MenuItem>
-              )}
-            </>
           )}
 
           {!preserve && (

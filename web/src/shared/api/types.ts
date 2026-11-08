@@ -76,6 +76,7 @@ export type TimelineEvent = {
     end_turn: boolean;
     preview_id?: string;
     preview?: boolean;
+    model?: string;
   };
   checkin_status?: string;
   created_at: string;
@@ -83,6 +84,7 @@ export type TimelineEvent = {
 export type Attempt = {
   device_node_id?: string;
   device_name?: string;
+  model?: string;
   id: string;
   turn_id: string;
   source_event_id?: string;

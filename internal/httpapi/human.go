@@ -53,6 +53,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
 	r.Post("/cards/{cardID}/model-route", api.setCardModelRoute)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
+	r.Patch("/cards/{cardID}/comments/{eventID}", api.editComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
 	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
 	r.Post("/cards/{cardID}/turns/{turnID}/steer", api.steerPendingTurn)
@@ -127,6 +128,7 @@ type cardReadResponse struct {
 type attemptResponse struct {
 	DeviceNodeID     string     `json:"device_node_id,omitempty"`
 	DeviceName       string     `json:"device_name,omitempty"`
+	Model            string     `json:"model,omitempty"`
 	ID               string     `json:"id"`
 	TurnID           string     `json:"turn_id"`
 	SourceEventID    string     `json:"source_event_id,omitempty"`
@@ -1101,6 +1103,45 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
 }
 
+func (api *API) editComment(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDParam(w, r, "eventID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Content string `json:"content"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.Content = strings.TrimSpace(request.Content)
+	if request.Content == "" {
+		writeError(w, http.StatusBadRequest, "invalid_content", "comment content is required")
+		return
+	}
+	identity := identityFromRequest(r)
+	result, err := api.store.EditSessionCommentAndRerun(r.Context(), store.EditSessionCommentParams{
+		WorkspaceID:    identity.WorkspaceID,
+		CardID:         cardID,
+		EventID:        eventID,
+		AuthorSourceID: identity.SourceID,
+		Content:        request.Content,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "timeline.truncated"})
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
+	writeJSON(w, http.StatusOK, commentResultToResponse(result))
+}
+
 func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
@@ -1590,6 +1631,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 func attemptToResponse(item store.SessionAttemptView) attemptResponse {
 	response := attemptResponse{
 		DeviceNodeID: item.DeviceNodeID, DeviceName: item.DeviceName,
+		Model:           item.Model,
 		ID:              item.ID.String(),
 		TurnID:          item.TurnID.String(),
 		AttemptNumber:   item.AttemptNumber,

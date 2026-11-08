@@ -157,12 +157,12 @@ export default function NexusDockPage() {
   const mcpCount = selectedDevice?.dynamic_mcp?.length || 0;
 
   return (
-    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-7 overflow-y-auto px-5 py-6 pb-24 md:px-8 md:py-8 md:pb-24">
+    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-4 overflow-y-auto px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
       {/* 统一全局页面头部 */}
-      <header className="flex flex-wrap items-center justify-between gap-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 md:gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight text-heading">
+            <h1 className="hidden text-3xl font-semibold tracking-tight text-heading md:block">
               {t("远程设备")}
             </h1>
             {isConnected ? (
@@ -176,7 +176,7 @@ export default function NexusDockPage() {
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 hidden text-sm text-muted-foreground md:block">
             {t("连接并管理你的远程设备，让 Agent 在授权范围内调用设备协助完成工作。")}
           </p>
         </div>

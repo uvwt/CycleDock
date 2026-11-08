@@ -14,6 +14,7 @@ import (
 type SessionAttemptView struct {
 	DeviceNodeID     string
 	DeviceName       string
+	Model            string
 	ID               uuid.UUID
 	TurnID           uuid.UUID
 	SourceEventID    uuid.NullUUID
@@ -54,6 +55,26 @@ func (s *Store) GetAttemptView(
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
+			COALESCE((
+				SELECT r.model
+				FROM cards c
+				LEFT JOIN workspace_agent_settings was
+				  ON was.workspace_id = a.workspace_id AND was.source_id = a.runner_source_id
+				JOIN workspace_model_routes r
+				  ON r.workspace_id = a.workspace_id AND r.enabled
+				WHERE c.workspace_id = a.workspace_id AND c.id = a.card_id
+				ORDER BY
+					CASE
+						WHEN r.id = t.preferred_model_route_id THEN 0
+						WHEN r.id = c.preferred_model_route_id THEN 1
+						WHEN c.kind = 'discussion' AND r.id = was.discussion_model_route_id THEN 2
+						WHEN c.kind = 'ongoing' AND r.id = was.plan_model_route_id THEN 2
+						WHEN r.id = was.default_model_route_id THEN 3
+						ELSE 4
+					END,
+					r.position ASC
+				LIMIT 1
+			), ''),
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			(
 				a.status IN ('failed','expired','cancelled')
@@ -72,6 +93,7 @@ func (s *Store) GetAttemptView(
 		WHERE a.workspace_id=$1 AND a.id=$2
 	`, workspaceID, attemptID).Scan(
 		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content, &out.DeviceNodeID, &out.DeviceName,
+		&out.Model,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
@@ -96,6 +118,26 @@ func (s *Store) CurrentAttemptView(
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
+			COALESCE((
+				SELECT r.model
+				FROM cards c
+				LEFT JOIN workspace_agent_settings was
+				  ON was.workspace_id = a.workspace_id AND was.source_id = a.runner_source_id
+				JOIN workspace_model_routes r
+				  ON r.workspace_id = a.workspace_id AND r.enabled
+				WHERE c.workspace_id = a.workspace_id AND c.id = a.card_id
+				ORDER BY
+					CASE
+						WHEN r.id = t.preferred_model_route_id THEN 0
+						WHEN r.id = c.preferred_model_route_id THEN 1
+						WHEN c.kind = 'discussion' AND r.id = was.discussion_model_route_id THEN 2
+						WHEN c.kind = 'ongoing' AND r.id = was.plan_model_route_id THEN 2
+						WHEN r.id = was.default_model_route_id THEN 3
+						ELSE 4
+					END,
+					r.position ASC
+				LIMIT 1
+			), ''),
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			false,
 			a.current_stage, a.progress_summary,
@@ -110,6 +152,7 @@ func (s *Store) CurrentAttemptView(
 		LIMIT 1
 	`, workspaceID, cardID).Scan(
 		&out.ID, &out.TurnID, &out.SourceEventID, &out.Sequence, &out.Source, &out.Content, &out.DeviceNodeID, &out.DeviceName,
+		&out.Model,
 		&out.AttemptNumber, &out.Reason, &out.RetryOfAttemptID, &out.Status, &out.CanRetry,
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
@@ -190,6 +233,26 @@ func (s *Store) listAttempts(
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
+			COALESCE((
+				SELECT r.model
+				FROM cards c
+				LEFT JOIN workspace_agent_settings was
+				  ON was.workspace_id = a.workspace_id AND was.source_id = a.runner_source_id
+				JOIN workspace_model_routes r
+				  ON r.workspace_id = a.workspace_id AND r.enabled
+				WHERE c.workspace_id = a.workspace_id AND c.id = a.card_id
+				ORDER BY
+					CASE
+						WHEN r.id = t.preferred_model_route_id THEN 0
+						WHEN r.id = c.preferred_model_route_id THEN 1
+						WHEN c.kind = 'discussion' AND r.id = was.discussion_model_route_id THEN 2
+						WHEN c.kind = 'ongoing' AND r.id = was.plan_model_route_id THEN 2
+						WHEN r.id = was.default_model_route_id THEN 3
+						ELSE 4
+					END,
+					r.position ASC
+				LIMIT 1
+			), ''),
 			a.attempt_number, a.reason, a.retry_of_attempt_id, a.status,
 			(
 				a.status IN ('failed','expired','cancelled')
@@ -249,6 +312,7 @@ func (s *Store) listAttempts(
 		var startedAt, finishedAt *time.Time
 		if err := rows.Scan(
 			&item.ID, &item.TurnID, &item.SourceEventID, &item.Sequence, &item.Source, &item.Content, &item.DeviceNodeID, &item.DeviceName,
+			&item.Model,
 			&item.AttemptNumber, &item.Reason, &item.RetryOfAttemptID, &item.Status, &item.CanRetry,
 			&item.CurrentStage,
 			&item.ProgressSummary, &item.ErrorSummary,

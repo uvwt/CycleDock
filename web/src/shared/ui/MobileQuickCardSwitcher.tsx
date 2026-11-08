@@ -1,11 +1,13 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Layers,
+  ListTodo,
   MessageSquare,
   PlayCircle,
+  Search,
   ShieldCheck,
   CheckCircle2,
   CalendarClock,
@@ -14,6 +16,7 @@ import {
   PinOff,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   Sheet as UISheet,
@@ -24,27 +27,43 @@ import {
 import type { Card } from "../api/types";
 import { api } from "../api/client";
 import { keys } from "../../app/query";
-import { CardStatusDot, getCardVisualStatus } from "./CardStatusDot";
+import {
+  CardStatusDot,
+  getCardVisualStatus,
+  type CardVisualStatus,
+} from "./CardStatusDot";
+import { buildFocusSummary, getCardFocusReason } from "../lib/card-focus";
 import { ConfirmDialog } from "./components";
 import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
 import { cn } from "../lib/utils";
 
-type SwitcherTab = "working" | "review" | "discussion" | "ongoing" | "done";
+type SwitcherTab =
+  | "focus"
+  | "todo"
+  | "working"
+  | "review"
+  | "discussion"
+  | "ongoing"
+  | "done";
 
 export interface QuickCardSwitcherTriggerProps {
   projectID: string;
+  activeCardID?: string;
+  activeAttemptStatus?: string;
   className?: string;
   onClick: () => void;
 }
 
 /**
  * 快速切换入口按钮
- * 仅负责渲染触发按钮与活跃任务数字角标，支持在移动端顶栏、桌面端工具栏等不同布局区域多次复用，
- * 避免重复挂载底层 SheetPortal 与全局键盘监听。
+ * 仅负责渲染触发按钮与全局焦点（正在运行 / 未读回复 / 进行中 / 待验收）角标，
+ * 支持在移动端顶栏、桌面端工具栏等不同布局区域多次复用，避免重复挂载底层 SheetPortal 与全局键盘监听。
  */
 export function QuickCardSwitcherTrigger({
   projectID,
+  activeCardID,
+  activeAttemptStatus,
   className = "",
   onClick,
 }: QuickCardSwitcherTriggerProps) {
@@ -57,18 +76,18 @@ export function QuickCardSwitcherTrigger({
 
   const cards: Card[] = useMemo(() => cardsQuery.data || [], [cardsQuery.data]);
 
-  const activeBadgeCount = useMemo(() => {
-    let count = 0;
-    for (const card of cards) {
-      if (
-        card.kind === "todo" &&
-        (card.todo_state === "working" || card.todo_state === "review")
-      ) {
-        count++;
-      }
-    }
-    return count;
-  }, [cards]);
+  const focusSummary = useMemo(
+    () => buildFocusSummary(cards, activeCardID, activeAttemptStatus),
+    [cards, activeCardID, activeAttemptStatus],
+  );
+
+  const activeBadgeCount = focusSummary.cards.length;
+  const badgeColorClass =
+    focusSummary.highestVisualStatus === "answering"
+      ? "bg-emerald-500 text-white shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+      : focusSummary.highestVisualStatus === "unread"
+        ? "bg-sky-500 text-white shadow-[0_0_6px_rgba(14,165,233,0.45)]"
+        : "bg-primary text-primary-foreground shadow";
 
   return (
     <button
@@ -83,7 +102,12 @@ export function QuickCardSwitcherTrigger({
     >
       <Layers className="size-4" />
       {activeBadgeCount > 0 && (
-        <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground shadow">
+        <span
+          className={cn(
+            "absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums",
+            badgeColorClass,
+          )}
+        >
           {activeBadgeCount > 99 ? "99+" : activeBadgeCount}
         </span>
       )}
@@ -123,7 +147,8 @@ export function QuickCardSwitcherModal({
   const cards: Card[] = useMemo(() => cardsQuery.data || [], [cardsQuery.data]);
 
   // 分组统计与列表
-  const { workingCards, reviewCards, discussionCards, ongoingCards, doneCards } = useMemo(() => {
+  const { todoCards, workingCards, reviewCards, discussionCards, ongoingCards, doneCards } = useMemo(() => {
+    const todo: Card[] = [];
     const working: Card[] = [];
     const review: Card[] = [];
     const discussions: Card[] = [];
@@ -136,15 +161,14 @@ export function QuickCardSwitcherModal({
         continue;
       }
       if (card.kind === "todo") {
-        if (card.todo_state === "working") {
+        if (card.todo_state === "todo") {
+          todo.push(card);
+        } else if (card.todo_state === "working") {
           working.push(card);
         } else if (card.todo_state === "review") {
           review.push(card);
         } else if (card.todo_state === "done") {
           done.push(card);
-        } else if (card.todo_state === "todo") {
-          // 待办归入进行中/待办大类中供快速切换
-          working.push(card);
         }
       } else if (card.kind === "ongoing") {
         // 定时任务与周期卡片归入专门的定时任务分类
@@ -164,6 +188,7 @@ export function QuickCardSwitcherModal({
     };
 
     return {
+      todoCards: todo.sort(sortFn),
       workingCards: working.sort(sortFn),
       reviewCards: review.sort(sortFn),
       discussionCards: discussions.sort(sortFn),
@@ -172,17 +197,30 @@ export function QuickCardSwitcherModal({
     };
   }, [cards]);
 
-  const activeBadgeCount = workingCards.length + reviewCards.length;
+  const focusSummary = useMemo(
+    () => buildFocusSummary(cards, activeCardID, activeAttemptStatus),
+    [cards, activeCardID, activeAttemptStatus],
+  );
+  const focusCards = focusSummary.cards;
+  const activeBadgeCount = focusCards.length;
 
   const [selectedTab, setSelectedTab] = useState<SwitcherTab | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const defaultTab = useMemo((): SwitcherTab => {
+    // 只要存在需要关注的焦点卡片（正在运行 / 未读回复 / 待验收 / 进行中），
+    // 打开面板时默认定位到「焦点」Tab，让手机上滑或 ⌘K 首屏即可一眼扫完所有动态。
+    if (focusCards.length > 0) {
+      return "focus";
+    }
     if (activeCardID) {
       const currentCard = cards.find((c) => c.id === activeCardID);
       if (currentCard) {
         if (currentCard.kind === "discussion") return "discussion";
         if (currentCard.kind === "ongoing") return "ongoing";
         if (currentCard.kind === "todo") {
+          if (currentCard.todo_state === "todo") return "todo";
           if (currentCard.todo_state === "review") return "review";
           if (currentCard.todo_state === "done") return "done";
           return "working";
@@ -190,7 +228,7 @@ export function QuickCardSwitcherModal({
       }
     }
     return "discussion";
-  }, [activeCardID, cards]);
+  }, [activeCardID, cards, focusCards.length]);
 
   const activeTab = selectedTab || defaultTab;
   const setActiveTab = setSelectedTab;
@@ -198,12 +236,24 @@ export function QuickCardSwitcherModal({
   const handleOpenChange = useCallback((nextOpen: boolean) => {
     if (!nextOpen) {
       setSelectedTab(null);
+      setSearchQuery("");
     }
     onOpenChange(nextOpen);
   }, [onOpenChange]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (typeof window !== "undefined" && window.matchMedia?.("(min-width: 768px)").matches) {
+      const raf = requestAnimationFrame(() => {
+        searchInputRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [open]);
+
   const handleSelectCard = (targetCard: Card) => {
     setSelectedTab(null);
+    setSearchQuery("");
     onOpenChange(false);
     if (targetCard.kind === "discussion") {
       navigate(`/chat/${targetCard.project_id}/${targetCard.id}`);
@@ -246,62 +296,148 @@ export function QuickCardSwitcherModal({
   });
 
   const currentList = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    let baseList: Card[];
     switch (activeTab) {
+      case "focus":
+        baseList = keyword ? cards : focusCards;
+        break;
+      case "todo":
+        baseList = todoCards;
+        break;
       case "working":
-        return workingCards;
+        baseList = workingCards;
+        break;
       case "review":
-        return reviewCards;
+        baseList = reviewCards;
+        break;
       case "discussion":
-        return discussionCards;
+        baseList = discussionCards;
+        break;
       case "ongoing":
-        return ongoingCards;
+        baseList = ongoingCards;
+        break;
       case "done":
-        return doneCards;
+        baseList = doneCards;
+        break;
       default:
-        return [];
+        baseList = [];
     }
-  }, [activeTab, workingCards, reviewCards, discussionCards, ongoingCards, doneCards]);
+    if (!keyword) return baseList;
+    return baseList.filter(
+      (card) =>
+        (card.title || "").toLowerCase().includes(keyword) ||
+        (card.description || "").toLowerCase().includes(keyword),
+    );
+  }, [
+    activeTab,
+    searchQuery,
+    cards,
+    focusCards,
+    todoCards,
+    workingCards,
+    reviewCards,
+    discussionCards,
+    ongoingCards,
+    doneCards,
+  ]);
+
+  const tabFocusMeta = useMemo(() => {
+    const summarize = (list: Card[]) => {
+      const summary = buildFocusSummary(list, activeCardID, activeAttemptStatus);
+      return {
+        count: summary.cards.length,
+        status: summary.highestVisualStatus,
+      };
+    };
+    return {
+      focus: {
+        count: focusCards.length,
+        status: focusSummary.highestVisualStatus,
+      },
+      discussion: summarize(discussionCards),
+      todo: summarize(todoCards),
+      working: summarize(workingCards),
+      review: summarize(reviewCards),
+      done: summarize(doneCards),
+      ongoing: summarize(ongoingCards),
+    };
+  }, [
+    activeCardID,
+    activeAttemptStatus,
+    focusCards.length,
+    focusSummary.highestVisualStatus,
+    discussionCards,
+    todoCards,
+    workingCards,
+    reviewCards,
+    doneCards,
+    ongoingCards,
+  ]);
 
   const tabs: {
     id: SwitcherTab;
     label: string;
     icon: typeof PlayCircle;
     count: number;
+    badgeStatus: CardVisualStatus;
     colorClasses: string;
   }[] = [
+    {
+      id: "focus",
+      label: t("焦点"),
+      icon: Sparkles,
+      count: tabFocusMeta.focus.count,
+      badgeStatus: tabFocusMeta.focus.status,
+      colorClasses:
+        "data-[state=active]:text-primary dark:data-[state=active]:text-primary",
+    },
     {
       id: "discussion",
       label: t("讨论"),
       icon: MessageSquare,
-      count: discussionCards.length,
+      count: tabFocusMeta.discussion.count,
+      badgeStatus: tabFocusMeta.discussion.status,
       colorClasses: "data-[state=active]:text-indigo-600 dark:data-[state=active]:text-indigo-400",
+    },
+    {
+      id: "todo",
+      label: t("待办"),
+      icon: ListTodo,
+      count: tabFocusMeta.todo.count,
+      badgeStatus: tabFocusMeta.todo.status,
+      colorClasses: "data-[state=active]:text-slate-700 dark:data-[state=active]:text-slate-300",
     },
     {
       id: "working",
       label: t("进行中"),
       icon: PlayCircle,
-      count: workingCards.length,
+      count: tabFocusMeta.working.count,
+      badgeStatus: tabFocusMeta.working.status,
       colorClasses: "data-[state=active]:text-sky-600 dark:data-[state=active]:text-sky-400",
     },
     {
       id: "review",
       label: t("待验收"),
       icon: ShieldCheck,
-      count: reviewCards.length,
+      count: tabFocusMeta.review.count,
+      badgeStatus: tabFocusMeta.review.status,
       colorClasses: "data-[state=active]:text-amber-600 dark:data-[state=active]:text-amber-400",
     },
     {
       id: "done",
       label: t("已完成"),
       icon: CheckCircle2,
-      count: doneCards.length,
+      count: tabFocusMeta.done.count,
+      badgeStatus: tabFocusMeta.done.status,
       colorClasses: "data-[state=active]:text-emerald-600 dark:data-[state=active]:text-emerald-400",
     },
     {
       id: "ongoing",
       label: t("定时任务"),
       icon: CalendarClock,
-      count: ongoingCards.length,
+      count: tabFocusMeta.ongoing.count,
+      badgeStatus: tabFocusMeta.ongoing.status,
       colorClasses: "data-[state=active]:text-violet-600 dark:data-[state=active]:text-violet-400",
     },
   ];
@@ -314,8 +450,16 @@ export function QuickCardSwitcherModal({
         handleOpenChange(!open);
       }
     };
+    const handleOpenEvent = () => handleOpenChange(true);
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("cycledock:open-quick-switcher", handleOpenEvent);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener(
+        "cycledock:open-quick-switcher",
+        handleOpenEvent,
+      );
+    };
   }, [open, handleOpenChange]);
 
   return (
@@ -353,14 +497,64 @@ export function QuickCardSwitcherModal({
               </span>
             </div>
             {activeBadgeCount > 0 && (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
-              </span>
+              <div className="flex items-center gap-1.5">
+                {focusSummary.answeringCount > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {t("{{count}} 运行中", { count: focusSummary.answeringCount })}
+                  </span>
+                )}
+                {focusSummary.unreadCount > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                    <span className="size-1.5 rounded-full bg-sky-500" />
+                    {t("{{count}} 未读", { count: focusSummary.unreadCount })}
+                  </span>
+                )}
+                {focusSummary.answeringCount === 0 &&
+                  focusSummary.unreadCount === 0 && (
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
+                    </span>
+                  )}
+              </div>
+            )}
+          </div>
+
+          {/* 搜索过滤框 */}
+          <div className="relative mt-2.5">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && currentList.length > 0) {
+                  e.preventDefault();
+                  handleSelectCard(currentList[0]);
+                }
+              }}
+              placeholder={t("搜索卡片标题或描述...")}
+              aria-label={t("搜索卡片标题或描述...")}
+              className="h-8 w-full rounded-lg border border-line/80 bg-canvas/80 pr-8 pl-8 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:bg-surface focus:ring-2 focus:ring-primary/15 focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label={t("清空搜索")}
+                onClick={() => {
+                  setSearchQuery("");
+                  searchInputRef.current?.focus();
+                }}
+                className="absolute top-1/2 right-2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
             )}
           </div>
 
           {/* 分类 Tabs */}
-          <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -382,10 +576,16 @@ export function QuickCardSwitcherModal({
                   {tab.count > 0 && (
                     <span
                       className={cn(
-                        "rounded-full px-1.5 py-0.2 text-[10px] tabular-nums",
-                        isActive
-                          ? "bg-primary text-primary-foreground font-bold"
-                          : "bg-muted text-muted-foreground",
+                        "rounded-full px-1.5 py-0.2 text-[10px] font-bold tabular-nums",
+                        tab.badgeStatus === "answering"
+                          ? "bg-emerald-500 text-white"
+                          : tab.badgeStatus === "unread"
+                            ? "bg-sky-500 text-white"
+                            : tab.id === "review"
+                              ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
+                              : isActive
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground",
                       )}
                     >
                       {tab.count}
@@ -401,7 +601,13 @@ export function QuickCardSwitcherModal({
         <div className="flex-1 overflow-y-auto px-3 py-2.5 min-h-0">
           {currentList.length === 0 ? (
             <div className="flex h-40 flex-col items-center justify-center text-center text-muted-foreground">
-              <p className="text-xs">{t("该分类下暂无卡片")}</p>
+              <p className="text-xs">
+                {searchQuery.trim()
+                  ? t("未找到匹配的卡片")
+                  : activeTab === "focus"
+                    ? t("当前没有正在运行、未读或待处理的事项")
+                    : t("该分类下暂无卡片")}
+              </p>
             </div>
           ) : (
             <SwipeActionGroup className="flex flex-col gap-2 p-1">
@@ -414,6 +620,17 @@ export function QuickCardSwitcherModal({
                   isActive,
                   isActive ? activeAttemptStatus : undefined,
                 );
+                const focusReason = getCardFocusReason(
+                  card,
+                  isActive,
+                  isActive ? activeAttemptStatus : undefined,
+                );
+                const kindLabel =
+                  card.kind === "discussion"
+                    ? t("讨论")
+                    : card.kind === "ongoing"
+                      ? t("定时")
+                      : t("任务");
 
                 const swipeActions = [
                   ...(!isMain
@@ -481,17 +698,30 @@ export function QuickCardSwitcherModal({
                       )}
                     >
                       <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                        <div className="mt-0.5 shrink-0">
-                          {card.kind === "discussion" ? (
+                        <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+                          {visualStatus !== "idle" ? (
+                            <CardStatusDot status={visualStatus} className="size-2.5" />
+                          ) : card.kind === "discussion" ? (
                             <MessageSquare className="size-3.5 text-indigo-500" />
                           ) : card.kind === "ongoing" ? (
                             <CalendarClock className="size-3.5 text-violet-500" />
+                          ) : card.todo_state === "todo" ? (
+                            <ListTodo className="size-3.5 text-slate-500" />
+                          ) : card.todo_state === "review" ? (
+                            <ShieldCheck className="size-3.5 text-amber-500" />
+                          ) : card.todo_state === "done" ? (
+                            <CheckCircle2 className="size-3.5 text-emerald-500" />
                           ) : (
-                            <CardStatusDot status={visualStatus} className="size-2.5" />
+                            <PlayCircle className="size-3.5 text-sky-500" />
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
+                            {(activeTab === "focus" || Boolean(searchQuery.trim())) && (
+                              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                {kindLabel}
+                              </span>
+                            )}
                             <h4
                               className={cn(
                                 "truncate text-xs font-medium leading-snug",
@@ -519,6 +749,26 @@ export function QuickCardSwitcherModal({
 
                       {/* 状态徽标与当前标记 */}
                       <div className="ml-2 flex shrink-0 items-center gap-1.5">
+                        {focusReason === "answering" && (
+                          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                            {t("运行中")}
+                          </span>
+                        )}
+                        {focusReason === "unread" && (
+                          <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
+                            {t("新消息")}
+                          </span>
+                        )}
+                        {focusReason === "review" && (
+                          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            {t("待验收")}
+                          </span>
+                        )}
+                        {focusReason === "working" && activeTab === "focus" && (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            {t("进行中")}
+                          </span>
+                        )}
                         {isActive && (
                           <span className="flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
                             <Sparkles className="size-2.5" />
@@ -601,6 +851,8 @@ export function MobileQuickCardSwitcher({
     return (
       <QuickCardSwitcherTrigger
         projectID={projectID}
+        activeCardID={activeCardID}
+        activeAttemptStatus={activeAttemptStatus}
         className={className}
         onClick={() => setOpen(true)}
       />
@@ -623,6 +875,8 @@ export function MobileQuickCardSwitcher({
     <>
       <QuickCardSwitcherTrigger
         projectID={projectID}
+        activeCardID={activeCardID}
+        activeAttemptStatus={activeAttemptStatus}
         className={className}
         onClick={() => setOpen(true)}
       />

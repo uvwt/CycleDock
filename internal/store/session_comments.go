@@ -40,11 +40,292 @@ type SubmitSessionCommentResult struct {
 	Reused  bool
 }
 
+type EditSessionCommentParams struct {
+	WorkspaceID    uuid.UUID
+	CardID         uuid.UUID
+	EventID        uuid.UUID
+	AuthorSourceID uuid.UUID
+	Content        string
+}
+
 func (s *Store) SubmitSessionComment(
 	ctx context.Context,
 	p SubmitSessionCommentParams,
 ) (SubmitSessionCommentResult, error) {
 	return s.submitSessionComment(ctx, p, false)
+}
+
+// EditSessionCommentAndRerun 编辑已发送的人类消息气泡，截断该消息之后的全部回复、后续轮次与 ADK Session 上下文，
+// 并将该轮次重置为待领取状态，唤醒 Built-in Agent 重新回答。
+func (s *Store) EditSessionCommentAndRerun(
+	ctx context.Context,
+	p EditSessionCommentParams,
+) (SubmitSessionCommentResult, error) {
+	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
+	if p.Content == "" {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content is required", domain.ErrConflict)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if err := requireHumanSource(ctx, tx, p.WorkspaceID, p.AuthorSourceID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	var cardKind, discussionState, todoState, ongoingState string
+	if err := tx.QueryRow(ctx, `
+		SELECT kind, COALESCE(discussion_state, ''), COALESCE(todo_state, ''), COALESCE(ongoing_state, '')
+		FROM cards
+		WHERE workspace_id = $1 AND id = $2
+	`, p.WorkspaceID, p.CardID).Scan(&cardKind, &discussionState, &todoState, &ongoingState); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SubmitSessionCommentResult{}, domain.ErrNotFound
+		}
+		return SubmitSessionCommentResult{}, err
+	}
+	switch cardKind {
+	case string(domain.CardKindDiscussion):
+		if discussionState != string(domain.DiscussionStateActive) {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: discussion is archived", domain.ErrInvalidTransition)
+		}
+	case string(domain.CardKindTodo):
+		if todoState == string(domain.TodoStateDone) {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: done todo card cannot rerun turns", domain.ErrInvalidTransition)
+		}
+	case string(domain.CardKindOngoing):
+		if ongoingState != string(domain.OngoingStateActive) {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: ongoing card is not active", domain.ErrInvalidTransition)
+		}
+	}
+
+	var eventSequence, turnSequence int64
+	var turnID uuid.UUID
+	var turnSource string
+	err = tx.QueryRow(ctx, `
+		SELECT e.sequence, t.id, t.sequence, t.source
+		FROM events e
+		JOIN card_turns t
+		  ON t.workspace_id = e.workspace_id
+		 AND t.card_id = e.card_id
+		 AND t.source_event_id = e.id
+		WHERE e.workspace_id = $1
+		  AND e.card_id = $2
+		  AND e.id = $3
+		  AND e.event_type = 'comment'
+		FOR UPDATE OF e, t
+	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventSequence, &turnID, &turnSequence, &turnSource)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SubmitSessionCommentResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if turnSource != string(domain.TurnSourceHuman) {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: only human comments can be edited", domain.ErrConflict)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT a.id, COALESCE(a.invocation_id, '')
+		FROM turn_attempts a
+		JOIN card_turns ct
+		  ON ct.workspace_id = a.workspace_id
+		 AND ct.card_id = a.card_id
+		 AND ct.id = a.turn_id
+		WHERE a.workspace_id = $1
+		  AND a.card_id = $2
+		  AND ct.sequence >= $3
+		FOR UPDATE OF a
+	`, p.WorkspaceID, p.CardID, turnSequence)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	attemptIDs := make([]uuid.UUID, 0)
+	invocationIDs := make([]string, 0)
+	for rows.Next() {
+		var attemptID uuid.UUID
+		var invocationID string
+		if err := rows.Scan(&attemptID, &invocationID); err != nil {
+			rows.Close()
+			return SubmitSessionCommentResult{}, err
+		}
+		attemptIDs = append(attemptIDs, attemptID)
+		if strings.TrimSpace(invocationID) != "" {
+			invocationIDs = append(invocationIDs, invocationID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return SubmitSessionCommentResult{}, err
+	}
+	rows.Close()
+
+	// 先删除关联的业务 Events，避免先删 turn_attempts 触发 ON DELETE SET NULL (attempt_id)
+	// 从而违反 events_reply_preview_check（带 preview_id 的消息要求 attempt_id IS NOT NULL）。
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM events e
+		WHERE e.workspace_id = $1
+		  AND e.card_id = $2
+		  AND e.id <> $3
+		  AND (
+		    e.attempt_id = ANY($4::uuid[])
+		    OR (
+		      e.sequence > $5
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM turn_attempts prev_a
+		        JOIN card_turns prev_t
+		          ON prev_t.workspace_id = prev_a.workspace_id
+		         AND prev_t.card_id = prev_a.card_id
+		         AND prev_t.id = prev_a.turn_id
+		        WHERE prev_a.workspace_id = e.workspace_id
+		          AND prev_a.card_id = e.card_id
+		          AND prev_a.id = e.attempt_id
+		          AND prev_t.sequence < $6
+		      )
+		      AND NOT EXISTS (
+		        SELECT 1
+		        FROM card_turns prev_t
+		        WHERE prev_t.workspace_id = e.workspace_id
+		          AND prev_t.card_id = e.card_id
+		          AND prev_t.source_event_id = e.id
+		          AND prev_t.sequence < $6
+		      )
+		    )
+		  )
+	`, p.WorkspaceID, p.CardID, p.EventID, attemptIDs, eventSequence, turnSequence); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	if len(invocationIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM agent_session_events
+			WHERE app_name = 'cycledock'
+			  AND user_id = $1
+			  AND session_id = $2
+			  AND (
+			    invocation_id = ANY($3::text[])
+			    OR sequence >= COALESCE(
+			      (
+			        SELECT MIN(ase.sequence)
+			        FROM agent_session_events ase
+			        WHERE ase.app_name = 'cycledock'
+			          AND ase.user_id = $1
+			          AND ase.session_id = $2
+			          AND ase.invocation_id = ANY($3::text[])
+			      ),
+			      9223372036854775807
+			    )
+			  )
+		`, p.WorkspaceID.String(), p.CardID.String(), invocationIDs); err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+	}
+
+	if len(attemptIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE turn_attempts
+			SET retry_of_attempt_id = NULL
+			WHERE workspace_id = $1
+			  AND card_id = $2
+			  AND id = ANY($3::uuid[])
+			  AND retry_of_attempt_id IS NOT NULL
+		`, p.WorkspaceID, p.CardID, attemptIDs); err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM turn_attempts
+			WHERE workspace_id = $1
+			  AND card_id = $2
+			  AND id = ANY($3::uuid[])
+		`, p.WorkspaceID, p.CardID, attemptIDs); err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM card_turns
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND sequence > $3
+	`, p.WorkspaceID, p.CardID, turnSequence); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	requestHash := stableRequestHash(
+		"session_comment",
+		p.WorkspaceID.String(),
+		p.CardID.String(),
+		p.AuthorSourceID.String(),
+		string(domain.DispatchModeEnqueue),
+		p.Content,
+	)
+	if _, err := tx.Exec(ctx, `
+		UPDATE events
+		SET content = $4,
+		    request_hash = $5
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, p.WorkspaceID, p.CardID, p.EventID, p.Content, requestHash); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns
+		SET content = $4,
+		    dispatch_mode = 'enqueue',
+		    cancelled_at = NULL,
+		    cancelled_by_source_id = NULL,
+		    cancel_reason = '',
+		    request_hash = $5
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, p.WorkspaceID, p.CardID, turnID, p.Content, requestHash); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	if cardKind == string(domain.CardKindTodo) {
+		if _, err := tx.Exec(ctx, `
+			UPDATE cards c
+			SET todo_state = COALESCE(
+			      (
+			        SELECT CASE
+			          WHEN split_part(transition.content, ' -> ', 2) IN ('todo', 'working', 'review')
+			            THEN split_part(transition.content, ' -> ', 2)
+			          ELSE 'working'
+			        END
+			        FROM events transition
+			        WHERE transition.workspace_id = c.workspace_id
+			          AND transition.card_id = c.id
+			          AND transition.event_type = 'status_change'
+			        ORDER BY transition.sequence DESC
+			        LIMIT 1
+			      ),
+			      'todo'
+			    ),
+			    confirmation_round = (
+			      SELECT count(*)
+			      FROM events transition
+			      WHERE transition.workspace_id = c.workspace_id
+			        AND transition.card_id = c.id
+			        AND transition.event_type = 'status_change'
+			        AND transition.content IN ('todo -> working', 'review -> working', 'done -> working')
+			    ),
+			    updated_at = now()
+			WHERE c.workspace_id = $1 AND c.id = $2
+		`, p.WorkspaceID, p.CardID); err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	s.notifyWorkReady()
+	return SubmitSessionCommentResult{EventID: p.EventID, TurnID: turnID}, nil
 }
 
 func (s *Store) ReplySessionAndContinue(

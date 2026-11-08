@@ -71,6 +71,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
           "attempt.finished",
           "attempt.failed",
           "reply.committed",
+          "timeline.truncated",
         ].includes(event.type)
       )
         sync();
@@ -87,6 +88,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       "reply.reset",
       "attempt.finished",
       "attempt.failed",
+      "timeline.truncated",
     ]) {
       stream.addEventListener(type, onEvent);
     }

@@ -43,6 +43,14 @@ type attemptToolRuntime struct {
 	historyService  *agentsession.PostgresService
 	replies         *replyState
 	live            *realtime.Hub
+	activeModel     func() string
+}
+
+func (r attemptToolRuntime) activeModelName() string {
+	if r.activeModel == nil {
+		return ""
+	}
+	return r.activeModel()
 }
 
 type replyState struct {
@@ -208,6 +216,7 @@ func (r attemptToolRuntime) internalHandler(
 				AttemptID: r.context.AttemptID, RunnerSourceID: r.context.RunnerSourceID,
 				Message: input.ReplyMessage, IdempotencyKey: input.IdempotencyKey,
 				PreviewID: r.replies.previewIDs[ctx.FunctionCallID()],
+				Model:     r.activeModelName(),
 			})
 			if err != nil {
 				return nil, err

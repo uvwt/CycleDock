@@ -129,7 +129,7 @@ function Authenticated() {
   }, [me.data, location.search, navigate]);
   if (me.isPending)
     return (
-      <main className="grid min-h-screen place-items-center">
+      <main className="grid h-full min-h-0 place-items-center">
         <Spinner text={t("正在验证会话…")} />
       </main>
     );

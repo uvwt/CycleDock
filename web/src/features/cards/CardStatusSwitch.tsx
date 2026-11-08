@@ -23,7 +23,6 @@ const ongoingOptions: {
 }[] = [
   { value: "active", label: "运行中", dotClassName: "bg-emerald-500" },
   { value: "paused", label: "已暂停", dotClassName: "bg-amber-500" },
-  { value: "archived", label: "已归档", dotClassName: "bg-slate-400" },
 ];
 
 export function CardStatusSwitch({

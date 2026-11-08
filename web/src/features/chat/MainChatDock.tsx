@@ -602,7 +602,7 @@ export function MainChatDock() {
               ? size
                 ? ""
                 : "h-[min(560px,70dvh)] w-[min(400px,calc(100vw-2rem))]"
-              : "fixed right-4 bottom-[max(1.25rem,env(safe-area-inset-bottom))] h-[min(560px,70dvh)] w-[min(400px,calc(100vw-2rem))]"
+              : "absolute right-4 bottom-[max(1.25rem,env(safe-area-inset-bottom))] h-[min(560px,70dvh)] w-[min(400px,calc(100vw-2rem))]"
           }`}
         >
           {/* Resize handles */}
@@ -645,41 +645,46 @@ export function MainChatDock() {
               // 移动端浮窗头部不应拖动页面或触发滚动穿透
               e.preventDefault();
             }}
-            className="flex h-12 shrink-0 cursor-move items-center gap-2 border-b border-line px-3 select-none"
+            className="absolute top-0 inset-x-0 z-20 flex cursor-move items-center justify-between gap-2 bg-gradient-to-b from-canvas/95 via-canvas/70 to-transparent px-3 pt-2.5 pb-3 select-none"
           >
-            <img
-              src="/cycledock-logo.png"
-              alt=""
-              className="size-6 pointer-events-none object-contain"
-              draggable={false}
-            />
-            <h2 className="min-w-0 flex-1 truncate text-sm font-semibold pointer-events-none">
-              {card?.title || t("主聊天")}
-            </h2>
-            <button
-              type="button"
-              title={t("在完整页面打开")}
-              aria-label={t("在完整页面打开")}
-              disabled={!cardID}
-              onClick={() =>
-                cardID &&
-                navigate(
-                  `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
-                )
-              }
-              className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-40"
-            >
-              <Expand className="size-4" />
-            </button>
-            <button
-              type="button"
-              title={t("关闭主聊天")}
-              aria-label={t("关闭主聊天")}
-              onClick={() => setOpen(false)}
-              className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted"
-            >
-              <X className="size-4" />
-            </button>
+            <div className="pointer-events-none inline-flex h-7 min-w-0 max-w-[68%] items-center gap-1.5 rounded-lg border border-line/75 bg-surface/85 px-2.5 shadow-2xs backdrop-blur-md">
+              <img
+                src="/cycledock-logo.png"
+                alt=""
+                className="size-4 shrink-0 object-contain"
+                draggable={false}
+              />
+              <h2 className="truncate text-xs font-semibold text-foreground">
+                {card?.title || t("主聊天")}
+              </h2>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                title={t("在完整页面打开")}
+                aria-label={t("在完整页面打开")}
+                disabled={!cardID}
+                onClick={() =>
+                  cardID &&
+                  navigate(
+                    `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
+                  )
+                }
+                className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+              >
+                <Expand className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                title={t("关闭主聊天")}
+                aria-label={t("关闭主聊天")}
+                onClick={() => setOpen(false)}
+                className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col select-auto">
@@ -698,16 +703,22 @@ export function MainChatDock() {
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
-                bottomSpacerClass="h-4 shrink-0"
+                bottomSpacerClass="h-2 shrink-0"
                 compact
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
                 onReply={setReplyTo}
+                onEditMessage={async (eventID, content) => {
+                  await api.editComment(cardID, eventID, content);
+                  setOlderEvents([]);
+                  setOlderAttempts([]);
+                  await sync();
+                }}
               />
             )}
           </div>
 
-          <div className="shrink-0 space-y-2 border-t border-line bg-canvas p-3 select-auto">
+          <div className="shrink-0 space-y-2 bg-canvas px-2.5 pt-1 pb-2.5 select-auto">
             <PendingTurnQueue
               turns={detail.data?.pending_turns || []}
               cancelingTurnID={cancelingTurnID}
@@ -746,7 +757,7 @@ export function MainChatDock() {
       {!open && (
         <div
           style={bubbleBottom !== null ? { bottom: `${bubbleBottom}px` } : undefined}
-          className={`fixed right-4 z-40 flex flex-col items-end gap-3 pointer-events-none ${
+          className={`absolute right-4 z-40 flex flex-col items-end gap-3 pointer-events-none ${
             isBubbleDragging ? "select-none" : "transition-[bottom] duration-200"
           } ${
             bubbleBottom !== null
