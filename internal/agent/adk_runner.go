@@ -638,12 +638,38 @@ func buildADKInstructions(
 	return strings.Join(parts, "\n\n")
 }
 
-// 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
-func turnMessage(card store.AgentCardContext) string {
-	if card.DeviceNodeID != "" {
-		return fmt.Sprintf("%s\n\n本轮用户选择的操作设备：%q（node_id=%q）。涉及设备操作时使用该设备；不可用时向用户说明，不要自行切换设备。", card.TurnContent, card.DeviceName, card.DeviceNodeID)
+func formatStatusChangesPrompt(changes []store.CardStatusChange) string {
+	if len(changes) == 0 {
+		return ""
 	}
-	return card.TurnContent
+	var b strings.Builder
+	b.WriteString("自上一轮执行以来的卡片状态变更：\n")
+	for _, c := range changes {
+		if c.ActorName != "" {
+			b.WriteString(fmt.Sprintf("- %s（操作人：%s）\n", c.Content, c.ActorName))
+		} else {
+			b.WriteString(fmt.Sprintf("- %s\n", c.Content))
+		}
+	}
+	b.WriteString("请结合最新的卡片状态与状态流转历史继续推进任务。")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
+// 状态变更提示静默注入模型上下文（不落库前端气泡），使模型感知自上一轮执行以来的状态流转历史。
+func turnMessage(card store.AgentCardContext) string {
+	var sections []string
+	sections = append(sections, card.TurnContent)
+
+	if prompt := formatStatusChangesPrompt(card.StatusChanges); prompt != "" {
+		sections = append(sections, prompt)
+	}
+
+	if card.DeviceNodeID != "" {
+		sections = append(sections, fmt.Sprintf("本轮用户选择的操作设备：%q（node_id=%q）。涉及设备操作时使用该设备；不可用时向用户说明，不要自行切换设备。", card.DeviceName, card.DeviceNodeID))
+	}
+
+	return strings.Join(sections, "\n\n")
 }
 
 func textFromADKContent(content *genai.Content) string {
