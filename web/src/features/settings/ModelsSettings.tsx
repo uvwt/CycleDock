@@ -215,12 +215,13 @@ function SortableRouteEditor({
   const applySelectedModel = (modelID: string) => {
     const matched = catalogModels.find((m) => m.id === modelID);
     if (route.limits_source === "user") {
-      onChange({ ...route, model: modelID });
+      onChange({ ...route, model: modelID, base_model: undefined });
       return;
     }
     onChange({
       ...route,
       model: modelID,
+      base_model: undefined,
       context_window_tokens: matched?.limits?.context_window_tokens,
       max_input_tokens: matched?.limits?.max_input_tokens,
       max_output_tokens: matched?.limits?.max_output_tokens,
@@ -449,7 +450,8 @@ function SortableRouteEditor({
               {formatTokenCount(displayMaxOutput)}
             </strong>
           </span>
-          {route.base_model ? (
+          {route.base_model &&
+          route.base_model.toLowerCase() !== route.model.trim().toLowerCase() ? (
             <span>
               底层模型:{" "}
               <strong className="font-mono text-foreground">
@@ -477,27 +479,7 @@ function SortableRouteEditor({
 
       {editingLimits && (
         <div className="space-y-3 rounded-lg border border-line bg-canvas p-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field
-              label="底层模型（可选）"
-              hint="自定义代理别名可指定如 gpt-5.4 / gemini-3.8-flash / claude-sonnet-5-5"
-            >
-              <TextInput
-                value={route.base_model ?? ""}
-                onChange={(event) => {
-                  const nextBase = event.target.value;
-                  onChange({
-                    ...route,
-                    base_model: nextBase,
-                    limits_source:
-                      route.limits_source === "user" ? "user" : undefined,
-                  });
-                }}
-                placeholder="如 gemini-3.8-flash"
-                aria-label="底层模型"
-              />
-            </Field>
-
+          <div className="grid gap-3 sm:grid-cols-3">
             <Field label="上下文窗口 (Tokens)">
               <TextInput
                 type="number"

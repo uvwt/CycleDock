@@ -80,6 +80,9 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireWorkspaceOwner(w, identity.Role) {
 		return
 	}
+	if api.model != nil {
+		api.model.EnsureOnlineRegistry(r.Context())
+	}
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
@@ -125,6 +128,15 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	if api.model != nil {
+		api.model.EnsureOnlineRegistry(r.Context())
+	}
+	existingSettings, _ := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
+	existingRoutesByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(existingSettings.Routes))
+	for _, er := range existingSettings.Routes {
+		existingRoutesByID[er.ID] = er
+	}
+
 	routes := make([]store.ModelRouteInput, 0, len(request.Routes))
 	for _, route := range request.Routes {
 		var routeID uuid.UUID
@@ -146,14 +158,27 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			credentialID = &parsed
 		}
 		providerType := strings.TrimSpace(route.ProviderType)
+		if providerType == "" {
+			providerType = "openai_compatible"
+		}
+		baseModel := strings.TrimSpace(route.BaseModel)
+		if prev, ok := existingRoutesByID[routeID]; ok && !strings.EqualFold(strings.TrimSpace(prev.Model), strings.TrimSpace(route.Model)) {
+			// 模型 ID 变更且未显式传入新底层模型时，清空旧底层模型关联，重新触发自动识别。
+			if strings.EqualFold(baseModel, strings.TrimSpace(prev.BaseModel)) {
+				baseModel = ""
+			}
+		}
+
 		limitsSource := strings.TrimSpace(route.LimitsSource)
 		contextWindow := route.ContextWindowTokens
 		maxInput := route.MaxInputTokens
 		maxOutput := route.MaxOutputTokens
 		var limitsVerifiedAt *time.Time
 
-		// 当非用户手动覆盖时，优先检查短时缓存中是否已有服务商返回的模型容量信息。
-		if limitsSource != modelclient.LimitsSourceUser && api.model != nil {
+		// 当非用户手动覆盖时，按优先级自动发现模型容量：
+		// 1. 服务商 /models 缓存 -> 2. 实时注册表 / 内置注册表精确匹配 -> 3. 调用路由自身 LLM 从实时注册表候选列表中识别底层模型
+		if limitsSource != modelclient.LimitsSourceUser {
+			var routeCfg modelclient.Config
 			lookupBaseURL := strings.TrimSpace(route.ProviderBaseURL)
 			if providerType != "openai_compatible" && api.modelAuth != nil && credentialID != nil {
 				if cfg, err := api.modelAuth.ModelConfigForCredential(
@@ -164,15 +189,77 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 					route.Model,
 					10*time.Second,
 				); err == nil {
+					routeCfg = cfg
 					lookupBaseURL = cfg.BaseURL
 				}
+			} else if providerType == "openai_compatible" && lookupBaseURL != "" {
+				apiKey := strings.TrimSpace(route.APIKey)
+				envName := strings.TrimSpace(route.APIKeyEnv)
+				if apiKey == "" && !route.ClearAPIKey {
+					if prev, ok := existingRoutesByID[routeID]; ok {
+						if k, err := api.store.ModelRouteAPIKey(prev); err == nil && k != "" {
+							apiKey = k
+						} else if envName == "" {
+							envName = prev.ApiKeyEnv
+						}
+					}
+					if apiKey == "" {
+						for _, er := range existingSettings.Routes {
+							if er.ProviderType == "openai_compatible" && strings.TrimSpace(er.ProviderBaseUrl) == lookupBaseURL {
+								if k, err := api.store.ModelRouteAPIKey(er); err == nil && k != "" {
+									apiKey = k
+									break
+								}
+							}
+						}
+					}
+				}
+				if apiKey == "" && envName != "" && agentconfig.ValidEnvName(envName) {
+					apiKey = strings.TrimSpace(os.Getenv(envName))
+				}
+				routeCfg = modelclient.Config{
+					BaseURL: lookupBaseURL,
+					APIKey:  apiKey,
+					Model:   strings.TrimSpace(route.Model),
+					Timeout: 8 * time.Second,
+				}
 			}
-			if cached, ok := api.model.CachedProviderModelLimits(lookupBaseURL, route.Model); ok && cached != nil {
-				contextWindow = cached.ContextWindowTokens
-				maxInput = cached.MaxInputTokens
-				maxOutput = cached.MaxOutputTokens
-				limitsSource = modelclient.LimitsSourceProvider
-				limitsVerifiedAt = cached.VerifiedAt
+
+			if api.model != nil {
+				if cached, ok := api.model.CachedProviderModelLimits(lookupBaseURL, route.Model); ok && cached != nil {
+					contextWindow = cached.ContextWindowTokens
+					maxInput = cached.MaxInputTokens
+					maxOutput = cached.MaxOutputTokens
+					limitsSource = modelclient.LimitsSourceProvider
+					limitsVerifiedAt = cached.VerifiedAt
+				}
+			}
+			if limitsSource != modelclient.LimitsSourceProvider {
+				if reg, canonical, ok := modelclient.LookupRegistryModelLimitsWithCanonical(route.Model, baseModel); ok {
+					contextWindow = reg.ContextWindowTokens
+					maxInput = reg.MaxInputTokens
+					maxOutput = reg.MaxOutputTokens
+					limitsSource = reg.Source
+					now := time.Now().UTC()
+					limitsVerifiedAt = &now
+					if baseModel == "" && canonical != "" && !strings.EqualFold(canonical, strings.TrimSpace(route.Model)) {
+						baseModel = canonical
+					}
+				} else if api.model != nil && routeCfg.BaseURL != "" && strings.TrimSpace(route.Model) != "" {
+					if identifiedBase, llmLimits, ok := api.model.IdentifyBaseModelWithLLM(r.Context(), routeCfg, route.Model); ok {
+						baseModel = identifiedBase
+						contextWindow = llmLimits.ContextWindowTokens
+						maxInput = llmLimits.MaxInputTokens
+						maxOutput = llmLimits.MaxOutputTokens
+						limitsSource = llmLimits.Source
+						limitsVerifiedAt = llmLimits.VerifiedAt
+					} else {
+						contextWindow = 0
+						maxInput = 0
+						maxOutput = 0
+						limitsSource = modelclient.LimitsSourceUnknown
+					}
+				}
 			}
 		}
 
@@ -183,7 +270,7 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			CredentialID:        credentialID,
 			ProviderBaseURL:     route.ProviderBaseURL,
 			Model:               route.Model,
-			BaseModel:           route.BaseModel,
+			BaseModel:           baseModel,
 			APIKey:              route.APIKey,
 			APIKeyEnv:           route.APIKeyEnv,
 			ClearAPIKey:         route.ClearAPIKey,
@@ -532,15 +619,19 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 			ts := route.LimitsVerifiedAt.Time.UTC()
 			verifiedAt = &ts
 		}
+		baseModel := route.BaseModel
 		// 对存量尚未回填限制的记录，在读取时尝试按注册表规则补齐精确识别模型的限制展示。
 		if limitsSource == modelclient.LimitsSourceUnknown && contextWindow == 0 && maxInput == 0 && maxOutput == 0 {
-			if reg, ok := modelclient.LookupRegistryModelLimits(route.Model, route.BaseModel); ok {
+			if reg, canonical, ok := modelclient.LookupRegistryModelLimitsWithCanonical(route.Model, baseModel); ok {
 				contextWindow = reg.ContextWindowTokens
 				maxInput = reg.MaxInputTokens
 				maxOutput = reg.MaxOutputTokens
 				limitsSource = reg.Source
 				if verifiedAt == nil {
 					verifiedAt = &now
+				}
+				if baseModel == "" && canonical != "" && !strings.EqualFold(canonical, strings.TrimSpace(route.Model)) {
+					baseModel = canonical
 				}
 			}
 		}
@@ -551,7 +642,7 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 			CredentialID:        credentialID,
 			ProviderBaseURL:     route.ProviderBaseUrl,
 			Model:               route.Model,
-			BaseModel:           route.BaseModel,
+			BaseModel:           baseModel,
 			APIKeyEnv:           route.ApiKeyEnv,
 			APIKeyConfigured:    len(route.ApiKeyCiphertext) > 0 || route.ApiKeyEnv != "",
 			ContextWindowTokens: contextWindow,

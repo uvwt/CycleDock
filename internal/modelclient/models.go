@@ -290,6 +290,7 @@ func (c *Client) fetchCatalog(ctx context.Context, config Config) ([]ModelInfo, 
 	}
 
 	now := time.Now().UTC()
+	c.EnsureOnlineRegistry(ctx)
 	providerLimits := make(map[string]ModelLimits)
 	models := make([]ModelInfo, 0, len(decoded.Models)+len(decoded.Data))
 

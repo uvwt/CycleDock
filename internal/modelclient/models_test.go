@@ -157,3 +157,136 @@ func TestListModelsRejectsRedirectsAndPrivateIPs(t *testing.T) {
 		t.Fatal("expected link-local IP endpoint to be rejected")
 	}
 }
+
+func TestSyncOnlineModelRegistryModelsDevAndOpenRouter(t *testing.T) {
+	modelsDevServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"openai": {
+				"models": {
+					"gpt-7-omega": {
+						"id": "gpt-7-omega",
+						"limit": {
+							"context": 2000000,
+							"input": 1800000,
+							"output": 200000
+						}
+					}
+				}
+			},
+			"google": {
+				"models": {
+					"gemini-4.2-flash-preview": {
+						"id": "gemini-4.2-flash-preview",
+						"limit": {
+							"context": 2097152,
+							"input": 2097152,
+							"output": 131072
+						}
+					}
+				}
+			}
+		}`))
+	}))
+	defer modelsDevServer.Close()
+
+	openRouterServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": [
+				{
+					"id": "openai/gpt-7-omega",
+					"context_length": 1000000,
+					"top_provider": {
+						"context_length": 1000000,
+						"max_completion_tokens": 64000
+					}
+				},
+				{
+					"id": "mistralai/mistral-next-2026:free",
+					"context_length": 524288,
+					"top_provider": {
+						"context_length": 524288,
+						"max_completion_tokens": 65536
+					}
+				}
+			]
+		}`))
+	}))
+	defer openRouterServer.Close()
+
+	restore := SetOnlineRegistryURLsForTest(modelsDevServer.URL, openRouterServer.URL)
+	defer restore()
+
+	client := New()
+	client.EnsureOnlineRegistry(context.Background())
+
+	// 1. models.dev 主源优先，保留精确的 context / input / output 三元组，不被 OpenRouter 同名条目覆盖
+	gpt7, canonical, ok := LookupRegistryModelLimitsWithCanonical("gpt-7-omega", "")
+	if !ok || canonical != "gpt-7-omega" || gpt7.ContextWindowTokens != 2000000 || gpt7.MaxInputTokens != 1800000 || gpt7.MaxOutputTokens != 200000 {
+		t.Fatalf("expected models.dev primary tuple for gpt-7-omega, got ok=%v canonical=%q limits=%+v", ok, canonical, gpt7)
+	}
+
+	// 2. OpenRouter 辅源补充主源未收录的长尾模型，并支持剥离厂商前缀与 :free 标签
+	mistral, canonical, ok := LookupRegistryModelLimitsWithCanonical("mistral-next-2026", "")
+	if !ok || canonical != "mistral-next-2026" || mistral.ContextWindowTokens != 524288 || mistral.MaxOutputTokens != 65536 {
+		t.Fatalf("expected OpenRouter secondary fallback for mistral-next-2026, got ok=%v canonical=%q limits=%+v", ok, canonical, mistral)
+	}
+
+	// 3. 标准 -preview 后缀归一化：用户输入 gemini-4.2-flash 可自动匹配在线目录中的 gemini-4.2-flash-preview
+	gemini, canonical, ok := LookupRegistryModelLimitsWithCanonical("gemini-4.2-flash", "")
+	if !ok || canonical != "gemini-4.2-flash-preview" || gemini.ContextWindowTokens != 2097152 || gemini.MaxOutputTokens != 131072 {
+		t.Fatalf("expected -preview suffix normalization for gemini-4.2-flash, got ok=%v canonical=%q limits=%+v", ok, canonical, gemini)
+	}
+}
+
+func TestIdentifyBaseModelWithLLM(t *testing.T) {
+	llmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/responses" {
+			http.Error(w, "responses API not supported on this proxy", http.StatusNotFound)
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			_, _ = w.Write([]byte(`{
+				"id": "chatcmpl-1",
+				"choices": [
+					{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "{\"base_model\":\"gemini-3.8-flash\"}"
+						}
+					}
+				]
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer llmServer.Close()
+
+	client := New()
+	baseModel, limits, ok := client.IdentifyBaseModelWithLLM(context.Background(), Config{
+		BaseURL: llmServer.URL + "/v1",
+		APIKey:  "sk-test",
+	}, "cpa-gemini-3.8-flash-high")
+	if !ok || baseModel != "gemini-3.8-flash" || limits.Source != LimitsSourceRegistry || limits.ContextWindowTokens != 1048576 || limits.MaxOutputTokens != 65536 {
+		t.Fatalf("expected LLM to map cpa-gemini-3.8-flash-high -> gemini-3.8-flash, got ok=%v base=%q limits=%+v", ok, baseModel, limits)
+	}
+
+	// 当 LLM 返回不在注册表中的幻觉模型名时，必须拒绝并返回 unknown
+	hallucinatingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"base_model\\\":\\\"hallucinated-super-model-999\\\"}\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"))
+	}))
+	defer hallucinatingServer.Close()
+
+	baseModel, limits, ok = client.IdentifyBaseModelWithLLM(context.Background(), Config{
+		BaseURL: hallucinatingServer.URL + "/v1",
+		APIKey:  "sk-test",
+	}, "mystery-custom-alias")
+	if ok || baseModel != "" || limits.Source != LimitsSourceUnknown || limits.ContextWindowTokens != 0 {
+		t.Fatalf("expected hallucinated model ID to be rejected, got ok=%v base=%q limits=%+v", ok, baseModel, limits)
+	}
+}
