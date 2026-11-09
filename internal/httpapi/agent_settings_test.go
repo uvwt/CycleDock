@@ -250,17 +250,55 @@ func TestAgentStatusReportsConfigurationWithoutExposingSettings(t *testing.T) {
 func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": [
-				{
-					"id": "relay-pro-max",
-					"name": "Relay Pro Max",
-					"context_window": 256000,
-					"max_input_tokens": 240000,
-					"max_output_tokens": 32000
-				}
-			]
-		}`))
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": "relay-pro-max",
+						"name": "Relay Pro Max",
+						"context_window": 256000,
+						"max_input_tokens": 240000,
+						"max_output_tokens": 32000
+					}
+				]
+			}`))
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			var body struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Model == "cpa-claude-sonnet-4-6-thinking" {
+				_, _ = w.Write([]byte(`{
+					"id": "chatcmpl-llm-id",
+					"choices": [
+						{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "{\"base_model\":\"claude-sonnet-4-6\"}"
+							}
+						}
+					]
+				}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{
+				"id": "chatcmpl-llm-empty",
+				"choices": [
+					{
+						"index": 0,
+						"message": {
+							"role": "assistant",
+							"content": "{\"base_model\":\"\"}"
+						}
+					}
+				]
+			}`))
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	defer provider.Close()
 
@@ -313,6 +351,13 @@ func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
 				"base_model":        "gemini-2.5-flash",
 			},
 			{
+				"id":                uuid.NewString(),
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"provider_base_url": provider.URL + "/v1",
+				"model":             "cpa-claude-sonnet-4-6-thinking",
+			},
+			{
 				"id":                    uuid.NewString(),
 				"enabled":               true,
 				"provider_type":         "openai_compatible",
@@ -332,8 +377,8 @@ func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
 
 	var got agentSettingsResponse
 	decodeRecorder(t, save, &got)
-	if len(got.Routes) != 5 {
-		t.Fatalf("expected 5 routes, got %d", len(got.Routes))
+	if len(got.Routes) != 6 {
+		t.Fatalf("expected 6 routes, got %d", len(got.Routes))
 	}
 
 	// Route 0: provider metadata
@@ -352,9 +397,13 @@ func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
 	if got.Routes[3].LimitsSource != "registry" || got.Routes[3].BaseModel != "gemini-2.5-flash" || got.Routes[3].ContextWindowTokens != 1048576 {
 		t.Fatalf("route[3] base_model registry limits mismatch: %+v", got.Routes[3])
 	}
-	// Route 4: user manual override wins over registry
-	if got.Routes[4].LimitsSource != "user" || got.Routes[4].ContextWindowTokens != 64000 || got.Routes[4].MaxInputTokens != 56000 || got.Routes[4].MaxOutputTokens != 8000 {
-		t.Fatalf("route[4] user override mismatch: %+v", got.Routes[4])
+	// Route 4: custom alias automatically identified by LLM -> base_model=claude-sonnet-4-6 + registry limits
+	if got.Routes[4].LimitsSource != "registry" || got.Routes[4].BaseModel != "claude-sonnet-4-6" || got.Routes[4].ContextWindowTokens != 1000000 || got.Routes[4].MaxOutputTokens != 128000 {
+		t.Fatalf("route[4] LLM auto-identified base_model mismatch: %+v", got.Routes[4])
+	}
+	// Route 5: user manual override wins over registry
+	if got.Routes[5].LimitsSource != "user" || got.Routes[5].ContextWindowTokens != 64000 || got.Routes[5].MaxInputTokens != 56000 || got.Routes[5].MaxOutputTokens != 8000 {
+		t.Fatalf("route[5] user override mismatch: %+v", got.Routes[5])
 	}
 
 	// 非法配置（max_input_tokens > context_window_tokens）必须被拒绝
