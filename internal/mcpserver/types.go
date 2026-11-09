@@ -96,6 +96,7 @@ type CreateTurnInput struct {
 	CardID         string `json:"card_id"`
 	Content        string `json:"content" jsonschema:"Durable new work direction queued on this Card"`
 	IdempotencyKey string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`
+	DispatchMode   string `json:"dispatch_mode,omitempty" jsonschema:"Optional dispatch mode: enqueue or interrupt. Defaults to enqueue."`
 }
 
 type ClaimAttemptInput struct {

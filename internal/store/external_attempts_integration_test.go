@@ -29,7 +29,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	first, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"execute external work", "external-turn-1",
-		uuid.NullUUID{},
+		uuid.NullUUID{}, domain.DispatchModeEnqueue,
 	)
 	if err != nil || first.Reused || first.EventID == uuid.Nil || first.TurnID == uuid.Nil {
 		t.Fatalf("submit agent turn: %+v err=%v", first, err)
@@ -37,7 +37,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	replayed, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"execute external work", "external-turn-1",
-		uuid.NullUUID{},
+		uuid.NullUUID{}, domain.DispatchModeEnqueue,
 	)
 	if err != nil || !replayed.Reused || replayed.TurnID != first.TurnID || replayed.EventID != first.EventID {
 		t.Fatalf("replay agent turn: %+v err=%v", replayed, err)
@@ -45,7 +45,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	if _, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, f.CardID, oauthA.ID,
 		"changed work", "external-turn-1",
-		uuid.NullUUID{},
+		uuid.NullUUID{}, domain.DispatchModeEnqueue,
 	); !errors.Is(err, domain.ErrIdempotencyMismatch) {
 		t.Fatalf("mismatched turn replay error=%v", err)
 	}
@@ -60,7 +60,7 @@ func TestExternalOAuthAttemptOwnershipAndCardScopedClaim(t *testing.T) {
 	otherTurn, err := s.SubmitAgentTurn(
 		ctx, f.WorkspaceID, otherCard.ID, oauthA.ID,
 		"must stay on the other card", "external-turn-other",
-		uuid.NullUUID{},
+		uuid.NullUUID{}, domain.DispatchModeEnqueue,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -300,5 +300,29 @@ func TestExternalOAuthClaimsHumanReplyAndScheduleTurns(t *testing.T) {
 	if scheduledClaim.Turn.ID != scheduled.Turn.ID ||
 		scheduledClaim.Turn.Source != domain.TurnSourceSchedule {
 		t.Fatalf("external schedule claim=%+v scheduled=%+v", scheduledClaim, scheduled)
+	}
+
+	// Test SubmitAgentTurn with DispatchModeInterrupt to supersede active attempt
+	interruptingTurn, err := s.SubmitAgentTurn(
+		ctx, ongoing.WorkspaceID, ongoing.CardID, scheduledExternal.ID,
+		"urgent redirection", "interrupt-turn-1",
+		uuid.NullUUID{}, domain.DispatchModeInterrupt,
+	)
+	if err != nil {
+		t.Fatalf("submit interrupting agent turn: %v", err)
+	}
+	if interruptingTurn.TurnID == uuid.Nil {
+		t.Fatalf("expected valid turn ID for interrupting turn")
+	}
+
+	supersededAttempt, err := s.GetAttempt(ctx, ongoing.WorkspaceID, scheduledClaim.Attempt.ID)
+	if err != nil {
+		t.Fatalf("get superseded attempt: %v", err)
+	}
+	if supersededAttempt.Status != domain.AttemptStatusSuperseded {
+		t.Fatalf("expected attempt status to be superseded, got %s", supersededAttempt.Status)
+	}
+	if supersededAttempt.ErrorSummary != "superseded by interrupting agent turn" {
+		t.Fatalf("expected error summary %q, got %q", "superseded by interrupting agent turn", supersededAttempt.ErrorSummary)
 	}
 }

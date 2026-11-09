@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/uvwt/CycleDock/internal/domain"
@@ -31,6 +32,16 @@ func TestAgentGenerateWorkConfirmThresholdAndHumanDone(t *testing.T) {
 	if !created.Card.SourceDiscussionID.Valid || created.Card.SourceDiscussionID.UUID != discussion.Card.ID {
 		t.Fatalf("generated work source=%v, want discussion %s", created.Card.SourceDiscussionID, discussion.Card.ID)
 	}
+
+	var turnCount int
+	var turnContent string
+	if err := s.pool.QueryRow(ctx, `SELECT count(*), coalesce(max(content), '') FROM card_turns WHERE card_id=$1`, created.Card.ID).Scan(&turnCount, &turnContent); err != nil {
+		t.Fatalf("query card turns: %v", err)
+	}
+	if turnCount != 1 || !strings.Contains(turnContent, "needs two confirmations") {
+		t.Fatalf("expected initial turn created, count=%d, content=%q", turnCount, turnContent)
+	}
+
 	replayed, err := s.GenerateWorkFromDiscussion(ctx, GenerateWorkParams{
 		WorkspaceID: f.WorkspaceID, DiscussionID: discussion.Card.ID, SourceID: f.AgentID,
 		Kind: domain.CardKindTodo, Title: "Agent created", Description: "needs two confirmations",

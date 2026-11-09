@@ -22,6 +22,7 @@ func (s *Store) SubmitAgentTurn(
 	workspaceID, cardID, sourceID uuid.UUID,
 	content, idempotencyKey string,
 	sourceCardID uuid.NullUUID,
+	dispatchMode domain.DispatchMode,
 ) (SubmitAgentTurnResult, error) {
 	content, _ = agentdata.NormalizeText(strings.TrimSpace(content))
 	idempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(idempotencyKey))
@@ -30,6 +31,12 @@ func (s *Store) SubmitAgentTurn(
 	}
 	if sourceCardID.Valid && sourceCardID.UUID == cardID {
 		return SubmitAgentTurnResult{}, fmt.Errorf("%w: target card must differ from source card", domain.ErrConflict)
+	}
+	if dispatchMode == "" {
+		dispatchMode = domain.DispatchModeEnqueue
+	}
+	if dispatchMode != domain.DispatchModeEnqueue && dispatchMode != domain.DispatchModeInterrupt {
+		return SubmitAgentTurnResult{}, fmt.Errorf("%w: invalid dispatch mode %q", domain.ErrConflict, dispatchMode)
 	}
 
 	var sourceCardIDStr string
@@ -44,6 +51,7 @@ func (s *Store) SubmitAgentTurn(
 		sourceID.String(),
 		content,
 		sourceCardIDStr,
+		string(dispatchMode),
 	)
 
 	tx, err := s.pool.Begin(ctx)
@@ -102,11 +110,16 @@ func (s *Store) SubmitAgentTurn(
 		Content:           content,
 		CreatedBySourceID: uuid.NullUUID{UUID: sourceID, Valid: true},
 		SourceEventID:     uuid.NullUUID{UUID: eventID, Valid: true},
-		DispatchMode:      domain.DispatchModeEnqueue,
+		DispatchMode:      dispatchMode,
 		IdempotencyKey:    idempotencyKey,
 		RequestHash:       requestHash,
 	})
 	if err != nil {
+		return SubmitAgentTurnResult{}, err
+	}
+	if err := supersedeAttemptForTurn(
+		ctx, tx, workspaceID, cardID, dispatchMode, "superseded by interrupting agent turn", turn.CreatedAt,
+	); err != nil {
 		return SubmitAgentTurnResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

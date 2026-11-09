@@ -201,7 +201,7 @@ func TestBuiltInCardMessageQueuesAndRunsIsolatedTargetSession(t *testing.T) {
 			t.Fatalf("invalid target %q accepted", cardID)
 		}
 	}
-	// 目标有 current Attempt 时，新消息只排队，不能替换或终止它。
+	// 默认 enqueue 模式：目标有 current Attempt 时，新消息只排队，不能替换或终止它。
 	if _, err := dataStore.CreateHumanTurn(ctx, workspace.ID, target.ID, human.ID, "busy target", "busy-turn", domain.DispatchModeEnqueue); err != nil {
 		t.Fatal(err)
 	}
@@ -221,4 +221,20 @@ func TestBuiltInCardMessageQueuesAndRunsIsolatedTargetSession(t *testing.T) {
 		t.Fatalf("busy target did not queue follow-up: %+v err=%v", pending, err)
 	}
 
+	// interrupt 模式：能够立即打断目标卡片的运行中 Attempt 并使其重定向转向。
+	if _, err := handler(&toolCtx, map[string]any{
+		"card_id":         target.ID.String(),
+		"content":         "urgent interrupt message",
+		"idempotency_key": "urgent-interrupt-1",
+		"dispatch_mode":   "interrupt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	superseded, err := dataStore.GetAttempt(ctx, workspace.ID, busyClaim.Attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if superseded.Status != domain.AttemptStatusSuperseded {
+		t.Fatalf("expected busy attempt to be superseded, got %s", superseded.Status)
+	}
 }

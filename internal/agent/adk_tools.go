@@ -286,19 +286,26 @@ func (r attemptToolRuntime) internalHandler(
 			if cardID == r.context.CardID {
 				return nil, errors.New("target card must differ from the current card")
 			}
+			dispatchMode := domain.DispatchMode(strings.TrimSpace(stringArg(args, "dispatch_mode")))
+			if dispatchMode == "" {
+				dispatchMode = domain.DispatchModeEnqueue
+			}
 			// Workspace 和发送者来自当前执行身份；记录源会话卡片以支持跨卡片溯源与跳转，不复制源 Session。
 			result, err := r.store.SubmitAgentTurn(
 				ctx, r.context.WorkspaceID, cardID, r.context.RunnerSourceID,
 				stringArg(args, "content"), stringArg(args, "idempotency_key"),
 				uuid.NullUUID{UUID: r.context.CardID, Valid: true},
+				dispatchMode,
 			)
 			if err != nil {
 				return nil, err
 			}
 			return map[string]any{
 				"ok": true, "card_id": cardID.String(),
-				"event_id": result.EventID.String(), "turn_id": result.TurnID.String(),
-				"reused": result.Reused,
+				"event_id":      result.EventID.String(),
+				"turn_id":       result.TurnID.String(),
+				"dispatch_mode": string(dispatchMode),
+				"reused":        result.Reused,
 			}, nil
 		}, nil
 
