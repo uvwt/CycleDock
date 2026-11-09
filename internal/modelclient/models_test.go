@@ -37,10 +37,36 @@ func TestResolveModelLimitsPriority(t *testing.T) {
 		t.Fatalf("expected provider limits to win over registry, got %+v", got)
 	}
 
-	// 3. 注册表对精确识别的官方模型生效
+	// 3. 注册表对精确识别的官方模型生效（覆盖最新世代模型与命名空间前缀）
 	got = ResolveModelLimits(ModelLimits{}, nil, "deepseek-chat", "", now)
-	if got.Source != LimitsSourceRegistry || got.ContextWindowTokens != 128000 || got.MaxOutputTokens != 8192 {
+	if got.Source != LimitsSourceRegistry || got.ContextWindowTokens != 163840 || got.MaxOutputTokens != 16384 {
 		t.Fatalf("expected registry match for deepseek-chat, got %+v", got)
+	}
+	for _, tc := range []struct {
+		modelID string
+		wantCtx int
+		wantIn  int
+		wantOut int
+	}{
+		{modelID: "gpt-6.1-sol", wantCtx: 1050000, wantIn: 922000, wantOut: 128000},
+		{modelID: "gpt-5.4", wantCtx: 1050000, wantIn: 922000, wantOut: 128000},
+		{modelID: "claude-opus-5-5", wantCtx: 1000000, wantIn: 1000000, wantOut: 128000},
+		{modelID: "anthropic/claude-sonnet-4.6", wantCtx: 1000000, wantIn: 1000000, wantOut: 128000},
+		{modelID: "gemini-3.8-flash", wantCtx: 1048576, wantIn: 1048576, wantOut: 65536},
+		{modelID: "deepseek-v4-pro", wantCtx: 1048576, wantIn: 1048576, wantOut: 393216},
+		{modelID: "grok-4.7", wantCtx: 500000, wantIn: 500000, wantOut: 500000},
+		{modelID: "qwen3.8-max", wantCtx: 1000000, wantIn: 1000000, wantOut: 131072},
+		{modelID: "moonshotai/kimi-k3", wantCtx: 1048576, wantIn: 1048576, wantOut: 1048576},
+		{modelID: "z-ai/glm-5.3", wantCtx: 1000000, wantIn: 1000000, wantOut: 131072},
+		{modelID: "minimax/minimax-m3", wantCtx: 1000000, wantIn: 1000000, wantOut: 524288},
+	} {
+		res := ResolveModelLimits(ModelLimits{}, nil, tc.modelID, "", now)
+		if res.Source != LimitsSourceRegistry ||
+			res.ContextWindowTokens != tc.wantCtx ||
+			res.MaxInputTokens != tc.wantIn ||
+			res.MaxOutputTokens != tc.wantOut {
+			t.Fatalf("model %q limits=%+v, want ctx=%d in=%d out=%d", tc.modelID, res, tc.wantCtx, tc.wantIn, tc.wantOut)
+		}
 	}
 
 	// 4. 未识别的自定义代理别名不得伪造模型容量
@@ -50,9 +76,9 @@ func TestResolveModelLimitsPriority(t *testing.T) {
 	}
 
 	// 5. 自定义代理别名指定精确 base_model 时，走注册表容量
-	got = ResolveModelLimits(ModelLimits{}, nil, "gemini-3.8-flash-high", "gemini-2.5-flash", now)
+	got = ResolveModelLimits(ModelLimits{}, nil, "gemini-3.8-flash-high", "gemini-3.8-flash", now)
 	if got.Source != LimitsSourceRegistry || got.ContextWindowTokens != 1048576 || got.MaxOutputTokens != 65536 {
-		t.Fatalf("expected registry match via base_model gemini-2.5-flash, got %+v", got)
+		t.Fatalf("expected registry match via base_model gemini-3.8-flash, got %+v", got)
 	}
 }
 

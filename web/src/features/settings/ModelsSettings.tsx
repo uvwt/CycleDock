@@ -411,7 +411,7 @@ function SortableRouteEditor({
                 className="flex-1 min-w-0"
                 value={route.model}
                 onChange={(event) => applySelectedModel(event.target.value)}
-                placeholder="输入模型 ID，如 deepseek-chat"
+                placeholder="输入模型 ID，如 gpt-5.4 / gemini-3.8-flash / deepseek-v4-pro"
                 aria-label="模型"
               />
               {customCatalog.data && customCatalog.data.length > 0 && (
@@ -480,7 +480,7 @@ function SortableRouteEditor({
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Field
               label="底层模型（可选）"
-              hint="自定义代理别名可指定如 gemini-2.5-flash"
+              hint="自定义代理别名可指定如 gpt-5.4 / gemini-3.8-flash / claude-sonnet-5-5"
             >
               <TextInput
                 value={route.base_model ?? ""}
@@ -493,7 +493,7 @@ function SortableRouteEditor({
                       route.limits_source === "user" ? "user" : undefined,
                   });
                 }}
-                placeholder="如 gemini-2.5-flash"
+                placeholder="如 gemini-3.8-flash"
                 aria-label="底层模型"
               />
             </Field>
