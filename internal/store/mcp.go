@@ -220,9 +220,29 @@ func (s *Store) GenerateWorkFromDiscussion(
 	if err != nil {
 		return AgentCardCreateResult{}, mapConstraintError(err)
 	}
+
+	initialTurnContent := fmt.Sprintf("# %s\n\n%s", p.Title, p.Description)
+	turnRequestHash := stableRequestHash(
+		"agent_turn", p.WorkspaceID.String(), card.ID.String(), p.SourceID.String(),
+		string(domain.DispatchModeEnqueue), initialTurnContent,
+	)
+	if _, err := insertTurn(ctx, tx, insertTurnParams{
+		WorkspaceID:       p.WorkspaceID,
+		CardID:            card.ID,
+		Source:            domain.TurnSourceSystem,
+		Content:           initialTurnContent,
+		CreatedBySourceID: uuid.NullUUID{UUID: p.SourceID, Valid: true},
+		DispatchMode:      domain.DispatchModeEnqueue,
+		IdempotencyKey:    p.IdempotencyKey + ":initial_turn",
+		RequestHash:       turnRequestHash,
+	}); err != nil {
+		return AgentCardCreateResult{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return AgentCardCreateResult{}, err
 	}
+	s.notifyWorkReady()
 	return AgentCardCreateResult{Card: card}, nil
 }
 
@@ -426,6 +446,9 @@ func (s *Store) ConfirmCard(
 			"INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content) VALUES ($1,$2,$3,'status_change',$4,'working -> review')",
 			uuid.New(), workspaceID, cardID, sourceID,
 		); err != nil {
+			return ConfirmResult{}, err
+		}
+		if err := notifySupervisorReview(ctx, tx, workspaceID, cardID, sourceID); err != nil {
 			return ConfirmResult{}, err
 		}
 	}
