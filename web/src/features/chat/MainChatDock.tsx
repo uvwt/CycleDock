@@ -15,6 +15,7 @@ import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
+import { AgentTracePanel } from "../trace/AgentTracePanel";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import {
   cardMessageEvent,
@@ -59,6 +60,7 @@ export function MainChatDock() {
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
+  const [traceAttemptID, setTraceAttemptID] = useState("");
 
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
@@ -707,6 +709,7 @@ export function MainChatDock() {
                 compact
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+                onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
                 onReply={setReplyTo}
                 onEditMessage={async (eventID, content) => {
                   await api.editComment(cardID, eventID, content);
@@ -795,6 +798,13 @@ export function MainChatDock() {
             />
           </button>
         </div>
+      )}
+      {traceAttemptID && (
+        <AgentTracePanel
+          cardID={cardID}
+          attemptID={traceAttemptID}
+          onClose={() => setTraceAttemptID("")}
+        />
       )}
     </>
   );

@@ -172,6 +172,65 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 	return i, err
 }
 
+const listAttemptModelCalls = `-- name: ListAttemptModelCalls :many
+SELECT id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at
+FROM agent_model_calls
+WHERE workspace_id = $1
+  AND card_id = $2
+  AND attempt_id = $3
+ORDER BY call_index ASC, started_at ASC
+`
+
+type ListAttemptModelCallsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	AttemptID   uuid.UUID `json:"attempt_id"`
+}
+
+func (q *Queries) ListAttemptModelCalls(ctx context.Context, arg ListAttemptModelCallsParams) ([]AgentModelCall, error) {
+	rows, err := q.db.Query(ctx, listAttemptModelCalls, arg.WorkspaceID, arg.CardID, arg.AttemptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentModelCall{}
+	for rows.Next() {
+		var i AgentModelCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.CardID,
+			&i.TurnID,
+			&i.AttemptID,
+			&i.InvocationID,
+			&i.CallIndex,
+			&i.Purpose,
+			&i.ModelRouteID,
+			&i.ModelID,
+			&i.Provider,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.DurationMs,
+			&i.Status,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CachedInputTokens,
+			&i.ReasoningOutputTokens,
+			&i.UsageSource,
+			&i.ErrorCode,
+			&i.ErrorSummary,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnabledWorkspaceMCPConnections = `-- name: ListEnabledWorkspaceMCPConnections :many
 SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
 FROM workspace_mcp_connections
@@ -291,6 +350,103 @@ func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordAgentModelCall = `-- name: RecordAgentModelCall :one
+INSERT INTO agent_model_calls (
+    id, workspace_id, card_id, turn_id, attempt_id, invocation_id,
+    call_index, purpose, model_route_id, model_id, provider,
+    started_at, finished_at, duration_ms, status,
+    input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens,
+    usage_source, error_code, error_summary
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10, $11,
+    $12, $13, $14, $15,
+    $16, $17, $18, $19,
+    $20, $21, $22
+)
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at
+`
+
+type RecordAgentModelCallParams struct {
+	ID                    uuid.UUID          `json:"id"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	CardID                uuid.UUID          `json:"card_id"`
+	TurnID                uuid.UUID          `json:"turn_id"`
+	AttemptID             uuid.UUID          `json:"attempt_id"`
+	InvocationID          string             `json:"invocation_id"`
+	CallIndex             int32              `json:"call_index"`
+	Purpose               string             `json:"purpose"`
+	ModelRouteID          uuid.NullUUID      `json:"model_route_id"`
+	ModelID               string             `json:"model_id"`
+	Provider              string             `json:"provider"`
+	StartedAt             pgtype.Timestamptz `json:"started_at"`
+	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
+	DurationMs            int32              `json:"duration_ms"`
+	Status                string             `json:"status"`
+	InputTokens           int32              `json:"input_tokens"`
+	OutputTokens          int32              `json:"output_tokens"`
+	CachedInputTokens     int32              `json:"cached_input_tokens"`
+	ReasoningOutputTokens int32              `json:"reasoning_output_tokens"`
+	UsageSource           string             `json:"usage_source"`
+	ErrorCode             string             `json:"error_code"`
+	ErrorSummary          string             `json:"error_summary"`
+}
+
+func (q *Queries) RecordAgentModelCall(ctx context.Context, arg RecordAgentModelCallParams) (AgentModelCall, error) {
+	row := q.db.QueryRow(ctx, recordAgentModelCall,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.TurnID,
+		arg.AttemptID,
+		arg.InvocationID,
+		arg.CallIndex,
+		arg.Purpose,
+		arg.ModelRouteID,
+		arg.ModelID,
+		arg.Provider,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.DurationMs,
+		arg.Status,
+		arg.InputTokens,
+		arg.OutputTokens,
+		arg.CachedInputTokens,
+		arg.ReasoningOutputTokens,
+		arg.UsageSource,
+		arg.ErrorCode,
+		arg.ErrorSummary,
+	)
+	var i AgentModelCall
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.TurnID,
+		&i.AttemptID,
+		&i.InvocationID,
+		&i.CallIndex,
+		&i.Purpose,
+		&i.ModelRouteID,
+		&i.ModelID,
+		&i.Provider,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.DurationMs,
+		&i.Status,
+		&i.InputTokens,
+		&i.OutputTokens,
+		&i.CachedInputTokens,
+		&i.ReasoningOutputTokens,
+		&i.UsageSource,
+		&i.ErrorCode,
+		&i.ErrorSummary,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one

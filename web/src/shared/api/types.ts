@@ -318,3 +318,50 @@ export type TestResult = {
   duration_ms: number;
   tool_count?: number;
 };
+
+export type ModelCallTrace = {
+  id: string;
+  call_index: number;
+  purpose: string;
+  model_route_id?: string;
+  model_id: string;
+  provider: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  status: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  reasoning_output_tokens: number;
+  usage_source: string;
+  error_code?: string;
+  error_summary?: string;
+};
+
+export type TraceOverview = {
+  attempt_id: string;
+  turn_id: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+  error_summary?: string;
+  model_calls: ModelCallTrace[];
+  model_call_count: number;
+  compaction_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+};
+
+export type TraceEvent = {
+  sequence: number;
+  id: string;
+  invocation_id: string;
+  occurred_at: string;
+  event: any;
+};
+
+export type TraceEventsResponse = {
+  events: TraceEvent[];
+};
+

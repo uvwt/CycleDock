@@ -16,6 +16,7 @@ import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
+import { AgentTracePanel } from "../trace/AgentTracePanel";
 import { ConversationSkeleton } from "../timeline/ConversationSkeleton";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
@@ -264,6 +265,7 @@ function CardPageContent({
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
+  const [traceAttemptID, setTraceAttemptID] = useState("");
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
@@ -683,6 +685,7 @@ function CardPageContent({
         : null;
 
   return (
+    <>
     <section
       ref={containerRef}
       className="relative flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden bg-canvas"
@@ -916,6 +919,7 @@ function CardPageContent({
                 onLoadMoreBefore={loadMoreBefore}
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+                onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
                 canApproveReview={
                   card.kind === "todo" && card.todo_state === "review"
                 }
@@ -1064,5 +1068,13 @@ function CardPageContent({
             )}
           </div>
         </section>
+        {traceAttemptID && (
+          <AgentTracePanel
+            cardID={cardID}
+            attemptID={traceAttemptID}
+            onClose={() => setTraceAttemptID("")}
+          />
+        )}
+    </>
   );
 }
