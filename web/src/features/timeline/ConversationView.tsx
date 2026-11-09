@@ -14,6 +14,8 @@ import {
   Activity,
   CornerDownRight,
   Loader2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -897,6 +899,54 @@ function EventRow({
   );
 }
 
+function ConversationEmptyCardDescription({ description }: { description?: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const trimmed = description?.trim();
+
+  if (!trimmed) {
+    return (
+      <div className="px-5 py-4 sm:px-6 sm:py-5">
+        <p className="text-xs text-faint">
+          {t("暂无卡片详细描述")}
+        </p>
+      </div>
+    );
+  }
+
+  const isLong = trimmed.length > 240 || trimmed.split("\n").length > 4;
+
+  return (
+    <div className="px-5 py-4 sm:px-6 sm:py-5 space-y-2">
+      <div
+        className={`relative overflow-hidden transition-all ${
+          !expanded && isLong ? "max-h-28" : "max-h-[50vh] overflow-y-auto pr-1 scrollbar-thin"
+        }`}
+      >
+        <RichText
+          content={trimmed}
+          className="text-sm leading-relaxed text-secondary-foreground"
+        />
+        {!expanded && isLong && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />
+        )}
+      </div>
+      {isLong && (
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition cursor-pointer"
+          >
+            <span>{expanded ? t("收起描述") : t("展开全部描述")}</span>
+            {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ConversationView({
   card,
   events,
@@ -1311,20 +1361,7 @@ export function ConversationView({
                       </h2>
                     </div>
 
-                    <div className="px-5 py-4 sm:px-6 sm:py-5">
-                      {card.description?.trim() ? (
-                        <div className="max-h-[42vh] overflow-y-auto pr-1 scrollbar-thin">
-                          <RichText
-                            content={card.description.trim()}
-                            className="text-sm leading-relaxed text-secondary-foreground"
-                          />
-                        </div>
-                      ) : (
-                        <p className="text-xs text-faint">
-                          {t("暂无卡片详细描述")}
-                        </p>
-                      )}
-                    </div>
+                    <ConversationEmptyCardDescription description={card.description} />
 
                     <div className="flex items-center gap-2 border-t border-line/50 bg-muted/15 px-5 py-3 text-xs text-muted-foreground sm:px-6">
                       <Bot className="size-4 shrink-0 text-faint" />
