@@ -343,7 +343,7 @@ const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
     p.name AS project_name,
-    COALESCE(latest_checkin.checkin_status, 'unknown') AS health,
+    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     (
@@ -363,7 +363,17 @@ JOIN projects p
   ON p.workspace_id = c.workspace_id
  AND p.id = c.project_id
 LEFT JOIN LATERAL (
-    SELECT e.checkin_status
+    SELECT
+        CASE
+            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                SELECT 1 FROM events ack
+                WHERE ack.workspace_id = e.workspace_id
+                  AND ack.card_id = e.card_id
+                  AND ack.event_type = 'checkin_ack'
+                  AND ack.sequence > e.sequence
+            ) THEN 'acknowledged'
+            ELSE e.checkin_status
+        END::text AS checkin_status
     FROM events e
     WHERE e.workspace_id = c.workspace_id
       AND e.card_id = c.id

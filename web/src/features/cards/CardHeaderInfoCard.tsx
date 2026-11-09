@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
-import { Link2, ListChecks, Calendar, Activity, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { Link2, ListChecks, Calendar, Activity, Check, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
+import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { api } from "../../shared/api/client";
 import type { Card, CardDetail } from "../../shared/api/types";
 import type { TaskProgress } from "../../shared/realtime/cardStreamState";
 import { Badge } from "../../shared/ui/badge";
@@ -77,6 +80,21 @@ export function CardHeaderInfoCard({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+
+  const currentHealth = detail?.health ?? card.health;
+  const canAcknowledge =
+    card.kind === "ongoing" &&
+    (currentHealth === "warning" || currentHealth === "critical");
+
+  const acknowledgeMutation = useMutation({
+    mutationFn: () => api.acknowledgeCheckin(card.id),
+    onSuccess: async () => {
+      if (onSync) await onSync();
+      toast.success(t("已标记为已确认"));
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("状态更新失败")),
+  });
 
   const sourceDiscussion = useMemo(() => {
     if (!card.source_discussion_id) return undefined;
@@ -155,9 +173,22 @@ export function CardHeaderInfoCard({
       ) : null}
 
       {card.kind === "ongoing" && detail?.last_checkin && (
-        <div className="space-y-1 rounded-lg border border-line/50 bg-canvas/50 p-2.5 text-xs">
-          <div className="text-[11px] font-medium text-muted-foreground">
-            {t("最近巡检")}
+        <div className="space-y-1.5 rounded-lg border border-line/50 bg-canvas/50 p-2.5 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-medium text-muted-foreground">
+              {t("最近巡检")}
+            </div>
+            {canAcknowledge && (
+              <button
+                type="button"
+                disabled={acknowledgeMutation.isPending}
+                onClick={() => acknowledgeMutation.mutate()}
+                className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-emerald-600 px-2 text-[11px] font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:opacity-50"
+              >
+                <Check className="size-3" />
+                <span>{t("已确认")}</span>
+              </button>
+            )}
           </div>
           <div className="text-secondary-foreground leading-relaxed break-words">
             {detail.last_checkin.content || t("已记录")}

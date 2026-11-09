@@ -51,6 +51,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteCard)
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
+	r.Post("/cards/{cardID}/acknowledge-checkin", api.acknowledgeCheckin)
 	r.Post("/cards/{cardID}/model-route", api.setCardModelRoute)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Patch("/cards/{cardID}/comments/{eventID}", api.editComment)
@@ -1009,6 +1010,43 @@ func (api *API) setOngoingState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
+func (api *API) acknowledgeCheckin(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Content string `json:"content"`
+	}
+	if r.ContentLength > 0 {
+		if !decodeJSON(w, r, &request) {
+			return
+		}
+	}
+	identity := identityFromRequest(r)
+	if err := api.store.AcknowledgeCheckin(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID, request.Content,
+	); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	health, err := api.store.Health(r.Context(), identity.WorkspaceID, cardID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	resp := cardToResponse(card)
+	if card.Kind == string(domain.CardKindOngoing) {
+		resp.Health = string(health)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (api *API) setCardModelRoute(w http.ResponseWriter, r *http.Request) {
