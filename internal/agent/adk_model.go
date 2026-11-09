@@ -391,12 +391,9 @@ func (m *adkRouteModel) recordTraceModelCall(ctx context.Context, params store.R
 	params.CardID = m.cardID
 	params.TurnID = m.turnID
 	params.AttemptID = m.attemptID
-	// 异步记录或同步轻量写入。为不阻塞响应，后台安全写入并忽略非关键错误，但记日志
-	go func() {
-		recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = m.store.RecordModelCall(recordCtx, params)
-	}()
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = m.store.RecordModelCall(recordCtx, params)
 }
 
 func (m *adkRouteModel) routeConfig(
