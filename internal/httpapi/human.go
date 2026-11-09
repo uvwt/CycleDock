@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/realtime"
@@ -696,78 +698,124 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	ctx := r.Context()
+	card, err := api.store.GetCard(ctx, identity.WorkspaceID, cardID)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
-	currentAttempt, err := api.store.CurrentAttemptView(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
-		api.handleError(w, err)
-		return
-	}
-	var timelineResp []eventResponse
-	var hasMoreBefore bool
-	var oldestSeq int64
 
-	if r.URL.Query().Get("all") == "true" {
-		timeline, err := api.store.ListCardTimeline(r.Context(), identity.WorkspaceID, cardID)
+	var (
+		currentAttempt *store.SessionAttemptView
+		timelineResp   []eventResponse
+		hasMoreBefore  bool
+		oldestSeq      int64
+		pendingTurns   []store.PendingTurnView
+		schedules      []db.CardSchedule
+		lastCheckin    *db.Event
+		health         domain.CheckinStatus = domain.CheckinUnknown
+	)
+
+	isOngoing := card.Kind == string(domain.CardKindOngoing)
+	isAll := r.URL.Query().Get("all") == "true"
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	// 1. CurrentAttemptView
+	g.Go(func() error {
+		attempt, err := api.store.CurrentAttemptView(gctx, identity.WorkspaceID, cardID)
 		if err != nil {
-			api.handleError(w, err)
-			return
+			return fmt.Errorf("current attempt: %w", err)
 		}
-		timelineResp = timelineToResponse(timeline)
-		if len(timelineResp) > 0 {
-			oldestSeq = timelineResp[0].Sequence
+		currentAttempt = attempt
+		return nil
+	})
+
+	// 2. Timeline
+	g.Go(func() error {
+		if isAll {
+			timeline, err := api.store.ListCardTimeline(gctx, identity.WorkspaceID, cardID)
+			if err != nil {
+				return fmt.Errorf("timeline: %w", err)
+			}
+			timelineResp = timelineToResponse(timeline)
+			if len(timelineResp) > 0 {
+				oldestSeq = timelineResp[0].Sequence
+			}
+			return nil
 		}
-	} else {
+
 		limit := 50
 		if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 			if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
 				limit = parsed
 			}
 		}
-		// Pull limit+1 items to determine if has_more_before is true
 		rows, err := api.store.ListCardTimelineBefore(
-			r.Context(), identity.WorkspaceID, cardID, 1<<62-1, int32(limit+1),
+			gctx, identity.WorkspaceID, cardID, 1<<62-1, int32(limit+1),
 		)
 		if err != nil {
-			api.handleError(w, err)
-			return
+			return fmt.Errorf("timeline before: %w", err)
 		}
 		if len(rows) > limit {
 			hasMoreBefore = true
-			rows = rows[1:] // drop the oldest extra item
+			rows = rows[1:]
 		}
 		timelineResp = timelineBeforeToResponse(rows)
 		if len(timelineResp) > 0 {
 			oldestSeq = timelineResp[0].Sequence
 		}
+		return nil
+	})
+
+	// 3. PendingTurns
+	g.Go(func() error {
+		turns, err := api.store.ListPendingTurns(gctx, identity.WorkspaceID, cardID)
+		if err != nil {
+			return fmt.Errorf("pending turns: %w", err)
+		}
+		pendingTurns = turns
+		return nil
+	})
+
+	// 4 & 5. Ongoing specific queries
+	if isOngoing {
+		g.Go(func() error {
+			scheds, err := api.store.ListSchedules(gctx, identity.WorkspaceID, cardID)
+			if err != nil {
+				return fmt.Errorf("schedules: %w", err)
+			}
+			schedules = scheds
+			return nil
+		})
+
+		g.Go(func() error {
+			checkin, err := api.store.LatestCheckin(gctx, identity.WorkspaceID, cardID)
+			if err != nil {
+				return fmt.Errorf("latest checkin: %w", err)
+			}
+			lastCheckin = checkin
+			if checkin != nil && checkin.CheckinStatus.Valid {
+				health = domain.CheckinStatus(checkin.CheckinStatus.String)
+			}
+			return nil
+		})
 	}
-	pendingTurns, err := api.store.ListPendingTurns(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
+
+	if err := g.Wait(); err != nil {
 		api.handleError(w, err)
 		return
 	}
-	attemptHistory, err := api.store.ListTimelineAttempts(r.Context(), identity.WorkspaceID, cardID, oldestSeq, 1<<62-1)
-	if err != nil {
-		api.handleError(w, err)
-		return
-	}
-	schedules, err := api.store.ListSchedules(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
-		api.handleError(w, err)
-		return
-	}
-	health, err := api.store.Health(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
-		api.handleError(w, err)
-		return
-	}
-	lastCheckin, err := api.store.LatestCheckin(r.Context(), identity.WorkspaceID, cardID)
-	if err != nil {
-		api.handleError(w, err)
-		return
+
+	// 6. AttemptHistory depends on oldestSeq from Timeline
+	var attemptHistory []store.SessionAttemptView
+	if len(timelineResp) > 0 {
+		history, err := api.store.ListTimelineAttempts(ctx, identity.WorkspaceID, cardID, oldestSeq, 1<<62-1)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		attemptHistory = history
 	}
 
 	response := cardDetailResponse{
@@ -926,13 +974,9 @@ func (api *API) moveCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.MoveTodo(
+	card, err := api.store.MoveTodoWithCard(
 		r.Context(), identity.WorkspaceID, cardID, identity.SourceID, state,
-	); err != nil {
-		api.handleError(w, err)
-		return
-	}
-	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -956,13 +1000,9 @@ func (api *API) setDiscussionState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.ArchiveDiscussion(
+	card, err := api.store.ArchiveDiscussionWithCard(
 		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
-	); err != nil {
-		api.handleError(w, err)
-		return
-	}
-	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -997,14 +1037,10 @@ func (api *API) setOngoingState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	if err := api.store.SetOngoingState(
+	card, err := api.store.SetOngoingStateWithCard(
 		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
 		domain.OngoingState(request.State), time.Now().UTC(),
-	); err != nil {
-		api.handleError(w, err)
-		return
-	}
-	card, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID)
+	)
 	if err != nil {
 		api.handleError(w, err)
 		return

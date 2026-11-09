@@ -43,19 +43,79 @@ export function CardStatusSwitch({
       isTodo
         ? api.moveTodo(card.id, state as TodoState)
         : api.ongoingState(card.id, state),
-    onSuccess: async () => {
+    onMutate: async (nextState: string) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: keys.card(card.id) }),
-        queryClient.invalidateQueries({
+        queryClient.cancelQueries({ queryKey: keys.card(card.id) }),
+        queryClient.cancelQueries({
           queryKey: keys.cards(card.project_id),
         }),
-        queryClient.invalidateQueries({
-          queryKey: keys.schedules(card.project_id),
-        }),
       ]);
+
+      const prevCard = queryClient.getQueryData<Card>(keys.card(card.id));
+      const prevCards = queryClient.getQueryData<Card[]>(
+        keys.cards(card.project_id),
+      );
+
+      if (prevCard) {
+        queryClient.setQueryData<Card>(keys.card(card.id), {
+          ...prevCard,
+          ...(isTodo
+            ? { todo_state: nextState as TodoState }
+            : { ongoing_state: nextState as OngoingState }),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      if (prevCards) {
+        queryClient.setQueryData<Card[]>(
+          keys.cards(card.project_id),
+          prevCards.map((c) =>
+            c.id === card.id
+              ? {
+                  ...c,
+                  ...(isTodo
+                    ? { todo_state: nextState as TodoState }
+                    : { ongoing_state: nextState as OngoingState }),
+                  updated_at: new Date().toISOString(),
+                }
+              : c,
+          ),
+        );
+      }
+
+      return { prevCard, prevCards };
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : t("状态更新失败")),
+    onError: (error, _nextState, context) => {
+      if (context?.prevCard) {
+        queryClient.setQueryData(keys.card(card.id), context.prevCard);
+      }
+      if (context?.prevCards) {
+        queryClient.setQueryData(
+          keys.cards(card.project_id),
+          context.prevCards,
+        );
+      }
+      toast.error(error instanceof Error ? error.message : t("状态更新失败"));
+    },
+    onSuccess: (updatedCard) => {
+      if (updatedCard) {
+        queryClient.setQueryData<Card>(keys.card(card.id), (old) =>
+          old ? { ...old, ...updatedCard } : updatedCard,
+        );
+        queryClient.setQueryData<Card[]>(keys.cards(card.project_id), (old) =>
+          old
+            ? old.map((c) => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c))
+            : old,
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: keys.card(card.id) });
+      void queryClient.invalidateQueries({
+        queryKey: keys.cards(card.project_id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: keys.schedules(card.project_id),
+      });
+    },
   });
 
   if (card.kind === "discussion") return null;

@@ -20,19 +20,35 @@ func (s *Store) MoveTodo(
 	workspaceID, cardID, actorSourceID uuid.UUID,
 	to domain.TodoState,
 ) error {
+	_, err := s.MoveTodoWithCard(ctx, workspaceID, cardID, actorSourceID, to)
+	return err
+}
+
+func (s *Store) MoveTodoWithCard(
+	ctx context.Context,
+	workspaceID, cardID, actorSourceID uuid.UUID,
+	to domain.TodoState,
+) (db.Card, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return db.Card{}, err
 	}
 	defer tx.Rollback(ctx)
 
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if err := moveTodoTx(ctx, tx, workspaceID, cardID, actorSourceID, to); err != nil {
-		return err
+		return db.Card{}, err
 	}
-	return tx.Commit(ctx)
+	card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
+	if err != nil {
+		return db.Card{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Card{}, err
+	}
+	return card, nil
 }
 
 func moveTodoTx(
@@ -97,17 +113,25 @@ func (s *Store) ArchiveDiscussion(
 	ctx context.Context,
 	workspaceID, cardID, actorSourceID uuid.UUID,
 ) error {
+	_, err := s.ArchiveDiscussionWithCard(ctx, workspaceID, cardID, actorSourceID)
+	return err
+}
+
+func (s *Store) ArchiveDiscussionWithCard(
+	ctx context.Context,
+	workspaceID, cardID, actorSourceID uuid.UUID,
+) (db.Card, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return db.Card{}, err
 	}
 	defer tx.Rollback(ctx)
 
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if err := requireHumanSource(ctx, tx, workspaceID, actorSourceID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	var kind, state string
 	if err := tx.QueryRow(ctx, `
@@ -115,19 +139,23 @@ func (s *Store) ArchiveDiscussion(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&kind, &state); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if kind != string(domain.CardKindDiscussion) {
-		return fmt.Errorf("%w: discussion card required", domain.ErrInvalidTransition)
+		return db.Card{}, fmt.Errorf("%w: discussion card required", domain.ErrInvalidTransition)
 	}
 	if err := rejectMainDiscussionMutation(ctx, tx, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if state == string(domain.DiscussionStateArchived) {
-		return tx.Commit(ctx)
+		card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
+		if err != nil {
+			return db.Card{}, err
+		}
+		return card, tx.Commit(ctx)
 	}
 	if state != string(domain.DiscussionStateActive) {
-		return domain.ErrInvalidTransition
+		return db.Card{}, domain.ErrInvalidTransition
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
@@ -140,7 +168,7 @@ func (s *Store) ArchiveDiscussion(
 		WHERE workspace_id=$1 AND card_id=$2
 		  AND status IN ('queued','running')
 	`, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE card_turns pending
@@ -156,22 +184,29 @@ func (s *Store) ArchiveDiscussion(
 			  AND existing.turn_id=pending.id
 		  )
 	`, workspaceID, cardID, actorSourceID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE cards
 		SET discussion_state = 'archived', updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content)
 		VALUES ($1, $2, $3, 'status_change', $4, 'active -> archived')
 	`, uuid.New(), workspaceID, cardID, actorSourceID); err != nil {
-		return err
+		return db.Card{}, err
 	}
-	return tx.Commit(ctx)
+	card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
+	if err != nil {
+		return db.Card{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Card{}, err
+	}
+	return card, nil
 }
 
 func ensureDiscussionAcceptsWork(
@@ -281,17 +316,27 @@ func (s *Store) SetOngoingState(
 	to domain.OngoingState,
 	now time.Time,
 ) error {
+	_, err := s.SetOngoingStateWithCard(ctx, workspaceID, cardID, actorSourceID, to, now)
+	return err
+}
+
+func (s *Store) SetOngoingStateWithCard(
+	ctx context.Context,
+	workspaceID, cardID, actorSourceID uuid.UUID,
+	to domain.OngoingState,
+	now time.Time,
+) (db.Card, error) {
 	if to != domain.OngoingStateActive && to != domain.OngoingStatePaused && to != domain.OngoingStateArchived {
-		return fmt.Errorf("%w: invalid ongoing state %q", domain.ErrInvalidTransition, to)
+		return db.Card{}, fmt.Errorf("%w: invalid ongoing state %q", domain.ErrInvalidTransition, to)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return db.Card{}, err
 	}
 	defer tx.Rollback(ctx)
 
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	var kind, from string
 	if err := tx.QueryRow(ctx, `
@@ -299,35 +344,46 @@ func (s *Store) SetOngoingState(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&kind, &from); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if kind != string(domain.CardKindOngoing) {
-		return fmt.Errorf("%w: ongoing card required", domain.ErrInvalidTransition)
+		return db.Card{}, fmt.Errorf("%w: ongoing card required", domain.ErrInvalidTransition)
 	}
 	if from == string(to) {
-		return tx.Commit(ctx)
+		card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
+		if err != nil {
+			return db.Card{}, err
+		}
+		return card, tx.Commit(ctx)
 	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE cards SET ongoing_state = $3, updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID, string(to)); err != nil {
-		return err
+		return db.Card{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content)
 		VALUES ($1, $2, $3, 'status_change', $4, $5)
 	`, uuid.New(), workspaceID, cardID, actorSourceID, fmt.Sprintf("%s -> %s", from, to)); err != nil {
-		return err
+		return db.Card{}, err
 	}
 
 	// Paused/Archived 期间不补跑。重新 Active 时从“现在”重新计算所有 enabled schedule 的未来 occurrence。
 	if to == domain.OngoingStateActive {
 		if err := recalculateCardSchedulesTx(ctx, tx, workspaceID, cardID, now); err != nil {
-			return err
+			return db.Card{}, err
 		}
 	}
-	return tx.Commit(ctx)
+	card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
+	if err != nil {
+		return db.Card{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Card{}, err
+	}
+	return card, nil
 }
 
 func (s *Store) Health(ctx context.Context, workspaceID, cardID uuid.UUID) (domain.CheckinStatus, error) {
