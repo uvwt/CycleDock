@@ -221,28 +221,36 @@ func (s *Store) GenerateWorkFromDiscussion(
 		return AgentCardCreateResult{}, mapConstraintError(err)
 	}
 
-	initialTurnContent := fmt.Sprintf("# %s\n\n%s", p.Title, p.Description)
-	turnRequestHash := stableRequestHash(
-		"agent_turn", p.WorkspaceID.String(), card.ID.String(), p.SourceID.String(),
-		string(domain.DispatchModeEnqueue), initialTurnContent,
-	)
-	if _, err := insertTurn(ctx, tx, insertTurnParams{
-		WorkspaceID:       p.WorkspaceID,
-		CardID:            card.ID,
-		Source:            domain.TurnSourceSystem,
-		Content:           initialTurnContent,
-		CreatedBySourceID: uuid.NullUUID{UUID: p.SourceID, Valid: true},
-		DispatchMode:      domain.DispatchModeEnqueue,
-		IdempotencyKey:    p.IdempotencyKey + ":initial_turn",
-		RequestHash:       turnRequestHash,
-	}); err != nil {
+	var sourceKind string
+	if err := tx.QueryRow(ctx, "SELECT kind FROM sources WHERE workspace_id=$1 AND id=$2", p.WorkspaceID, p.SourceID).Scan(&sourceKind); err != nil {
 		return AgentCardCreateResult{}, err
+	}
+	if sourceKind == string(domain.SourceKindCycleAgent) {
+		initialTurnContent := fmt.Sprintf("# %s\n\n%s", p.Title, p.Description)
+		turnRequestHash := stableRequestHash(
+			"agent_turn", p.WorkspaceID.String(), card.ID.String(), p.SourceID.String(),
+			string(domain.DispatchModeEnqueue), initialTurnContent,
+		)
+		if _, err := insertTurn(ctx, tx, insertTurnParams{
+			WorkspaceID:       p.WorkspaceID,
+			CardID:            card.ID,
+			Source:            domain.TurnSourceSystem,
+			Content:           initialTurnContent,
+			CreatedBySourceID: uuid.NullUUID{UUID: p.SourceID, Valid: true},
+			DispatchMode:      domain.DispatchModeEnqueue,
+			IdempotencyKey:    p.IdempotencyKey + ":initial_turn",
+			RequestHash:       turnRequestHash,
+		}); err != nil {
+			return AgentCardCreateResult{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return AgentCardCreateResult{}, err
 	}
-	s.notifyWorkReady()
+	if sourceKind == string(domain.SourceKindCycleAgent) {
+		s.notifyWorkReady()
+	}
 	return AgentCardCreateResult{Card: card}, nil
 }
 

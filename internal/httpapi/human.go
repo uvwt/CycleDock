@@ -795,9 +795,11 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("latest checkin: %w", err)
 			}
 			lastCheckin = checkin
-			if checkin != nil && checkin.CheckinStatus.Valid {
-				health = domain.CheckinStatus(checkin.CheckinStatus.String)
+			h, err := api.store.Health(gctx, identity.WorkspaceID, cardID)
+			if err != nil {
+				return fmt.Errorf("health: %w", err)
 			}
+			health = h
 			return nil
 		})
 	}

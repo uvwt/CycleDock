@@ -206,8 +206,15 @@ func TestSupervisorTimeoutDoesNotAutoRecoverWhenCircuitOpens(t *testing.T) {
 	if !strings.Contains(content, "outcome=expired") || !strings.Contains(content, "熔断") {
 		t.Fatalf("timeout callback=%q", content)
 	}
-	if _, err := s.ClaimNextBuiltInAttempt(ctx, 1, started.Add(6*time.Minute), time.Minute); err == nil {
-		t.Fatal("circuit opened but another attempt was queued")
+	if latestAttempt := latestAttemptNumber(t, s, second.Attempt.TurnID); latestAttempt != second.Attempt.AttemptNumber {
+		t.Fatalf("circuit opened but another recovery attempt was queued: got %d want %d", latestAttempt, second.Attempt.AttemptNumber)
+	}
+	nextClaim, err := s.ClaimNextBuiltInAttempt(ctx, 1, started.Add(6*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatalf("expected supervisor callback turn to be claimable: %v", err)
+	}
+	if nextClaim.Attempt.CardID != mainChat.ID {
+		t.Fatalf("claimed card=%s, want supervisor mainChat %s", nextClaim.Attempt.CardID, mainChat.ID)
 	}
 }
 
