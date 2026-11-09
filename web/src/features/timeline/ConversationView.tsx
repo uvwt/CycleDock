@@ -249,6 +249,7 @@ export type QuotedMessage = {
 type ExecutionActions = {
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
+  onOpenTrace?: (attemptID: string) => void;
   onReply?: (quote: QuotedMessage) => void;
   onEditMessage?: (eventID: string, content: string) => Promise<void>;
   canApproveReview?: boolean;

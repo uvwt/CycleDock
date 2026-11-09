@@ -93,3 +93,29 @@ RETURNING *;
 DELETE FROM workspace_mcp_connections
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id);
+
+-- name: RecordAgentModelCall :one
+INSERT INTO agent_model_calls (
+    id, workspace_id, card_id, turn_id, attempt_id, invocation_id,
+    call_index, purpose, model_route_id, model_id, provider,
+    started_at, finished_at, duration_ms, status,
+    input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens,
+    usage_source, error_code, error_summary
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(card_id), sqlc.arg(turn_id), sqlc.arg(attempt_id), sqlc.arg(invocation_id),
+    sqlc.arg(call_index), sqlc.arg(purpose), sqlc.narg(model_route_id), sqlc.arg(model_id), sqlc.arg(provider),
+    sqlc.arg(started_at), sqlc.arg(finished_at), sqlc.arg(duration_ms), sqlc.arg(status),
+    sqlc.arg(input_tokens), sqlc.arg(output_tokens), sqlc.arg(cached_input_tokens), sqlc.arg(reasoning_output_tokens),
+    sqlc.arg(usage_source), sqlc.arg(error_code), sqlc.arg(error_summary)
+)
+RETURNING *;
+
+-- name: ListAttemptModelCalls :many
+SELECT *
+FROM agent_model_calls
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND attempt_id = sqlc.arg(attempt_id)
+ORDER BY call_index ASC, started_at ASC;
+

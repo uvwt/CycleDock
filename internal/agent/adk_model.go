@@ -56,6 +56,10 @@ type adkRouteModel struct {
 	modelAuth    *modelauth.Service
 	store        *store.Store
 	workspaceID  uuid.UUID
+	cardID       uuid.UUID
+	turnID       uuid.UUID
+	attemptID    uuid.UUID
+	purpose      string
 	routes       []db.WorkspaceModelRoute
 	budgetPolicy CompactionBudgetPolicy
 
@@ -126,9 +130,23 @@ func newADKRouteModel(
 		modelAuth:    auth,
 		store:        dataStore,
 		workspaceID:  workspaceID,
+		purpose:      "agent",
 		routes:       enabled,
 		budgetPolicy: DefaultCompactionBudgetPolicy(),
 	}, nil
+}
+
+func (m *adkRouteModel) withTraceContext(cardID, turnID, attemptID uuid.UUID, purpose string) *adkRouteModel {
+	if m == nil {
+		return nil
+	}
+	m.cardID = cardID
+	m.turnID = turnID
+	m.attemptID = attemptID
+	if purpose != "" {
+		m.purpose = purpose
+	}
+	return m
 }
 
 func (m *adkRouteModel) Name() string {
@@ -257,6 +275,7 @@ func (m *adkRouteModel) GenerateContent(
 					}
 					config.OnToolCall = previewToolCalls(generation, modelCall, emit)
 				}
+				callStarted := time.Now().UTC()
 				completion, err := m.client.Complete(requestCtx, config, messages, tools)
 				cancel()
 				if stopped {
@@ -266,8 +285,13 @@ func (m *adkRouteModel) GenerateContent(
 				if err == nil {
 					response, err = modelClientCompletionToADK(completion)
 				}
+				callFinished := time.Now().UTC()
+				durationMS := int(callFinished.Sub(callStarted).Milliseconds())
+				if durationMS < 0 {
+					durationMS = 0
+				}
+				matchedRoute := m.routes[i]
 				if err == nil {
-					matchedRoute := m.routes[i]
 					usage, usageSource, usageMetadata := resolveADKTokenUsage(req, completion)
 					response.UsageMetadata = usageMetadata
 					response.ModelVersion = strings.TrimSpace(matchedRoute.Model)
@@ -285,9 +309,41 @@ func (m *adkRouteModel) GenerateContent(
 					}
 					m.hasObservation = true
 					m.mu.Unlock()
+
+					m.recordTraceModelCall(ctx, store.RecordModelCallParams{
+						CallIndex:             modelCall,
+						Purpose:               m.purpose,
+						ModelRouteID:          uuid.NullUUID{UUID: matchedRoute.ID, Valid: true},
+						ModelID:               strings.TrimSpace(matchedRoute.Model),
+						Provider:              normalizedProviderType(matchedRoute.ProviderType),
+						StartedAt:             callStarted,
+						FinishedAt:            callFinished,
+						DurationMS:            durationMS,
+						Status:                "success",
+						InputTokens:           usage.InputTokens,
+						OutputTokens:          usage.OutputTokens,
+						CachedInputTokens:     usage.CachedInputTokens,
+						ReasoningOutputTokens: usage.ReasoningOutputTokens,
+						UsageSource:           string(usageSource),
+					})
+
 					yield(response, nil)
 					return
 				}
+
+				m.recordTraceModelCall(ctx, store.RecordModelCallParams{
+					CallIndex:    modelCall,
+					Purpose:      m.purpose,
+					ModelRouteID: uuid.NullUUID{UUID: matchedRoute.ID, Valid: true},
+					ModelID:      strings.TrimSpace(matchedRoute.Model),
+					Provider:     normalizedProviderType(matchedRoute.ProviderType),
+					StartedAt:    callStarted,
+					FinishedAt:   callFinished,
+					DurationMS:   durationMS,
+					Status:       "failed",
+					UsageSource:  "unknown",
+					ErrorSummary: err.Error(),
+				})
 				if modelclient.IsContextTooLargeError(err) {
 					lastErr = fmt.Errorf("%w: %v", ErrRouteContextCapacityExceeded, err)
 					break
@@ -325,6 +381,22 @@ func (m *adkRouteModel) GenerateContent(
 		}
 		yield(nil, fmt.Errorf("all configured model routes failed: %w", lastErr))
 	}
+}
+
+func (m *adkRouteModel) recordTraceModelCall(ctx context.Context, params store.RecordModelCallParams) {
+	if m == nil || m.store == nil || m.workspaceID == uuid.Nil || m.cardID == uuid.Nil || m.attemptID == uuid.Nil {
+		return
+	}
+	params.WorkspaceID = m.workspaceID
+	params.CardID = m.cardID
+	params.TurnID = m.turnID
+	params.AttemptID = m.attemptID
+	// 异步记录或同步轻量写入。为不阻塞响应，后台安全写入并忽略非关键错误，但记日志
+	go func() {
+		recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = m.store.RecordModelCall(recordCtx, params)
+	}()
 }
 
 func (m *adkRouteModel) routeConfig(

@@ -27,6 +27,32 @@ type AgentArtifact struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type AgentModelCall struct {
+	ID                    uuid.UUID          `json:"id"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	CardID                uuid.UUID          `json:"card_id"`
+	TurnID                uuid.UUID          `json:"turn_id"`
+	AttemptID             uuid.UUID          `json:"attempt_id"`
+	InvocationID          string             `json:"invocation_id"`
+	CallIndex             int32              `json:"call_index"`
+	Purpose               string             `json:"purpose"`
+	ModelRouteID          uuid.NullUUID      `json:"model_route_id"`
+	ModelID               string             `json:"model_id"`
+	Provider              string             `json:"provider"`
+	StartedAt             pgtype.Timestamptz `json:"started_at"`
+	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
+	DurationMs            int32              `json:"duration_ms"`
+	Status                string             `json:"status"`
+	InputTokens           int32              `json:"input_tokens"`
+	OutputTokens          int32              `json:"output_tokens"`
+	CachedInputTokens     int32              `json:"cached_input_tokens"`
+	ReasoningOutputTokens int32              `json:"reasoning_output_tokens"`
+	UsageSource           string             `json:"usage_source"`
+	ErrorCode             string             `json:"error_code"`
+	ErrorSummary          string             `json:"error_summary"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentSession struct {
 	AppName   string             `json:"app_name"`
 	UserID    string             `json:"user_id"`

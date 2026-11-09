@@ -147,6 +147,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
+	llm.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "agent")
 	llm.budgetPolicy = r.compactionBudgetPolicy.withDefaults()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
@@ -178,6 +179,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	if err != nil {
 		return err
 	}
+	summaryLLM.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "compaction")
 	summarizer, err := compaction.NewLLMSummarizer(compaction.LLMSummarizerConfig{
 		Model:               summaryLLM,
 		PromptTemplate:      compactionPromptTemplate,

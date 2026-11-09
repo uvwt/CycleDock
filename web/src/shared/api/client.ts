@@ -28,6 +28,8 @@ import type {
   Workspace,
   DoneCardsPaged,
   CardTimelinePaged,
+  TraceOverview,
+  TraceEventsResponse,
 } from "./types";
 
 export class APIError extends Error {
@@ -247,6 +249,10 @@ export const api = {
       "POST",
       {},
     ),
+  getAttemptTrace: (id: string, attemptID: string) =>
+    request<TraceOverview>(`/cards/${id}/attempts/${attemptID}/trace`),
+  getAttemptTraceEvents: (id: string, attemptID: string) =>
+    request<TraceEventsResponse>(`/cards/${id}/attempts/${attemptID}/trace/events`),
   createSchedule: (id: string, input: ScheduleInput) =>
     request<Schedule>(`/cards/${id}/schedules`, "POST", input),
   updateSchedule: (id: string, schedule: string, input: ScheduleInput) =>

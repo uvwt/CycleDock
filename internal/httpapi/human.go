@@ -63,6 +63,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Patch("/cards/{cardID}/turns/{turnID}", api.editPendingTurn)
 	r.Post("/cards/{cardID}/attempts/{attemptID}/retry", api.retryAttempt)
 	r.Post("/cards/{cardID}/attempts/{attemptID}/cancel", api.cancelAttempt)
+	r.Get("/cards/{cardID}/attempts/{attemptID}/trace", api.getAttemptTrace)
+	r.Get("/cards/{cardID}/attempts/{attemptID}/trace/events", api.getAttemptTraceEvents)
 
 	r.Get("/cards/{cardID}/schedules", api.listSchedules)
 	r.Post("/cards/{cardID}/schedules", api.createSchedule)

@@ -22,10 +22,12 @@ export function RunDuration({
   startedAt,
   finishedAt,
   active,
+  onClick,
 }: {
   startedAt?: string;
   finishedAt?: string;
   active: boolean;
+  onClick?: () => void;
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
@@ -40,11 +42,24 @@ export function RunDuration({
   const end = active ? now : new Date(finishedAt || "").getTime();
   if (!Number.isFinite(end)) return null;
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  const content = (
+    <span className={`shrink-0 text-[11px] tabular-nums text-faint ${onClick ? "cursor-pointer hover:text-sky-600 hover:underline" : "cursor-default"}`}>
+      {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+      {onClick && " ›"}
+    </span>
+  );
+  if (onClick) {
+    return (
+      <HintTooltip content={t("查看执行链路")}>
+        <button type="button" onClick={onClick} className="inline-flex items-center">
+          {content}
+        </button>
+      </HintTooltip>
+    );
+  }
   return (
     <HintTooltip content={t("本次 Agent 执行时长")}>
-      <span className="shrink-0 cursor-default text-[11px] tabular-nums text-faint">
-        {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-      </span>
+      {content}
     </HintTooltip>
   );
 }
@@ -70,10 +85,12 @@ export function AttemptMetadata({
   attempt,
   retryingAttemptID,
   onRetryAttempt,
+  onOpenTrace,
 }: {
   attempt: Attempt;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
+  onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
   const humanReplied =
@@ -95,6 +112,7 @@ export function AttemptMetadata({
         startedAt={attempt.started_at}
         finishedAt={attempt.finished_at}
         active={isRunning}
+        onClick={onOpenTrace ? () => onOpenTrace(attempt.id) : undefined}
       />
       {attempt.retry_of_attempt_id || attempt.reason === "retry"
         ? " · " + t("重试")
