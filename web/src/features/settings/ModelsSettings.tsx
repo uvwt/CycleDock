@@ -33,6 +33,8 @@ import { api } from "../../shared/api/client";
 import type {
   AgentSettings,
   ModelAuth,
+  ModelCatalogItem,
+  ModelLimitsSource,
   ModelRoute,
   Provider,
 } from "../../shared/api/types";
@@ -56,6 +58,32 @@ const names: Record<Provider, string> = {
   grok: "Grok",
   openai_compatible: "自定义 API",
 };
+
+const limitsSourceLabels: Record<ModelLimitsSource, string> = {
+  user: "用户配置",
+  provider: "服务商返回",
+  registry: "注册表识别",
+  unknown: "未知（保守策略）",
+};
+
+function formatTokenCount(tokens?: number): string {
+  if (!tokens || tokens <= 0) return "未知";
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
+    return `${tokens / 1_000_000}M`;
+  }
+  if (tokens >= 1000) {
+    return `${Math.round(tokens / 1000)}K (${tokens.toLocaleString()})`;
+  }
+  return tokens.toLocaleString();
+}
+
+function parseOptionalPositiveInt(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
 
 function OpenAILogo({ className = "size-4" }: { className?: string }) {
   return (
@@ -156,6 +184,49 @@ function SortableRouteEditor({
     enabled: !subscription && !!route.provider_base_url.trim(),
   });
   const [manualInput, setManualInput] = useState(false);
+  const [editingLimits, setEditingLimits] = useState(false);
+
+  const catalogModels: ModelCatalogItem[] = subscription
+    ? (catalog.data ?? [])
+    : (customCatalog.data ?? []);
+  const matchedCatalogModel = catalogModels.find(
+    (item) => item.id === route.model,
+  );
+  const effectiveSource: ModelLimitsSource =
+    route.limits_source ??
+    matchedCatalogModel?.limits?.source ??
+    "unknown";
+  const displayContextWindow =
+    effectiveSource === "user"
+      ? route.context_window_tokens
+      : (route.context_window_tokens ||
+          matchedCatalogModel?.limits?.context_window_tokens);
+  const displayMaxInput =
+    effectiveSource === "user"
+      ? route.max_input_tokens
+      : (route.max_input_tokens ||
+          matchedCatalogModel?.limits?.max_input_tokens);
+  const displayMaxOutput =
+    effectiveSource === "user"
+      ? route.max_output_tokens
+      : (route.max_output_tokens ||
+          matchedCatalogModel?.limits?.max_output_tokens);
+
+  const applySelectedModel = (modelID: string) => {
+    const matched = catalogModels.find((m) => m.id === modelID);
+    if (route.limits_source === "user") {
+      onChange({ ...route, model: modelID });
+      return;
+    }
+    onChange({
+      ...route,
+      model: modelID,
+      context_window_tokens: matched?.limits?.context_window_tokens,
+      max_input_tokens: matched?.limits?.max_input_tokens,
+      max_output_tokens: matched?.limits?.max_output_tokens,
+      limits_source: matched?.limits?.source ?? "unknown",
+    });
+  };
 
   // 当账号模型目录加载完成且当前未选择模型时，默认选中第一项
   useEffect(() => {
@@ -276,9 +347,7 @@ function SortableRouteEditor({
           {catalog.data?.length ? (
             <Select
               value={route.model}
-              onChange={(event) =>
-                onChange({ ...route, model: event.target.value })
-              }
+              onChange={(event) => applySelectedModel(event.target.value)}
               aria-label="模型"
             >
               <option value="">选择模型</option>
@@ -292,9 +361,7 @@ function SortableRouteEditor({
             <TextInput
               disabled={!route.credential_id}
               value={route.model}
-              onChange={(event) =>
-                onChange({ ...route, model: event.target.value })
-              }
+              onChange={(event) => applySelectedModel(event.target.value)}
               placeholder={!route.credential_id ? "先选择账号" : "模型 ID"}
               aria-label="模型"
             />
@@ -323,7 +390,7 @@ function SortableRouteEditor({
                   if (val === "__custom__") {
                     setManualInput(true);
                   } else {
-                    onChange({ ...route, model: val });
+                    applySelectedModel(val);
                   }
                 }}
                 aria-label="模型"
@@ -343,9 +410,7 @@ function SortableRouteEditor({
               <TextInput
                 className="flex-1 min-w-0"
                 value={route.model}
-                onChange={(event) =>
-                  onChange({ ...route, model: event.target.value })
-                }
+                onChange={(event) => applySelectedModel(event.target.value)}
                 placeholder="输入模型 ID，如 deepseek-chat"
                 aria-label="模型"
               />
@@ -359,6 +424,189 @@ function SortableRouteEditor({
                   下拉选择
                 </Button>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+          <span>
+            上下文窗口:{" "}
+            <strong className="font-mono text-foreground">
+              {formatTokenCount(displayContextWindow)}
+            </strong>
+          </span>
+          <span>
+            最大输入:{" "}
+            <strong className="font-mono text-foreground">
+              {formatTokenCount(displayMaxInput)}
+            </strong>
+          </span>
+          <span>
+            最大输出:{" "}
+            <strong className="font-mono text-foreground">
+              {formatTokenCount(displayMaxOutput)}
+            </strong>
+          </span>
+          {route.base_model ? (
+            <span>
+              底层模型:{" "}
+              <strong className="font-mono text-foreground">
+                {route.base_model}
+              </strong>
+            </span>
+          ) : null}
+          <span>
+            信息来源:{" "}
+            <strong className="text-foreground">
+              {limitsSourceLabels[effectiveSource] ?? limitsSourceLabels.unknown}
+            </strong>
+          </span>
+        </div>
+
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setEditingLimits((prev) => !prev)}
+        >
+          {editingLimits ? "收起容量设置" : "编辑容量"}
+        </Button>
+      </div>
+
+      {editingLimits && (
+        <div className="space-y-3 rounded-lg border border-line bg-canvas p-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Field
+              label="底层模型（可选）"
+              hint="自定义代理别名可指定如 gemini-2.5-flash"
+            >
+              <TextInput
+                value={route.base_model ?? ""}
+                onChange={(event) => {
+                  const nextBase = event.target.value;
+                  onChange({
+                    ...route,
+                    base_model: nextBase,
+                    limits_source:
+                      route.limits_source === "user" ? "user" : undefined,
+                  });
+                }}
+                placeholder="如 gemini-2.5-flash"
+                aria-label="底层模型"
+              />
+            </Field>
+
+            <Field label="上下文窗口 (Tokens)">
+              <TextInput
+                type="number"
+                min={1}
+                value={
+                  route.context_window_tokens && route.context_window_tokens > 0
+                    ? String(route.context_window_tokens)
+                    : ""
+                }
+                onChange={(event) => {
+                  const nextWindow = parseOptionalPositiveInt(event.target.value);
+                  const hasAnyManual = Boolean(
+                    nextWindow ||
+                      route.max_input_tokens ||
+                      route.max_output_tokens,
+                  );
+                  onChange({
+                    ...route,
+                    context_window_tokens: nextWindow,
+                    limits_source: hasAnyManual ? "user" : undefined,
+                  });
+                }}
+                placeholder={
+                  displayContextWindow
+                    ? String(displayContextWindow)
+                    : "留空自动识别"
+                }
+                aria-label="上下文窗口"
+              />
+            </Field>
+
+            <Field label="最大输入 (Tokens)">
+              <TextInput
+                type="number"
+                min={1}
+                value={
+                  route.max_input_tokens && route.max_input_tokens > 0
+                    ? String(route.max_input_tokens)
+                    : ""
+                }
+                onChange={(event) => {
+                  const nextInput = parseOptionalPositiveInt(event.target.value);
+                  const hasAnyManual = Boolean(
+                    route.context_window_tokens ||
+                      nextInput ||
+                      route.max_output_tokens,
+                  );
+                  onChange({
+                    ...route,
+                    max_input_tokens: nextInput,
+                    limits_source: hasAnyManual ? "user" : undefined,
+                  });
+                }}
+                placeholder={
+                  displayMaxInput ? String(displayMaxInput) : "留空自动识别"
+                }
+                aria-label="最大输入"
+              />
+            </Field>
+
+            <Field label="最大输出 (Tokens)">
+              <TextInput
+                type="number"
+                min={1}
+                value={
+                  route.max_output_tokens && route.max_output_tokens > 0
+                    ? String(route.max_output_tokens)
+                    : ""
+                }
+                onChange={(event) => {
+                  const nextOutput = parseOptionalPositiveInt(event.target.value);
+                  const hasAnyManual = Boolean(
+                    route.context_window_tokens ||
+                      route.max_input_tokens ||
+                      nextOutput,
+                  );
+                  onChange({
+                    ...route,
+                    max_output_tokens: nextOutput,
+                    limits_source: hasAnyManual ? "user" : undefined,
+                  });
+                }}
+                placeholder={
+                  displayMaxOutput ? String(displayMaxOutput) : "留空自动识别"
+                }
+                aria-label="最大输出"
+              />
+            </Field>
+          </div>
+
+          {effectiveSource === "user" && (
+            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>当前使用手动覆盖容量，保存后将按用户配置计算动态压缩预算。</span>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() =>
+                  onChange({
+                    ...route,
+                    context_window_tokens: undefined,
+                    max_input_tokens: undefined,
+                    max_output_tokens: undefined,
+                    limits_source: undefined,
+                  })
+                }
+              >
+                恢复自动识别
+              </Button>
             </div>
           )}
         </div>
@@ -607,9 +855,14 @@ export function ModelsSettings() {
         credential_id: r.credential_id,
         provider_base_url: r.provider_base_url,
         model: r.model,
+        base_model: r.base_model,
         api_key: r.api_key,
         api_key_env: r.api_key_env,
         clear_api_key: r.clear_api_key,
+        context_window_tokens: r.context_window_tokens,
+        max_input_tokens: r.max_input_tokens,
+        max_output_tokens: r.max_output_tokens,
+        limits_source: r.limits_source,
       }));
       return api.saveAgent({ ...input, routes });
     },

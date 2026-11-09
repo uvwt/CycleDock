@@ -5,27 +5,36 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 const maxModelRoutes = 16
 
 type ModelRouteInput struct {
-	ID              uuid.UUID
-	Enabled         bool
-	ProviderType    string
-	CredentialID    *uuid.UUID
-	ProviderBaseURL string
-	Model           string
-	APIKey          string
-	APIKeyEnv       string
-	ClearAPIKey     bool
+	ID                  uuid.UUID
+	Enabled             bool
+	ProviderType        string
+	CredentialID        *uuid.UUID
+	ProviderBaseURL     string
+	Model               string
+	BaseModel           string
+	APIKey              string
+	APIKeyEnv           string
+	ClearAPIKey         bool
+	ContextWindowTokens int
+	MaxInputTokens      int
+	MaxOutputTokens     int
+	LimitsSource        string
+	LimitsVerifiedAt    *time.Time
 }
 
 type AgentSettingsInput struct {
@@ -66,6 +75,7 @@ func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
 		route.ProviderType = strings.TrimSpace(route.ProviderType)
 		route.ProviderBaseURL = strings.TrimRight(strings.TrimSpace(route.ProviderBaseURL), "/")
 		route.Model = strings.TrimSpace(route.Model)
+		route.BaseModel = strings.TrimSpace(route.BaseModel)
 		route.APIKey = strings.TrimSpace(route.APIKey)
 		route.APIKeyEnv = strings.TrimSpace(route.APIKeyEnv)
 		if route.ID == uuid.Nil {
@@ -78,6 +88,24 @@ func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
 		if route.Model == "" {
 			return nil, fmt.Errorf("%w: model is required for every model route", domain.ErrConflict)
 		}
+		if len(route.BaseModel) > 160 || strings.ContainsAny(route.BaseModel, "\r\n") {
+			return nil, fmt.Errorf("%w: invalid base_model", domain.ErrConflict)
+		}
+		validatedLimits, err := modelclient.ValidateUserModelLimits(modelclient.ModelLimits{
+			ContextWindowTokens: route.ContextWindowTokens,
+			MaxInputTokens:      route.MaxInputTokens,
+			MaxOutputTokens:     route.MaxOutputTokens,
+			Source:              route.LimitsSource,
+			VerifiedAt:          route.LimitsVerifiedAt,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", domain.ErrConflict, err)
+		}
+		route.ContextWindowTokens = validatedLimits.ContextWindowTokens
+		route.MaxInputTokens = validatedLimits.MaxInputTokens
+		route.MaxOutputTokens = validatedLimits.MaxOutputTokens
+		route.LimitsSource = validatedLimits.Source
+		route.LimitsVerifiedAt = validatedLimits.VerifiedAt
 		switch route.ProviderType {
 		case "openai_compatible":
 			if route.CredentialID != nil {
@@ -212,12 +240,68 @@ func (s *Store) SaveAgentSettings(
 				ciphertext = existing.ApiKeyCiphertext
 			}
 		}
+		now := time.Now().UTC()
+		var userOverride modelclient.ModelLimits
+		var providerLimits *modelclient.ModelLimits
+		switch route.LimitsSource {
+		case modelclient.LimitsSourceUser:
+			userOverride = modelclient.ModelLimits{
+				ContextWindowTokens: route.ContextWindowTokens,
+				MaxInputTokens:      route.MaxInputTokens,
+				MaxOutputTokens:     route.MaxOutputTokens,
+				Source:              modelclient.LimitsSourceUser,
+				VerifiedAt:          route.LimitsVerifiedAt,
+			}
+		case modelclient.LimitsSourceProvider:
+			providerLimits = &modelclient.ModelLimits{
+				ContextWindowTokens: route.ContextWindowTokens,
+				MaxInputTokens:      route.MaxInputTokens,
+				MaxOutputTokens:     route.MaxOutputTokens,
+				Source:              modelclient.LimitsSourceProvider,
+				VerifiedAt:          route.LimitsVerifiedAt,
+			}
+		default:
+			if existing, ok := existingByID[route.ID]; ok &&
+				existing.LimitsSource == modelclient.LimitsSourceProvider &&
+				existing.ProviderType == route.ProviderType &&
+				existing.ProviderBaseUrl == route.ProviderBaseURL &&
+				existing.Model == route.Model {
+				var existingVerified *time.Time
+				if existing.LimitsVerifiedAt.Valid {
+					ts := existing.LimitsVerifiedAt.Time.UTC()
+					existingVerified = &ts
+				}
+				providerLimits = &modelclient.ModelLimits{
+					ContextWindowTokens: int(existing.ContextWindowTokens.Int32),
+					MaxInputTokens:      int(existing.MaxInputTokens.Int32),
+					MaxOutputTokens:     int(existing.MaxOutputTokens.Int32),
+					Source:              modelclient.LimitsSourceProvider,
+					VerifiedAt:          existingVerified,
+				}
+			}
+		}
+		resolvedLimits := modelclient.ResolveModelLimits(
+			userOverride,
+			providerLimits,
+			route.Model,
+			route.BaseModel,
+			now,
+		)
+		var verifiedAt pgtype.Timestamptz
+		if resolvedLimits.VerifiedAt != nil && !resolvedLimits.VerifiedAt.IsZero() {
+			verifiedAt = pgtype.Timestamptz{Time: resolvedLimits.VerifiedAt.UTC(), Valid: true}
+		}
 		stored, err := q.CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
 			ID: route.ID, WorkspaceID: workspaceID, Position: int32(position),
 			Enabled: route.Enabled, ProviderType: route.ProviderType,
 			CredentialID: credentialID, ProviderBaseUrl: route.ProviderBaseURL,
-			Model: route.Model, ApiKeyEnv: route.APIKeyEnv,
-			ApiKeyCiphertext: ciphertext,
+			Model: route.Model, BaseModel: route.BaseModel, ApiKeyEnv: route.APIKeyEnv,
+			ApiKeyCiphertext:    ciphertext,
+			ContextWindowTokens: pgtype.Int4{Int32: int32(resolvedLimits.ContextWindowTokens), Valid: resolvedLimits.ContextWindowTokens > 0},
+			MaxInputTokens:      pgtype.Int4{Int32: int32(resolvedLimits.MaxInputTokens), Valid: resolvedLimits.MaxInputTokens > 0},
+			MaxOutputTokens:     pgtype.Int4{Int32: int32(resolvedLimits.MaxOutputTokens), Valid: resolvedLimits.MaxOutputTokens > 0},
+			LimitsSource:        resolvedLimits.Source,
+			LimitsVerifiedAt:    verifiedAt,
 		})
 		if err != nil {
 			return AgentSettings{}, mapConstraintError(err)

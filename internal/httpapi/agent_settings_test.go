@@ -246,3 +246,132 @@ func TestAgentStatusReportsConfigurationWithoutExposingSettings(t *testing.T) {
 	}
 	check(workspace.ID, false)
 }
+
+func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": [
+				{
+					"id": "relay-pro-max",
+					"name": "Relay Pro Max",
+					"context_window": 256000,
+					"max_input_tokens": 240000,
+					"max_output_tokens": 32000
+				}
+			]
+		}`))
+	}))
+	defer provider.Close()
+
+	handler, _, _ := newHTTPIntegration(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+
+	// 先拉取服务商目录，将 relay-pro-max 的容量信息写入短时缓存
+	catalogResp := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-models", map[string]any{
+		"provider_base_url": provider.URL + "/v1",
+	}, cookie, nil)
+	if catalogResp.Code != http.StatusOK {
+		t.Fatalf("provider-models status=%d body=%s", catalogResp.Code, catalogResp.Body.String())
+	}
+
+	save := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
+		"routes": []map[string]any{
+			{
+				"id":                uuid.NewString(),
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"provider_base_url": provider.URL + "/v1",
+				"model":             "relay-pro-max",
+			},
+			{
+				"id":                uuid.NewString(),
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"provider_base_url": provider.URL + "/v1",
+				"model":             "gpt-4o",
+			},
+			{
+				"id":                uuid.NewString(),
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"provider_base_url": provider.URL + "/v1",
+				"model":             "gemini-3.8-flash-high",
+			},
+			{
+				"id":                uuid.NewString(),
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"provider_base_url": provider.URL + "/v1",
+				"model":             "gemini-3.8-flash-high",
+				"base_model":        "gemini-2.5-flash",
+			},
+			{
+				"id":                    uuid.NewString(),
+				"enabled":               true,
+				"provider_type":         "openai_compatible",
+				"provider_base_url":     provider.URL + "/v1",
+				"model":                 "gpt-4o",
+				"context_window_tokens": 64000,
+				"max_input_tokens":      56000,
+				"max_output_tokens":     8000,
+				"limits_source":         "user",
+			},
+		},
+		"system_instructions": "",
+	}, cookie, nil)
+	if save.Code != http.StatusOK {
+		t.Fatalf("save settings status=%d body=%s", save.Code, save.Body.String())
+	}
+
+	var got agentSettingsResponse
+	decodeRecorder(t, save, &got)
+	if len(got.Routes) != 5 {
+		t.Fatalf("expected 5 routes, got %d", len(got.Routes))
+	}
+
+	// Route 0: provider metadata
+	if got.Routes[0].LimitsSource != "provider" || got.Routes[0].ContextWindowTokens != 256000 || got.Routes[0].MaxInputTokens != 240000 || got.Routes[0].MaxOutputTokens != 32000 {
+		t.Fatalf("route[0] provider limits mismatch: %+v", got.Routes[0])
+	}
+	// Route 1: registry exact match
+	if got.Routes[1].LimitsSource != "registry" || got.Routes[1].ContextWindowTokens != 128000 || got.Routes[1].MaxOutputTokens != 16384 {
+		t.Fatalf("route[1] registry limits mismatch: %+v", got.Routes[1])
+	}
+	// Route 2: unknown custom alias -> 0 (not fabricated)
+	if got.Routes[2].LimitsSource != "unknown" || got.Routes[2].ContextWindowTokens != 0 || got.Routes[2].MaxInputTokens != 0 || got.Routes[2].MaxOutputTokens != 0 {
+		t.Fatalf("route[2] unknown alias should not fabricate limits: %+v", got.Routes[2])
+	}
+	// Route 3: custom alias with base_model -> registry match
+	if got.Routes[3].LimitsSource != "registry" || got.Routes[3].BaseModel != "gemini-2.5-flash" || got.Routes[3].ContextWindowTokens != 1048576 {
+		t.Fatalf("route[3] base_model registry limits mismatch: %+v", got.Routes[3])
+	}
+	// Route 4: user manual override wins over registry
+	if got.Routes[4].LimitsSource != "user" || got.Routes[4].ContextWindowTokens != 64000 || got.Routes[4].MaxInputTokens != 56000 || got.Routes[4].MaxOutputTokens != 8000 {
+		t.Fatalf("route[4] user override mismatch: %+v", got.Routes[4])
+	}
+
+	// 非法配置（max_input_tokens > context_window_tokens）必须被拒绝
+	invalid := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
+		"routes": []map[string]any{{
+			"id":                    uuid.NewString(),
+			"enabled":               true,
+			"provider_type":         "openai_compatible",
+			"provider_base_url":     provider.URL + "/v1",
+			"model":                 "gpt-4o",
+			"context_window_tokens": 32000,
+			"max_input_tokens":      64000,
+			"limits_source":         "user",
+		}},
+		"system_instructions": "",
+	}, cookie, nil)
+	if invalid.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for invalid token bounds, got %d %s", invalid.Code, invalid.Body.String())
+	}
+}

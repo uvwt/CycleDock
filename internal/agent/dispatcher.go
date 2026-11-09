@@ -253,6 +253,10 @@ func publicRunError(err error) string {
 		return "Model provider returned an invalid response."
 	case errors.Is(err, modelclient.ErrResponseTooLarge):
 		return "Model provider response exceeded the safety limit."
+	case errors.Is(err, ErrRouteContextCapacityExceeded),
+		errors.Is(err, ErrRouteContextCapacityUnknown),
+		modelclient.IsContextTooLargeError(err):
+		return "Model context window is insufficient for the current session size."
 	case errors.Is(err, errRunawayToolLoop):
 		return "Built-in Agent stopped after 8 consecutive identical tool rounds with unchanged results."
 	case strings.Contains(err.Error(), "environment variable"):

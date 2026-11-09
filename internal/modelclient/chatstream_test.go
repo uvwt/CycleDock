@@ -68,3 +68,30 @@ func TestChatToolInputsAreAvailableBeforeCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestChatStreamParsesFinalUsageChunk(t *testing.T) {
+	data := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Answer"}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":600,"completion_tokens":45,"prompt_tokens_details":{"cached_tokens":200},"completion_tokens_details":{"reasoning_tokens":15}}}`,
+		`data: [DONE]`,
+	}, "\n")
+	got, err := readChatStream(strings.NewReader(data), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "Answer" {
+		t.Fatalf("content=%q", got.Content)
+	}
+	if got.Usage == nil {
+		t.Fatal("expected usage from final stream chunk")
+	}
+	want := TokenUsage{
+		InputTokens:           600,
+		OutputTokens:          45,
+		CachedInputTokens:     200,
+		ReasoningOutputTokens: 15,
+	}
+	if *got.Usage != want {
+		t.Fatalf("usage=%+v, want %+v", *got.Usage, want)
+	}
+}

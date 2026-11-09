@@ -24,6 +24,7 @@ type chatStreamDelta struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
+	Usage *wireTokenUsage `json:"usage"`
 }
 
 // Chat Completions tool call arguments arrive in fragments, indexed by call.
@@ -35,6 +36,7 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 	var answer strings.Builder
 	completed := false
 	calls := make(map[int]*ToolCall)
+	var usage *TokenUsage
 	for scanner.Scan() {
 		line := scanner.Text()
 		bytesRead += int64(len(line) + 1)
@@ -55,6 +57,9 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 		var packet chatStreamDelta
 		if err := json.Unmarshal([]byte(data), &packet); err != nil {
 			return Completion{}, fmt.Errorf("%w: chat stream data: %v", ErrMalformedResponse, err)
+		}
+		if parsed := packet.Usage.toTokenUsage(); parsed != nil {
+			usage = parsed
 		}
 		for _, choice := range packet.Choices {
 			if choice.Delta.Content != "" {
@@ -95,7 +100,10 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 		indices = append(indices, i)
 	}
 	sort.Ints(indices)
-	result := Completion{Content: strings.TrimSpace(answer.String())}
+	result := Completion{
+		Content: strings.TrimSpace(answer.String()),
+		Usage:   usage,
+	}
 	for _, i := range indices {
 		call := calls[i]
 		if call.ID == "" || call.Function.Name == "" {

@@ -67,10 +67,12 @@ Session 可以长期存在，但 prompt 不能无限增长。
 
 生产 ADK Runner 使用 Tail Retention Context Compaction：
 
-- 默认 `TokenThreshold = 24000`，在 prompt 继续膨胀前触发。
+- 根据当前首选模型路由的实际容量动态计算压缩阈值（`internal/agent/compaction_budget.go`）：`inputLimit = min(MaxInputTokens, ContextWindowTokens - reservedOutput)`，`safetyReserve = max(inputLimit * 15 / 100, 16000)`，`compactAt = inputLimit - safetyReserve`；容量未知（`unknown`）的路由退回独立保守阈值 `TokenThreshold = 24000`，不伪造模型容量。
 - 默认 `EventRetentionSize = 20`，保留近期指代与 function call / response 配对所需 raw tail。
 - summarizer 使用同一 ordered model routes，但不发布内部 summary SSE。
-- summarizer 对单个工具内容与 transcript 本身也设置上限，避免“为了压缩而先构造无限大压缩请求”。
+- summarizer 使用自定义结构化摘要模板（`internal/agent/compaction_prompt.go`），固定输出 `## Objective`、`## Requirements`、`## Decisions`、`## Work State`（区分 `### Completed`、`### Active`、`### Blocked`）、`## Next Move`、`## Relevant Files` 与 `## Important Context`。只有真实执行过且有工具结果或证据支撑的操作才进入 `### Completed`，仅表达计划的内容归入 `### Active` 或 `## Next Move`，并跨轮原样保留用户语言、精确文件路径/符号名、错误结论及外置 `artifact_ref` 引用，防止压缩后丢失执行阶段而反复分析同一批文件。
+- summarizer 对单个工具内容（4,000 字符）与 transcript 本身（120,000 字符）设置上限，避免“为了压缩而先构造无限大压缩请求”。
+- 模型路由发生故障切换（failover）时，适配器在发往候选备用路由前校验当前估算 Prompt Token 是否超过该备用路由的 `EffectiveInputLimit`（或未知路由的 32K 保守上限），自动跳过容量不足或容量不明的小窗口备用路由，避免把大窗口会话盲目发往小窗口路由引发无控溢出。
 
 Compaction record 是 Session EventActions 的一部分，由 SessionService 完整持久化。它走独立 bookkeeping ownership guard：只允许当前 running、已绑定 invocation 的 Attempt 对当前 Card Session 已存在事件范围追加 summary；普通 Session Event 的 stale invocation guard 不放宽。
 
@@ -219,6 +221,15 @@ ADK LLM Agent 负责 agent/tool loop。
 每次 Attempt 最多执行 256 轮工具调用，从第 240 轮起提示模型验证并收尾；预算耗尽时若仍请求工具，则明确报告预算不足，不标记为死循环。连续 8 轮完整工具调用的工具名、参数和结果均不变时提前停止；结果发生变化的轮询不触发该检测。计数属于本次 Attempt，新 Turn 和技术重试重新计算预算。
 
 CycleDock model adapter 仍负责 OpenAI-compatible、ChatGPT SIWC、Grok OAuth、多账号 credential、ordered routes、retryability classification、failover、partial stream reset。
+
+每条 `workspace_model_routes` 记录维护自身的上下文容量与输入/输出上限（`base_model`、`context_window_tokens`、`max_input_tokens`、`max_output_tokens`、`limits_source`、`limits_verified_at`；空值表示未知，不自动解释为固定默认容量）。解析优先级固定为：
+
+1. 用户手动覆盖（`user`）
+2. 服务商 `/models` 返回并经校验的模型元数据（`provider`，带超时、2 MiB 响应上限、禁止重定向、SSRF 目标 IP 校验与短时缓存）
+3. 内置模型注册表精确匹配（`registry`，支持 `model` 或用户为自定义代理别名显式指定的 `base_model`）
+4. 未知（`unknown`，保留空值交由下游保守策略处理，不伪造模型容量）
+
+模型适配层同时解析 Chat Completions（非流式 `usage` 与流式 `stream_options.include_usage` 尾部统计块；遇到不支持 `stream_options` 的兼容端点时自动降级重发并按 `BaseURL` 缓存能力）和 Responses（`response.completed` 的 `usage`）中的输入、输出、缓存输入与推理输出 Token，并映射为 ADK `UsageMetadata`（`PromptTokenCount`、`CandidatesTokenCount`、`CachedContentTokenCount`、`ThoughtsTokenCount`、`TotalTokenCount`）。若上游中转未返回 `Usage`，则基于当前请求内容与输出写入本地估算值，并在响应元数据与路由观测状态中明确区分 `actual`（实际统计）、`estimated`（本地估算）与 `unknown`（未知），同时记录真正命中响应的模型路由（`RouteID` / `Provider` / `Model`），避免发生故障切换后仍将原始路由的用量用于后续判断。
 
 同一路由遇到空响应、响应格式异常、网络错误、超时或 HTTP 408 / 429 / 5xx 时，退避 500ms 后再请求一次，仍失败才尝试后续路由。认证、额度及路由不存在等路由级错误直接切换备用路由。重试沿用原始模型输入，每次重新建立流式预览批次；不重复执行工具、不创建新 Turn / Attempt，也不额外消耗工具轮数。
 

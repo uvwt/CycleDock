@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,6 +55,58 @@ type chatResponseFormat struct {
 	JSONSchema *OutputSchema `json:"json_schema"`
 }
 
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// TokenUsage 记录单次模型调用的 Token 统计。
+// 当上游服务商或中转未返回有效统计时，Completion.Usage 保持为 nil，由调用方区分实际值与估算值。
+type TokenUsage struct {
+	InputTokens           int
+	OutputTokens          int
+	CachedInputTokens     int
+	ReasoningOutputTokens int
+}
+
+type wireTokenUsage struct {
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	InputTokens             int `json:"input_tokens"`
+	OutputTokens            int `json:"output_tokens"`
+	CacheReadInputTokens    int `json:"cache_read_input_tokens"`
+	PromptTokensDetails     struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+}
+
+func (u *wireTokenUsage) toTokenUsage() *TokenUsage {
+	if u == nil {
+		return nil
+	}
+	input := max(u.PromptTokens, u.InputTokens, 0)
+	output := max(u.CompletionTokens, u.OutputTokens, 0)
+	cached := max(u.PromptTokensDetails.CachedTokens, u.InputTokensDetails.CachedTokens, u.CacheReadInputTokens, 0)
+	reasoning := max(u.CompletionTokensDetails.ReasoningTokens, u.OutputTokensDetails.ReasoningTokens, 0)
+	if input == 0 && output == 0 && cached == 0 && reasoning == 0 {
+		return nil
+	}
+	return &TokenUsage{
+		InputTokens:           input,
+		OutputTokens:          output,
+		CachedInputTokens:     cached,
+		ReasoningOutputTokens: reasoning,
+	}
+}
+
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content,omitempty"`
@@ -88,6 +141,7 @@ type ToolDefinitionFunc struct {
 type Completion struct {
 	Content   string
 	ToolCalls []ToolCall
+	Usage     *TokenUsage
 }
 
 type APIError struct {
@@ -103,18 +157,59 @@ func (e *APIError) Error() string {
 }
 
 type Client struct {
-	httpClient *http.Client
+	httpClient    *http.Client
+	mu            sync.Mutex
+	noStreamUsage map[string]bool
+	catalogMu     sync.Mutex
+	catalogCache  map[string]catalogCacheEntry
 }
 
 func New() *Client {
-	return &Client{httpClient: &http.Client{}}
+	return &Client{
+		httpClient:    &http.Client{},
+		noStreamUsage: make(map[string]bool),
+	}
 }
 
 func NewWithHTTPClient(client *http.Client) *Client {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &Client{httpClient: client}
+	return &Client{
+		httpClient:    client,
+		noStreamUsage: make(map[string]bool),
+	}
+}
+
+func (c *Client) streamUsageUnsupported(baseURL string) bool {
+	if c == nil {
+		return false
+	}
+	key := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.noStreamUsage[key]
+}
+
+func (c *Client) markStreamUsageUnsupported(baseURL string) {
+	if c == nil {
+		return
+	}
+	key := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	c.mu.Lock()
+	if c.noStreamUsage == nil {
+		c.noStreamUsage = make(map[string]bool)
+	}
+	c.noStreamUsage[key] = true
+	c.mu.Unlock()
+}
+
+func isUnsupportedStreamOptionsError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "stream_options") || strings.Contains(lower, "include_usage")
 }
 
 func (c *Client) Complete(
@@ -136,80 +231,99 @@ func (c *Client) Complete(
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	body := struct {
-		Model          string              `json:"model"`
-		Messages       []Message           `json:"messages"`
-		Tools          []ToolDefinition    `json:"tools,omitempty"`
-		Temperature    float64             `json:"temperature,omitempty"`
-		Stream         bool                `json:"stream"`
-		ResponseFormat *chatResponseFormat `json:"response_format,omitempty"`
-	}{
-		Model: strings.TrimSpace(config.Model), Messages: messages,
-		Tools: tools, Temperature: config.Temperature, Stream: config.OnTextDelta != nil || config.OnToolCall != nil,
-	}
-	if config.OutputSchema != nil {
-		body.ResponseFormat = &chatResponseFormat{Type: "json_schema", JSONSchema: config.OutputSchema}
-	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return Completion{}, fmt.Errorf("encode model request: %w", err)
-	}
+	stream := config.OnTextDelta != nil || config.OnToolCall != nil
+	includeStreamUsage := stream && !c.streamUsageUnsupported(config.BaseURL)
 
-	endpoint := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/") + "/chat/completions"
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(raw))
-	if err != nil {
-		return Completion{}, fmt.Errorf("create model request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if config.OnTextDelta != nil || config.OnToolCall != nil {
-		request.Header.Set("Accept", "text/event-stream")
-	} else {
-		request.Header.Set("Accept", "application/json")
-	}
-	if config.APIKey != "" {
-		request.Header.Set("Authorization", "Bearer "+config.APIKey)
-	}
-
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return Completion{}, fmt.Errorf("model request: %w", err)
-	}
-	defer response.Body.Close()
-
-	if (config.OnTextDelta != nil || config.OnToolCall != nil) &&
-		response.StatusCode >= 200 && response.StatusCode < 300 &&
-		strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
-		return readChatStream(response.Body, config.OnTextDelta, config.OnToolCall)
-	}
-	responseBody, err := readBounded(response.Body, response.ContentLength, maxResponseBytes)
-	if err != nil {
-		return Completion{}, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return Completion{}, &APIError{
-			StatusCode: response.StatusCode,
-			Body:       summarizeBody(responseBody),
+	for {
+		body := struct {
+			Model          string              `json:"model"`
+			Messages       []Message           `json:"messages"`
+			Tools          []ToolDefinition    `json:"tools,omitempty"`
+			Temperature    float64             `json:"temperature,omitempty"`
+			Stream         bool                `json:"stream"`
+			StreamOptions  *chatStreamOptions  `json:"stream_options,omitempty"`
+			ResponseFormat *chatResponseFormat `json:"response_format,omitempty"`
+		}{
+			Model: strings.TrimSpace(config.Model), Messages: messages,
+			Tools: tools, Temperature: config.Temperature, Stream: stream,
 		}
-	}
+		if includeStreamUsage {
+			body.StreamOptions = &chatStreamOptions{IncludeUsage: true}
+		}
+		if config.OutputSchema != nil {
+			body.ResponseFormat = &chatResponseFormat{Type: "json_schema", JSONSchema: config.OutputSchema}
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return Completion{}, fmt.Errorf("encode model request: %w", err)
+		}
 
-	var decoded struct {
-		Choices []struct {
-			Message struct {
-				Content   string     `json:"content"`
-				ToolCalls []ToolCall `json:"tool_calls"`
-			} `json:"message"`
-		} `json:"choices"`
+		endpoint := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/") + "/chat/completions"
+		request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(raw))
+		if err != nil {
+			return Completion{}, fmt.Errorf("create model request: %w", err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if stream {
+			request.Header.Set("Accept", "text/event-stream")
+		} else {
+			request.Header.Set("Accept", "application/json")
+		}
+		if config.APIKey != "" {
+			request.Header.Set("Authorization", "Bearer "+config.APIKey)
+		}
+
+		response, err := c.httpClient.Do(request)
+		if err != nil {
+			return Completion{}, fmt.Errorf("model request: %w", err)
+		}
+
+		if stream &&
+			response.StatusCode >= 200 && response.StatusCode < 300 &&
+			strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+			completion, streamErr := readChatStream(response.Body, config.OnTextDelta, config.OnToolCall)
+			response.Body.Close()
+			return completion, streamErr
+		}
+		responseBody, err := readBounded(response.Body, response.ContentLength, maxResponseBytes)
+		response.Body.Close()
+		if err != nil {
+			return Completion{}, err
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			// 部分 OpenAI 兼容中转不支持 stream_options.include_usage，遇到明确字段报错时降级重发并记住该端点。
+			if includeStreamUsage && isUnsupportedStreamOptionsError(response.StatusCode, responseBody) {
+				c.markStreamUsageUnsupported(config.BaseURL)
+				includeStreamUsage = false
+				continue
+			}
+			return Completion{}, &APIError{
+				StatusCode: response.StatusCode,
+				Body:       summarizeBody(responseBody),
+			}
+		}
+
+		var decoded struct {
+			Choices []struct {
+				Message struct {
+					Content   string     `json:"content"`
+					ToolCalls []ToolCall `json:"tool_calls"`
+				} `json:"message"`
+			} `json:"choices"`
+			Usage *wireTokenUsage `json:"usage"`
+		}
+		if err := json.Unmarshal(responseBody, &decoded); err != nil {
+			return Completion{}, fmt.Errorf("%w: %v", ErrMalformedResponse, err)
+		}
+		if len(decoded.Choices) == 0 {
+			return Completion{}, ErrEmptyResponse
+		}
+		return Completion{
+			Content:   strings.TrimSpace(decoded.Choices[0].Message.Content),
+			ToolCalls: decoded.Choices[0].Message.ToolCalls,
+			Usage:     decoded.Usage.toTokenUsage(),
+		}, nil
 	}
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return Completion{}, fmt.Errorf("%w: %v", ErrMalformedResponse, err)
-	}
-	if len(decoded.Choices) == 0 {
-		return Completion{}, ErrEmptyResponse
-	}
-	return Completion{
-		Content:   strings.TrimSpace(decoded.Choices[0].Message.Content),
-		ToolCalls: decoded.Choices[0].Message.ToolCalls,
-	}, nil
 }
 
 func readBounded(reader io.Reader, contentLength, limit int64) ([]byte, error) {

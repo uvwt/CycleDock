@@ -176,6 +176,19 @@ export type DoneCardsPaged = {
   has_more: boolean;
 };
 export type Provider = "chatgpt" | "grok" | "openai_compatible";
+export type ModelLimitsSource = "user" | "provider" | "registry" | "unknown";
+export type ModelLimits = {
+  context_window_tokens?: number;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  source: ModelLimitsSource;
+  verified_at?: string;
+};
+export type ModelCatalogItem = {
+  id: string;
+  name: string;
+  limits?: ModelLimits;
+};
 export type ModelRoute = {
   id: string;
   enabled: boolean;
@@ -183,10 +196,16 @@ export type ModelRoute = {
   credential_id: string;
   provider_base_url: string;
   model: string;
+  base_model?: string;
   api_key_env?: string;
   api_key?: string;
   api_key_configured?: boolean;
   clear_api_key?: boolean;
+  context_window_tokens?: number;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  limits_source?: ModelLimitsSource;
+  limits_verified_at?: string;
 };
 export type AgentSettings = {
   configured: boolean;

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/adk/v2/model"
@@ -21,20 +22,48 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
+type TokenUsageSource string
+
+const (
+	TokenUsageSourceUnknown   TokenUsageSource = "unknown"
+	TokenUsageSourceActual    TokenUsageSource = "actual"
+	TokenUsageSourceEstimated TokenUsageSource = "estimated"
+
+	tokenUsageSourceKey = "cycledock.token_usage_source"
+	modelRouteIDKey     = "cycledock.model_route_id"
+	modelProviderKey    = "cycledock.model_provider"
+
+	estimatedCharsPerToken = 4
+)
+
+// RouteCallObservation 记录最近一次成功命中的模型路由及本次调用的 Token 统计与来源。
+// 当请求发生故障切换（failover）时，它始终对应实际返回响应的路由，避免将备用路由的用量误算在原始路由上。
+type RouteCallObservation struct {
+	RouteIndex  int
+	RouteID     uuid.UUID
+	Provider    string
+	Model       string
+	Usage       modelclient.TokenUsage
+	UsageSource TokenUsageSource
+}
+
 // adkRouteModel adapts CycleDock's production model transports and ordered
 // credential routes to ADK's model.LLM interface. ADK owns the conversation and
 // tool loop; CycleDock keeps credential refresh, route failover and converts
 // provider argument deltas into ADK partial responses.
 type adkRouteModel struct {
-	client      *modelclient.Client
-	modelAuth   *modelauth.Service
-	store       *store.Store
-	workspaceID uuid.UUID
-	routes      []db.WorkspaceModelRoute
+	client       *modelclient.Client
+	modelAuth    *modelauth.Service
+	store        *store.Store
+	workspaceID  uuid.UUID
+	routes       []db.WorkspaceModelRoute
+	budgetPolicy CompactionBudgetPolicy
 
-	mu          sync.Mutex
-	activeRoute int
-	modelCalls  int
+	mu              sync.Mutex
+	activeRoute     int
+	modelCalls      int
+	lastObservation RouteCallObservation
+	hasObservation  bool
 }
 
 func prioritizeRoutes(
@@ -93,10 +122,12 @@ func newADKRouteModel(
 		return nil, errors.New("built-in agent has no enabled model route")
 	}
 	return &adkRouteModel{
-		client: client, modelAuth: auth,
-		store:       dataStore,
-		workspaceID: workspaceID,
-		routes:      enabled,
+		client:       client,
+		modelAuth:    auth,
+		store:        dataStore,
+		workspaceID:  workspaceID,
+		routes:       enabled,
+		budgetPolicy: DefaultCompactionBudgetPolicy(),
 	}, nil
 }
 
@@ -105,18 +136,38 @@ func (m *adkRouteModel) Name() string {
 }
 
 func (m *adkRouteModel) ActiveModel() string {
-	if m == nil {
+	route, ok := m.ActiveRoute()
+	if !ok {
 		return ""
+	}
+	return strings.TrimSpace(route.Model)
+}
+
+func (m *adkRouteModel) ActiveRoute() (db.WorkspaceModelRoute, bool) {
+	if m == nil {
+		return db.WorkspaceModelRoute{}, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.activeRoute >= 0 && m.activeRoute < len(m.routes) {
-		return strings.TrimSpace(m.routes[m.activeRoute].Model)
+		return m.routes[m.activeRoute], true
 	}
 	if len(m.routes) > 0 {
-		return strings.TrimSpace(m.routes[0].Model)
+		return m.routes[0], true
 	}
-	return ""
+	return db.WorkspaceModelRoute{}, false
+}
+
+func (m *adkRouteModel) LastObservation() (RouteCallObservation, bool) {
+	if m == nil {
+		return RouteCallObservation{UsageSource: TokenUsageSourceUnknown}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasObservation {
+		return RouteCallObservation{UsageSource: TokenUsageSourceUnknown}, false
+	}
+	return m.lastObservation, true
 }
 
 func (m *adkRouteModel) GenerateContent(
@@ -149,8 +200,25 @@ func (m *adkRouteModel) GenerateContent(
 			return
 		}
 
+		estimatedPromptTokens := estimateADKRequestTokens(req)
 		var lastErr error
 		for i := start; i < len(m.routes); i++ {
+			routeLimits := ResolveRouteModelLimits(m.routes[i], m.client)
+			routeBudget := ComputeRouteCompactionBudget(routeLimits, m.budgetPolicy)
+			if capErr := ValidateRoutePromptCapacity(
+				m.routes[i],
+				routeBudget,
+				estimatedPromptTokens,
+				i > start,
+				m.budgetPolicy,
+			); capErr != nil {
+				lastErr = capErr
+				if i+1 < len(m.routes) && stream && !yield(modelStageResponse("备用模型上下文窗口不足，正在尝试下一模型"), nil) {
+					return
+				}
+				continue
+			}
+
 			config, err := m.routeConfig(ctx, m.routes[i])
 			if err != nil {
 				if !isRetryableModelRouteError(ctx, err) {
@@ -199,11 +267,30 @@ func (m *adkRouteModel) GenerateContent(
 					response, err = modelClientCompletionToADK(completion)
 				}
 				if err == nil {
+					matchedRoute := m.routes[i]
+					usage, usageSource, usageMetadata := resolveADKTokenUsage(req, completion)
+					response.UsageMetadata = usageMetadata
+					response.ModelVersion = strings.TrimSpace(matchedRoute.Model)
+					response.CustomMetadata = buildModelResponseMetadata(matchedRoute, usageSource)
+
 					m.mu.Lock()
 					m.activeRoute = i
+					m.lastObservation = RouteCallObservation{
+						RouteIndex:  i,
+						RouteID:     matchedRoute.ID,
+						Provider:    normalizedProviderType(matchedRoute.ProviderType),
+						Model:       strings.TrimSpace(matchedRoute.Model),
+						Usage:       usage,
+						UsageSource: usageSource,
+					}
+					m.hasObservation = true
 					m.mu.Unlock()
 					yield(response, nil)
 					return
+				}
+				if modelclient.IsContextTooLargeError(err) {
+					lastErr = fmt.Errorf("%w: %v", ErrRouteContextCapacityExceeded, err)
+					break
 				}
 				if !isRetryableModelRouteError(ctx, err) {
 					yield(nil, err)
@@ -488,8 +575,126 @@ func modelClientCompletionToADK(completion modelclient.Completion) (*model.LLMRe
 	if len(parts) == 0 {
 		return nil, modelclient.ErrEmptyResponse
 	}
+	var usageMetadata *genai.GenerateContentResponseUsageMetadata
+	if completion.Usage != nil {
+		usageMetadata = tokenUsageToADKMetadata(*completion.Usage)
+	}
 	return &model.LLMResponse{
-		Content:      &genai.Content{Role: string(genai.RoleModel), Parts: parts},
-		TurnComplete: true,
+		Content:       &genai.Content{Role: string(genai.RoleModel), Parts: parts},
+		UsageMetadata: usageMetadata,
+		TurnComplete:  true,
 	}, nil
+}
+
+func normalizedProviderType(provider string) string {
+	trimmed := strings.TrimSpace(provider)
+	if trimmed == "" {
+		return "openai_compatible"
+	}
+	return trimmed
+}
+
+func buildModelResponseMetadata(route db.WorkspaceModelRoute, usageSource TokenUsageSource) map[string]any {
+	meta := map[string]any{
+		tokenUsageSourceKey: string(usageSource),
+		modelProviderKey:    normalizedProviderType(route.ProviderType),
+	}
+	if route.ID != uuid.Nil {
+		meta[modelRouteIDKey] = route.ID.String()
+	}
+	return meta
+}
+
+// resolveADKTokenUsage 优先采用服务商返回的真实统计（actual）；
+// 若中转未返回 Usage，则回退到本地字符估算（estimated）并写入 UsageMetadata，
+// 确保压缩后的首次模型调用也能刷新 ADK Session 的 PromptTokenCount 基线。
+func resolveADKTokenUsage(
+	req *model.LLMRequest,
+	completion modelclient.Completion,
+) (modelclient.TokenUsage, TokenUsageSource, *genai.GenerateContentResponseUsageMetadata) {
+	if completion.Usage != nil {
+		actual := *completion.Usage
+		if actual.InputTokens > 0 || actual.OutputTokens > 0 || actual.CachedInputTokens > 0 || actual.ReasoningOutputTokens > 0 {
+			return actual, TokenUsageSourceActual, tokenUsageToADKMetadata(actual)
+		}
+	}
+	estimatedInput := estimateADKRequestTokens(req)
+	estimatedOutput := estimateCompletionOutputTokens(completion)
+	if estimatedInput == 0 && estimatedOutput == 0 {
+		return modelclient.TokenUsage{}, TokenUsageSourceUnknown, nil
+	}
+	estimated := modelclient.TokenUsage{
+		InputTokens:  estimatedInput,
+		OutputTokens: estimatedOutput,
+	}
+	return estimated, TokenUsageSourceEstimated, tokenUsageToADKMetadata(estimated)
+}
+
+func tokenUsageToADKMetadata(usage modelclient.TokenUsage) *genai.GenerateContentResponseUsageMetadata {
+	input := max(usage.InputTokens, 0)
+	output := max(usage.OutputTokens, 0)
+	cached := max(usage.CachedInputTokens, 0)
+	reasoning := max(usage.ReasoningOutputTokens, 0)
+	if input == 0 && output == 0 && cached == 0 && reasoning == 0 {
+		return nil
+	}
+	totalOutput := max(output, reasoning)
+	return &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:        int32(input),
+		CandidatesTokenCount:    int32(output),
+		CachedContentTokenCount: int32(cached),
+		ThoughtsTokenCount:      int32(reasoning),
+		TotalTokenCount:         int32(input + totalOutput),
+	}
+}
+
+func estimateADKRequestTokens(req *model.LLMRequest) int {
+	if req == nil || len(req.Contents) == 0 {
+		return 0
+	}
+	chars := 0
+	for _, content := range req.Contents {
+		if content == nil {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part == nil || part.Thought {
+				continue
+			}
+			chars += utf8.RuneCountInString(part.Text)
+			if fc := part.FunctionCall; fc != nil {
+				chars += utf8.RuneCountInString(fc.Name) + estimateJSONMapChars(fc.Args)
+			}
+			if fr := part.FunctionResponse; fr != nil {
+				chars += utf8.RuneCountInString(fr.Name) + estimateJSONMapChars(fr.Response)
+			}
+		}
+	}
+	return charsToEstimatedTokens(chars)
+}
+
+func estimateCompletionOutputTokens(completion modelclient.Completion) int {
+	chars := utf8.RuneCountInString(completion.Content)
+	for _, call := range completion.ToolCalls {
+		chars += utf8.RuneCountInString(call.Function.Name) + utf8.RuneCountInString(call.Function.Arguments)
+	}
+	return charsToEstimatedTokens(chars)
+}
+
+func estimateJSONMapChars(v map[string]any) int {
+	if len(v) == 0 {
+		return 0
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return utf8.RuneCount(raw)
+}
+
+func charsToEstimatedTokens(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + estimatedCharsPerToken - 1) / estimatedCharsPerToken
 }

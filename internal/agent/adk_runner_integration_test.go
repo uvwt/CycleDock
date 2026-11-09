@@ -1124,3 +1124,277 @@ func TestADKRunnerPersistsToolResultsWithNullBytesAndContinuesWithoutOrphanedCal
 		t.Fatal("second turn did not see paired FunctionCall/FunctionResponse from first turn")
 	}
 }
+
+func TestADKTailCompactionStructuredSummaryAdvancesFromAnalysisToImplementation(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	var toolMu sync.Mutex
+	readCalls := 0
+	editCalls := 0
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "dev-tools", Version: "1.0.0"}, nil)
+	type fileInput struct {
+		Path  string `json:"path"`
+		Patch string `json:"patch,omitempty"`
+	}
+	type fileOutput struct {
+		Status  string `json:"status"`
+		Content string `json:"content"`
+	}
+	mcp.AddTool(
+		mcpServer,
+		&mcp.Tool{Name: "read_source", Description: "Read source file and recent test output."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in fileInput) (*mcp.CallToolResult, fileOutput, error) {
+			toolMu.Lock()
+			readCalls++
+			toolMu.Unlock()
+			// 构造超过 12,000 字符的输出，触发外置为 Artifact，同时在头部保留关键错误定位。
+			return nil, fileOutput{
+				Status: "analyzed",
+				Content: "ERROR_SUMMARY: panic in ValidateOrder at internal/service/order.go:84 when items slice is empty\n" +
+					strings.Repeat("verbose test log line for order validation ", 350),
+			}, nil
+		},
+	)
+	mcp.AddTool(
+		mcpServer,
+		&mcp.Tool{Name: "apply_patch", Description: "Apply code patch to source file."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in fileInput) (*mcp.CallToolResult, fileOutput, error) {
+			toolMu.Lock()
+			editCalls++
+			toolMu.Unlock()
+			return nil, fileOutput{
+				Status:  "patched",
+				Content: "patched " + in.Path + ": " + in.Patch,
+			}, nil
+		},
+	)
+	mcpHTTP := httptest.NewServer(
+		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil),
+	)
+	defer mcpHTTP.Close()
+
+	const structuredCheckpoint = `Conversation Language: 中文
+
+## Objective
+修复 internal/service/order.go 中 ValidateOrder 在空切片输入下的 panic 并完成验证。
+
+## Requirements
+- 保持既有接口签名不变。
+- 空切片返回 ErrEmptyOrderItems。
+
+## Decisions
+- 在 ValidateOrder 入口第 84 行前增加 len(order.Items) == 0 校验。
+
+## Work State
+### Completed
+- 已通过 lab:read_source 读取 internal/service/order.go 并定位第 84 行 panic（完整测试日志已外置为 Artifact）。
+
+### Active
+- 准备对 internal/service/order.go 应用补丁，尚未执行修改工具。
+
+### Blocked
+- 无
+
+## Next Move
+直接调用 call_mcp_tool 执行 lab:apply_patch 修改 internal/service/order.go，不要再次调用 lab:read_source 重复读取分析。
+
+## Relevant Files
+- internal/service/order.go: ValidateOrder 校验函数（第 84 行）。
+
+## Important Context
+- MCP 工具：lab:read_source、lab:apply_patch。`
+
+	var modelMu sync.Mutex
+	regularCalls := 0
+	summaryCalls := 0
+	summarizerSawStructuredTemplate := false
+	summarizerSawArtifactRef := false
+
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body modelRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode model request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		rawMessages, _ := json.Marshal(body.Messages)
+		all := string(rawMessages)
+		w.Header().Set("Content-Type", "application/json")
+
+		if len(body.Tools) == 0 {
+			modelMu.Lock()
+			summaryCalls++
+			if strings.Contains(all, "## Objective") &&
+				strings.Contains(all, "## Work State") &&
+				strings.Contains(all, "### Completed") &&
+				strings.Contains(all, "### Active") &&
+				strings.Contains(all, "### Blocked") &&
+				strings.Contains(all, "## Next Move") &&
+				strings.Contains(all, "## Relevant Files") &&
+				strings.Contains(all, "## Important Context") {
+				summarizerSawStructuredTemplate = true
+			}
+			if strings.Contains(all, "artifact_ref") &&
+				strings.Contains(all, "ERROR_SUMMARY: panic in ValidateOrder at internal/service/order.go:84") {
+				summarizerSawArtifactRef = true
+			}
+			modelMu.Unlock()
+			writeModelResponse(t, w, structuredCheckpoint, nil)
+			return
+		}
+
+		modelMu.Lock()
+		regularCalls++
+		current := regularCalls
+		modelMu.Unlock()
+
+		switch current {
+		case 1:
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "search-1", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "search_mcp_tools",
+					Arguments: `{"query":"read_source apply_patch"}`,
+				},
+			}})
+		case 2:
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "read-1", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:read_source","arguments":{"path":"internal/service/order.go"}}`,
+				},
+			}})
+		case 3:
+			// 第一轮完成分析后汇报计划并结束本轮，此时尚未执行 apply_patch。
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "reply-1", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "reply_message",
+					Arguments: `{"type":"text","content":"已定位 internal/service/order.go:84 的空切片 panic，下一步将直接打补丁修复。","end_turn":true,"idempotency_key":"analysis-done"}`,
+				},
+			}})
+		case 4:
+			// 第二轮由于 EventRetentionSize=1 且超过阈值触发压缩，模型应收到结构化摘要并直接进入实现阶段（apply_patch）。
+			if !strings.Contains(all, "## Work State") || !strings.Contains(all, "## Next Move") {
+				t.Errorf("压缩后 Prompt 缺少结构化工作状态摘要: %s", all)
+			}
+			if strings.Contains(all, "verbose test log line for order validation") {
+				t.Errorf("压缩后 Prompt 仍包含已被覆盖的冗长原始日志")
+			}
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "patch-1", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:apply_patch","arguments":{"path":"internal/service/order.go","patch":"if len(order.Items) == 0 { return ErrEmptyOrderItems }"}}`,
+				},
+			}})
+		case 5:
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID: "reply-2", Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "reply_message",
+					Arguments: `{"type":"text","content":"已完成 internal/service/order.go 补丁修改。","end_turn":true,"idempotency_key":"patch-done"}`,
+				},
+			}})
+		default:
+			t.Errorf("unexpected regular model call %d", current)
+			writeModelResponse(t, w, "unexpected", nil)
+		}
+	}))
+	defer modelHTTP.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Structured Compaction Continuity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(
+		ctx, workspace.ID, project.ID, human.ID,
+		"Fix ValidateOrder panic", "", uuid.NullUUID{}, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(
+		ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "structured-compaction-model"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
+		Name: "lab", URL: mcpHTTP.URL, Enabled: true, TimeoutMS: 5000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
+		SessionService:    agentsession.NewPostgresService(pool),
+		ArtifactService:   agentartifact.NewPostgresService(pool),
+		HeartbeatInterval: 50 * time.Millisecond,
+		LeaseDuration:     time.Minute,
+	})
+	runner.compactionTokenThreshold = 80
+	runner.compactionEventRetention = 1
+
+	runTurn := func(content, key string) {
+		t.Helper()
+		created, err := dataStore.CreateHumanTurn(
+			ctx, workspace.ID, card.ID, human.ID, content, key, domain.DispatchModeEnqueue,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claim, err := dataStore.ClaimNextTurnAttempt(
+			ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claim.Turn.ID != created.Turn.ID {
+			t.Fatalf("claimed turn=%s want=%s", claim.Turn.ID, created.Turn.ID)
+		}
+		if err := runner.RunAttempt(ctx, *claim); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runTurn("请分析 internal/service/order.go 的 ValidateOrder 崩溃原因。", "structured-turn-1")
+	runTurn("继续执行下一步修改。", "structured-turn-2")
+
+	modelMu.Lock()
+	gotSummaries := summaryCalls
+	sawTemplate := summarizerSawStructuredTemplate
+	sawArtifactRef := summarizerSawArtifactRef
+	modelMu.Unlock()
+
+	if gotSummaries == 0 {
+		t.Fatal("未触发上下文压缩")
+	}
+	if !sawTemplate {
+		t.Fatal("压缩模型未收到完整的结构化摘要 Prompt 模板")
+	}
+	if !sawArtifactRef {
+		t.Fatal("大输出被外置与截断后，压缩模型未收到错误摘要或 artifact_ref 引用")
+	}
+
+	toolMu.Lock()
+	gotReads := readCalls
+	gotEdits := editCalls
+	toolMu.Unlock()
+	if gotReads != 1 {
+		t.Fatalf("read_source 调用次数=%d，期望只分析 1 次且恢复后不重复读取", gotReads)
+	}
+	if gotEdits != 1 {
+		t.Fatalf("apply_patch 调用次数=%d，期望压缩恢复后直接进入实现阶段执行 1 次修改", gotEdits)
+	}
+}
+

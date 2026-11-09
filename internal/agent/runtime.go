@@ -44,6 +44,7 @@ type Runner struct {
 	leaseDuration            time.Duration
 	compactionTokenThreshold int
 	compactionEventRetention int
+	compactionBudgetPolicy   CompactionBudgetPolicy
 }
 
 func NewRunner(
@@ -77,6 +78,7 @@ func NewRunner(
 		leaseDuration:            config.LeaseDuration,
 		compactionTokenThreshold: defaultCompactionTokenThreshold,
 		compactionEventRetention: defaultCompactionEventRetention,
+		compactionBudgetPolicy:   DefaultCompactionBudgetPolicy(),
 	}
 }
 
