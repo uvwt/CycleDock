@@ -233,5 +233,22 @@ func (s *Store) FailAttemptOwned(
 	if command.RowsAffected() != 1 {
 		return domain.ErrAttemptNotCurrent
 	}
+	var turnID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT turn_id FROM turn_attempts
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+	`, workspaceID, cardID, attemptID).Scan(&turnID); err != nil {
+		return err
+	}
+	decision, err := decideSupervisorFailure(ctx, tx, workspaceID, cardID, turnID, summary)
+	if err != nil {
+		return err
+	}
+	if err := notifySupervisorFailure(
+		ctx, tx, workspaceID, cardID, turnID, attemptID, runnerSourceID,
+		domain.AttemptStatusFailed, summary, decision,
+	); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }

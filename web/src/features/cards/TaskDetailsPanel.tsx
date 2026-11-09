@@ -12,6 +12,7 @@ import { useNavigate } from "react-router-dom";
 import {
   CalendarClock,
   CalendarPlus,
+  Check,
   Link2,
   Pencil,
   Save,
@@ -83,9 +84,31 @@ export function TaskDetailsPanel({
       {card.kind === "ongoing" && (
         <>
           <Section title="定时任务">
-            <div className="flex items-center gap-2 text-sm text-secondary-foreground">
-              <span>健康状态：</span>
-              <OngoingHealthBadge health={detail.health} />
+            <div className="flex items-center justify-between gap-2 text-sm text-secondary-foreground">
+              <div className="flex items-center gap-2">
+                <span>健康状态：</span>
+                <OngoingHealthBadge health={detail.health} />
+              </div>
+              {(detail.health === "warning" || detail.health === "critical") && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await api.acknowledgeCheckin(card.id);
+                      await onChange();
+                      toast.success("已标记为已确认");
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error ? err.message : "状态更新失败",
+                      );
+                    }
+                  }}
+                  className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-emerald-600 px-2 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95"
+                >
+                  <Check className="size-3" />
+                  <span>已确认</span>
+                </button>
+              )}
             </div>
             {detail.last_checkin && (
               <p className="mt-2 text-xs leading-5 text-faint">

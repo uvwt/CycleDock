@@ -100,7 +100,8 @@ export function PlanSidebar({
             const showHealth =
               card.health === "healthy" ||
               card.health === "warning" ||
-              card.health === "critical";
+              card.health === "critical" ||
+              card.health === "acknowledged";
 
             const swipeActions = [
               {

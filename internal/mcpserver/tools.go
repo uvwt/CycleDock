@@ -274,7 +274,7 @@ func createTurnHandler(dataStore *store.Store) mcp.ToolHandlerFor[CreateTurnInpu
 		}
 		result, err := dataStore.SubmitAgentTurn(
 			ctx, actor.WorkspaceID, cardID, actor.SourceID, input.Content, input.IdempotencyKey,
-			uuid.NullUUID{},
+			uuid.NullUUID{}, domain.DispatchMode(input.DispatchMode),
 		)
 		if err != nil {
 			return nil, TurnOutput{}, stableToolError(err)

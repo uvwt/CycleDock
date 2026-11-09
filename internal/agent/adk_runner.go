@@ -602,7 +602,9 @@ const mainChatInstructions = `当前场景：项目主聊天。你的职责是�
 - 派发成功后，用工具返回的 card_id 给出任务入口，并在回复中必须使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)，严禁只输出裸 ID 或纯文本；以便在主聊天消息内直接以内嵌原生卡片形式呈现并支持一键跳转；然后结束本轮。不要留在主聊天里继续执行这项任务，也不要把 NexusDock 的 task_create 当成创建 CycleDock 任务 Card。
 - 用户追问某个任务时，围绕该任务解释进度、结果、阻塞和下一步。已有任务优先继续使用，避免重复建卡；信息不足时简短确认用户指的是哪张卡。
 - 主聊天中的回复只属于当前主聊天，不会自动传到来源任务。需要把补充要求交给已有任务执行时，引导用户打开对应任务卡继续聊天（统一使用标准格式 [卡片标题](cycledock://card/<card_id>) 引用卡片）；只有实际调用了支持转发的工具并成功，才能说已转交。
-- 任务进度以已有消息或当前工具查询结果为准，不编造状态，不将创建成功说成执行完成。需要查看最新状态时做一次必要查询，回复后结束本轮，不在主聊天中持续轮询。`
+- 任务进度以已有消息或当前工具查询结果为准，不编造状态，不将创建成功说成执行完成。需要查看最新状态时做一次必要查询，回复后结束本轮，不在主聊天中持续轮询。
+- 子任务进入 Review、Failed 或 Timeout 时，系统会把结构化终态回调注入当前主聊天。完成回调只向用户总结，不自动重开。
+- 失败回调带有 5 次动态自愈预算。错误摘要相较上次有变化时，可以用 cycledock_send_card_message 给出调整后的方案并让原卡片继续；连续两次相同错误摘要，或已经到达第 5 次，立即停止自动追聊，向用户说明熔断原因。`
 
 const proactiveMainChatInstructions = `当前执行模式：主聊天内置定时主动消息（后台静默触发）。
 
@@ -664,12 +666,38 @@ func buildADKInstructions(
 	return strings.Join(parts, "\n\n")
 }
 
-// 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
-func turnMessage(card store.AgentCardContext) string {
-	if card.DeviceNodeID != "" {
-		return fmt.Sprintf("%s\n\n本轮用户选择的操作设备：%q（node_id=%q）。涉及设备操作时使用该设备；不可用时向用户说明，不要自行切换设备。", card.TurnContent, card.DeviceName, card.DeviceNodeID)
+func formatStatusChangesPrompt(changes []store.CardStatusChange) string {
+	if len(changes) == 0 {
+		return ""
 	}
-	return card.TurnContent
+	var b strings.Builder
+	b.WriteString("自上一轮执行以来的卡片状态变更：\n")
+	for _, c := range changes {
+		if c.ActorName != "" {
+			b.WriteString(fmt.Sprintf("- %s（操作人：%s）\n", c.Content, c.ActorName))
+		} else {
+			b.WriteString(fmt.Sprintf("- %s\n", c.Content))
+		}
+	}
+	b.WriteString("请结合最新的卡片状态与状态流转历史继续推进任务。")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
+// 状态变更提示静默注入模型上下文（不落库前端气泡），使模型感知自上一轮执行以来的状态流转历史。
+func turnMessage(card store.AgentCardContext) string {
+	var sections []string
+	sections = append(sections, card.TurnContent)
+
+	if prompt := formatStatusChangesPrompt(card.StatusChanges); prompt != "" {
+		sections = append(sections, prompt)
+	}
+
+	if card.DeviceNodeID != "" {
+		sections = append(sections, fmt.Sprintf("本轮用户选择的操作设备：%q（node_id=%q）。涉及设备操作时使用该设备；不可用时向用户说明，不要自行切换设备。", card.DeviceName, card.DeviceNodeID))
+	}
+
+	return strings.Join(sections, "\n\n")
 }
 
 func textFromADKContent(content *genai.Content) string {

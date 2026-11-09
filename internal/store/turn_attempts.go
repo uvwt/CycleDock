@@ -407,20 +407,34 @@ func supersedeAttemptForHumanTurn(
 	dispatchMode domain.DispatchMode,
 	now time.Time,
 ) error {
+	return supersedeAttemptForTurn(ctx, tx, workspaceID, cardID, dispatchMode, "superseded by interrupting human turn", now)
+}
+
+func supersedeAttemptForTurn(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, cardID uuid.UUID,
+	dispatchMode domain.DispatchMode,
+	reason string,
+	now time.Time,
+) error {
 	if dispatchMode != domain.DispatchModeInterrupt {
 		return nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "superseded by interrupting turn"
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
 		SET status='superseded',
-		    error_summary='superseded by interrupting human turn',
+		    error_summary=$4,
 		    heartbeat_at=NULL, lease_expires_at=NULL,
 		    finished_at=$3, updated_at=$3
 		WHERE workspace_id=$1 AND card_id=$2
 		  AND status IN ('queued','running')
-	`, workspaceID, cardID, now)
+	`, workspaceID, cardID, now, reason)
 	if err != nil {
-		return fmt.Errorf("supersede current attempt for human turn: %w", err)
+		return fmt.Errorf("supersede current attempt for turn: %w", err)
 	}
 	return nil
 }
@@ -581,6 +595,26 @@ func (s *Store) FinishAttempt(
 	}
 	if command.RowsAffected() != 1 {
 		return domain.ErrAttemptNotCurrent
+	}
+	if status == domain.AttemptStatusFailed || status == domain.AttemptStatusExpired {
+		var turnID, runnerSourceID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			SELECT turn_id, runner_source_id
+			FROM turn_attempts
+			WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+		`, workspaceID, cardID, attemptID).Scan(&turnID, &runnerSourceID); err != nil {
+			return err
+		}
+		decision, err := decideSupervisorFailure(ctx, tx, workspaceID, cardID, turnID, errorSummary)
+		if err != nil {
+			return err
+		}
+		if err := notifySupervisorFailure(
+			ctx, tx, workspaceID, cardID, turnID, attemptID, runnerSourceID,
+			status, errorSummary, decision,
+		); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -1029,6 +1063,23 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 	}
 	if command.RowsAffected() != 1 {
 		return false, false, tx.Commit(ctx)
+	}
+	const leaseExpiredSummary = "execution lease expired"
+	decision, err := decideSupervisorFailure(ctx, tx, workspaceID, cardID, attempt.TurnID, leaseExpiredSummary)
+	if err != nil {
+		return false, false, err
+	}
+	if err := notifySupervisorFailure(
+		ctx, tx, workspaceID, cardID, attempt.TurnID, attemptID, attempt.RunnerSourceID,
+		domain.AttemptStatusExpired, leaseExpiredSummary, decision,
+	); err != nil {
+		return false, false, err
+	}
+	if decision.CircuitOpen {
+		if err := tx.Commit(ctx); err != nil {
+			return false, false, err
+		}
+		return true, false, nil
 	}
 
 	executable := cardKind == string(domain.CardKindDiscussion) &&

@@ -216,7 +216,8 @@ export default function PlanPage() {
                     <span className="flex shrink-0 items-center gap-2">
                       {(card.health === "healthy" ||
                         card.health === "warning" ||
-                        card.health === "critical") && (
+                        card.health === "critical" ||
+                        card.health === "acknowledged") && (
                         <OngoingHealthBadge health={card.health} size="xs" />
                       )}
                       {card.ongoing_state && card.ongoing_state !== "active" && (
@@ -227,7 +228,10 @@ export default function PlanPage() {
                     </span>
                   </span>
                   {stripMarkdownSummary(card.description) && (
-                    <span className="mt-1 line-clamp-2 block text-[13px] leading-relaxed text-muted-foreground">
+                    <span
+                      title={stripMarkdownSummary(card.description)}
+                      className="mt-1 line-clamp-1 text-[13px] leading-relaxed text-muted-foreground"
+                    >
                       {stripMarkdownSummary(card.description)}
                     </span>
                   )}

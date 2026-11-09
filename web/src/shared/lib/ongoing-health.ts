@@ -1,7 +1,17 @@
-export type OngoingHealthKind = "healthy" | "warning" | "critical" | "unknown";
+export type OngoingHealthKind =
+  | "healthy"
+  | "warning"
+  | "critical"
+  | "acknowledged"
+  | "unknown";
 
 export function normalizeOngoingHealth(health?: string): OngoingHealthKind {
-  if (health === "healthy" || health === "warning" || health === "critical") {
+  if (
+    health === "healthy" ||
+    health === "warning" ||
+    health === "critical" ||
+    health === "acknowledged"
+  ) {
     return health;
   }
   return "unknown";
@@ -36,6 +46,13 @@ const healthMetaMap: Record<
     badgeClassName:
       "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
     textClassName: "text-rose-700 dark:text-rose-400",
+  },
+  acknowledged: {
+    labelKey: "已确认",
+    dotClassName: "bg-slate-400 dark:bg-slate-500",
+    badgeClassName:
+      "border-line bg-muted/60 text-muted-foreground dark:bg-muted/40",
+    textClassName: "text-muted-foreground",
   },
   unknown: {
     labelKey: "待首次巡检",

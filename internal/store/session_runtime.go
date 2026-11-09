@@ -15,6 +15,17 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
+type CardStatusChange struct {
+	ID        uuid.UUID `json:"id"`
+	Sequence  int64     `json:"sequence"`
+	FromState string    `json:"from_state"`
+	ToState   string    `json:"to_state"`
+	Content   string    `json:"content"`
+	ActorName string    `json:"actor_name"`
+	ActorKind string    `json:"actor_kind"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type AgentCardContext struct {
 	DeviceNodeID          string
 	DeviceName            string
@@ -34,6 +45,7 @@ type AgentCardContext struct {
 	RequiredConfirmations int32
 
 	TurnID             uuid.UUID
+	TurnSequence       int64
 	TurnSource         domain.TurnSource
 	TurnContent        string
 	DispatchMode       domain.DispatchMode
@@ -47,6 +59,10 @@ type AgentCardContext struct {
 	AttemptReason    domain.AttemptReason
 	RunnerSourceID   uuid.UUID
 	PendingTurnCount int64
+
+	// StatusChanges 记录自上一轮已执行 Turn/Attempt 以来卡片发生的外部状态变更（例如用户由 review 移回 working）。
+	// 供 Agent Runner 在下次发消息时隐式注入模型上下文，聊天前端不产生可见气泡。
+	StatusChanges []CardStatusChange
 }
 
 // LoadAgentCardContext returns only business/runtime metadata. Conversation
@@ -68,7 +84,7 @@ func (s *Store) LoadAgentCardContext(
 			c.id, c.kind, c.title, c.description, COALESCE(p.main_discussion_id = c.id, false),
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
-			t.id, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
+			t.id, t.sequence, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
 				SELECT count(*)
@@ -104,7 +120,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.ProjectID, &out.ProjectName, &out.ProjectDescription,
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription, &out.IsMainDiscussion,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
-		&out.TurnID, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
+		&out.TurnID, &out.TurnSequence, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,
 	)
@@ -128,7 +144,141 @@ func (s *Store) LoadAgentCardContext(
 	out.AttemptReason = domain.AttemptReason(attemptReason)
 	out.TurnCreatedAt = createdAt.Time
 	out.IsBuiltInProactive = IsBuiltInProactiveTurnKey(turnIdempotencyKey)
+
+	changes, err := s.loadStatusChangesSinceLastExecutedTurn(
+		ctx, out.WorkspaceID, out.CardID, out.TurnID, out.TurnSequence, out.RunnerSourceID,
+	)
+	if err != nil {
+		return AgentCardContext{}, fmt.Errorf("load status changes: %w", err)
+	}
+	out.StatusChanges = changes
 	return out, nil
+}
+
+// loadStatusChangesSinceLastExecutedTurn 查询自上一次已执行 Turn/Attempt 以来卡片发生的外部状态变更（例如用户将 review 更改为 working）。
+// 仅加载用户或外部操作触发的状态流转，排除 Agent Runner 自身生命周期触发的操作。
+// 排队与重试轮次通过对齐当前 Turn 首个 Attempt 游标，保证上下文的一致性与确定性。
+func (s *Store) loadStatusChangesSinceLastExecutedTurn(
+	ctx context.Context,
+	workspaceID, cardID, turnID uuid.UUID,
+	turnSequence int64,
+	runnerSourceID uuid.UUID,
+) ([]CardStatusChange, error) {
+	// 1. 查找在当前 Turn 之前真正执行过的最近一次 Attempt（属于前序 Turn，且 started_at 不为空）
+	var prevAttemptID uuid.UUID
+	var prevTurnCreatedAt time.Time
+	var prevSourceEventID *uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			a_prev.id,
+			t_prev.created_at,
+			t_prev.source_event_id
+		FROM turn_attempts a_prev
+		JOIN card_turns t_prev
+		  ON t_prev.workspace_id = a_prev.workspace_id
+		 AND t_prev.card_id = a_prev.card_id
+		 AND t_prev.id = a_prev.turn_id
+		WHERE a_prev.workspace_id = $1
+		  AND a_prev.card_id = $2
+		  AND t_prev.sequence < $3
+		  AND a_prev.started_at IS NOT NULL
+		ORDER BY t_prev.sequence DESC, a_prev.attempt_number DESC
+		LIMIT 1
+	`, workspaceID, cardID, turnSequence).Scan(&prevAttemptID, &prevTurnCreatedAt, &prevSourceEventID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// 卡片首次执行，前序尚无执行过的 Turn/Attempt，不生成“自上一轮执行以来”的增量提示
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. 计算前置已执行 Turn/Attempt 产出的最大 event sequence 游标基线：
+	// 包含前置 Turn 自身的创建时间之前已存在的事件、前置 Turn 的输入事件、以及该 Attempt 执行产生的所有事件。
+	var minSequence int64
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(e.sequence), 0)
+		FROM events e
+		WHERE e.workspace_id = $1
+		  AND e.card_id = $2
+		  AND (
+			e.attempt_id = $3
+			OR e.id = COALESCE($4, '00000000-0000-0000-0000-000000000000'::uuid)
+			OR e.created_at <= $5
+		  )
+	`, workspaceID, cardID, prevAttemptID, prevSourceEventID, prevTurnCreatedAt).Scan(&minSequence)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. 计算当前 Turn 的起始截止时间。使用当前 Turn 的首个 Attempt 启动/创建时间，使多次技术重试与排队保持完全一致的快照
+	var maxCreatedAt time.Time
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(started_at, created_at)
+		FROM turn_attempts
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND turn_id = $3
+		  AND attempt_number = 1
+	`, workspaceID, cardID, turnID).Scan(&maxCreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		maxCreatedAt = time.Now().UTC()
+	} else if err != nil {
+		return nil, err
+	}
+
+	// 4. 查询在基准游标之后、当前 Turn 执行前发生的所有 status_change 事件，排除 runner 自身
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			e.id,
+			e.sequence,
+			e.content,
+			e.created_at,
+			s.name,
+			s.kind
+		FROM events e
+		JOIN sources s
+		  ON s.workspace_id = e.workspace_id
+		 AND s.id = e.actor_source_id
+		WHERE e.workspace_id = $1
+		  AND e.card_id = $2
+		  AND e.event_type = 'status_change'
+		  AND e.sequence > $3
+		  AND e.created_at <= $4
+		  AND e.actor_source_id != $5
+		ORDER BY e.sequence ASC
+	`, workspaceID, cardID, minSequence, maxCreatedAt, runnerSourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var changes []CardStatusChange
+	for rows.Next() {
+		var item CardStatusChange
+		var actorKind string
+		if err := rows.Scan(
+			&item.ID,
+			&item.Sequence,
+			&item.Content,
+			&item.CreatedAt,
+			&item.ActorName,
+			&actorKind,
+		); err != nil {
+			return nil, err
+		}
+		item.ActorKind = actorKind
+		parts := strings.Split(item.Content, " -> ")
+		if len(parts) == 2 {
+			item.FromState = strings.TrimSpace(parts[0])
+			item.ToState = strings.TrimSpace(parts[1])
+		}
+		changes = append(changes, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return changes, nil
 }
 
 type AttemptProgressParams struct {

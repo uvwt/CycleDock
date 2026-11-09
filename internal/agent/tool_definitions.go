@@ -121,11 +121,16 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_send_card_message",
-				Description: "Send a message to another Card in the same Workspace and queue a Turn for its Agent. Does not interrupt its current Attempt or share Session history. Success means queued, not completed.",
+				Description: "Send a message to another Card in the same Workspace and queue a Turn for its Agent. Optionally set dispatch_mode to interrupt to immediately supersede the target Card's current running or queued Attempt and redirect work. Defaults to enqueue.",
 				Parameters: object(map[string]any{
 					"card_id":         stringField("Target Card UUID, different from the current Card."),
 					"content":         stringField("Relevant context and requested work for the target Agent."),
 					"idempotency_key": stringField("Stable key for this message; reuse for retries to avoid duplicate Turns."),
+					"dispatch_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"enqueue", "interrupt"},
+						"description": "Optional dispatch mode: 'enqueue' to queue normally after current work, or 'interrupt' to immediately cancel running/queued attempts and prioritize this turn. Defaults to 'enqueue'.",
+					},
 				}, "card_id", "content", "idempotency_key"),
 			},
 		},

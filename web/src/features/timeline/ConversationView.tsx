@@ -14,6 +14,8 @@ import {
   Activity,
   CornerDownRight,
   Loader2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -63,6 +65,7 @@ const systemTypes = new Set([
   "status_change",
   "progress",
   "checkin",
+  "checkin_ack",
   "confirm",
   "reject",
 ]);
@@ -70,6 +73,7 @@ const labels: Record<string, string> = {
   status_change: "状态变化",
   progress: "阶段进度",
   checkin: "巡检",
+  checkin_ack: "巡检已确认",
   confirm: "提交验收",
   reject: "驳回",
 };
@@ -89,6 +93,10 @@ const statusInfoMap: Record<string, { label: string; dot: string }> = {
   open: { label: "进行中", dot: "bg-sky-500" },
   closed: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
   resolved: { label: "已完成", dot: "bg-emerald-500" },
+  healthy: { label: "正常", dot: "bg-emerald-500" },
+  warning: { label: "需留意", dot: "bg-amber-500" },
+  critical: { label: "异常", dot: "bg-rose-500" },
+  acknowledged: { label: "已确认", dot: "bg-slate-400 dark:bg-slate-500" },
   // 中文别名容错
   待办: { label: "待办", dot: "bg-slate-400 dark:bg-slate-500" },
   进行中: { label: "进行中", dot: "bg-sky-500" },
@@ -98,6 +106,10 @@ const statusInfoMap: Record<string, { label: string; dot: string }> = {
   已暂停: { label: "已暂停", dot: "bg-amber-500" },
   已归档: { label: "已归档", dot: "bg-slate-400 dark:bg-slate-500" },
   已关闭: { label: "已关闭", dot: "bg-slate-400 dark:bg-slate-500" },
+  正常: { label: "正常", dot: "bg-emerald-500" },
+  需留意: { label: "需留意", dot: "bg-amber-500" },
+  异常: { label: "异常", dot: "bg-rose-500" },
+  已确认: { label: "已确认", dot: "bg-slate-400 dark:bg-slate-500" },
 };
 
 /** 解析形如 "review -> working" 或 "待审核 → 进行中" 的状态流转字串 */
@@ -242,6 +254,9 @@ type ExecutionActions = {
   canApproveReview?: boolean;
   approvingReview?: boolean;
   onApproveReview?: () => void;
+  canAcknowledgeCheckin?: boolean;
+  acknowledgingCheckin?: boolean;
+  onAcknowledgeCheckin?: () => void;
 };
 
 function TimeSeparator({ value }: { value: string }) {
@@ -330,6 +345,14 @@ function EventRow({
       const showApproveAction = Boolean(
         isConfirm && actions.canApproveReview && actions.onApproveReview,
       );
+      const isCheckin = event.type === "checkin";
+      const showAcknowledgeAction = Boolean(
+        isCheckin &&
+          (event.checkin_status === "warning" ||
+            event.checkin_status === "critical") &&
+          actions.canAcknowledgeCheckin &&
+          actions.onAcknowledgeCheckin,
+      );
       return (
         <>
           <ChatBubble
@@ -395,6 +418,20 @@ function EventRow({
                     </button>
                   </div>
                 )}
+
+                {showAcknowledgeAction && (
+                  <div className="mt-3 flex items-center justify-end border-t border-line/60 pt-2.5">
+                    <button
+                      type="button"
+                      disabled={actions.acknowledgingCheckin}
+                      onClick={actions.onAcknowledgeCheckin}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Check className="size-3.5" />
+                      <span>{t("已确认")}</span>
+                    </button>
+                  </div>
+                )}
               </ChatBubbleMessage>
             </div>
           </ChatBubble>
@@ -406,7 +443,7 @@ function EventRow({
         </>
       );
     }
-    if (event.type === "status_change") {
+    if (event.type === "status_change" || event.type === "checkin_ack") {
       const transition = parseStatusTransition(event.content);
       const fromMeta = transition ? getStatusDisplay(transition.from, t) : null;
       const toMeta = transition ? getStatusDisplay(transition.to, t) : null;
@@ -425,7 +462,7 @@ function EventRow({
           >
             <span className="inline-flex max-w-[90%] items-center gap-1.5 rounded-full border border-line/50 bg-muted/20 dark:bg-muted/10 px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/30">
               <span className="text-muted-foreground/60 font-normal">
-                {t("状态变化")}
+                {t(labels[event.type] || "状态变化")}
               </span>
               <span className="text-muted-foreground/30 font-normal">·</span>
               {fromMeta && toMeta ? (
@@ -897,6 +934,54 @@ function EventRow({
   );
 }
 
+function ConversationEmptyCardDescription({ description }: { description?: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const trimmed = description?.trim();
+
+  if (!trimmed) {
+    return (
+      <div className="px-5 py-4 sm:px-6 sm:py-5">
+        <p className="text-xs text-faint">
+          {t("暂无卡片详细描述")}
+        </p>
+      </div>
+    );
+  }
+
+  const isLong = trimmed.length > 240 || trimmed.split("\n").length > 4;
+
+  return (
+    <div className="px-5 py-4 sm:px-6 sm:py-5 space-y-2">
+      <div
+        className={`relative overflow-hidden transition-all ${
+          !expanded && isLong ? "max-h-28" : "max-h-[50vh] overflow-y-auto pr-1 scrollbar-thin"
+        }`}
+      >
+        <RichText
+          content={trimmed}
+          className="text-sm leading-relaxed text-secondary-foreground"
+        />
+        {!expanded && isLong && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-surface to-transparent" />
+        )}
+      </div>
+      {isLong && (
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition cursor-pointer"
+          >
+            <span>{expanded ? t("收起描述") : t("展开全部描述")}</span>
+            {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ConversationView({
   card,
   events,
@@ -1098,6 +1183,9 @@ export function ConversationView({
   const lastEvent = displayEvents.at(-1);
   const latestConfirmID = displayEvents.findLast(
     (event) => event.type === "confirm",
+  )?.id;
+  const latestCheckinID = displayEvents.findLast(
+    (event) => event.type === "checkin",
   )?.id;
   // 运行圆点是当前 Attempt 的下一条气泡。紧挨着本轮 Cycle 回复时不再重复头像和名称。
   // 必须是同一 Attempt：新的一轮即使发送者仍是 Cycle，也要重新带头像。
@@ -1311,20 +1399,7 @@ export function ConversationView({
                       </h2>
                     </div>
 
-                    <div className="px-5 py-4 sm:px-6 sm:py-5">
-                      {card.description?.trim() ? (
-                        <div className="max-h-[42vh] overflow-y-auto pr-1 scrollbar-thin">
-                          <RichText
-                            content={card.description.trim()}
-                            className="text-sm leading-relaxed text-secondary-foreground"
-                          />
-                        </div>
-                      ) : (
-                        <p className="text-xs text-faint">
-                          {t("暂无卡片详细描述")}
-                        </p>
-                      )}
-                    </div>
+                    <ConversationEmptyCardDescription description={card.description} />
 
                     <div className="flex items-center gap-2 border-t border-line/50 bg-muted/15 px-5 py-3 text-xs text-muted-foreground sm:px-6">
                       <Bot className="size-4 shrink-0 text-faint" />
@@ -1392,6 +1467,10 @@ export function ConversationView({
                 canApproveReview={
                   Boolean(actions.canApproveReview) &&
                   event.id === latestConfirmID
+                }
+                canAcknowledgeCheckin={
+                  Boolean(actions.canAcknowledgeCheckin) &&
+                  event.id === latestCheckinID
                 }
               />
             </div>
