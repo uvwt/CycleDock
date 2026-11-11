@@ -27,6 +27,10 @@ type agentSettingsResponse struct {
 	DefaultModelRouteID    string               `json:"default_model_route_id,omitempty"`
 	DiscussionModelRouteID string               `json:"discussion_model_route_id,omitempty"`
 	PlanModelRouteID       string               `json:"plan_model_route_id,omitempty"`
+	ToolGuardMode          string               `json:"tool_guard_mode"`
+	ToolGuardModelRouteID  string               `json:"tool_guard_model_route_id,omitempty"`
+	ToolGuardTimeoutSeconds int32               `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules   string               `json:"tool_guard_custom_rules"`
 }
 
 type modelRouteResponse struct {
@@ -87,6 +91,7 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
 			Configured: false, Routes: []modelRouteResponse{},
+			ToolGuardMode: "disabled", ToolGuardTimeoutSeconds: 10,
 		})
 		return
 	}
@@ -124,6 +129,10 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		DefaultModelRouteID    string `json:"default_model_route_id"`
 		DiscussionModelRouteID string `json:"discussion_model_route_id"`
 		PlanModelRouteID       string `json:"plan_model_route_id"`
+		ToolGuardMode          string `json:"tool_guard_mode"`
+		ToolGuardModelRouteID  string `json:"tool_guard_model_route_id"`
+		ToolGuardTimeoutSeconds int32 `json:"tool_guard_timeout_seconds"`
+		ToolGuardCustomRules   string `json:"tool_guard_custom_rules"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -307,6 +316,11 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_plan_model_route_id", "Plan model route id is invalid.")
 		return
 	}
+	toolGuardRouteID, err := parseRouteID(request.ToolGuardModelRouteID, "tool_guard_model_route_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_tool_guard_model_route_id", "Tool guard model route id is invalid.")
+		return
+	}
 
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
 		Routes:                 routes,
@@ -314,6 +328,10 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		DefaultModelRouteID:    defaultRouteID,
 		DiscussionModelRouteID: discussionRouteID,
 		PlanModelRouteID:       planRouteID,
+		ToolGuardMode:          request.ToolGuardMode,
+		ToolGuardModelRouteID:  toolGuardRouteID,
+		ToolGuardTimeoutSeconds: request.ToolGuardTimeoutSeconds,
+		ToolGuardCustomRules:   request.ToolGuardCustomRules,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -664,6 +682,18 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 	if settings.PlanModelRouteID.Valid {
 		planRouteID = settings.PlanModelRouteID.UUID.String()
 	}
+	toolGuardRouteID := ""
+	if settings.ToolGuardModelRouteID.Valid {
+		toolGuardRouteID = settings.ToolGuardModelRouteID.UUID.String()
+	}
+	guardMode := settings.ToolGuardMode
+	if guardMode == "" {
+		guardMode = "disabled"
+	}
+	guardTimeout := settings.ToolGuardTimeoutSeconds
+	if guardTimeout <= 0 {
+		guardTimeout = 10
+	}
 	return agentSettingsResponse{
 		Configured:             true,
 		Routes:                 routes,
@@ -672,6 +702,10 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 		DefaultModelRouteID:    defaultRouteID,
 		DiscussionModelRouteID: discussionRouteID,
 		PlanModelRouteID:       planRouteID,
+		ToolGuardMode:          guardMode,
+		ToolGuardModelRouteID:  toolGuardRouteID,
+		ToolGuardTimeoutSeconds: guardTimeout,
+		ToolGuardCustomRules:   settings.ToolGuardCustomRules,
 	}
 }
 

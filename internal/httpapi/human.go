@@ -58,6 +58,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Patch("/cards/{cardID}/comments/{eventID}", api.editComment)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
+	r.Post("/cards/{cardID}/tool-approvals/{approvalID}/resolve", api.resolveToolApproval)
 	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
 	r.Post("/cards/{cardID}/turns/{turnID}/steer", api.steerPendingTurn)
 	r.Patch("/cards/{cardID}/turns/{turnID}", api.editPendingTurn)
@@ -160,6 +161,8 @@ type eventResponse struct {
 	Content         string          `json:"content"`
 	CheckinStatus   string          `json:"checkin_status,omitempty"`
 	Message         json.RawMessage `json:"message,omitempty"`
+	ToolApprovalID  string                `json:"tool_approval_id,omitempty"`
+	ToolApproval    *toolApprovalResponse `json:"tool_approval,omitempty"`
 	ActorName       string          `json:"actor_name"`
 	ActorKind       string          `json:"actor_kind"`
 	CreatedAt       time.Time       `json:"created_at"`
@@ -810,6 +813,7 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	api.attachToolApprovals(ctx, identity.WorkspaceID, cardID, timelineResp)
 
 	// 6. AttemptHistory depends on oldestSeq from Timeline
 	var attemptHistory []store.SessionAttemptView
@@ -892,6 +896,7 @@ func (api *API) getCardTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	timelineResp := timelineBeforeToResponse(rows)
+	api.attachToolApprovals(r.Context(), identity.WorkspaceID, cardID, timelineResp)
 	var oldestSeq int64
 	if len(timelineResp) > 0 {
 		oldestSeq = timelineResp[0].Sequence
@@ -1763,6 +1768,9 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		if row.SourceCardTitle != "" {
 			item.SourceCardTitle = row.SourceCardTitle
 		}
+		if row.ToolApprovalID.Valid {
+			item.ToolApprovalID = row.ToolApprovalID.UUID.String()
+		}
 		response = append(response, item)
 	}
 	return response
@@ -1790,6 +1798,9 @@ func timelineBeforeToResponse(rows []db.ListCardTimelineBeforeRow) []eventRespon
 		}
 		if row.SourceCardTitle != "" {
 			item.SourceCardTitle = row.SourceCardTitle
+		}
+		if row.ToolApprovalID.Valid {
+			item.ToolApprovalID = row.ToolApprovalID.UUID.String()
 		}
 		response = append(response, item)
 	}

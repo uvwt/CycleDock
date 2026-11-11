@@ -54,6 +54,15 @@ const (
 	EventTypeReject       EventType = "reject"
 	EventTypeStatusChange EventType = "status_change"
 	EventTypeCheckinAck   EventType = "checkin_ack"
+	EventTypeToolApproval EventType = "tool_approval"
+)
+
+type ToolGuardMode string
+
+const (
+	ToolGuardModeDisabled      ToolGuardMode = "disabled"
+	ToolGuardModeBlockHighRisk ToolGuardMode = "block_high_risk"
+	ToolGuardModeStrict        ToolGuardMode = "strict"
 )
 
 type CheckinStatus string

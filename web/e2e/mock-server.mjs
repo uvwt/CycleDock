@@ -185,6 +185,29 @@ const events = {
       attempt_id: "attempt-completed",
       created_at: now(),
     },
+    {
+      id: "event-tool-approval-1",
+      sequence: 8,
+      type: "tool_approval",
+      content: "工具「exec_command」调用已被安全守卫拦截并挂起（风险等级：high）。等待人工确认后恢复执行。",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle Agent",
+      tool_approval_id: "approval-demo-1",
+      tool_approval: {
+        id: "approval-demo-1",
+        tool_name: "exec_command",
+        arguments: {
+          node_id: "node-rn",
+          cmd: "docker restart nginx-proxy && rm -f /var/log/nginx/error.log.old",
+        },
+        risk_level: "high",
+        reversible: false,
+        reason: "命令包含重启线上网关容器及删除历史日志文件，属于不可逆高风险写操作，需人工确认。",
+        status: "pending",
+        created_at: now(),
+      },
+      created_at: now(),
+    },
   ],
   "ongoing-1": [
     {
@@ -215,6 +238,10 @@ let settings = {
     },
   ],
   system_instructions: "先检查现场，再确认结果",
+  tool_guard_mode: "block_high_risk",
+  tool_guard_model_route_id: "00000000-0000-4000-8000-000000000101",
+  tool_guard_timeout_seconds: 10,
+  tool_guard_custom_rules: "允许在独立 Git worktree 中自由修改测试代码；涉及线上容器重启、删除日志或修改生产配置必须触发人工确认。",
 };
 const session = {
   human_account_id: "demo-human",
@@ -742,6 +769,32 @@ http
               { event_id: "event-" + seq, turn_id: "turn-demo" },
               201,
             );
+          }
+          if (rest?.startsWith("tool-approvals/") && rest.endsWith("/resolve") && req.method === "POST") {
+            const approvalID = rest.split("/")[1];
+            const input = await body(req);
+            const ev = (events[id] || []).find((e) => e.tool_approval?.id === approvalID);
+            if (ev && ev.tool_approval) {
+              ev.tool_approval.status = input.action === "reject" ? "rejected" : "approved";
+              ev.tool_approval.resolution_comment = input.comment || "";
+              ev.tool_approval.resolved_at = now();
+            }
+            events[id].push({
+              id: "event-" + ++seq,
+              sequence: seq,
+              type: "comment",
+              content: input.action === "reject"
+                ? `【工具审批拒绝反馈】\n拒绝原因：${input.comment || "风险过高"}`
+                : `【工具审批通过并已执行（${input.action === "approve_session" ? "本卡片内同类操作不再询问" : "允许本次执行"}）】\n工具 exec_command 已获批准并恢复执行。`,
+              actor_kind: "human",
+              actor_name: "测试用户",
+              created_at: now(),
+            });
+            return data(res, {
+              approval: ev?.tool_approval,
+              turn_id: "turn-demo",
+              event_id: "event-" + seq,
+            });
           }
           if (rest === "schedules" && req.method === "POST")
             return data(

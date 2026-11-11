@@ -51,6 +51,7 @@ import {
   StandaloneExecution,
 } from "./ExecutionStatus";
 import { RichText } from "./RichText";
+import { ToolApprovalCard } from "./ToolApprovalCard";
 import { usePacedTimeline } from "./usePacedTimeline";
 import { cn } from "../../shared/lib/utils";
 import {
@@ -283,6 +284,7 @@ function TimeSeparator({ value }: { value: string }) {
 
 function EventRow({
   event,
+  cardID,
   attempts,
   headerAttempts,
   showSender,
@@ -295,6 +297,7 @@ function EventRow({
   ...actions
 }: {
   event: TimelineEvent;
+  cardID?: string;
   attempts: ExecutionAttempt[];
   headerAttempts: Attempt[];
   showSender: boolean;
@@ -339,6 +342,22 @@ function EventRow({
   const human = event.actor_kind === "human";
   const isDelegate = !human && event.type === "comment";
   const message = event.type === "message" ? event.message : undefined;
+  if (event.type === "tool_approval") {
+    return (
+      <div id={"event-" + event.id} data-sequence={event.sequence}>
+        <ToolApprovalCard
+          cardID={cardID}
+          approval={event.tool_approval}
+          fallbackContent={event.content}
+        />
+        {attempts.length > 0 && (
+          <div className="mt-3">
+            <ExecutionStatus attempts={attempts} live={live} {...actions} />
+          </div>
+        )}
+      </div>
+    );
+  }
   if (system) {
     const cardStyle = getSystemCardStyle(event.type, event.checkin_status);
     if (cardStyle) {
@@ -1455,6 +1474,7 @@ export function ConversationView({
               {showTime && <TimeSeparator value={event.created_at} />}
               <EventRow
                 event={event}
+                cardID={card?.id}
                 preview={preview}
                 previewStatus={matchedAttempt?.status}
                 replyModel={replyModel}

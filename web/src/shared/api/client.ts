@@ -30,6 +30,7 @@ import type {
   CardTimelinePaged,
   TraceOverview,
   TraceEventsResponse,
+  ToolApproval,
 } from "./types";
 
 export class APIError extends Error {
@@ -231,6 +232,17 @@ export const api = {
     ),
   cancelAttempt: (id: string, attemptID: string) =>
     request<void>(`/cards/${id}/attempts/${attemptID}/cancel`, "POST", {}),
+  resolveToolApproval: (
+    cardID: string,
+    approvalID: string,
+    action: "approve_once" | "approve_session" | "reject",
+    comment?: string,
+  ) =>
+    request<{ approval: ToolApproval; turn_id: string; event_id: string }>(
+      `/cards/${cardID}/tool-approvals/${approvalID}/resolve`,
+      "POST",
+      { action, comment: comment || "" },
+    ),
   editComment: (id: string, eventID: string, content: string) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments/${eventID}`,

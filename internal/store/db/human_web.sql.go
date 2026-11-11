@@ -117,7 +117,7 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 }
 
 const latestCheckinForCard = `-- name: LatestCheckinForCard :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, tool_approval_id
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -150,6 +150,7 @@ func (q *Queries) LatestCheckinForCard(ctx context.Context, arg LatestCheckinFor
 		&i.Message,
 		&i.ConfirmationRound,
 		&i.SourceCardID,
+		&i.ToolApprovalID,
 	)
 	return i, err
 }
@@ -238,7 +239,7 @@ func (q *Queries) ListCardSchedules(ctx context.Context, arg ListCardSchedulesPa
 
 const listCardTimeline = `-- name: ListCardTimeline :many
 SELECT
-    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id,
+    e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id, e.tool_approval_id,
     s.name AS actor_name,
     s.kind AS actor_kind,
     COALESCE(
@@ -289,6 +290,7 @@ type ListCardTimelineRow struct {
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
 	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
+	ToolApprovalID    uuid.NullUUID      `json:"tool_approval_id"`
 	ActorName         string             `json:"actor_name"`
 	ActorKind         string             `json:"actor_kind"`
 	SourceCardTitle   string             `json:"source_card_title"`
@@ -319,6 +321,7 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 			&i.Message,
 			&i.ConfirmationRound,
 			&i.SourceCardID,
+			&i.ToolApprovalID,
 			&i.ActorName,
 			&i.ActorKind,
 			&i.SourceCardTitle,
@@ -336,7 +339,7 @@ func (q *Queries) ListCardTimeline(ctx context.Context, arg ListCardTimelinePara
 const listCardTimelineBefore = `-- name: ListCardTimelineBefore :many
 WITH scoped_events AS (
     SELECT
-        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id,
+        e.id, e.sequence, e.workspace_id, e.card_id, e.event_type, e.actor_source_id, e.attempt_id, e.content, e.checkin_status, e.idempotency_key, e.request_hash, e.created_at, e.message, e.confirmation_round, e.source_card_id, e.tool_approval_id,
         s.name AS actor_name,
         s.kind AS actor_kind,
         COALESCE(
@@ -367,7 +370,7 @@ WITH scoped_events AS (
     ORDER BY e.sequence DESC
     LIMIT $4::int
 )
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, actor_name, actor_kind, source_card_title
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, tool_approval_id, actor_name, actor_kind, source_card_title
 FROM scoped_events
 ORDER BY sequence ASC
 `
@@ -395,6 +398,7 @@ type ListCardTimelineBeforeRow struct {
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
 	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
+	ToolApprovalID    uuid.NullUUID      `json:"tool_approval_id"`
 	ActorName         string             `json:"actor_name"`
 	ActorKind         string             `json:"actor_kind"`
 	SourceCardTitle   string             `json:"source_card_title"`
@@ -430,6 +434,7 @@ func (q *Queries) ListCardTimelineBefore(ctx context.Context, arg ListCardTimeli
 			&i.Message,
 			&i.ConfirmationRound,
 			&i.SourceCardID,
+			&i.ToolApprovalID,
 			&i.ActorName,
 			&i.ActorKind,
 			&i.SourceCardTitle,

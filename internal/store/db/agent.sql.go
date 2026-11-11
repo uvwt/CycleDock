@@ -12,6 +12,132 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkCardToolWhitelisted = `-- name: CheckCardToolWhitelisted :one
+SELECT EXISTS (
+    SELECT 1 FROM card_tool_whitelists
+    WHERE workspace_id = $1 AND card_id = $2 AND tool_name = $3
+) AS whitelisted
+`
+
+type CheckCardToolWhitelistedParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	ToolName    string    `json:"tool_name"`
+}
+
+func (q *Queries) CheckCardToolWhitelisted(ctx context.Context, arg CheckCardToolWhitelistedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, checkCardToolWhitelisted, arg.WorkspaceID, arg.CardID, arg.ToolName)
+	var whitelisted bool
+	err := row.Scan(&whitelisted)
+	return whitelisted, err
+}
+
+const createCardToolApproval = `-- name: CreateCardToolApproval :one
+INSERT INTO card_tool_approvals (
+    id, workspace_id, card_id, turn_id, attempt_id,
+    tool_call_id, tool_name, arguments, risk_level,
+    reversible, reason, status
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, 'pending'
+)
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+`
+
+type CreateCardToolApprovalParams struct {
+	ID          uuid.UUID     `json:"id"`
+	WorkspaceID uuid.UUID     `json:"workspace_id"`
+	CardID      uuid.UUID     `json:"card_id"`
+	TurnID      uuid.NullUUID `json:"turn_id"`
+	AttemptID   uuid.NullUUID `json:"attempt_id"`
+	ToolCallID  string        `json:"tool_call_id"`
+	ToolName    string        `json:"tool_name"`
+	Arguments   []byte        `json:"arguments"`
+	RiskLevel   string        `json:"risk_level"`
+	Reversible  bool          `json:"reversible"`
+	Reason      string        `json:"reason"`
+}
+
+func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardToolApprovalParams) (CardToolApproval, error) {
+	row := q.db.QueryRow(ctx, createCardToolApproval,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.TurnID,
+		arg.AttemptID,
+		arg.ToolCallID,
+		arg.ToolName,
+		arg.Arguments,
+		arg.RiskLevel,
+		arg.Reversible,
+		arg.Reason,
+	)
+	var i CardToolApproval
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.TurnID,
+		&i.AttemptID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Arguments,
+		&i.RiskLevel,
+		&i.Reversible,
+		&i.Reason,
+		&i.Status,
+		&i.ResolutionComment,
+		&i.ResolvedBySourceID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createCardToolWhitelist = `-- name: CreateCardToolWhitelist :one
+INSERT INTO card_tool_whitelists (
+    id, workspace_id, card_id, tool_name, pattern, created_by_source_id
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6
+)
+RETURNING id, workspace_id, card_id, tool_name, pattern, created_by_source_id, created_at
+`
+
+type CreateCardToolWhitelistParams struct {
+	ID                uuid.UUID     `json:"id"`
+	WorkspaceID       uuid.UUID     `json:"workspace_id"`
+	CardID            uuid.UUID     `json:"card_id"`
+	ToolName          string        `json:"tool_name"`
+	Pattern           string        `json:"pattern"`
+	CreatedBySourceID uuid.NullUUID `json:"created_by_source_id"`
+}
+
+func (q *Queries) CreateCardToolWhitelist(ctx context.Context, arg CreateCardToolWhitelistParams) (CardToolWhitelist, error) {
+	row := q.db.QueryRow(ctx, createCardToolWhitelist,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.ToolName,
+		arg.Pattern,
+		arg.CreatedBySourceID,
+	)
+	var i CardToolWhitelist
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.ToolName,
+		&i.Pattern,
+		&i.CreatedBySourceID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createWorkspaceModelRoute = `-- name: CreateWorkspaceModelRoute :one
 INSERT INTO workspace_model_routes (
     id, workspace_id, position, enabled, provider_type, credential_id,
@@ -121,8 +247,81 @@ func (q *Queries) DeleteWorkspaceModelRoutes(ctx context.Context, workspaceID uu
 	return err
 }
 
+const getCardToolApproval = `-- name: GetCardToolApproval :one
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+`
+
+type GetCardToolApprovalParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetCardToolApproval(ctx context.Context, arg GetCardToolApprovalParams) (CardToolApproval, error) {
+	row := q.db.QueryRow(ctx, getCardToolApproval, arg.WorkspaceID, arg.CardID, arg.ID)
+	var i CardToolApproval
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.TurnID,
+		&i.AttemptID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Arguments,
+		&i.RiskLevel,
+		&i.Reversible,
+		&i.Reason,
+		&i.Status,
+		&i.ResolutionComment,
+		&i.ResolvedBySourceID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCardToolApprovalByID = `-- name: GetCardToolApprovalByID :one
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND id = $2
+`
+
+type GetCardToolApprovalByIDParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetCardToolApprovalByID(ctx context.Context, arg GetCardToolApprovalByIDParams) (CardToolApproval, error) {
+	row := q.db.QueryRow(ctx, getCardToolApprovalByID, arg.WorkspaceID, arg.ID)
+	var i CardToolApproval
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.TurnID,
+		&i.AttemptID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Arguments,
+		&i.RiskLevel,
+		&i.Reversible,
+		&i.Reason,
+		&i.Status,
+		&i.ResolutionComment,
+		&i.ResolvedBySourceID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceAgentSettings = `-- name: GetWorkspaceAgentSettings :one
-SELECT workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
+SELECT workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 FROM workspace_agent_settings
 WHERE workspace_id = $1
 `
@@ -139,6 +338,10 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 		&i.DefaultModelRouteID,
 		&i.DiscussionModelRouteID,
 		&i.PlanModelRouteID,
+		&i.ToolGuardMode,
+		&i.ToolGuardModelRouteID,
+		&i.ToolGuardTimeoutSeconds,
+		&i.ToolGuardCustomRules,
 	)
 	return i, err
 }
@@ -220,6 +423,56 @@ func (q *Queries) ListAttemptModelCalls(ctx context.Context, arg ListAttemptMode
 			&i.ErrorCode,
 			&i.ErrorSummary,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCardToolApprovals = `-- name: ListCardToolApprovals :many
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND card_id = $2
+ORDER BY created_at DESC
+`
+
+type ListCardToolApprovalsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+func (q *Queries) ListCardToolApprovals(ctx context.Context, arg ListCardToolApprovalsParams) ([]CardToolApproval, error) {
+	rows, err := q.db.Query(ctx, listCardToolApprovals, arg.WorkspaceID, arg.CardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CardToolApproval{}
+	for rows.Next() {
+		var i CardToolApproval
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.CardID,
+			&i.TurnID,
+			&i.AttemptID,
+			&i.ToolCallID,
+			&i.ToolName,
+			&i.Arguments,
+			&i.RiskLevel,
+			&i.Reversible,
+			&i.Reason,
+			&i.Status,
+			&i.ResolutionComment,
+			&i.ResolvedBySourceID,
+			&i.ResolvedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -449,31 +702,93 @@ func (q *Queries) RecordAgentModelCall(ctx context.Context, arg RecordAgentModel
 	return i, err
 }
 
+const resolveCardToolApproval = `-- name: ResolveCardToolApproval :one
+UPDATE card_tool_approvals
+SET status = $4,
+    resolution_comment = $5,
+    resolved_by_source_id = $6,
+    resolved_at = now(),
+    updated_at = now()
+WHERE workspace_id = $1 AND card_id = $2 AND id = $3 AND status = 'pending'
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+`
+
+type ResolveCardToolApprovalParams struct {
+	WorkspaceID        uuid.UUID     `json:"workspace_id"`
+	CardID             uuid.UUID     `json:"card_id"`
+	ID                 uuid.UUID     `json:"id"`
+	Status             string        `json:"status"`
+	ResolutionComment  string        `json:"resolution_comment"`
+	ResolvedBySourceID uuid.NullUUID `json:"resolved_by_source_id"`
+}
+
+func (q *Queries) ResolveCardToolApproval(ctx context.Context, arg ResolveCardToolApprovalParams) (CardToolApproval, error) {
+	row := q.db.QueryRow(ctx, resolveCardToolApproval,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.ID,
+		arg.Status,
+		arg.ResolutionComment,
+		arg.ResolvedBySourceID,
+	)
+	var i CardToolApproval
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CardID,
+		&i.TurnID,
+		&i.AttemptID,
+		&i.ToolCallID,
+		&i.ToolName,
+		&i.Arguments,
+		&i.RiskLevel,
+		&i.Reversible,
+		&i.Reason,
+		&i.Status,
+		&i.ResolutionComment,
+		&i.ResolvedBySourceID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
     workspace_id, source_id, system_instructions,
-    default_model_route_id, discussion_model_route_id, plan_model_route_id
+    default_model_route_id, discussion_model_route_id, plan_model_route_id,
+    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 )
 VALUES (
     $1, $2, $3,
-    $4, $5, $6
+    $4, $5, $6,
+    $7, $8, $9, $10
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET system_instructions = EXCLUDED.system_instructions,
     default_model_route_id = EXCLUDED.default_model_route_id,
     discussion_model_route_id = EXCLUDED.discussion_model_route_id,
     plan_model_route_id = EXCLUDED.plan_model_route_id,
+    tool_guard_mode = EXCLUDED.tool_guard_mode,
+    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
+    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
+    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
     updated_at = now()
-RETURNING workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
+RETURNING workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 `
 
 type UpsertWorkspaceAgentSettingsParams struct {
-	WorkspaceID            uuid.UUID     `json:"workspace_id"`
-	SourceID               uuid.UUID     `json:"source_id"`
-	SystemInstructions     string        `json:"system_instructions"`
-	DefaultModelRouteID    uuid.NullUUID `json:"default_model_route_id"`
-	DiscussionModelRouteID uuid.NullUUID `json:"discussion_model_route_id"`
-	PlanModelRouteID       uuid.NullUUID `json:"plan_model_route_id"`
+	WorkspaceID             uuid.UUID     `json:"workspace_id"`
+	SourceID                uuid.UUID     `json:"source_id"`
+	SystemInstructions      string        `json:"system_instructions"`
+	DefaultModelRouteID     uuid.NullUUID `json:"default_model_route_id"`
+	DiscussionModelRouteID  uuid.NullUUID `json:"discussion_model_route_id"`
+	PlanModelRouteID        uuid.NullUUID `json:"plan_model_route_id"`
+	ToolGuardMode           string        `json:"tool_guard_mode"`
+	ToolGuardModelRouteID   uuid.NullUUID `json:"tool_guard_model_route_id"`
+	ToolGuardTimeoutSeconds int32         `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules    string        `json:"tool_guard_custom_rules"`
 }
 
 func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWorkspaceAgentSettingsParams) (WorkspaceAgentSetting, error) {
@@ -484,6 +799,10 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		arg.DefaultModelRouteID,
 		arg.DiscussionModelRouteID,
 		arg.PlanModelRouteID,
+		arg.ToolGuardMode,
+		arg.ToolGuardModelRouteID,
+		arg.ToolGuardTimeoutSeconds,
+		arg.ToolGuardCustomRules,
 	)
 	var i WorkspaceAgentSetting
 	err := row.Scan(
@@ -495,6 +814,10 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		&i.DefaultModelRouteID,
 		&i.DiscussionModelRouteID,
 		&i.PlanModelRouteID,
+		&i.ToolGuardMode,
+		&i.ToolGuardModelRouteID,
+		&i.ToolGuardTimeoutSeconds,
+		&i.ToolGuardCustomRules,
 	)
 	return i, err
 }
