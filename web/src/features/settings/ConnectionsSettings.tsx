@@ -172,6 +172,10 @@ function MCPForm({
   busy: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const agentSettings = useQuery({
+    queryKey: keys.agent,
+    queryFn: api.agentSettings,
+  });
   // 编辑连接只展示是否已配置，绝不向浏览器回传已保存的 Token。
   const {
     register,
@@ -262,12 +266,24 @@ function MCPForm({
               <ShieldAlert className="size-3.5 text-primary shrink-0" />
               <span>此 MCP 连接独立安全守卫（Tool Guard）</span>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Field label="拦截模式" error={errors.tool_guard_mode?.message}>
                 <Select {...register("tool_guard_mode")}>
                   <option value="disabled">关闭安全拦截</option>
                   <option value="block_high_risk">仅拦截高危不可逆操作（推荐）</option>
                   <option value="strict">严格模式（拦截所有写操作）</option>
+                </Select>
+              </Field>
+              <Field label="风险评估小模型" error={errors.tool_guard_model_route_id?.message}>
+                <Select {...register("tool_guard_model_route_id")}>
+                  <option value="">默认使用首个可用路由</option>
+                  {(agentSettings.data?.routes || [])
+                    .filter((r) => r.enabled && r.id)
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.model}
+                      </option>
+                    ))}
                 </Select>
               </Field>
               <Field label="守卫评估超时（秒）" error={errors.tool_guard_timeout_seconds?.message}>
