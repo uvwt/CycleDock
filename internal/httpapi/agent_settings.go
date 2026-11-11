@@ -27,10 +27,6 @@ type agentSettingsResponse struct {
 	DefaultModelRouteID    string               `json:"default_model_route_id,omitempty"`
 	DiscussionModelRouteID string               `json:"discussion_model_route_id,omitempty"`
 	PlanModelRouteID       string               `json:"plan_model_route_id,omitempty"`
-	ToolGuardMode          string               `json:"tool_guard_mode"`
-	ToolGuardModelRouteID  string               `json:"tool_guard_model_route_id,omitempty"`
-	ToolGuardTimeoutSeconds int32               `json:"tool_guard_timeout_seconds"`
-	ToolGuardCustomRules   string               `json:"tool_guard_custom_rules"`
 }
 
 type modelRouteResponse struct {
@@ -51,12 +47,16 @@ type modelRouteResponse struct {
 }
 
 type mcpConnectionResponse struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	URL             string `json:"url"`
-	TokenConfigured bool   `json:"token_configured"`
-	Enabled         bool   `json:"enabled"`
-	TimeoutMS       int32  `json:"timeout_ms"`
+	ID                      string `json:"id"`
+	Name                    string `json:"name"`
+	URL                     string `json:"url"`
+	TokenConfigured         bool   `json:"token_configured"`
+	Enabled                 bool   `json:"enabled"`
+	TimeoutMS               int32  `json:"timeout_ms"`
+	ToolGuardMode           string `json:"tool_guard_mode"`
+	ToolGuardModelRouteID   string `json:"tool_guard_model_route_id,omitempty"`
+	ToolGuardTimeoutSeconds int32  `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules    string `json:"tool_guard_custom_rules"`
 }
 
 // 所有工作区成员都需要知道 Agent 是否可执行；这里只返回配置状态，不暴露路由或凭据。
@@ -91,7 +91,6 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
 			Configured: false, Routes: []modelRouteResponse{},
-			ToolGuardMode: "disabled", ToolGuardTimeoutSeconds: 10,
 		})
 		return
 	}
@@ -129,10 +128,6 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		DefaultModelRouteID    string `json:"default_model_route_id"`
 		DiscussionModelRouteID string `json:"discussion_model_route_id"`
 		PlanModelRouteID       string `json:"plan_model_route_id"`
-		ToolGuardMode          string `json:"tool_guard_mode"`
-		ToolGuardModelRouteID  string `json:"tool_guard_model_route_id"`
-		ToolGuardTimeoutSeconds int32 `json:"tool_guard_timeout_seconds"`
-		ToolGuardCustomRules   string `json:"tool_guard_custom_rules"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -316,22 +311,12 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_plan_model_route_id", "Plan model route id is invalid.")
 		return
 	}
-	toolGuardRouteID, err := parseRouteID(request.ToolGuardModelRouteID, "tool_guard_model_route_id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_tool_guard_model_route_id", "Tool guard model route id is invalid.")
-		return
-	}
-
 	settings, err := api.store.SaveAgentSettings(r.Context(), identity.WorkspaceID, store.AgentSettingsInput{
 		Routes:                 routes,
 		SystemInstructions:     request.SystemInstructions,
 		DefaultModelRouteID:    defaultRouteID,
 		DiscussionModelRouteID: discussionRouteID,
 		PlanModelRouteID:       planRouteID,
-		ToolGuardMode:          request.ToolGuardMode,
-		ToolGuardModelRouteID:  toolGuardRouteID,
-		ToolGuardTimeoutSeconds: request.ToolGuardTimeoutSeconds,
-		ToolGuardCustomRules:   request.ToolGuardCustomRules,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -563,12 +548,16 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	var request struct {
-		Name             string `json:"name"`
-		URL              string `json:"url"`
-		BearerToken      string `json:"bearer_token"`
-		ClearBearerToken bool   `json:"clear_bearer_token"`
-		Enabled          *bool  `json:"enabled"`
-		TimeoutMS        int32  `json:"timeout_ms"`
+		Name                    string `json:"name"`
+		URL                     string `json:"url"`
+		BearerToken             string `json:"bearer_token"`
+		ClearBearerToken        bool   `json:"clear_bearer_token"`
+		Enabled                 *bool  `json:"enabled"`
+		TimeoutMS               int32  `json:"timeout_ms"`
+		ToolGuardMode           string `json:"tool_guard_mode"`
+		ToolGuardModelRouteID   string `json:"tool_guard_model_route_id"`
+		ToolGuardTimeoutSeconds int32  `json:"tool_guard_timeout_seconds"`
+		ToolGuardCustomRules    string `json:"tool_guard_custom_rules"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -577,10 +566,20 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
+	var guardRouteID *uuid.UUID
+	if strings.TrimSpace(request.ToolGuardModelRouteID) != "" {
+		if id, err := uuid.Parse(strings.TrimSpace(request.ToolGuardModelRouteID)); err == nil {
+			guardRouteID = &id
+		}
+	}
 	connection, err := api.store.SaveMCPConnection(r.Context(), identity.WorkspaceID, store.MCPConnectionInput{
 		ID: connectionID, Name: strings.TrimSpace(request.Name), URL: strings.TrimSpace(request.URL),
 		BearerToken: request.BearerToken, ClearBearerToken: request.ClearBearerToken, Enabled: enabled,
-		TimeoutMS: request.TimeoutMS,
+		TimeoutMS:               request.TimeoutMS,
+		ToolGuardMode:           request.ToolGuardMode,
+		ToolGuardModelRouteID:   guardRouteID,
+		ToolGuardTimeoutSeconds: request.ToolGuardTimeoutSeconds,
+		ToolGuardCustomRules:    request.ToolGuardCustomRules,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -682,18 +681,6 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 	if settings.PlanModelRouteID.Valid {
 		planRouteID = settings.PlanModelRouteID.UUID.String()
 	}
-	toolGuardRouteID := ""
-	if settings.ToolGuardModelRouteID.Valid {
-		toolGuardRouteID = settings.ToolGuardModelRouteID.UUID.String()
-	}
-	guardMode := settings.ToolGuardMode
-	if guardMode == "" {
-		guardMode = "disabled"
-	}
-	guardTimeout := settings.ToolGuardTimeoutSeconds
-	if guardTimeout <= 0 {
-		guardTimeout = 10
-	}
 	return agentSettingsResponse{
 		Configured:             true,
 		Routes:                 routes,
@@ -702,17 +689,32 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 		DefaultModelRouteID:    defaultRouteID,
 		DiscussionModelRouteID: discussionRouteID,
 		PlanModelRouteID:       planRouteID,
-		ToolGuardMode:          guardMode,
-		ToolGuardModelRouteID:  toolGuardRouteID,
-		ToolGuardTimeoutSeconds: guardTimeout,
-		ToolGuardCustomRules:   settings.ToolGuardCustomRules,
 	}
 }
 
 func mcpConnectionToResponse(connection db.WorkspaceMcpConnection) mcpConnectionResponse {
+	guardRouteID := ""
+	if connection.ToolGuardModelRouteID.Valid {
+		guardRouteID = connection.ToolGuardModelRouteID.UUID.String()
+	}
+	guardMode := connection.ToolGuardMode
+	if guardMode == "" {
+		guardMode = "block_high_risk"
+	}
+	guardTimeout := connection.ToolGuardTimeoutSeconds
+	if guardTimeout <= 0 {
+		guardTimeout = 10
+	}
 	return mcpConnectionResponse{
-		ID: connection.ID.String(), Name: connection.Name, URL: connection.Url,
-		TokenConfigured: len(connection.BearerTokenCiphertext) != 0, Enabled: connection.Enabled,
-		TimeoutMS: connection.TimeoutMs,
+		ID:                      connection.ID.String(),
+		Name:                    connection.Name,
+		URL:                     connection.Url,
+		TokenConfigured:         len(connection.BearerTokenCiphertext) != 0,
+		Enabled:                 connection.Enabled,
+		TimeoutMS:               connection.TimeoutMs,
+		ToolGuardMode:           guardMode,
+		ToolGuardModelRouteID:   guardRouteID,
+		ToolGuardTimeoutSeconds: guardTimeout,
+		ToolGuardCustomRules:    connection.ToolGuardCustomRules,
 	}
 }

@@ -231,10 +231,6 @@ export type AgentSettings = {
   default_model_route_id?: string;
   discussion_model_route_id?: string;
   plan_model_route_id?: string;
-  tool_guard_mode?: "disabled" | "block_high_risk" | "strict";
-  tool_guard_model_route_id?: string;
-  tool_guard_timeout_seconds?: number;
-  tool_guard_custom_rules?: string;
 };
 export type ModelAuthAccount = {
   id: string;
@@ -274,6 +270,21 @@ export type MCPConnection = {
   token_configured: boolean;
   enabled: boolean;
   timeout_ms: number;
+  tool_guard_mode?: "disabled" | "block_high_risk" | "strict";
+  tool_guard_model_route_id?: string;
+  tool_guard_timeout_seconds?: number;
+  tool_guard_custom_rules?: string;
+};
+export type DeviceToolGuard = {
+  id?: string;
+  device_node_id: string;
+  device_name?: string;
+  mode: "disabled" | "block_high_risk" | "strict";
+  model_route_id?: string;
+  timeout_seconds: number;
+  custom_rules: string;
+  created_at?: string;
+  updated_at?: string;
 };
 export type MCPInput = Omit<MCPConnection, "id" | "token_configured"> & {
   bearer_token: string;

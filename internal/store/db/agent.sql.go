@@ -218,6 +218,25 @@ func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorks
 	return i, err
 }
 
+const deleteWorkspaceDeviceToolGuard = `-- name: DeleteWorkspaceDeviceToolGuard :execrows
+DELETE FROM workspace_device_tool_guards
+WHERE workspace_id = $1
+  AND device_node_id = $2
+`
+
+type DeleteWorkspaceDeviceToolGuardParams struct {
+	WorkspaceID  uuid.UUID `json:"workspace_id"`
+	DeviceNodeID string    `json:"device_node_id"`
+}
+
+func (q *Queries) DeleteWorkspaceDeviceToolGuard(ctx context.Context, arg DeleteWorkspaceDeviceToolGuardParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspaceDeviceToolGuard, arg.WorkspaceID, arg.DeviceNodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteWorkspaceMCPConnection = `-- name: DeleteWorkspaceMCPConnection :execrows
 DELETE FROM workspace_mcp_connections
 WHERE workspace_id = $1
@@ -321,7 +340,7 @@ func (q *Queries) GetCardToolApprovalByID(ctx context.Context, arg GetCardToolAp
 }
 
 const getWorkspaceAgentSettings = `-- name: GetWorkspaceAgentSettings :one
-SELECT workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
+SELECT workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
 FROM workspace_agent_settings
 WHERE workspace_id = $1
 `
@@ -338,16 +357,42 @@ func (q *Queries) GetWorkspaceAgentSettings(ctx context.Context, workspaceID uui
 		&i.DefaultModelRouteID,
 		&i.DiscussionModelRouteID,
 		&i.PlanModelRouteID,
-		&i.ToolGuardMode,
-		&i.ToolGuardModelRouteID,
-		&i.ToolGuardTimeoutSeconds,
-		&i.ToolGuardCustomRules,
+	)
+	return i, err
+}
+
+const getWorkspaceDeviceToolGuard = `-- name: GetWorkspaceDeviceToolGuard :one
+SELECT id, workspace_id, device_node_id, device_name, mode, model_route_id, timeout_seconds, custom_rules, created_at, updated_at
+FROM workspace_device_tool_guards
+WHERE workspace_id = $1
+  AND device_node_id = $2
+`
+
+type GetWorkspaceDeviceToolGuardParams struct {
+	WorkspaceID  uuid.UUID `json:"workspace_id"`
+	DeviceNodeID string    `json:"device_node_id"`
+}
+
+func (q *Queries) GetWorkspaceDeviceToolGuard(ctx context.Context, arg GetWorkspaceDeviceToolGuardParams) (WorkspaceDeviceToolGuard, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceDeviceToolGuard, arg.WorkspaceID, arg.DeviceNodeID)
+	var i WorkspaceDeviceToolGuard
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DeviceNodeID,
+		&i.DeviceName,
+		&i.Mode,
+		&i.ModelRouteID,
+		&i.TimeoutSeconds,
+		&i.CustomRules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getWorkspaceMCPConnection = `-- name: GetWorkspaceMCPConnection :one
-SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
   AND id = $2
@@ -371,6 +416,10 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BearerTokenCiphertext,
+		&i.ToolGuardMode,
+		&i.ToolGuardModelRouteID,
+		&i.ToolGuardTimeoutSeconds,
+		&i.ToolGuardCustomRules,
 	)
 	return i, err
 }
@@ -485,7 +534,7 @@ func (q *Queries) ListCardToolApprovals(ctx context.Context, arg ListCardToolApp
 }
 
 const listEnabledWorkspaceMCPConnections = `-- name: ListEnabledWorkspaceMCPConnections :many
-SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
   AND enabled
@@ -511,6 +560,48 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BearerTokenCiphertext,
+			&i.ToolGuardMode,
+			&i.ToolGuardModelRouteID,
+			&i.ToolGuardTimeoutSeconds,
+			&i.ToolGuardCustomRules,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceDeviceToolGuards = `-- name: ListWorkspaceDeviceToolGuards :many
+SELECT id, workspace_id, device_node_id, device_name, mode, model_route_id, timeout_seconds, custom_rules, created_at, updated_at
+FROM workspace_device_tool_guards
+WHERE workspace_id = $1
+ORDER BY device_name, device_node_id
+`
+
+func (q *Queries) ListWorkspaceDeviceToolGuards(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceDeviceToolGuard, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceDeviceToolGuards, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WorkspaceDeviceToolGuard{}
+	for rows.Next() {
+		var i WorkspaceDeviceToolGuard
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DeviceNodeID,
+			&i.DeviceName,
+			&i.Mode,
+			&i.ModelRouteID,
+			&i.TimeoutSeconds,
+			&i.CustomRules,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -523,7 +614,7 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 }
 
 const listWorkspaceMCPConnections = `-- name: ListWorkspaceMCPConnections :many
-SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
+SELECT id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 FROM workspace_mcp_connections
 WHERE workspace_id = $1
 ORDER BY name, id
@@ -548,6 +639,10 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BearerTokenCiphertext,
+			&i.ToolGuardMode,
+			&i.ToolGuardModelRouteID,
+			&i.ToolGuardTimeoutSeconds,
+			&i.ToolGuardCustomRules,
 		); err != nil {
 			return nil, err
 		}
@@ -757,38 +852,28 @@ func (q *Queries) ResolveCardToolApproval(ctx context.Context, arg ResolveCardTo
 const upsertWorkspaceAgentSettings = `-- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
     workspace_id, source_id, system_instructions,
-    default_model_route_id, discussion_model_route_id, plan_model_route_id,
-    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
+    default_model_route_id, discussion_model_route_id, plan_model_route_id
 )
 VALUES (
     $1, $2, $3,
-    $4, $5, $6,
-    $7, $8, $9, $10
+    $4, $5, $6
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET system_instructions = EXCLUDED.system_instructions,
     default_model_route_id = EXCLUDED.default_model_route_id,
     discussion_model_route_id = EXCLUDED.discussion_model_route_id,
     plan_model_route_id = EXCLUDED.plan_model_route_id,
-    tool_guard_mode = EXCLUDED.tool_guard_mode,
-    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
-    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
-    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
     updated_at = now()
-RETURNING workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
+RETURNING workspace_id, source_id, system_instructions, created_at, updated_at, default_model_route_id, discussion_model_route_id, plan_model_route_id
 `
 
 type UpsertWorkspaceAgentSettingsParams struct {
-	WorkspaceID             uuid.UUID     `json:"workspace_id"`
-	SourceID                uuid.UUID     `json:"source_id"`
-	SystemInstructions      string        `json:"system_instructions"`
-	DefaultModelRouteID     uuid.NullUUID `json:"default_model_route_id"`
-	DiscussionModelRouteID  uuid.NullUUID `json:"discussion_model_route_id"`
-	PlanModelRouteID        uuid.NullUUID `json:"plan_model_route_id"`
-	ToolGuardMode           string        `json:"tool_guard_mode"`
-	ToolGuardModelRouteID   uuid.NullUUID `json:"tool_guard_model_route_id"`
-	ToolGuardTimeoutSeconds int32         `json:"tool_guard_timeout_seconds"`
-	ToolGuardCustomRules    string        `json:"tool_guard_custom_rules"`
+	WorkspaceID            uuid.UUID     `json:"workspace_id"`
+	SourceID               uuid.UUID     `json:"source_id"`
+	SystemInstructions     string        `json:"system_instructions"`
+	DefaultModelRouteID    uuid.NullUUID `json:"default_model_route_id"`
+	DiscussionModelRouteID uuid.NullUUID `json:"discussion_model_route_id"`
+	PlanModelRouteID       uuid.NullUUID `json:"plan_model_route_id"`
 }
 
 func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWorkspaceAgentSettingsParams) (WorkspaceAgentSetting, error) {
@@ -799,10 +884,6 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		arg.DefaultModelRouteID,
 		arg.DiscussionModelRouteID,
 		arg.PlanModelRouteID,
-		arg.ToolGuardMode,
-		arg.ToolGuardModelRouteID,
-		arg.ToolGuardTimeoutSeconds,
-		arg.ToolGuardCustomRules,
 	)
 	var i WorkspaceAgentSetting
 	err := row.Scan(
@@ -814,47 +895,110 @@ func (q *Queries) UpsertWorkspaceAgentSettings(ctx context.Context, arg UpsertWo
 		&i.DefaultModelRouteID,
 		&i.DiscussionModelRouteID,
 		&i.PlanModelRouteID,
-		&i.ToolGuardMode,
-		&i.ToolGuardModelRouteID,
-		&i.ToolGuardTimeoutSeconds,
-		&i.ToolGuardCustomRules,
+	)
+	return i, err
+}
+
+const upsertWorkspaceDeviceToolGuard = `-- name: UpsertWorkspaceDeviceToolGuard :one
+INSERT INTO workspace_device_tool_guards (
+    id, workspace_id, device_node_id, device_name, mode,
+    model_route_id, timeout_seconds, custom_rules
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8
+)
+ON CONFLICT (workspace_id, device_node_id) DO UPDATE
+SET device_name = EXCLUDED.device_name,
+    mode = EXCLUDED.mode,
+    model_route_id = EXCLUDED.model_route_id,
+    timeout_seconds = EXCLUDED.timeout_seconds,
+    custom_rules = EXCLUDED.custom_rules,
+    updated_at = now()
+RETURNING id, workspace_id, device_node_id, device_name, mode, model_route_id, timeout_seconds, custom_rules, created_at, updated_at
+`
+
+type UpsertWorkspaceDeviceToolGuardParams struct {
+	ID             uuid.UUID     `json:"id"`
+	WorkspaceID    uuid.UUID     `json:"workspace_id"`
+	DeviceNodeID   string        `json:"device_node_id"`
+	DeviceName     string        `json:"device_name"`
+	Mode           string        `json:"mode"`
+	ModelRouteID   uuid.NullUUID `json:"model_route_id"`
+	TimeoutSeconds int32         `json:"timeout_seconds"`
+	CustomRules    string        `json:"custom_rules"`
+}
+
+func (q *Queries) UpsertWorkspaceDeviceToolGuard(ctx context.Context, arg UpsertWorkspaceDeviceToolGuardParams) (WorkspaceDeviceToolGuard, error) {
+	row := q.db.QueryRow(ctx, upsertWorkspaceDeviceToolGuard,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.DeviceNodeID,
+		arg.DeviceName,
+		arg.Mode,
+		arg.ModelRouteID,
+		arg.TimeoutSeconds,
+		arg.CustomRules,
+	)
+	var i WorkspaceDeviceToolGuard
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DeviceNodeID,
+		&i.DeviceName,
+		&i.Mode,
+		&i.ModelRouteID,
+		&i.TimeoutSeconds,
+		&i.CustomRules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const upsertWorkspaceMCPConnection = `-- name: UpsertWorkspaceMCPConnection :one
 INSERT INTO workspace_mcp_connections (
-    id, workspace_id, name, url, bearer_token_ciphertext, enabled, timeout_ms
+    id, workspace_id, name, url, bearer_token_ciphertext, enabled, timeout_ms,
+    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 )
 VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7
+    $5, $6, $7,
+    $8, $9, $10, $11
 )
 ON CONFLICT (workspace_id, id) DO UPDATE
 SET name = EXCLUDED.name,
     url = EXCLUDED.url,
     bearer_token_ciphertext = CASE
-        WHEN $8::boolean THEN EXCLUDED.bearer_token_ciphertext
+        WHEN $12::boolean THEN EXCLUDED.bearer_token_ciphertext
         ELSE workspace_mcp_connections.bearer_token_ciphertext
     END,
     enabled = EXCLUDED.enabled,
     timeout_ms = EXCLUDED.timeout_ms,
+    tool_guard_mode = EXCLUDED.tool_guard_mode,
+    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
+    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
+    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
     updated_at = now()
 WHERE workspace_mcp_connections.url = EXCLUDED.url
    OR workspace_mcp_connections.bearer_token_ciphertext IS NULL
-   OR $8::boolean
-RETURNING id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext
+   OR $12::boolean
+RETURNING id, workspace_id, name, url, enabled, timeout_ms, created_at, updated_at, bearer_token_ciphertext, tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 `
 
 type UpsertWorkspaceMCPConnectionParams struct {
-	ID                    uuid.UUID `json:"id"`
-	WorkspaceID           uuid.UUID `json:"workspace_id"`
-	Name                  string    `json:"name"`
-	Url                   string    `json:"url"`
-	BearerTokenCiphertext []byte    `json:"bearer_token_ciphertext"`
-	Enabled               bool      `json:"enabled"`
-	TimeoutMs             int32     `json:"timeout_ms"`
-	ReplaceBearerToken    bool      `json:"replace_bearer_token"`
+	ID                      uuid.UUID     `json:"id"`
+	WorkspaceID             uuid.UUID     `json:"workspace_id"`
+	Name                    string        `json:"name"`
+	Url                     string        `json:"url"`
+	BearerTokenCiphertext   []byte        `json:"bearer_token_ciphertext"`
+	Enabled                 bool          `json:"enabled"`
+	TimeoutMs               int32         `json:"timeout_ms"`
+	ToolGuardMode           string        `json:"tool_guard_mode"`
+	ToolGuardModelRouteID   uuid.NullUUID `json:"tool_guard_model_route_id"`
+	ToolGuardTimeoutSeconds int32         `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules    string        `json:"tool_guard_custom_rules"`
+	ReplaceBearerToken      bool          `json:"replace_bearer_token"`
 }
 
 func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWorkspaceMCPConnectionParams) (WorkspaceMcpConnection, error) {
@@ -866,6 +1010,10 @@ func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWo
 		arg.BearerTokenCiphertext,
 		arg.Enabled,
 		arg.TimeoutMs,
+		arg.ToolGuardMode,
+		arg.ToolGuardModelRouteID,
+		arg.ToolGuardTimeoutSeconds,
+		arg.ToolGuardCustomRules,
 		arg.ReplaceBearerToken,
 	)
 	var i WorkspaceMcpConnection
@@ -879,6 +1027,10 @@ func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BearerTokenCiphertext,
+		&i.ToolGuardMode,
+		&i.ToolGuardModelRouteID,
+		&i.ToolGuardTimeoutSeconds,
+		&i.ToolGuardCustomRules,
 	)
 	return i, err
 }
