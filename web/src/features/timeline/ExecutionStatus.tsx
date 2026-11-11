@@ -142,12 +142,14 @@ function AgentAttempt({
   showSender = true,
   retryingAttemptID,
   onRetryAttempt,
+  onOpenTrace,
 }: {
   attempt: ExecutionAttempt;
   live?: LiveAttempt | null;
   showSender?: boolean;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
+  onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
   const current = attempt.kind === "current" ? attempt.value : null;
@@ -195,6 +197,7 @@ function AgentAttempt({
                 attempt={execution}
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={onRetryAttempt}
+                onOpenTrace={onOpenTrace}
               />
             </div>
           </div>
@@ -251,6 +254,7 @@ function AgentAttempt({
                       startedAt={runningStartedAt}
                       finishedAt={execution?.finished_at}
                       active={status === "running"}
+                      onClick={onOpenTrace && id ? () => onOpenTrace(id) : undefined}
                     />
                   </span>
                 </div>
@@ -311,6 +315,7 @@ type ExecutionActions = {
   live?: LiveAttempt | null;
   retryingAttemptID?: string;
   onRetryAttempt: (attemptID: string) => void;
+  onOpenTrace?: (attemptID: string) => void;
 };
 
 export function ExecutionStatus({
