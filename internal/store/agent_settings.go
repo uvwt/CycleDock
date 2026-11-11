@@ -43,6 +43,10 @@ type AgentSettingsInput struct {
 	DefaultModelRouteID     *uuid.UUID
 	DiscussionModelRouteID *uuid.UUID
 	PlanModelRouteID       *uuid.UUID
+	ToolGuardMode           string
+	ToolGuardModelRouteID   *uuid.UUID
+	ToolGuardTimeoutSeconds int32
+	ToolGuardCustomRules    string
 }
 
 type AgentSettings struct {
@@ -336,6 +340,25 @@ func (s *Store) SaveAgentSettings(
 	if err != nil {
 		return AgentSettings{}, err
 	}
+	toolGuardRouteID, err := toNullUUID(input.ToolGuardModelRouteID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	guardMode := strings.TrimSpace(input.ToolGuardMode)
+	if guardMode == "" {
+		guardMode = "disabled"
+	}
+	switch guardMode {
+	case "disabled", "block_high_risk", "strict":
+	default:
+		return AgentSettings{}, fmt.Errorf("%w: invalid tool_guard_mode %q", domain.ErrConflict, guardMode)
+	}
+	guardTimeout := input.ToolGuardTimeoutSeconds
+	if guardTimeout <= 0 {
+		guardTimeout = 10
+	} else if guardTimeout > 60 {
+		guardTimeout = 60
+	}
 
 	settings, err := q.UpsertWorkspaceAgentSettings(ctx, db.UpsertWorkspaceAgentSettingsParams{
 		WorkspaceID:            workspaceID,
@@ -344,6 +367,10 @@ func (s *Store) SaveAgentSettings(
 		DefaultModelRouteID:    defaultRouteID,
 		DiscussionModelRouteID: discussionRouteID,
 		PlanModelRouteID:       planRouteID,
+		ToolGuardMode:           guardMode,
+		ToolGuardModelRouteID:   toolGuardRouteID,
+		ToolGuardTimeoutSeconds: guardTimeout,
+		ToolGuardCustomRules:    strings.TrimSpace(input.ToolGuardCustomRules),
 	})
 	if err != nil {
 		return AgentSettings{}, mapConstraintError(err)

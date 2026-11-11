@@ -6,17 +6,23 @@ WHERE workspace_id = sqlc.arg(workspace_id);
 -- name: UpsertWorkspaceAgentSettings :one
 INSERT INTO workspace_agent_settings (
     workspace_id, source_id, system_instructions,
-    default_model_route_id, discussion_model_route_id, plan_model_route_id
+    default_model_route_id, discussion_model_route_id, plan_model_route_id,
+    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
 )
 VALUES (
     sqlc.arg(workspace_id), sqlc.arg(source_id), sqlc.arg(system_instructions),
-    sqlc.narg(default_model_route_id), sqlc.narg(discussion_model_route_id), sqlc.narg(plan_model_route_id)
+    sqlc.narg(default_model_route_id), sqlc.narg(discussion_model_route_id), sqlc.narg(plan_model_route_id),
+    sqlc.arg(tool_guard_mode), sqlc.narg(tool_guard_model_route_id), sqlc.arg(tool_guard_timeout_seconds), sqlc.arg(tool_guard_custom_rules)
 )
 ON CONFLICT (workspace_id) DO UPDATE
 SET system_instructions = EXCLUDED.system_instructions,
     default_model_route_id = EXCLUDED.default_model_route_id,
     discussion_model_route_id = EXCLUDED.discussion_model_route_id,
     plan_model_route_id = EXCLUDED.plan_model_route_id,
+    tool_guard_mode = EXCLUDED.tool_guard_mode,
+    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
+    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
+    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
     updated_at = now()
 RETURNING *;
 
@@ -119,3 +125,56 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND attempt_id = sqlc.arg(attempt_id)
 ORDER BY call_index ASC, started_at ASC;
 
+-- name: CreateCardToolApproval :one
+INSERT INTO card_tool_approvals (
+    id, workspace_id, card_id, turn_id, attempt_id,
+    tool_call_id, tool_name, arguments, risk_level,
+    reversible, reason, status
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, 'pending'
+)
+RETURNING *;
+
+-- name: GetCardToolApproval :one
+SELECT *
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND card_id = $2 AND id = $3;
+
+-- name: GetCardToolApprovalByID :one
+SELECT *
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND id = $2;
+
+-- name: ResolveCardToolApproval :one
+UPDATE card_tool_approvals
+SET status = $4,
+    resolution_comment = $5,
+    resolved_by_source_id = $6,
+    resolved_at = now(),
+    updated_at = now()
+WHERE workspace_id = $1 AND card_id = $2 AND id = $3 AND status = 'pending'
+RETURNING *;
+
+-- name: ListCardToolApprovals :many
+SELECT *
+FROM card_tool_approvals
+WHERE workspace_id = $1 AND card_id = $2
+ORDER BY created_at DESC;
+
+-- name: CreateCardToolWhitelist :one
+INSERT INTO card_tool_whitelists (
+    id, workspace_id, card_id, tool_name, pattern, created_by_source_id
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6
+)
+RETURNING *;
+
+-- name: CheckCardToolWhitelisted :one
+SELECT EXISTS (
+    SELECT 1 FROM card_tool_whitelists
+    WHERE workspace_id = $1 AND card_id = $2 AND tool_name = $3
+) AS whitelisted;

@@ -127,6 +127,36 @@ type CardSchedule struct {
 	IntervalMinutes pgtype.Int4        `json:"interval_minutes"`
 }
 
+type CardToolApproval struct {
+	ID                 uuid.UUID          `json:"id"`
+	WorkspaceID        uuid.UUID          `json:"workspace_id"`
+	CardID             uuid.UUID          `json:"card_id"`
+	TurnID             uuid.NullUUID      `json:"turn_id"`
+	AttemptID          uuid.NullUUID      `json:"attempt_id"`
+	ToolCallID         string             `json:"tool_call_id"`
+	ToolName           string             `json:"tool_name"`
+	Arguments          []byte             `json:"arguments"`
+	RiskLevel          string             `json:"risk_level"`
+	Reversible         bool               `json:"reversible"`
+	Reason             string             `json:"reason"`
+	Status             string             `json:"status"`
+	ResolutionComment  string             `json:"resolution_comment"`
+	ResolvedBySourceID uuid.NullUUID      `json:"resolved_by_source_id"`
+	ResolvedAt         pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CardToolWhitelist struct {
+	ID                uuid.UUID          `json:"id"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	CardID            uuid.UUID          `json:"card_id"`
+	ToolName          string             `json:"tool_name"`
+	Pattern           string             `json:"pattern"`
+	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type CardTurn struct {
 	ID                    uuid.UUID          `json:"id"`
 	Sequence              int64              `json:"sequence"`
@@ -166,6 +196,7 @@ type Event struct {
 	Message           []byte             `json:"message"`
 	ConfirmationRound int64              `json:"confirmation_round"`
 	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
+	ToolApprovalID    uuid.NullUUID      `json:"tool_approval_id"`
 }
 
 type HumanAccount struct {
@@ -361,14 +392,18 @@ type Workspace struct {
 }
 
 type WorkspaceAgentSetting struct {
-	WorkspaceID            uuid.UUID          `json:"workspace_id"`
-	SourceID               uuid.UUID          `json:"source_id"`
-	SystemInstructions     string             `json:"system_instructions"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
-	DefaultModelRouteID    uuid.NullUUID      `json:"default_model_route_id"`
-	DiscussionModelRouteID uuid.NullUUID      `json:"discussion_model_route_id"`
-	PlanModelRouteID       uuid.NullUUID      `json:"plan_model_route_id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	SourceID                uuid.UUID          `json:"source_id"`
+	SystemInstructions      string             `json:"system_instructions"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	DefaultModelRouteID     uuid.NullUUID      `json:"default_model_route_id"`
+	DiscussionModelRouteID  uuid.NullUUID      `json:"discussion_model_route_id"`
+	PlanModelRouteID        uuid.NullUUID      `json:"plan_model_route_id"`
+	ToolGuardMode           string             `json:"tool_guard_mode"`
+	ToolGuardModelRouteID   uuid.NullUUID      `json:"tool_guard_model_route_id"`
+	ToolGuardTimeoutSeconds int32              `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules    string             `json:"tool_guard_custom_rules"`
 }
 
 type WorkspaceMcpConnection struct {

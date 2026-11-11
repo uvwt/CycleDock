@@ -47,12 +47,26 @@ export type Card = {
   created_at: string;
   updated_at: string;
 };
+export type ToolApproval = {
+  id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  risk_level: "low" | "medium" | "high" | "critical" | string;
+  reversible: boolean;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  resolution_comment?: string;
+  resolved_at?: string;
+  created_at: string;
+};
 export type TimelineEvent = {
   id: string;
   sequence: number;
   attempt_id?: string;
   source_card_id?: string;
   source_card_title?: string;
+  tool_approval_id?: string;
+  tool_approval?: ToolApproval;
   type:
     | "comment"
     | "progress"
@@ -63,7 +77,8 @@ export type TimelineEvent = {
     | "checkin_ack"
     | "confirm"
     | "reject"
-    | "status_change";
+    | "status_change"
+    | "tool_approval";
   actor_kind: string;
   actor_name: string;
   content: string;
@@ -216,6 +231,10 @@ export type AgentSettings = {
   default_model_route_id?: string;
   discussion_model_route_id?: string;
   plan_model_route_id?: string;
+  tool_guard_mode?: "disabled" | "block_high_risk" | "strict";
+  tool_guard_model_route_id?: string;
+  tool_guard_timeout_seconds?: number;
+  tool_guard_custom_rules?: string;
 };
 export type ModelAuthAccount = {
   id: string;

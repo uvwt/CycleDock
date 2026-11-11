@@ -231,7 +231,7 @@ func (q *Queries) GetSource(ctx context.Context, arg GetSourceParams) (Source, e
 }
 
 const latestCheckin = `-- name: LatestCheckin :one
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, tool_approval_id
 FROM events
 WHERE workspace_id = $1
   AND card_id = $2
@@ -264,12 +264,13 @@ func (q *Queries) LatestCheckin(ctx context.Context, arg LatestCheckinParams) (E
 		&i.Message,
 		&i.ConfirmationRound,
 		&i.SourceCardID,
+		&i.ToolApprovalID,
 	)
 	return i, err
 }
 
 const listCardEvents = `-- name: ListCardEvents :many
-SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id
+SELECT id, sequence, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, checkin_status, idempotency_key, request_hash, created_at, message, confirmation_round, source_card_id, tool_approval_id
 FROM events
 WHERE workspace_id = $1 AND card_id = $2
 ORDER BY sequence
@@ -305,6 +306,7 @@ func (q *Queries) ListCardEvents(ctx context.Context, arg ListCardEventsParams) 
 			&i.Message,
 			&i.ConfirmationRound,
 			&i.SourceCardID,
+			&i.ToolApprovalID,
 		); err != nil {
 			return nil, err
 		}
