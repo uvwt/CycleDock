@@ -31,6 +31,7 @@ import type {
   TraceOverview,
   TraceEventsResponse,
   ToolApproval,
+  DeviceToolGuard,
 } from "./types";
 
 export class APIError extends Error {
@@ -334,6 +335,14 @@ export const api = {
     request<NexusFleetResponse>(
       `/agent/nexusdock/fleet${refresh ? "?refresh=true" : ""}`,
     ),
+  listDeviceToolGuards: () =>
+    request<DeviceToolGuard[]>("/agent/device-tool-guards"),
+  getDeviceToolGuard: (nodeID: string) =>
+    request<DeviceToolGuard>(`/agent/device-tool-guards/${encodeURIComponent(nodeID)}`),
+  saveDeviceToolGuard: (nodeID: string, value: Omit<DeviceToolGuard, "id" | "created_at" | "updated_at">) =>
+    request<DeviceToolGuard>(`/agent/device-tool-guards/${encodeURIComponent(nodeID)}`, "PUT", value),
+  deleteDeviceToolGuard: (nodeID: string) =>
+    request<{ ok: boolean }>(`/agent/device-tool-guards/${encodeURIComponent(nodeID)}`, "DELETE"),
   nexusConnect: () =>
     request<{ authorization_url: string }>(
       "/agent/nexusdock/connect",

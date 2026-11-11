@@ -93,6 +93,10 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/agent/nexusdock", api.getNexusDockConnection)
 	r.Get("/agent/nexusdock/devices", api.listNexusDockDevices)
 	r.Get("/agent/nexusdock/fleet", api.getNexusDockFleet)
+	r.Get("/agent/device-tool-guards", api.listDeviceToolGuards)
+	r.Get("/agent/device-tool-guards/{nodeID}", api.getDeviceToolGuard)
+	r.Put("/agent/device-tool-guards/{nodeID}", api.saveDeviceToolGuard)
+	r.Delete("/agent/device-tool-guards/{nodeID}", api.deleteDeviceToolGuard)
 	r.Post("/agent/nexusdock/connect", api.connectNexusDock)
 	r.Delete("/agent/nexusdock", api.disconnectNexusDock)
 }

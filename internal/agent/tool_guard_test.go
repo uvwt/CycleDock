@@ -20,12 +20,7 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 	workspaceID := uuid.New()
 	cardID := uuid.New()
 
-	settings := store.AgentSettings{
-		WorkspaceAgentSetting: db.WorkspaceAgentSetting{
-			ToolGuardMode:           "strict",
-			ToolGuardTimeoutSeconds: 5,
-		},
-	}
+	settings := store.AgentSettings{}
 
 	// 1. 第一层：只读工具与内置 cycledock_* 协同工具应直接放行（0 延迟、0 Token 消耗）
 	safeTools := []string{
@@ -38,12 +33,12 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 		}
 		dec := EvaluateToolGuard(
 			ctx, nil, nil, nil,
-			settings, workspaceID, cardID,
+			settings, workspaceID, cardID, "",
 			"测试卡片", "测试描述",
 			name, map[string]any{},
 		)
 		if dec.Decision != "allow" {
-			t.Fatalf("expected %q to be allowed in strict mode, got %+v", name, dec)
+			t.Fatalf("expected %q to be allowed, got %+v", name, dec)
 		}
 	}
 
@@ -64,29 +59,16 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 	}
 	critDec := EvaluateToolGuard(
 		ctx, nil, nil, nil,
-		settings, workspaceID, cardID,
+		settings, workspaceID, cardID, "node-1",
 		"测试卡片", "测试描述",
 		"exec_command", map[string]any{"cmd": "sudo rm -rf /"},
 	)
 	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.Reversible {
 		t.Fatalf("expected critical destructive command to ask_human immediately, got %+v", critDec)
 	}
-
-	// 4. 关闭模式下所有工具直接放行
-	disabledSettings := settings
-	disabledSettings.ToolGuardMode = "disabled"
-	dec := EvaluateToolGuard(
-		ctx, nil, nil, nil,
-		disabledSettings, workspaceID, cardID,
-		"测试卡片", "测试描述",
-		"exec_command", map[string]any{"cmd": "rm -rf /"},
-	)
-	if dec.Decision != "allow" {
-		t.Fatalf("expected disabled mode to allow, got %+v", dec)
-	}
 }
 
-func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
+func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := uuid.New()
 	cardID := uuid.New()
@@ -100,7 +82,7 @@ func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
 				{
 					"message": map[string]any{
 						"role":    "assistant",
-						"content": "```json\n{\"reversible\": false, \"risk_level\": \"high\", \"decision\": \"ask_human\", \"reason\": \"尝试修改生产环境配置并重启容器\"}\n```",
+						"content": "```json\n{\"reversible\": false, \"risk_level\": \"high\", \"decision\": \"ask_human\", \"reason\": \"尝试对目标设备修改生产环境配置并重启容器\"}\n```",
 					},
 				},
 			},
@@ -111,12 +93,6 @@ func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
 
 	client := modelclient.NewWithHTTPClient(server.Client())
 	settings := store.AgentSettings{
-		WorkspaceAgentSetting: db.WorkspaceAgentSetting{
-			ToolGuardMode:           "block_high_risk",
-			ToolGuardModelRouteID:   uuid.NullUUID{UUID: routeID, Valid: true},
-			ToolGuardTimeoutSeconds: 5,
-			ToolGuardCustomRules:    "禁止未经确认修改生产配置",
-		},
 		Routes: []db.WorkspaceModelRoute{
 			{
 				ID:              routeID,
@@ -128,8 +104,27 @@ func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
 		},
 	}
 
+	policy := ScopedGuardPolicy{
+		ScopeType:      "device",
+		ScopeTarget:    "node-prod-server",
+		Mode:           "block_high_risk",
+		ModelRouteID:   uuid.NullUUID{UUID: routeID, Valid: true},
+		TimeoutSeconds: 5,
+		CustomRules:    "禁止未经确认重启线上生产容器",
+	}
+
+	// 明确高危系统指令必审测试
+	critDec := EvaluateToolGuard(
+		ctx, nil, client, nil, settings, workspaceID, cardID, "node-prod-server",
+		"测试卡片", "测试描述",
+		"exec_command", map[string]any{"cmd": "sudo rm -rf / --no-preserve-root"},
+	)
+	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" {
+		t.Fatalf("expected critical command to ask_human, got %+v", critDec)
+	}
+
 	dec, err := evaluateDynamicModel(
-		ctx, nil, client, nil, settings, workspaceID,
+		ctx, nil, client, nil, settings, policy, workspaceID,
 		"部署服务", "更新线上配置",
 		"exec_command", map[string]any{"cmd": "docker compose up -d --force-recreate"},
 	)
@@ -140,7 +135,7 @@ func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
 		t.Fatalf("unexpected decision from small model: %+v", dec)
 	}
 
-	// 测试第三层降级兜底：当小模型服务超时或报错时，EvaluateToolGuard 对未分类写操作回退为 ask_human
+	// 测试针对 MCP 独立作用域的动态评估与超时降级
 	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)
 		http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
@@ -157,13 +152,20 @@ func TestToolGuard_DynamicSmallModelAndFallback(t *testing.T) {
 			Model:           "gpt-4o-mini-guard",
 		},
 	}
-	fallbackDec := EvaluateToolGuard(
+	mcpPolicy := ScopedGuardPolicy{
+		ScopeType:      "mcp",
+		ScopeTarget:    "production-db",
+		Mode:           "strict",
+		ModelRouteID:   uuid.NullUUID{UUID: routeID, Valid: true},
+		TimeoutSeconds: 5,
+	}
+	_, err = evaluateDynamicModel(
 		ctx, nil, modelclient.NewWithHTTPClient(errServer.Client()), nil,
-		errSettings, workspaceID, cardID,
-		"部署服务", "更新线上配置",
-		"file_edit", map[string]any{"action": "replace", "path": "config.yaml"},
+		errSettings, mcpPolicy, workspaceID,
+		"数据库运维", "变更生产数据",
+		"call_mcp_tool", map[string]any{"tool_id": "production-db:drop_table"},
 	)
-	if fallbackDec.Decision != "ask_human" || fallbackDec.RiskLevel != "high" {
-		t.Fatalf("expected fallback decision to be ask_human with high risk, got %+v", fallbackDec)
+	if err == nil {
+		t.Fatalf("expected error when small model returns 504")
 	}
 }

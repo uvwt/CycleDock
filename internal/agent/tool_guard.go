@@ -145,7 +145,89 @@ func hasApprovedMatchingToolCall(
 	return false
 }
 
-// EvaluateToolGuard 执行三层守卫流水线评估
+// ScopedGuardPolicy 描述具体执行目标（设备或具体 MCP 连接）的独立守卫策略
+type ScopedGuardPolicy struct {
+	ScopeType      string // "device" | "mcp"
+	ScopeTarget    string // device_node_id 或 connection_name
+	Mode           string // "disabled" | "block_high_risk" | "strict"
+	ModelRouteID   uuid.NullUUID
+	TimeoutSeconds int32
+	CustomRules    string
+}
+
+// resolveScopedGuardPolicy 根据即将调用的工具类型与入参，精准解析对应的设备级或 MCP 级策略
+func resolveScopedGuardPolicy(
+	ctx context.Context,
+	storeInstance *store.Store,
+	workspaceID uuid.UUID,
+	cardDeviceNodeID string,
+	toolName string,
+	args map[string]any,
+) (ScopedGuardPolicy, bool) {
+	if storeInstance == nil {
+		return ScopedGuardPolicy{}, false
+	}
+
+	// 1. 如果是 call_mcp_tool
+	if toolName == "call_mcp_tool" {
+		toolID, _ := args["tool_id"].(string)
+		serverName, _, ok := mcpclient.ParseToolID(toolID)
+		if !ok || serverName == "" {
+			return ScopedGuardPolicy{}, false
+		}
+		conns, err := storeInstance.ListMCPConnections(ctx, workspaceID)
+		if err == nil {
+			for _, c := range conns {
+				if strings.EqualFold(c.Name, serverName) {
+					return ScopedGuardPolicy{
+						ScopeType:      "mcp",
+						ScopeTarget:    c.Name,
+						Mode:           c.ToolGuardMode,
+						ModelRouteID:   c.ToolGuardModelRouteID,
+						TimeoutSeconds: c.ToolGuardTimeoutSeconds,
+						CustomRules:    c.ToolGuardCustomRules,
+					}, true
+				}
+			}
+		}
+		return ScopedGuardPolicy{}, false
+	}
+
+	// 2. 如果是针对设备的工具（例如包含 node_id 参数，或者继承本轮 cardDeviceNodeID）
+	targetNodeID, _ := args["node_id"].(string)
+	targetNodeID = strings.TrimSpace(targetNodeID)
+	if targetNodeID == "" {
+		targetNodeID = strings.TrimSpace(cardDeviceNodeID)
+	}
+
+	// 设备级工具判断：具备 node_id 或者是常见的设备执行/文件/进程类工具
+	isDeviceTool := targetNodeID != "" || toolName == "exec_command" || toolName == "file_edit" || toolName == "session_act" || strings.HasPrefix(toolName, "browser_")
+
+	if isDeviceTool && targetNodeID != "" {
+		guard, err := storeInstance.GetDeviceToolGuard(ctx, workspaceID, targetNodeID)
+		if err == nil {
+			return ScopedGuardPolicy{
+				ScopeType:      "device",
+				ScopeTarget:    targetNodeID,
+				Mode:           guard.Mode,
+				ModelRouteID:   guard.ModelRouteID,
+				TimeoutSeconds: guard.TimeoutSeconds,
+				CustomRules:    guard.CustomRules,
+			}, true
+		}
+		// 若该设备尚未单独配置，默认使用推荐的 block_high_risk 兜底
+		return ScopedGuardPolicy{
+			ScopeType:      "device",
+			ScopeTarget:    targetNodeID,
+			Mode:           "disabled",
+			TimeoutSeconds: 10,
+		}, true
+	}
+
+	return ScopedGuardPolicy{}, false
+}
+
+// EvaluateToolGuard 执行三层守卫流水线评估（基于设备与 MCP 连接精准独立判定）
 func EvaluateToolGuard(
 	ctx context.Context,
 	storeInstance *store.Store,
@@ -153,22 +235,23 @@ func EvaluateToolGuard(
 	modelAuthService *modelauth.Service,
 	settings store.AgentSettings,
 	workspaceID, cardID uuid.UUID,
+	cardDeviceNodeID string,
 	cardTitle, cardDescription string,
 	toolName string,
 	args map[string]any,
 ) ToolGuardDecision {
-	guardMode := settings.ToolGuardMode
-	if guardMode == "" || guardMode == "disabled" {
+	// ---------------- 第一层：静态规则过滤 ----------------
+	// 1. 只读及系统内部协同工具放行（0 延迟、0 Token 消耗，直接放行）
+	if isSafeReadOnlyTool(toolName, args) {
 		return ToolGuardDecision{
 			Reversible: true,
 			RiskLevel:  "low",
 			Decision:   "allow",
-			Reason:     "工具安全守卫处于关闭状态，直接放行",
+			Reason:     "只读或系统协同工具无破坏副作用，直接安全放行",
 		}
 	}
 
-	// ---------------- 第一层：静态规则过滤 ----------------
-	// 1. 卡片内白名单规则检查（用户交互“同类操作不再询问”）或已批准的完全相同操作重试
+	// 2. 卡片内白名单规则检查（用户交互“同类操作不再询问”）或已批准的完全相同操作重试
 	if storeInstance != nil {
 		whitelisted, err := storeInstance.IsCardToolWhitelisted(ctx, workspaceID, cardID, toolName)
 		if err == nil && whitelisted {
@@ -189,23 +272,24 @@ func EvaluateToolGuard(
 		}
 	}
 
-	// 2. 只读及系统内部协同工具放行（0 延迟、0 Token 消耗）
-	if isSafeReadOnlyTool(toolName, args) {
-		return ToolGuardDecision{
-			Reversible: true,
-			RiskLevel:  "low",
-			Decision:   "allow",
-			Reason:     "只读或系统协同工具无外部破坏副作用，直接安全放行",
-		}
-	}
-
-	// 3. 明确高危操作直接必审
+	// 3. 明确高危系统级破坏命令（如 rm -rf /、drop database）无论设备配置如何直接必审
 	if isCrit, critReason := isCriticalDestructiveCommand(toolName, args); isCrit {
 		return ToolGuardDecision{
 			Reversible: false,
 			RiskLevel:  "critical",
 			Decision:   "ask_human",
 			Reason:     critReason,
+		}
+	}
+
+	// 4. 解析对应的具体设备或 MCP 连接级独立安全策略
+	policy, ok := resolveScopedGuardPolicy(ctx, storeInstance, workspaceID, cardDeviceNodeID, toolName, args)
+	if !ok || policy.Mode == "disabled" {
+		return ToolGuardDecision{
+			Reversible: true,
+			RiskLevel:  "low",
+			Decision:   "allow",
+			Reason:     "目标设备或 MCP 连接未启用安全守卫，予以放行",
 		}
 	}
 
@@ -216,6 +300,7 @@ func EvaluateToolGuard(
 		modelClient,
 		modelAuthService,
 		settings,
+		policy,
 		workspaceID,
 		cardTitle,
 		cardDescription,
@@ -227,6 +312,8 @@ func EvaluateToolGuard(
 	if dynamicErr != nil {
 		slog.Warn("tool guard dynamic evaluation failed, falling back to ask_human",
 			"tool_name", toolName,
+			"scope_type", policy.ScopeType,
+			"scope_target", policy.ScopeTarget,
 			"error", dynamicErr,
 		)
 		return ToolGuardDecision{
@@ -237,14 +324,13 @@ func EvaluateToolGuard(
 		}
 	}
 
-	// 根据模式最终确定决策
-	if guardMode == "block_high_risk" {
+	// 根据目标设备或 MCP 的具体模式最终确定决策
+	if policy.Mode == "block_high_risk" {
 		// 仅拦截高危且不可逆操作或显式要求人工确认
 		if dynamicDecision.Decision == "ask_human" {
 			if dynamicDecision.RiskLevel == "high" || dynamicDecision.RiskLevel == "critical" || !dynamicDecision.Reversible {
 				return dynamicDecision
 			}
-			// 低中风险且可逆操作在 block_high_risk 模式下放行
 			dynamicDecision.Decision = "allow"
 			dynamicDecision.Reason = "在仅拦截高危不可逆模式下，评估为中低风险或可逆操作，予以放行"
 			return dynamicDecision
@@ -330,6 +416,7 @@ func evaluateDynamicModel(
 	modelClient *modelclient.Client,
 	modelAuthService *modelauth.Service,
 	settings store.AgentSettings,
+	policy ScopedGuardPolicy,
 	workspaceID uuid.UUID,
 	cardTitle, cardDescription string,
 	toolName string,
@@ -339,11 +426,11 @@ func evaluateDynamicModel(
 		return ToolGuardDecision{}, errors.New("model client is not available")
 	}
 
-	// 确定评估使用的模型路由
+	// 确定评估使用的模型路由：优先使用该设备或 MCP 绑定的模型路由
 	var selectedRoute *db.WorkspaceModelRoute
-	if settings.ToolGuardModelRouteID.Valid {
+	if policy.ModelRouteID.Valid {
 		for i := range settings.Routes {
-			if settings.Routes[i].ID == settings.ToolGuardModelRouteID.UUID && settings.Routes[i].Enabled {
+			if settings.Routes[i].ID == policy.ModelRouteID.UUID && settings.Routes[i].Enabled {
 				selectedRoute = &settings.Routes[i]
 				break
 			}
@@ -362,7 +449,7 @@ func evaluateDynamicModel(
 		return ToolGuardDecision{}, errors.New("no enabled model route configured for tool guard")
 	}
 
-	timeoutSec := int(settings.ToolGuardTimeoutSeconds)
+	timeoutSec := int(policy.TimeoutSeconds)
 	if timeoutSec <= 0 {
 		timeoutSec = 10
 	}
@@ -370,8 +457,14 @@ func evaluateDynamicModel(
 
 	argsJSON, _ := json.MarshalIndent(args, "", "  ")
 
+	scopeDesc := fmt.Sprintf("设备节点: %s", policy.ScopeTarget)
+	if policy.ScopeType == "mcp" {
+		scopeDesc = fmt.Sprintf("MCP 外部服务: %s", policy.ScopeTarget)
+	}
+
 	systemPrompt := fmt.Sprintf(`你是 CycleDock 的轻量级「工具调用安全守卫（Tool Guard）」。
-你的核心任务是审查 Agent 即将调用的工具与其入参，评估操作安全风险，决定是否允许直接执行或必须挂起等待人工确认。
+当前审查目标作用域：%s
+你的核心任务是审查 Agent 即将针对该目标调用的工具与其入参，评估操作安全风险，决定是否允许直接执行或必须挂起等待人工确认。
 
 【评估维度】
 1. reversible（布尔值）：操作是否可安全回滚/撤销（例如读取或添加临时文件为 true；删除数据、覆写关键代码、执行外部有副作用命令为 false）。
@@ -379,7 +472,7 @@ func evaluateDynamicModel(
 3. decision（字符串）：决策结果，必须是 "allow"（放行）或 "ask_human"（拦截等待人工确认）。
 4. reason（字符串）：简明扼要的一两句中文解释，说明为什么做出该决策与潜在风险点。
 
-【用户自定义守卫规则】
+【该目标独立自定义守卫规则】
 %s
 
 【输出规范】
@@ -389,7 +482,7 @@ func evaluateDynamicModel(
   "risk_level": "medium",
   "decision": "ask_human",
   "reason": "..."
-}`, settings.ToolGuardCustomRules)
+}`, scopeDesc, policy.CustomRules)
 
 	userPrompt := fmt.Sprintf(`请评估以下工具调用：
 当前卡片目标：
@@ -480,7 +573,7 @@ func ToolGuardCallback(
 
 		toolName := t.Name()
 
-		// 执行安全守卫评估
+		// 执行安全守卫评估（支持继承 cardContext.DeviceNodeID）
 		decision := EvaluateToolGuard(
 			ctx,
 			runner.store,
@@ -489,6 +582,7 @@ func ToolGuardCallback(
 			settings,
 			cardContext.WorkspaceID,
 			cardContext.CardID,
+			cardContext.DeviceNodeID,
 			cardContext.CardTitle,
 			cardContext.CardDescription,
 			toolName,

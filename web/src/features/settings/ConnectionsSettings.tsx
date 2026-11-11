@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus, Trash2, TestTube2 } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { api } from "../../shared/api/client";
 import type { MCPConnection, MCPInput } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
@@ -16,8 +17,10 @@ import {
   Field,
   Modal,
   Section,
+  Select,
   Spinner,
   Switch,
+  TextArea,
   TextInput,
 } from "../../shared/ui/components";
 
@@ -69,6 +72,10 @@ export function MCPSettings() {
         timeout_ms: connection.timeout_ms,
         bearer_token: "",
         clear_bearer_token: false,
+        tool_guard_mode: connection.tool_guard_mode,
+        tool_guard_model_route_id: connection.tool_guard_model_route_id,
+        tool_guard_timeout_seconds: connection.tool_guard_timeout_seconds,
+        tool_guard_custom_rules: connection.tool_guard_custom_rules,
       }),
     onSuccess: async (_, variables) => {
       toast.success(variables.enabled ? "已停用此 MCP 连接" : "已启用此 MCP 连接");
@@ -181,6 +188,10 @@ function MCPForm({
       timeout_ms: initial.timeout_ms,
       bearer_token: "",
       clear_bearer_token: false,
+      tool_guard_mode: initial.tool_guard_mode || "disabled",
+      tool_guard_model_route_id: initial.tool_guard_model_route_id || "",
+      tool_guard_timeout_seconds: initial.tool_guard_timeout_seconds || 10,
+      tool_guard_custom_rules: initial.tool_guard_custom_rules || "",
     },
   });
   const clearBearerToken = useWatch({ control, name: "clear_bearer_token" });
@@ -245,6 +256,37 @@ function MCPForm({
               aria-invalid={!!errors.timeout_ms}
             />
           </Field>
+
+          <div className="rounded-xl border border-line/80 bg-muted/20 p-3.5 space-y-3">
+            <div className="flex items-center gap-1.5 font-medium text-xs text-foreground">
+              <ShieldAlert className="size-3.5 text-primary shrink-0" />
+              <span>此 MCP 连接独立安全守卫（Tool Guard）</span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="拦截模式" error={errors.tool_guard_mode?.message}>
+                <Select {...register("tool_guard_mode")}>
+                  <option value="disabled">关闭安全拦截</option>
+                  <option value="block_high_risk">仅拦截高危不可逆操作（推荐）</option>
+                  <option value="strict">严格模式（拦截所有写操作）</option>
+                </Select>
+              </Field>
+              <Field label="守卫评估超时（秒）" error={errors.tool_guard_timeout_seconds?.message}>
+                <TextInput
+                  type="number"
+                  min={2}
+                  max={60}
+                  {...register("tool_guard_timeout_seconds", { valueAsNumber: true })}
+                />
+              </Field>
+            </div>
+            <Field label="针对此 MCP 的自定义守卫规则">
+              <TextArea
+                rows={2}
+                placeholder="例如：允许读取但禁止修改表结构或删除记录..."
+                {...register("tool_guard_custom_rules")}
+              />
+            </Field>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div className="flex flex-wrap gap-2">
               <Button type="submit" variant="primary" disabled={busy}>

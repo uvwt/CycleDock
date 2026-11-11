@@ -22,6 +22,10 @@ export const mcpFormSchema = z
       .max(300000, "超时不能超过 300000 毫秒"),
     bearer_token: z.string(),
     clear_bearer_token: z.boolean(),
+    tool_guard_mode: z.enum(["disabled", "block_high_risk", "strict"]).optional(),
+    tool_guard_model_route_id: z.string().optional(),
+    tool_guard_timeout_seconds: z.number().int().min(2).max(60).optional(),
+    tool_guard_custom_rules: z.string().optional(),
   })
   .refine((value) => !value.clear_bearer_token || !value.bearer_token, {
     path: ["bearer_token"],

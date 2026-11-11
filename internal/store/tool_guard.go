@@ -157,6 +157,83 @@ func (s *Store) IsCardToolWhitelisted(ctx context.Context, workspaceID, cardID u
 	})
 }
 
+type DeviceToolGuardInput struct {
+	DeviceNodeID   string
+	DeviceName     string
+	Mode           string
+	ModelRouteID   *uuid.UUID
+	TimeoutSeconds int32
+	CustomRules    string
+}
+
+func toNullableUUID(u *uuid.UUID) uuid.NullUUID {
+	if u == nil || *u == uuid.Nil {
+		return uuid.NullUUID{}
+	}
+	return uuid.NullUUID{UUID: *u, Valid: true}
+}
+
+// GetDeviceToolGuard 获取指定设备的 Tool Guard 配置
+func (s *Store) GetDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, nodeID string) (db.WorkspaceDeviceToolGuard, error) {
+	guard, err := s.queries.GetWorkspaceDeviceToolGuard(ctx, db.GetWorkspaceDeviceToolGuardParams{
+		WorkspaceID:  workspaceID,
+		DeviceNodeID: strings.TrimSpace(nodeID),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkspaceDeviceToolGuard{}, domain.ErrNotFound
+	}
+	return guard, err
+}
+
+// ListDeviceToolGuards 列出工作区所有设备的 Tool Guard 配置
+func (s *Store) ListDeviceToolGuards(ctx context.Context, workspaceID uuid.UUID) ([]db.WorkspaceDeviceToolGuard, error) {
+	return s.queries.ListWorkspaceDeviceToolGuards(ctx, workspaceID)
+}
+
+// SaveDeviceToolGuard 保存或更新指定设备的 Tool Guard 配置
+func (s *Store) SaveDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, input DeviceToolGuardInput) (db.WorkspaceDeviceToolGuard, error) {
+	nodeID := strings.TrimSpace(input.DeviceNodeID)
+	if nodeID == "" {
+		return db.WorkspaceDeviceToolGuard{}, fmt.Errorf("%w: device_node_id is required", domain.ErrConflict)
+	}
+	mode := strings.TrimSpace(input.Mode)
+	if mode == "" {
+		mode = "disabled"
+	}
+	switch mode {
+	case "disabled", "block_high_risk", "strict":
+	default:
+		return db.WorkspaceDeviceToolGuard{}, fmt.Errorf("%w: invalid mode %q", domain.ErrConflict, mode)
+	}
+	timeout := input.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = 10
+	} else if timeout > 60 {
+		timeout = 60
+	}
+	routeID := toNullableUUID(input.ModelRouteID)
+
+	return s.queries.UpsertWorkspaceDeviceToolGuard(ctx, db.UpsertWorkspaceDeviceToolGuardParams{
+		ID:             uuid.New(),
+		WorkspaceID:    workspaceID,
+		DeviceNodeID:   nodeID,
+		DeviceName:     strings.TrimSpace(input.DeviceName),
+		Mode:           mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: timeout,
+		CustomRules:    strings.TrimSpace(input.CustomRules),
+	})
+}
+
+// DeleteDeviceToolGuard 删除指定设备的 Tool Guard 配置
+func (s *Store) DeleteDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, nodeID string) error {
+	_, err := s.queries.DeleteWorkspaceDeviceToolGuard(ctx, db.DeleteWorkspaceDeviceToolGuardParams{
+		WorkspaceID:  workspaceID,
+		DeviceNodeID: strings.TrimSpace(nodeID),
+	})
+	return err
+}
+
 type PublishToolApprovalEventParams struct {
 	WorkspaceID    uuid.UUID
 	CardID         uuid.UUID

@@ -28,6 +28,18 @@ let nexusConnected = true;
 const now = () => new Date().toISOString();
 const hoursAgo = (hours) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+let deviceToolGuards = [
+  {
+    id: "guard-rn",
+    device_node_id: "node-rn",
+    device_name: "RN Server",
+    mode: "disabled",
+    timeout_seconds: 10,
+    custom_rules: "严禁直接执行 docker rm 或修改生产 nginx 配置文件",
+    created_at: now(),
+    updated_at: now(),
+  },
+];
 const cards = [
   {
     id: "discussion-1",
@@ -848,6 +860,31 @@ http
         if (route === "/agent/nexusdock") {
           if (req.method === "DELETE") nexusConnected = false;
           return data(res, { available: true, connected: nexusConnected });
+        }
+        if (route === "/agent/device-tool-guards") {
+          return data(res, deviceToolGuards);
+        }
+        if (route.startsWith("/agent/device-tool-guards/")) {
+          const nodeID = decodeURIComponent(route.split("/").at(-1));
+          const existing = deviceToolGuards.find((g) => g.device_node_id === nodeID);
+          if (req.method === "GET") {
+            if (existing) return data(res, existing);
+            return data(res, { device_node_id: nodeID, mode: "block_high_risk", timeout_seconds: 10 });
+          }
+          if (req.method === "PUT") {
+            const input = await body(req);
+            if (existing) {
+              Object.assign(existing, input, { updated_at: now() });
+              return data(res, existing);
+            }
+            const created = { id: "guard-" + Date.now(), device_node_id: nodeID, ...input, created_at: now(), updated_at: now() };
+            deviceToolGuards.push(created);
+            return data(res, created);
+          }
+          if (req.method === "DELETE") {
+            deviceToolGuards = deviceToolGuards.filter((g) => g.device_node_id !== nodeID);
+            return data(res, { ok: true });
+          }
         }
         if (route === "/agent/mcp-connections") {
           if (req.method === "GET") return data(res, mcp);

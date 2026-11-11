@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -204,4 +205,130 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		"turn_id":  commentResult.TurnID.String(),
 		"event_id": commentResult.EventID.String(),
 	})
+}
+
+type deviceToolGuardResponse struct {
+	ID             string     `json:"id"`
+	DeviceNodeID   string     `json:"device_node_id"`
+	DeviceName     string     `json:"device_name"`
+	Mode           string     `json:"mode"`
+	ModelRouteID   string     `json:"model_route_id,omitempty"`
+	TimeoutSeconds int32      `json:"timeout_seconds"`
+	CustomRules    string     `json:"custom_rules"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+func deviceToolGuardFromDB(row db.WorkspaceDeviceToolGuard) deviceToolGuardResponse {
+	routeID := ""
+	if row.ModelRouteID.Valid {
+		routeID = row.ModelRouteID.UUID.String()
+	}
+	return deviceToolGuardResponse{
+		ID:             row.ID.String(),
+		DeviceNodeID:   row.DeviceNodeID,
+		DeviceName:     row.DeviceName,
+		Mode:           row.Mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: row.TimeoutSeconds,
+		CustomRules:    row.CustomRules,
+		CreatedAt:      row.CreatedAt.Time,
+		UpdatedAt:      row.UpdatedAt.Time,
+	}
+}
+
+func (api *API) listDeviceToolGuards(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	guards, err := api.store.ListDeviceToolGuards(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	res := make([]deviceToolGuardResponse, 0, len(guards))
+	for _, g := range guards {
+		res = append(res, deviceToolGuardFromDB(g))
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (api *API) getDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	nodeID := strings.TrimSpace(r.PathValue("nodeID"))
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_node_id", "device node_id is required")
+		return
+	}
+	guard, err := api.store.GetDeviceToolGuard(r.Context(), identity.WorkspaceID, nodeID)
+	if errors.Is(err, domain.ErrNotFound) {
+		writeJSON(w, http.StatusOK, deviceToolGuardResponse{
+			DeviceNodeID:   nodeID,
+			Mode:           "block_high_risk",
+			TimeoutSeconds: 10,
+		})
+		return
+	}
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deviceToolGuardFromDB(guard))
+}
+
+func (api *API) saveDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	nodeID := strings.TrimSpace(r.PathValue("nodeID"))
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_node_id", "device node_id is required")
+		return
+	}
+	var request struct {
+		DeviceName     string `json:"device_name"`
+		Mode           string `json:"mode"`
+		ModelRouteID   string `json:"model_route_id"`
+		TimeoutSeconds int32  `json:"timeout_seconds"`
+		CustomRules    string `json:"custom_rules"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	var routeID *uuid.UUID
+	if strings.TrimSpace(request.ModelRouteID) != "" {
+		if id, err := uuid.Parse(strings.TrimSpace(request.ModelRouteID)); err == nil {
+			routeID = &id
+		}
+	}
+	guard, err := api.store.SaveDeviceToolGuard(r.Context(), identity.WorkspaceID, store.DeviceToolGuardInput{
+		DeviceNodeID:   nodeID,
+		DeviceName:     strings.TrimSpace(request.DeviceName),
+		Mode:           request.Mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: request.TimeoutSeconds,
+		CustomRules:    request.CustomRules,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deviceToolGuardFromDB(guard))
+}
+
+func (api *API) deleteDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	nodeID := strings.TrimSpace(r.PathValue("nodeID"))
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_node_id", "device node_id is required")
+		return
+	}
+	err := api.store.DeleteDeviceToolGuard(r.Context(), identity.WorkspaceID, nodeID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

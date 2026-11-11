@@ -392,30 +392,43 @@ type Workspace struct {
 }
 
 type WorkspaceAgentSetting struct {
+	WorkspaceID            uuid.UUID          `json:"workspace_id"`
+	SourceID               uuid.UUID          `json:"source_id"`
+	SystemInstructions     string             `json:"system_instructions"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	DefaultModelRouteID    uuid.NullUUID      `json:"default_model_route_id"`
+	DiscussionModelRouteID uuid.NullUUID      `json:"discussion_model_route_id"`
+	PlanModelRouteID       uuid.NullUUID      `json:"plan_model_route_id"`
+}
+
+type WorkspaceDeviceToolGuard struct {
+	ID             uuid.UUID          `json:"id"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	DeviceNodeID   string             `json:"device_node_id"`
+	DeviceName     string             `json:"device_name"`
+	Mode           string             `json:"mode"`
+	ModelRouteID   uuid.NullUUID      `json:"model_route_id"`
+	TimeoutSeconds int32              `json:"timeout_seconds"`
+	CustomRules    string             `json:"custom_rules"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkspaceMcpConnection struct {
+	ID                      uuid.UUID          `json:"id"`
 	WorkspaceID             uuid.UUID          `json:"workspace_id"`
-	SourceID                uuid.UUID          `json:"source_id"`
-	SystemInstructions      string             `json:"system_instructions"`
+	Name                    string             `json:"name"`
+	Url                     string             `json:"url"`
+	Enabled                 bool               `json:"enabled"`
+	TimeoutMs               int32              `json:"timeout_ms"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	DefaultModelRouteID     uuid.NullUUID      `json:"default_model_route_id"`
-	DiscussionModelRouteID  uuid.NullUUID      `json:"discussion_model_route_id"`
-	PlanModelRouteID        uuid.NullUUID      `json:"plan_model_route_id"`
+	BearerTokenCiphertext   []byte             `json:"bearer_token_ciphertext"`
 	ToolGuardMode           string             `json:"tool_guard_mode"`
 	ToolGuardModelRouteID   uuid.NullUUID      `json:"tool_guard_model_route_id"`
 	ToolGuardTimeoutSeconds int32              `json:"tool_guard_timeout_seconds"`
 	ToolGuardCustomRules    string             `json:"tool_guard_custom_rules"`
-}
-
-type WorkspaceMcpConnection struct {
-	ID                    uuid.UUID          `json:"id"`
-	WorkspaceID           uuid.UUID          `json:"workspace_id"`
-	Name                  string             `json:"name"`
-	Url                   string             `json:"url"`
-	Enabled               bool               `json:"enabled"`
-	TimeoutMs             int32              `json:"timeout_ms"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	BearerTokenCiphertext []byte             `json:"bearer_token_ciphertext"`
 }
 
 type WorkspaceMembership struct {
