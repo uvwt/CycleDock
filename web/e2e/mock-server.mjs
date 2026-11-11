@@ -285,6 +285,10 @@ let mcp = [
     enabled: true,
     token_configured: false,
     timeout_ms: 30000,
+    tool_guard_mode: "block_high_risk",
+    tool_guard_model_route_id: "00000000-0000-4000-8000-000000000101",
+    tool_guard_timeout_seconds: 10,
+    tool_guard_custom_rules: "允许读取但禁止修改表结构",
   },
 ];
 const data = (response, body, status = 200) => {
