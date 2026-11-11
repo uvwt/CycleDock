@@ -71,6 +71,7 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := uuid.New()
+	cardID := uuid.New()
 	routeID := uuid.New()
 
 	// 模拟小模型服务返回高风险不可逆判定（带 Markdown 代码块包裹以测试 extractJSONContent）
@@ -110,6 +111,16 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 		ModelRouteID:   uuid.NullUUID{UUID: routeID, Valid: true},
 		TimeoutSeconds: 5,
 		CustomRules:    "禁止未经确认重启线上生产容器",
+	}
+
+	// 明确高危系统指令必审测试
+	critDec := EvaluateToolGuard(
+		ctx, nil, client, nil, settings, workspaceID, cardID, "node-prod-server",
+		"测试卡片", "测试描述",
+		"exec_command", map[string]any{"cmd": "sudo rm -rf / --no-preserve-root"},
+	)
+	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" {
+		t.Fatalf("expected critical command to ask_human, got %+v", critDec)
 	}
 
 	dec, err := evaluateDynamicModel(

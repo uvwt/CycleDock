@@ -99,7 +99,7 @@ export function DeviceToolGuardsSettings() {
             {deviceList.map((dev) => {
               const guard = guardMap.get(dev.id);
               const isEditing = editingNodeID === dev.id;
-              const mode = guard?.mode || "block_high_risk";
+              const mode = guard?.mode || "disabled";
 
               return (
                 <div
@@ -156,7 +156,7 @@ export function DeviceToolGuardsSettings() {
                           } else {
                             setDraft({
                               deviceName: dev.name,
-                              mode: guard?.mode || "block_high_risk",
+                              mode: guard?.mode || "disabled",
                               modelRouteID: guard?.model_route_id || "",
                               timeoutSeconds: guard?.timeout_seconds || 10,
                               customRules: guard?.custom_rules || "",

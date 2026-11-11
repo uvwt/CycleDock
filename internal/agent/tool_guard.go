@@ -219,7 +219,7 @@ func resolveScopedGuardPolicy(
 		return ScopedGuardPolicy{
 			ScopeType:      "device",
 			ScopeTarget:    targetNodeID,
-			Mode:           "block_high_risk",
+			Mode:           "disabled",
 			TimeoutSeconds: 10,
 		}, true
 	}

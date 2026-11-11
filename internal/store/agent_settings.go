@@ -451,7 +451,7 @@ func (s *Store) SaveMCPConnection(
 
 	guardMode := strings.TrimSpace(input.ToolGuardMode)
 	if guardMode == "" {
-		guardMode = "block_high_risk"
+		guardMode = "disabled"
 	}
 	switch guardMode {
 	case "disabled", "block_high_risk", "strict":

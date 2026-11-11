@@ -198,7 +198,7 @@ func (s *Store) SaveDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, 
 	}
 	mode := strings.TrimSpace(input.Mode)
 	if mode == "" {
-		mode = "block_high_risk"
+		mode = "disabled"
 	}
 	switch mode {
 	case "disabled", "block_high_risk", "strict":

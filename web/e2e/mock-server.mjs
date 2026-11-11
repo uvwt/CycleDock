@@ -33,7 +33,7 @@ let deviceToolGuards = [
     id: "guard-rn",
     device_node_id: "node-rn",
     device_name: "RN Server",
-    mode: "block_high_risk",
+    mode: "disabled",
     timeout_seconds: 10,
     custom_rules: "严禁直接执行 docker rm 或修改生产 nginx 配置文件",
     created_at: now(),

@@ -5,7 +5,7 @@ CREATE TABLE workspace_device_tool_guards (
     workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     device_node_id TEXT NOT NULL,
     device_name TEXT NOT NULL DEFAULT '',
-    mode TEXT NOT NULL DEFAULT 'block_high_risk',
+    mode TEXT NOT NULL DEFAULT 'disabled',
     model_route_id UUID REFERENCES workspace_model_routes(id) ON DELETE SET NULL,
     timeout_seconds INTEGER NOT NULL DEFAULT 10,
     custom_rules TEXT NOT NULL DEFAULT '',
@@ -19,7 +19,7 @@ CREATE INDEX idx_workspace_device_tool_guards_workspace ON workspace_device_tool
 
 -- MCP 连接表增加独立的 Tool Guard 配置字段
 ALTER TABLE workspace_mcp_connections
-    ADD COLUMN tool_guard_mode TEXT DEFAULT 'block_high_risk' NOT NULL,
+    ADD COLUMN tool_guard_mode TEXT DEFAULT 'disabled' NOT NULL,
     ADD COLUMN tool_guard_model_route_id UUID REFERENCES workspace_model_routes(id) ON DELETE SET NULL,
     ADD COLUMN tool_guard_timeout_seconds INTEGER DEFAULT 10 NOT NULL,
     ADD COLUMN tool_guard_custom_rules TEXT DEFAULT '' NOT NULL;

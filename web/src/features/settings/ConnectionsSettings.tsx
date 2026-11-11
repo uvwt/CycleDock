@@ -188,7 +188,7 @@ function MCPForm({
       timeout_ms: initial.timeout_ms,
       bearer_token: "",
       clear_bearer_token: false,
-      tool_guard_mode: initial.tool_guard_mode || "block_high_risk",
+      tool_guard_mode: initial.tool_guard_mode || "disabled",
       tool_guard_model_route_id: initial.tool_guard_model_route_id || "",
       tool_guard_timeout_seconds: initial.tool_guard_timeout_seconds || 10,
       tool_guard_custom_rules: initial.tool_guard_custom_rules || "",
