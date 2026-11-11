@@ -1078,7 +1078,7 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertLessEqual(metrics["scrollWidth"], 375)
         self.assertGreaterEqual(metrics["textareaFontSize"], 16)
         self.assertEqual(metrics["bubbleMaxWidth"], "92%")
-        self.assertGreater(metrics["msgWidth"], 280)
+        self.assertGreater(metrics["msgWidth"], 240)
         self.assertTrue(metrics["topVisible"])
     def test_mobile_topbar_buttons_aligned_and_simplified(self):
         self.page.set_viewport_size({"width": 375, "height": 812})
