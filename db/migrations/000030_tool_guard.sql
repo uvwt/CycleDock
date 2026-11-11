@@ -58,12 +58,13 @@ CREATE INDEX idx_card_tool_whitelists_card ON card_tool_whitelists(workspace_id,
 ALTER TABLE events ADD COLUMN tool_approval_id UUID REFERENCES card_tool_approvals(id) ON DELETE SET NULL;
 ALTER TABLE events DROP CONSTRAINT events_event_type_check;
 ALTER TABLE events ADD CONSTRAINT events_event_type_check CHECK (event_type IN
-  ('comment','progress','finding','result','checkin','confirm','reject','status_change','message','tool_approval'));
+  ('comment','progress','finding','result','checkin','confirm','reject','status_change','message','checkin_ack','tool_approval'));
 
 -- +goose Down
+DELETE FROM events WHERE event_type = 'tool_approval';
 ALTER TABLE events DROP CONSTRAINT events_event_type_check;
 ALTER TABLE events ADD CONSTRAINT events_event_type_check CHECK (event_type IN
-  ('comment','progress','finding','result','checkin','confirm','reject','status_change','message'));
+  ('comment','progress','finding','result','checkin','confirm','reject','status_change','message','checkin_ack'));
 ALTER TABLE events DROP COLUMN IF EXISTS tool_approval_id;
 
 DROP TABLE IF EXISTS card_tool_whitelists;
