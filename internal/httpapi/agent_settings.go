@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,13 +21,22 @@ import (
 )
 
 type agentSettingsResponse struct {
-	Configured             bool                 `json:"configured"`
-	Routes                 []modelRouteResponse `json:"routes"`
-	SystemInstructions     string               `json:"system_instructions"`
-	SourceID               string               `json:"source_id,omitempty"`
-	DefaultModelRouteID    string               `json:"default_model_route_id,omitempty"`
-	DiscussionModelRouteID string               `json:"discussion_model_route_id,omitempty"`
-	PlanModelRouteID       string               `json:"plan_model_route_id,omitempty"`
+	Configured             bool                    `json:"configured"`
+	Routes                 []modelRouteResponse    `json:"routes"`
+	APICredentials         []apiCredentialResponse `json:"api_credentials"`
+	SystemInstructions     string                  `json:"system_instructions"`
+	SourceID               string                  `json:"source_id,omitempty"`
+	DefaultModelRouteID    string                  `json:"default_model_route_id,omitempty"`
+	DiscussionModelRouteID string                  `json:"discussion_model_route_id,omitempty"`
+	PlanModelRouteID       string                  `json:"plan_model_route_id,omitempty"`
+}
+
+type apiCredentialResponse struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	BaseURL          string `json:"base_url"`
+	APIKeyEnv        string `json:"api_key_env"`
+	APIKeyConfigured bool   `json:"api_key_configured"`
 }
 
 type modelRouteResponse struct {
@@ -34,6 +44,8 @@ type modelRouteResponse struct {
 	Enabled             bool       `json:"enabled"`
 	ProviderType        string     `json:"provider_type"`
 	CredentialID        string     `json:"credential_id,omitempty"`
+	APICredentialID     string     `json:"api_credential_id,omitempty"`
+	APICredentialName   string     `json:"api_credential_name,omitempty"`
 	ProviderBaseURL     string     `json:"provider_base_url"`
 	Model               string     `json:"model"`
 	BaseModel           string     `json:"base_model,omitempty"`
@@ -90,8 +102,15 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {
+		creds, credErr := api.store.ListAPICredentials(r.Context(), identity.WorkspaceID)
+		if credErr != nil {
+			api.handleError(w, credErr)
+			return
+		}
 		writeJSON(w, http.StatusOK, agentSettingsResponse{
-			Configured: false, Routes: []modelRouteResponse{},
+			Configured:     false,
+			Routes:         []modelRouteResponse{},
+			APICredentials: apiCredentialsToResponse(creds),
 		})
 		return
 	}
@@ -100,6 +119,81 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agentSettingsToResponse(settings))
+}
+
+func (api *API) listAgentAPICredentials(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	credentials, err := api.store.ListAPICredentials(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, apiCredentialsToResponse(credentials))
+}
+
+func (api *API) createAgentAPICredential(w http.ResponseWriter, r *http.Request) {
+	api.saveAgentAPICredential(w, r, uuid.Nil)
+}
+
+func (api *API) updateAgentAPICredential(w http.ResponseWriter, r *http.Request) {
+	credentialID, ok := parseUUIDParam(w, r, "credentialID")
+	if !ok {
+		return
+	}
+	api.saveAgentAPICredential(w, r, credentialID)
+}
+
+func (api *API) saveAgentAPICredential(w http.ResponseWriter, r *http.Request, credentialID uuid.UUID) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	var request struct {
+		Name        string `json:"name"`
+		BaseURL     string `json:"base_url"`
+		APIKey      string `json:"api_key"`
+		APIKeyEnv   string `json:"api_key_env"`
+		ClearAPIKey bool   `json:"clear_api_key"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	credential, err := api.store.SaveAPICredential(r.Context(), identity.WorkspaceID, store.APICredentialInput{
+		ID:          credentialID,
+		Name:        request.Name,
+		BaseURL:     request.BaseURL,
+		APIKey:      request.APIKey,
+		APIKeyEnv:   request.APIKeyEnv,
+		ClearAPIKey: request.ClearAPIKey,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if credentialID == uuid.Nil {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, apiCredentialToResponse(credential))
+}
+
+func (api *API) deleteAgentAPICredential(w http.ResponseWriter, r *http.Request) {
+	credentialID, ok := parseUUIDParam(w, r, "credentialID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	if err := api.store.DeleteAPICredential(r.Context(), identity.WorkspaceID, credentialID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +207,8 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			Enabled             bool   `json:"enabled"`
 			ProviderType        string `json:"provider_type"`
 			CredentialID        string `json:"credential_id"`
+			APICredentialID     string `json:"api_credential_id"`
+			APICredentialName   string `json:"api_credential_name"`
 			ProviderBaseURL     string `json:"provider_base_url"`
 			Model               string `json:"model"`
 			BaseModel           string `json:"base_model"`
@@ -137,9 +233,19 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		api.model.EnsureOnlineRegistry(r.Context())
 	}
 	existingSettings, _ := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
-	existingRoutesByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(existingSettings.Routes))
+	existingRoutesByID := make(map[uuid.UUID]store.ModelRoute, len(existingSettings.Routes))
 	for _, er := range existingSettings.Routes {
 		existingRoutesByID[er.ID] = er
+	}
+	existingCreds, _ := api.store.ListAPICredentials(r.Context(), identity.WorkspaceID)
+	existingCredsByID := make(map[uuid.UUID]db.WorkspaceApiCredential, len(existingCreds))
+	existingCredsByURL := make(map[string]db.WorkspaceApiCredential, len(existingCreds))
+	for _, cred := range existingCreds {
+		existingCredsByID[cred.ID] = cred
+		prev, exists := existingCredsByURL[cred.BaseUrl]
+		if !exists || (len(prev.ApiKeyCiphertext) == 0 && prev.ApiKeyEnv == "" && (len(cred.ApiKeyCiphertext) > 0 || cred.ApiKeyEnv != "")) {
+			existingCredsByURL[cred.BaseUrl] = cred
+		}
 	}
 
 	routes := make([]store.ModelRouteInput, 0, len(request.Routes))
@@ -162,6 +268,16 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			credentialID = &parsed
 		}
+		var apiCredentialID *uuid.UUID
+		if strings.TrimSpace(route.APICredentialID) != "" {
+			parsed, err := uuid.Parse(strings.TrimSpace(route.APICredentialID))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_api_credential_id", "API credential id is invalid.")
+				return
+			}
+			apiCredentialID = &parsed
+		}
+
 		providerType := strings.TrimSpace(route.ProviderType)
 		if providerType == "" {
 			providerType = "openai_compatible"
@@ -184,7 +300,7 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 		// 1. 服务商 /models 缓存 -> 2. 实时注册表 / 内置注册表精确匹配 -> 3. 调用路由自身 LLM 从实时注册表候选列表中识别底层模型
 		if limitsSource != modelclient.LimitsSourceUser {
 			var routeCfg modelclient.Config
-			lookupBaseURL := strings.TrimSpace(route.ProviderBaseURL)
+			lookupBaseURL := store.NormalizeAPIBaseURL(route.ProviderBaseURL)
 			if providerType != "openai_compatible" && api.modelAuth != nil && credentialID != nil {
 				if cfg, err := api.modelAuth.ModelConfigForCredential(
 					r.Context(),
@@ -197,40 +313,50 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 					routeCfg = cfg
 					lookupBaseURL = cfg.BaseURL
 				}
-			} else if providerType == "openai_compatible" && lookupBaseURL != "" {
+			} else if providerType == "openai_compatible" {
 				apiKey := strings.TrimSpace(route.APIKey)
 				envName := strings.TrimSpace(route.APIKeyEnv)
-				if apiKey == "" && !route.ClearAPIKey {
-					if prev, ok := existingRoutesByID[routeID]; ok {
-						if k, err := api.store.ModelRouteAPIKey(prev); err == nil && k != "" {
-							apiKey = k
-						} else if envName == "" {
-							envName = prev.ApiKeyEnv
+				var matchedCred *db.WorkspaceApiCredential
+				if apiCredentialID != nil {
+					if c, ok := existingCredsByID[*apiCredentialID]; ok {
+						matchedCred = &c
+						if lookupBaseURL == "" {
+							lookupBaseURL = c.BaseUrl
 						}
 					}
-					if apiKey == "" {
-						for _, er := range existingSettings.Routes {
-							if er.ProviderType == "openai_compatible" && strings.TrimSpace(er.ProviderBaseUrl) == lookupBaseURL {
-								if k, err := api.store.ModelRouteAPIKey(er); err == nil && k != "" {
-									apiKey = k
-									break
-								}
-							}
+				} else if lookupBaseURL != "" {
+					if prev, ok := existingRoutesByID[routeID]; ok && prev.ProviderBaseUrl == lookupBaseURL && prev.ApiCredentialID.Valid {
+						if c, ok := existingCredsByID[prev.ApiCredentialID.UUID]; ok {
+							matchedCred = &c
 						}
+					}
+					if matchedCred == nil {
+						if c, ok := existingCredsByURL[lookupBaseURL]; ok {
+							matchedCred = &c
+						}
+					}
+				}
+				if apiKey == "" && !route.ClearAPIKey && matchedCred != nil && lookupBaseURL == matchedCred.BaseUrl {
+					if k, err := api.store.APICredentialKey(*matchedCred); err == nil && k != "" {
+						apiKey = k
+					} else if envName == "" {
+						envName = matchedCred.ApiKeyEnv
 					}
 				}
 				if apiKey == "" && envName != "" && agentconfig.ValidEnvName(envName) {
 					apiKey = strings.TrimSpace(os.Getenv(envName))
 				}
-				routeCfg = modelclient.Config{
-					BaseURL: lookupBaseURL,
-					APIKey:  apiKey,
-					Model:   strings.TrimSpace(route.Model),
-					Timeout: 8 * time.Second,
+				if lookupBaseURL != "" {
+					routeCfg = modelclient.Config{
+						BaseURL: lookupBaseURL,
+						APIKey:  apiKey,
+						Model:   strings.TrimSpace(route.Model),
+						Timeout: 8 * time.Second,
+					}
 				}
 			}
 
-			if api.model != nil {
+			if api.model != nil && lookupBaseURL != "" {
 				if cached, ok := api.model.CachedProviderModelLimits(lookupBaseURL, route.Model); ok && cached != nil {
 					contextWindow = cached.ContextWindowTokens
 					maxInput = cached.MaxInputTokens
@@ -273,6 +399,7 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 			Enabled:             route.Enabled,
 			ProviderType:        providerType,
 			CredentialID:        credentialID,
+			APICredentialID:     apiCredentialID,
 			ProviderBaseURL:     route.ProviderBaseURL,
 			Model:               route.Model,
 			BaseModel:           baseModel,
@@ -326,6 +453,126 @@ func (api *API) saveAgentSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentSettingsToResponse(settings))
 }
 
+type resolvedOpenAIAuth struct {
+	baseURL   string
+	apiKey    string
+	apiKeyEnv string
+}
+
+// resolveOpenAICompatibleAuth 统一解析自定义 API 的连通性测试与模型列表鉴权参数：
+// 1. 优先采用请求直传的新密钥；
+// 2. 否则按 api_credential_id -> route_id -> 归一化 base_url 查找服务端加密凭据；
+// 3. 严禁在未提供新密钥时把已保存密钥转发到不同的 Base URL；
+// 4. 若服务端存在密文但解密失败，显式报错而非静默降级为空密钥。
+func (api *API) resolveOpenAICompatibleAuth(
+	ctx context.Context,
+	w http.ResponseWriter,
+	workspaceID uuid.UUID,
+	rawAPICredentialID, rawRouteID, rawBaseURL, rawAPIKey, rawAPIKeyEnv string,
+) (resolvedOpenAIAuth, bool) {
+	baseURL := store.NormalizeAPIBaseURL(rawBaseURL)
+	apiKey := strings.TrimSpace(rawAPIKey)
+	apiKeyEnv := strings.TrimSpace(rawAPIKeyEnv)
+	boundToCredential := false
+
+	if trimmedCredID := strings.TrimSpace(rawAPICredentialID); trimmedCredID != "" {
+		credUUID, err := uuid.Parse(trimmedCredID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_api_credential_id", "API credential id is invalid.")
+			return resolvedOpenAIAuth{}, false
+		}
+		cred, err := api.store.GetAPICredential(ctx, workspaceID, credUUID)
+		if err != nil {
+			api.handleError(w, err)
+			return resolvedOpenAIAuth{}, false
+		}
+		boundToCredential = true
+		if baseURL == "" {
+			baseURL = cred.BaseUrl
+		}
+		hasStoredSecret := len(cred.ApiKeyCiphertext) > 0 || cred.ApiKeyEnv != ""
+		if apiKey == "" && apiKeyEnv == "" && hasStoredSecret && baseURL != cred.BaseUrl {
+			writeError(w, http.StatusBadRequest, "api_url_changed", "Enter a new API key to access a different Base URL.")
+			return resolvedOpenAIAuth{}, false
+		}
+		if apiKey == "" && apiKeyEnv == "" {
+			if len(cred.ApiKeyCiphertext) > 0 {
+				decrypted, err := api.store.APICredentialKey(cred)
+				if err != nil {
+					if api.logger != nil {
+						api.logger.Warn("decrypt custom provider API credential failed", "credential_id", cred.ID, "error", err)
+					}
+					writeError(w, http.StatusServiceUnavailable, "api_key_unavailable", "Saved model API key cannot be decrypted.")
+					return resolvedOpenAIAuth{}, false
+				}
+				apiKey = decrypted
+			} else if cred.ApiKeyEnv != "" {
+				apiKeyEnv = cred.ApiKeyEnv
+			}
+		}
+	} else if apiKey == "" && apiKeyEnv == "" && strings.TrimSpace(rawRouteID) != "" {
+		if routeUUID, err := uuid.Parse(strings.TrimSpace(rawRouteID)); err == nil {
+			if route, err := api.store.GetModelRoute(ctx, workspaceID, routeUUID); err == nil {
+				boundToCredential = route.ApiCredentialID.Valid
+				if baseURL == "" {
+					baseURL = route.ProviderBaseUrl
+				}
+				hasStoredSecret := len(route.ApiKeyCiphertext) > 0 || route.ApiKeyEnv != ""
+				if hasStoredSecret && baseURL != route.ProviderBaseUrl {
+					writeError(w, http.StatusBadRequest, "api_url_changed", "Enter a new API key to access a different Base URL.")
+					return resolvedOpenAIAuth{}, false
+				}
+				if len(route.ApiKeyCiphertext) > 0 {
+					decrypted, err := api.store.ModelRouteAPIKey(route)
+					if err != nil {
+						if api.logger != nil {
+							api.logger.Warn("decrypt model route API key failed", "route_id", route.ID, "error", err)
+						}
+						writeError(w, http.StatusServiceUnavailable, "api_key_unavailable", "Saved model API key cannot be decrypted.")
+						return resolvedOpenAIAuth{}, false
+					}
+					apiKey = decrypted
+				} else if route.ApiKeyEnv != "" {
+					apiKeyEnv = route.ApiKeyEnv
+				}
+			}
+		}
+	}
+
+	// 仅在请求未绑定明确凭据或已有路由时，才按归一化 Base URL 兜底复用同地址凭据，
+	// 防止同一网关下多个独立凭据之间窜用密钥。
+	if !boundToCredential && apiKey == "" && apiKeyEnv == "" && baseURL != "" {
+		if creds, err := api.store.ListAPICredentials(ctx, workspaceID); err == nil {
+			for _, cred := range creds {
+				if cred.BaseUrl != baseURL {
+					continue
+				}
+				if len(cred.ApiKeyCiphertext) > 0 {
+					decrypted, err := api.store.APICredentialKey(cred)
+					if err != nil {
+						if api.logger != nil {
+							api.logger.Warn("decrypt custom provider API credential failed", "credential_id", cred.ID, "error", err)
+						}
+						writeError(w, http.StatusServiceUnavailable, "api_key_unavailable", "Saved model API key cannot be decrypted.")
+						return resolvedOpenAIAuth{}, false
+					}
+					apiKey = decrypted
+					break
+				}
+				if apiKeyEnv == "" && cred.ApiKeyEnv != "" {
+					apiKeyEnv = cred.ApiKeyEnv
+				}
+			}
+		}
+	}
+
+	return resolvedOpenAIAuth{
+		baseURL:   baseURL,
+		apiKey:    apiKey,
+		apiKeyEnv: apiKeyEnv,
+	}, true
+}
+
 func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 	identity := identityFromRequest(r)
 	if !requireWorkspaceOwner(w, identity.Role) {
@@ -334,6 +581,7 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		ProviderType    string `json:"provider_type"`
 		CredentialID    string `json:"credential_id"`
+		APICredentialID string `json:"api_credential_id"`
 		ProviderBaseURL string `json:"provider_base_url"`
 		Model           string `json:"model"`
 		APIKey          string `json:"api_key"`
@@ -352,22 +600,25 @@ func (api *API) testAgentProvider(w http.ResponseWriter, r *http.Request) {
 	var result agentcheck.Result
 	switch providerType {
 	case "openai_compatible":
-		apiKey := strings.TrimSpace(request.APIKey)
-		apiKeyEnv := strings.TrimSpace(request.APIKeyEnv)
-		if apiKey == "" && apiKeyEnv == "" && strings.TrimSpace(request.RouteID) != "" {
-			if routeUUID, err := uuid.Parse(strings.TrimSpace(request.RouteID)); err == nil {
-				if route, err := api.store.GetModelRoute(r.Context(), identity.WorkspaceID, routeUUID); err == nil {
-					if key, err := api.store.ModelRouteAPIKey(route); err == nil && key != "" {
-						apiKey = key
-					} else {
-						apiKeyEnv = route.ApiKeyEnv
-					}
-				}
-			}
+		resolved, ok := api.resolveOpenAICompatibleAuth(
+			r.Context(),
+			w,
+			identity.WorkspaceID,
+			request.APICredentialID,
+			request.RouteID,
+			request.ProviderBaseURL,
+			request.APIKey,
+			request.APIKeyEnv,
+		)
+		if !ok {
+			return
 		}
 		result = checker.Provider(r.Context(), agentcheck.ProviderInput{
-			BaseURL: request.ProviderBaseURL, Model: request.Model,
-			APIKey: apiKey, APIKeyEnv: apiKeyEnv, Timeout: timeout,
+			BaseURL:   resolved.baseURL,
+			Model:     request.Model,
+			APIKey:    resolved.apiKey,
+			APIKeyEnv: resolved.apiKeyEnv,
+			Timeout:   timeout,
 		})
 	case string(modelauth.ProviderChatGPT), string(modelauth.ProviderGrok):
 		if api.modelAuth == nil {
@@ -400,6 +651,7 @@ func (api *API) listAgentProviderModels(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var request struct {
+		APICredentialID string `json:"api_credential_id"`
 		ProviderBaseURL string `json:"provider_base_url"`
 		APIKey          string `json:"api_key"`
 		APIKeyEnv       string `json:"api_key_env"`
@@ -408,34 +660,31 @@ func (api *API) listAgentProviderModels(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	baseURL := strings.TrimSpace(request.ProviderBaseURL)
-	if err := agentconfig.ValidateEndpoint(baseURL); err != nil {
+	resolved, ok := api.resolveOpenAICompatibleAuth(
+		r.Context(),
+		w,
+		identity.WorkspaceID,
+		request.APICredentialID,
+		"",
+		request.ProviderBaseURL,
+		request.APIKey,
+		request.APIKeyEnv,
+	)
+	if !ok {
+		return
+	}
+	if err := agentconfig.ValidateEndpoint(resolved.baseURL); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_endpoint", err.Error())
 		return
 	}
-	apiKey := strings.TrimSpace(request.APIKey)
-	envName := strings.TrimSpace(request.APIKeyEnv)
-	if apiKey == "" && envName == "" {
-		if settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID); err == nil {
-			for _, route := range settings.Routes {
-				if route.ProviderType == "openai_compatible" && strings.TrimSpace(route.ProviderBaseUrl) == baseURL {
-					if key, err := api.store.ModelRouteAPIKey(route); err == nil && key != "" {
-						apiKey = key
-						break
-					}
-					if envName == "" && route.ApiKeyEnv != "" {
-						envName = route.ApiKeyEnv
-					}
-				}
-			}
-		}
-	}
-	if apiKey == "" && envName != "" {
-		if !agentconfig.ValidEnvName(envName) {
+
+	apiKey := resolved.apiKey
+	if apiKey == "" && resolved.apiKeyEnv != "" {
+		if !agentconfig.ValidEnvName(resolved.apiKeyEnv) {
 			writeError(w, http.StatusBadRequest, "invalid_secret_env", "Model API key environment variable name is invalid.")
 			return
 		}
-		value, ok := os.LookupEnv(envName)
+		value, ok := os.LookupEnv(resolved.apiKeyEnv)
 		if !ok || strings.TrimSpace(value) == "" {
 			writeError(w, http.StatusBadRequest, "secret_env_missing", "Configured model API key environment variable is not set.")
 			return
@@ -444,7 +693,7 @@ func (api *API) listAgentProviderModels(w http.ResponseWriter, r *http.Request) 
 	}
 
 	models, err := api.model.ListModels(r.Context(), modelclient.Config{
-		BaseURL: baseURL,
+		BaseURL: resolved.baseURL,
 		APIKey:  apiKey,
 		Timeout: 30 * time.Second,
 	})
@@ -617,6 +866,24 @@ func requireWorkspaceOwner(w http.ResponseWriter, role string) bool {
 	return false
 }
 
+func apiCredentialToResponse(cred db.WorkspaceApiCredential) apiCredentialResponse {
+	return apiCredentialResponse{
+		ID:               cred.ID.String(),
+		Name:             cred.Name,
+		BaseURL:          cred.BaseUrl,
+		APIKeyEnv:        cred.ApiKeyEnv,
+		APIKeyConfigured: len(cred.ApiKeyCiphertext) > 0 || cred.ApiKeyEnv != "",
+	}
+}
+
+func apiCredentialsToResponse(creds []db.WorkspaceApiCredential) []apiCredentialResponse {
+	out := make([]apiCredentialResponse, 0, len(creds))
+	for _, cred := range creds {
+		out = append(out, apiCredentialToResponse(cred))
+	}
+	return out
+}
+
 func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse {
 	routes := make([]modelRouteResponse, 0, len(settings.Routes))
 	now := time.Now().UTC()
@@ -624,6 +891,10 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 		credentialID := ""
 		if route.CredentialID.Valid {
 			credentialID = route.CredentialID.UUID.String()
+		}
+		apiCredentialID := ""
+		if route.ApiCredentialID.Valid {
+			apiCredentialID = route.ApiCredentialID.UUID.String()
 		}
 		contextWindow := int(route.ContextWindowTokens.Int32)
 		maxInput := int(route.MaxInputTokens.Int32)
@@ -658,6 +929,8 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 			Enabled:             route.Enabled,
 			ProviderType:        route.ProviderType,
 			CredentialID:        credentialID,
+			APICredentialID:     apiCredentialID,
+			APICredentialName:   route.ApiCredentialName,
 			ProviderBaseURL:     route.ProviderBaseUrl,
 			Model:               route.Model,
 			BaseModel:           baseModel,
@@ -685,6 +958,7 @@ func agentSettingsToResponse(settings store.AgentSettings) agentSettingsResponse
 	return agentSettingsResponse{
 		Configured:             true,
 		Routes:                 routes,
+		APICredentials:         apiCredentialsToResponse(settings.APICredentials),
 		SystemInstructions:     settings.SystemInstructions,
 		SourceID:               settings.SourceID.String(),
 		DefaultModelRouteID:    defaultRouteID,

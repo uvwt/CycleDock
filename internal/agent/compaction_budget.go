@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
-	"github.com/uvwt/CycleDock/internal/store/db"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 var (
@@ -81,7 +81,7 @@ type RouteBudget struct {
 }
 
 // ResolveRouteModelLimits 按（1. user -> 2. provider -> 3. registry -> 4. unknown）解析路由容量。
-func ResolveRouteModelLimits(route db.WorkspaceModelRoute, client *modelclient.Client) modelclient.ModelLimits {
+func ResolveRouteModelLimits(route store.ModelRoute, client *modelclient.Client) modelclient.ModelLimits {
 	var verifiedAt *time.Time
 	if route.LimitsVerifiedAt.Valid {
 		ts := route.LimitsVerifiedAt.Time.UTC()
@@ -198,7 +198,7 @@ func ComputeRouteCompactionBudget(limits modelclient.ModelLimits, policy Compact
 // 1. 当候选路由具有已知容量但 promptTokens > EffectiveInputLimit 时，拒绝发送并返回可诊断错误。
 // 2. 当处于故障切换（isFailover=true）且备用路由容量未知、同时 promptTokens 超过未知路由保守上限时，拒绝盲目发送。
 func ValidateRoutePromptCapacity(
-	route db.WorkspaceModelRoute,
+	route store.ModelRoute,
 	budget RouteBudget,
 	promptTokens int,
 	isFailover bool,

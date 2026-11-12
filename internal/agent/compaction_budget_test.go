@@ -27,7 +27,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
-	"github.com/uvwt/CycleDock/internal/store/db"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestComputeRouteCompactionBudget(t *testing.T) {
@@ -69,7 +69,7 @@ func TestComputeRouteCompactionBudget(t *testing.T) {
 	})
 
 	t.Run("用户手动覆盖与独立 MaxInputTokens", func(t *testing.T) {
-		route := db.WorkspaceModelRoute{
+		route := store.ModelRoute{
 			ID:                  uuid.New(),
 			Model:               "custom-proxy-model",
 			ContextWindowTokens: pgtype.Int4{Int32: 64000, Valid: true},
@@ -99,7 +99,7 @@ func TestComputeRouteCompactionBudget(t *testing.T) {
 	})
 
 	t.Run("未知容量模型使用独立保守策略且不伪造容量", func(t *testing.T) {
-		route := db.WorkspaceModelRoute{
+		route := store.ModelRoute{
 			ID:           uuid.New(),
 			Model:        "gemini-3.8-flash-high-unknown",
 			LimitsSource: modelclient.LimitsSourceUnknown,
@@ -153,7 +153,7 @@ func TestFailoverSkipsSmallAndUnknownBackupRoutesForOversizedPrompt(t *testing.T
 	unknownID := uuid.New()
 	largeID := uuid.New()
 
-	routes := []db.WorkspaceModelRoute{
+	routes := []store.ModelRoute{
 		{
 			ID:              primaryID,
 			Enabled:         true,
@@ -262,7 +262,7 @@ func TestContextTooLargeErrorFailsOverWithoutRetryingSameRoute(t *testing.T) {
 	}))
 	defer backupServer.Close()
 
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 		{ID: uuid.New(), Enabled: true, ProviderBaseUrl: primaryServer.URL, Model: "custom-primary"},
 		{ID: uuid.New(), Enabled: true, ProviderBaseUrl: backupServer.URL, Model: "gemini-2.5-pro"},
 	})

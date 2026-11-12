@@ -138,84 +138,39 @@ func (q *Queries) CreateCardToolWhitelist(ctx context.Context, arg CreateCardToo
 	return i, err
 }
 
-const createWorkspaceModelRoute = `-- name: CreateWorkspaceModelRoute :one
-INSERT INTO workspace_model_routes (
-    id, workspace_id, position, enabled, provider_type, credential_id,
-    provider_base_url, model, base_model, api_key_env, api_key_ciphertext,
-    context_window_tokens, max_input_tokens, max_output_tokens,
-    limits_source, limits_verified_at
-)
-VALUES (
-    $1, $2, $3, $4,
-    $5, $6,
-    $7, $8, $9, $10,
-    $11,
-    $12, $13, $14,
-    COALESCE(NULLIF(btrim($15::text), ''), 'unknown'), $16
-)
-RETURNING id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext, base_model, context_window_tokens, max_input_tokens, max_output_tokens, limits_source, limits_verified_at
+const deleteRemovedWorkspaceModelRoutes = `-- name: DeleteRemovedWorkspaceModelRoutes :exec
+DELETE FROM workspace_model_routes
+WHERE workspace_id = $1
+  AND NOT (id = ANY($2::uuid[]))
 `
 
-type CreateWorkspaceModelRouteParams struct {
-	ID                  uuid.UUID          `json:"id"`
-	WorkspaceID         uuid.UUID          `json:"workspace_id"`
-	Position            int32              `json:"position"`
-	Enabled             bool               `json:"enabled"`
-	ProviderType        string             `json:"provider_type"`
-	CredentialID        uuid.NullUUID      `json:"credential_id"`
-	ProviderBaseUrl     string             `json:"provider_base_url"`
-	Model               string             `json:"model"`
-	BaseModel           string             `json:"base_model"`
-	ApiKeyEnv           string             `json:"api_key_env"`
-	ApiKeyCiphertext    []byte             `json:"api_key_ciphertext"`
-	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
-	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
-	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
-	LimitsSource        string             `json:"limits_source"`
-	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
+type DeleteRemovedWorkspaceModelRoutesParams struct {
+	WorkspaceID uuid.UUID   `json:"workspace_id"`
+	KeepIds     []uuid.UUID `json:"keep_ids"`
 }
 
-func (q *Queries) CreateWorkspaceModelRoute(ctx context.Context, arg CreateWorkspaceModelRouteParams) (WorkspaceModelRoute, error) {
-	row := q.db.QueryRow(ctx, createWorkspaceModelRoute,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.Position,
-		arg.Enabled,
-		arg.ProviderType,
-		arg.CredentialID,
-		arg.ProviderBaseUrl,
-		arg.Model,
-		arg.BaseModel,
-		arg.ApiKeyEnv,
-		arg.ApiKeyCiphertext,
-		arg.ContextWindowTokens,
-		arg.MaxInputTokens,
-		arg.MaxOutputTokens,
-		arg.LimitsSource,
-		arg.LimitsVerifiedAt,
-	)
-	var i WorkspaceModelRoute
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Position,
-		&i.Enabled,
-		&i.ProviderType,
-		&i.CredentialID,
-		&i.ProviderBaseUrl,
-		&i.Model,
-		&i.ApiKeyEnv,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ApiKeyCiphertext,
-		&i.BaseModel,
-		&i.ContextWindowTokens,
-		&i.MaxInputTokens,
-		&i.MaxOutputTokens,
-		&i.LimitsSource,
-		&i.LimitsVerifiedAt,
-	)
-	return i, err
+func (q *Queries) DeleteRemovedWorkspaceModelRoutes(ctx context.Context, arg DeleteRemovedWorkspaceModelRoutesParams) error {
+	_, err := q.db.Exec(ctx, deleteRemovedWorkspaceModelRoutes, arg.WorkspaceID, arg.KeepIds)
+	return err
+}
+
+const deleteWorkspaceAPICredential = `-- name: DeleteWorkspaceAPICredential :execrows
+DELETE FROM workspace_api_credentials
+WHERE workspace_id = $1
+  AND id = $2
+`
+
+type DeleteWorkspaceAPICredentialParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteWorkspaceAPICredential(ctx context.Context, arg DeleteWorkspaceAPICredentialParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspaceAPICredential, arg.WorkspaceID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteWorkspaceDeviceToolGuard = `-- name: DeleteWorkspaceDeviceToolGuard :execrows
@@ -254,16 +209,6 @@ func (q *Queries) DeleteWorkspaceMCPConnection(ctx context.Context, arg DeleteWo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const deleteWorkspaceModelRoutes = `-- name: DeleteWorkspaceModelRoutes :exec
-DELETE FROM workspace_model_routes
-WHERE workspace_id = $1
-`
-
-func (q *Queries) DeleteWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceModelRoutes, workspaceID)
-	return err
 }
 
 const getCardToolApproval = `-- name: GetCardToolApproval :one
@@ -333,6 +278,34 @@ func (q *Queries) GetCardToolApprovalByID(ctx context.Context, arg GetCardToolAp
 		&i.ResolutionComment,
 		&i.ResolvedBySourceID,
 		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkspaceAPICredential = `-- name: GetWorkspaceAPICredential :one
+SELECT id, workspace_id, name, base_url, api_key_env, api_key_ciphertext, created_at, updated_at
+FROM workspace_api_credentials
+WHERE workspace_id = $1
+  AND id = $2
+`
+
+type GetWorkspaceAPICredentialParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetWorkspaceAPICredential(ctx context.Context, arg GetWorkspaceAPICredentialParams) (WorkspaceApiCredential, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceAPICredential, arg.WorkspaceID, arg.ID)
+	var i WorkspaceApiCredential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.ApiKeyEnv,
+		&i.ApiKeyCiphertext,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -575,6 +548,42 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 	return items, nil
 }
 
+const listWorkspaceAPICredentials = `-- name: ListWorkspaceAPICredentials :many
+SELECT id, workspace_id, name, base_url, api_key_env, api_key_ciphertext, created_at, updated_at
+FROM workspace_api_credentials
+WHERE workspace_id = $1
+ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListWorkspaceAPICredentials(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceApiCredential, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceAPICredentials, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WorkspaceApiCredential{}
+	for rows.Next() {
+		var i WorkspaceApiCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.BaseUrl,
+			&i.ApiKeyEnv,
+			&i.ApiKeyCiphertext,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceDeviceToolGuards = `-- name: ListWorkspaceDeviceToolGuards :many
 SELECT id, workspace_id, device_node_id, device_name, mode, model_route_id, timeout_seconds, custom_rules, created_at, updated_at
 FROM workspace_device_tool_guards
@@ -655,21 +664,67 @@ func (q *Queries) ListWorkspaceMCPConnections(ctx context.Context, workspaceID u
 }
 
 const listWorkspaceModelRoutes = `-- name: ListWorkspaceModelRoutes :many
-SELECT id, workspace_id, position, enabled, provider_type, credential_id, provider_base_url, model, api_key_env, created_at, updated_at, api_key_ciphertext, base_model, context_window_tokens, max_input_tokens, max_output_tokens, limits_source, limits_verified_at
-FROM workspace_model_routes
-WHERE workspace_id = $1
-ORDER BY position, id
+SELECT
+    r.id,
+    r.workspace_id,
+    r.position,
+    r.enabled,
+    r.provider_type,
+    r.credential_id,
+    r.api_credential_id,
+    COALESCE(ac.name, '')::text AS api_credential_name,
+    COALESCE(ac.base_url, '')::text AS provider_base_url,
+    r.model,
+    r.base_model,
+    COALESCE(ac.api_key_env, '')::text AS api_key_env,
+    ac.api_key_ciphertext,
+    r.context_window_tokens,
+    r.max_input_tokens,
+    r.max_output_tokens,
+    r.limits_source,
+    r.limits_verified_at,
+    r.created_at,
+    r.updated_at
+FROM workspace_model_routes r
+LEFT JOIN workspace_api_credentials ac
+  ON ac.workspace_id = r.workspace_id
+ AND ac.id = r.api_credential_id
+WHERE r.workspace_id = $1
+ORDER BY r.position, r.id
 `
 
-func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceModelRoute, error) {
+type ListWorkspaceModelRoutesRow struct {
+	ID                  uuid.UUID          `json:"id"`
+	WorkspaceID         uuid.UUID          `json:"workspace_id"`
+	Position            int32              `json:"position"`
+	Enabled             bool               `json:"enabled"`
+	ProviderType        string             `json:"provider_type"`
+	CredentialID        uuid.NullUUID      `json:"credential_id"`
+	ApiCredentialID     uuid.NullUUID      `json:"api_credential_id"`
+	ApiCredentialName   string             `json:"api_credential_name"`
+	ProviderBaseUrl     string             `json:"provider_base_url"`
+	Model               string             `json:"model"`
+	BaseModel           string             `json:"base_model"`
+	ApiKeyEnv           string             `json:"api_key_env"`
+	ApiKeyCiphertext    []byte             `json:"api_key_ciphertext"`
+	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
+	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
+	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
+	LimitsSource        string             `json:"limits_source"`
+	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceModelRoutesRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspaceModelRoutes, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []WorkspaceModelRoute{}
+	items := []ListWorkspaceModelRoutesRow{}
 	for rows.Next() {
-		var i WorkspaceModelRoute
+		var i ListWorkspaceModelRoutesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
@@ -677,18 +732,20 @@ func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid
 			&i.Enabled,
 			&i.ProviderType,
 			&i.CredentialID,
+			&i.ApiCredentialID,
+			&i.ApiCredentialName,
 			&i.ProviderBaseUrl,
 			&i.Model,
-			&i.ApiKeyEnv,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ApiKeyCiphertext,
 			&i.BaseModel,
+			&i.ApiKeyEnv,
+			&i.ApiKeyCiphertext,
 			&i.ContextWindowTokens,
 			&i.MaxInputTokens,
 			&i.MaxOutputTokens,
 			&i.LimitsSource,
 			&i.LimitsVerifiedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -843,6 +900,74 @@ func (q *Queries) ResolveCardToolApproval(ctx context.Context, arg ResolveCardTo
 		&i.ResolutionComment,
 		&i.ResolvedBySourceID,
 		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const shiftWorkspaceModelRoutePositions = `-- name: ShiftWorkspaceModelRoutePositions :exec
+UPDATE workspace_model_routes
+SET position = position + 1000
+WHERE workspace_id = $1
+`
+
+func (q *Queries) ShiftWorkspaceModelRoutePositions(ctx context.Context, workspaceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, shiftWorkspaceModelRoutePositions, workspaceID)
+	return err
+}
+
+const upsertWorkspaceAPICredential = `-- name: UpsertWorkspaceAPICredential :one
+INSERT INTO workspace_api_credentials (
+    id, workspace_id, name, base_url, api_key_env, api_key_ciphertext
+)
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6
+)
+ON CONFLICT (workspace_id, id) DO UPDATE
+SET name = EXCLUDED.name,
+    base_url = EXCLUDED.base_url,
+    api_key_env = EXCLUDED.api_key_env,
+    api_key_ciphertext = CASE
+        WHEN $7::boolean THEN EXCLUDED.api_key_ciphertext
+        ELSE workspace_api_credentials.api_key_ciphertext
+    END,
+    updated_at = now()
+WHERE workspace_api_credentials.base_url = EXCLUDED.base_url
+   OR workspace_api_credentials.api_key_ciphertext IS NULL
+   OR $7::boolean
+RETURNING id, workspace_id, name, base_url, api_key_env, api_key_ciphertext, created_at, updated_at
+`
+
+type UpsertWorkspaceAPICredentialParams struct {
+	ID               uuid.UUID `json:"id"`
+	WorkspaceID      uuid.UUID `json:"workspace_id"`
+	Name             string    `json:"name"`
+	BaseUrl          string    `json:"base_url"`
+	ApiKeyEnv        string    `json:"api_key_env"`
+	ApiKeyCiphertext []byte    `json:"api_key_ciphertext"`
+	ReplaceApiKey    bool      `json:"replace_api_key"`
+}
+
+func (q *Queries) UpsertWorkspaceAPICredential(ctx context.Context, arg UpsertWorkspaceAPICredentialParams) (WorkspaceApiCredential, error) {
+	row := q.db.QueryRow(ctx, upsertWorkspaceAPICredential,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.BaseUrl,
+		arg.ApiKeyEnv,
+		arg.ApiKeyCiphertext,
+		arg.ReplaceApiKey,
+	)
+	var i WorkspaceApiCredential
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.ApiKeyEnv,
+		&i.ApiKeyCiphertext,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1031,6 +1156,94 @@ func (q *Queries) UpsertWorkspaceMCPConnection(ctx context.Context, arg UpsertWo
 		&i.ToolGuardModelRouteID,
 		&i.ToolGuardTimeoutSeconds,
 		&i.ToolGuardCustomRules,
+	)
+	return i, err
+}
+
+const upsertWorkspaceModelRoute = `-- name: UpsertWorkspaceModelRoute :one
+INSERT INTO workspace_model_routes (
+    id, workspace_id, position, enabled, provider_type, credential_id, api_credential_id,
+    model, base_model,
+    context_window_tokens, max_input_tokens, max_output_tokens,
+    limits_source, limits_verified_at
+)
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7,
+    $8, $9,
+    $10, $11, $12,
+    COALESCE(NULLIF(btrim($13::text), ''), 'unknown'), $14
+)
+ON CONFLICT (id) DO UPDATE
+SET position = EXCLUDED.position,
+    enabled = EXCLUDED.enabled,
+    provider_type = EXCLUDED.provider_type,
+    credential_id = EXCLUDED.credential_id,
+    api_credential_id = EXCLUDED.api_credential_id,
+    model = EXCLUDED.model,
+    base_model = EXCLUDED.base_model,
+    context_window_tokens = EXCLUDED.context_window_tokens,
+    max_input_tokens = EXCLUDED.max_input_tokens,
+    max_output_tokens = EXCLUDED.max_output_tokens,
+    limits_source = EXCLUDED.limits_source,
+    limits_verified_at = EXCLUDED.limits_verified_at,
+    updated_at = now()
+WHERE workspace_model_routes.workspace_id = EXCLUDED.workspace_id
+RETURNING id, workspace_id, position, enabled, provider_type, credential_id, model, created_at, updated_at, base_model, context_window_tokens, max_input_tokens, max_output_tokens, limits_source, limits_verified_at, api_credential_id
+`
+
+type UpsertWorkspaceModelRouteParams struct {
+	ID                  uuid.UUID          `json:"id"`
+	WorkspaceID         uuid.UUID          `json:"workspace_id"`
+	Position            int32              `json:"position"`
+	Enabled             bool               `json:"enabled"`
+	ProviderType        string             `json:"provider_type"`
+	CredentialID        uuid.NullUUID      `json:"credential_id"`
+	ApiCredentialID     uuid.NullUUID      `json:"api_credential_id"`
+	Model               string             `json:"model"`
+	BaseModel           string             `json:"base_model"`
+	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
+	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
+	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
+	LimitsSource        string             `json:"limits_source"`
+	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
+}
+
+func (q *Queries) UpsertWorkspaceModelRoute(ctx context.Context, arg UpsertWorkspaceModelRouteParams) (WorkspaceModelRoute, error) {
+	row := q.db.QueryRow(ctx, upsertWorkspaceModelRoute,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Position,
+		arg.Enabled,
+		arg.ProviderType,
+		arg.CredentialID,
+		arg.ApiCredentialID,
+		arg.Model,
+		arg.BaseModel,
+		arg.ContextWindowTokens,
+		arg.MaxInputTokens,
+		arg.MaxOutputTokens,
+		arg.LimitsSource,
+		arg.LimitsVerifiedAt,
+	)
+	var i WorkspaceModelRoute
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Position,
+		&i.Enabled,
+		&i.ProviderType,
+		&i.CredentialID,
+		&i.Model,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BaseModel,
+		&i.ContextWindowTokens,
+		&i.MaxInputTokens,
+		&i.MaxOutputTokens,
+		&i.LimitsSource,
+		&i.LimitsVerifiedAt,
+		&i.ApiCredentialID,
 	)
 	return i, err
 }

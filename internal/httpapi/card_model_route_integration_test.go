@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/uvwt/CycleDock/internal/store/db"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestCardModelRouteEndpointIntegration(t *testing.T) {
-	handler, pool, dataStore := newHTTPIntegration(t)
+	handler, _, dataStore := newHTTPIntegration(t)
 	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]string{"password": httpIntegrationPassword}, nil, nil)
 	cookie := responseCookie(t, login, sessionCookieName)
 	var me identityResponse
@@ -28,18 +28,18 @@ func TestCardModelRouteEndpointIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	route, err := db.New(pool).CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
-		ID:              uuid.New(),
-		WorkspaceID:     workspaceID,
-		Position:        1,
-		ProviderType:    "openai_compatible",
-		ProviderBaseUrl: "https://api.openai.com/v1",
-		Model:           "gpt-4o",
-		Enabled:         true,
+	savedSettings, err := dataStore.SaveAgentSettings(ctx, workspaceID, store.AgentSettingsInput{
+		Routes: []store.ModelRouteInput{{
+			ProviderType:    "openai_compatible",
+			ProviderBaseURL: "https://api.openai.com/v1",
+			Model:           "gpt-4o",
+			Enabled:         true,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	route := savedSettings.Routes[0]
 
 	// 1. 设置模型路由
 	routeIDStr := route.ID.String()

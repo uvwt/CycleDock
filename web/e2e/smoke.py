@@ -1011,6 +1011,71 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(len(payload["routes"]), 2)
         self.assertEqual(payload["routes"][0]["model"], "")
         self.assertEqual(payload["routes"][1]["model"], "example-model")
+        self.assertTrue(payload["routes"][0].get("api_credential_id"))
+        self.assertEqual(
+            payload["routes"][0]["api_credential_id"],
+            payload["routes"][1]["api_credential_id"],
+        )
+
+    def test_custom_api_credential_create_rotate_and_share_across_routes(self):
+        self.page.goto(BASE + "/settings/models")
+        self.page.get_by_role("heading", name="模型账号与服务").wait_for()
+
+        self.page.get_by_role("button", name="添加 API").click()
+        dialog = self.page.get_by_role("dialog", name="配置服务商接口")
+        dialog.wait_for()
+        dialog.get_by_placeholder("如 CPA 主力网关 / DeepSeek 生产").fill("CPA 主力网关")
+        dialog.get_by_placeholder("Base URL，如 https://api.deepseek.com/v1").fill(
+            "https://cpa.example.com/v1/"
+        )
+        dialog.locator('input[type="password"]').fill("sk-cpa-initial")
+
+        with self.page.expect_request(
+            lambda request: request.url.endswith("/api/v1/agent/api-credentials")
+            and request.method == "POST"
+        ) as create_req:
+            dialog.get_by_role("button", name="查看可用模型").click()
+            dialog.get_by_role("button", name="Example Model", exact=False).first.click()
+        created_payload = create_req.value.post_data_json
+        self.assertEqual(created_payload["name"], "CPA 主力网关")
+        self.assertEqual(created_payload["base_url"], "https://cpa.example.com/v1")
+        self.assertEqual(created_payload["api_key"], "sk-cpa-initial")
+
+        # 继续在同一凭据下添加第二个模型：不应再次创建重复凭据，而应共享同一 api_credential_id
+        dialog.get_by_role("button", name="Example Model Pro").click()
+        dialog.get_by_role("button", name="完成", exact=True).click()
+        dialog.wait_for(state="hidden")
+
+        with self.page.expect_request(
+            lambda request: request.url.endswith("/api/v1/agent/settings")
+            and request.method == "PUT"
+        ) as save_req:
+            self.page.get_by_role("button", name="保存模型路由").click()
+        saved_routes = [
+            r
+            for r in save_req.value.post_data_json["routes"]
+            if r.get("provider_base_url") == "https://cpa.example.com/v1"
+        ]
+        self.assertEqual(len(saved_routes), 2)
+        self.assertEqual(
+            saved_routes[0]["api_credential_id"],
+            saved_routes[1]["api_credential_id"],
+        )
+
+        # 重新打开该服务商凭据原地轮换 API Key
+        cpa_row = self.page.locator("div").filter(has_text="CPA 主力网关").first
+        self.assertTrue(cpa_row.is_visible())
+        self.page.get_by_role("button", name="查看可用模型").last.click()
+        dialog.wait_for()
+        dialog.locator('input[type="password"]').fill("sk-cpa-rotated")
+        with self.page.expect_request(
+            lambda request: "/api/v1/agent/api-credentials/" in request.url
+            and request.method == "PUT"
+        ) as rotate_req:
+            dialog.get_by_role("button", name="保存凭据").click()
+        self.assertEqual(rotate_req.value.post_data_json["api_key"], "sk-cpa-rotated")
+        dialog.get_by_role("button", name="完成", exact=True).click()
+        dialog.wait_for(state="hidden")
 
     def test_settings_and_persistent_language_theme(self):
         self.page.goto(BASE + "/settings/general")

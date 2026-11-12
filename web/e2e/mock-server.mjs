@@ -238,15 +238,27 @@ const failFirstComment = new Set();
 let failNextDiscussionCreate = false;
 let settings = {
   configured: true,
+  api_credentials: [
+    {
+      id: "00000000-0000-4000-8000-000000000201",
+      name: "api.example.com",
+      base_url: "https://api.example.com/v1",
+      api_key_env: "CYCLEDOCK_MODEL_API_KEY",
+      api_key_configured: true,
+    },
+  ],
   routes: [
     {
       id: "00000000-0000-4000-8000-000000000101",
       enabled: true,
       provider_type: "openai_compatible",
       credential_id: "",
+      api_credential_id: "00000000-0000-4000-8000-000000000201",
+      api_credential_name: "api.example.com",
       provider_base_url: "https://api.example.com/v1",
       model: "example-model",
       api_key_env: "CYCLEDOCK_MODEL_API_KEY",
+      api_key_configured: true,
     },
   ],
   system_instructions: "先检查现场，再确认结果",
@@ -821,12 +833,138 @@ http
             return data(res, { attempt_id: "attempt-retry-demo" });
         }
         if (route === "/agent/status") return data(res, { model_configured: settings.routes.some((route) => route.enabled) });
+        if (route === "/agent/api-credentials") {
+          if (req.method === "GET")
+            return data(res, settings.api_credentials || []);
+          if (req.method === "POST") {
+            const input = await body(req);
+            const baseURL = String(input.base_url || "")
+              .trim()
+              .replace(/\/+$/, "");
+            let defaultName = baseURL;
+            try {
+              defaultName = new URL(baseURL).hostname || baseURL;
+            } catch {}
+            const created = {
+              id: "00000000-0000-4000-8000-" + String(Date.now()).slice(-12),
+              name: String(input.name || "").trim() || defaultName,
+              base_url: baseURL,
+              api_key_env: String(input.api_key_env || "").trim(),
+              api_key_configured: Boolean(
+                String(input.api_key || "").trim() ||
+                  String(input.api_key_env || "").trim(),
+              ),
+            };
+            settings.api_credentials = [
+              ...(settings.api_credentials || []),
+              created,
+            ];
+            return data(res, created, 201);
+          }
+        }
+        if (route.startsWith("/agent/api-credentials/")) {
+          const credID = decodeURIComponent(route.split("/").at(-1));
+          const list = settings.api_credentials || [];
+          const existing = list.find((c) => c.id === credID);
+          if (!existing) return failure(res);
+          if (req.method === "DELETE") {
+            settings.api_credentials = list.filter((c) => c.id !== credID);
+            settings.routes = (settings.routes || []).filter(
+              (r) => r.api_credential_id !== credID,
+            );
+            return data(res, null, 204);
+          }
+          if (req.method === "PUT") {
+            const input = await body(req);
+            const baseURL = String(input.base_url || existing.base_url)
+              .trim()
+              .replace(/\/+$/, "");
+            existing.base_url = baseURL;
+            if (String(input.name || "").trim()) {
+              existing.name = String(input.name).trim();
+            }
+            if (input.clear_api_key) {
+              existing.api_key_configured = false;
+              existing.api_key_env = "";
+            } else if (String(input.api_key || "").trim()) {
+              existing.api_key_configured = true;
+            }
+            settings.routes = (settings.routes || []).map((r) =>
+              r.api_credential_id === credID
+                ? {
+                    ...r,
+                    api_credential_name: existing.name,
+                    provider_base_url: existing.base_url,
+                    api_key_configured: existing.api_key_configured,
+                    api_key_env: existing.api_key_env,
+                  }
+                : r,
+            );
+            return data(res, existing);
+          }
+        }
         if (route === "/agent/settings") {
           if (req.method === "PUT") {
-            settings = { ...settings, ...(await body(req)) };
+            const incoming = await body(req);
+            const creds = [...(settings.api_credentials || [])];
+            const nextRoutes = (incoming.routes || []).map((r) => {
+              if ((r.provider_type || "openai_compatible") !== "openai_compatible")
+                return r;
+              const normalizedURL = String(r.provider_base_url || "")
+                .trim()
+                .replace(/\/+$/, "");
+              let cred =
+                creds.find((c) => c.id === r.api_credential_id) ||
+                creds.find((c) => c.base_url === normalizedURL);
+              if (!cred && normalizedURL) {
+                let host = normalizedURL;
+                try {
+                  host = new URL(normalizedURL).hostname || normalizedURL;
+                } catch {}
+                cred = {
+                  id:
+                    "00000000-0000-4000-8000-" +
+                    String(Date.now() + Math.floor(Math.random() * 1000)).slice(
+                      -12,
+                    ),
+                  name: host,
+                  base_url: normalizedURL,
+                  api_key_env: String(r.api_key_env || "").trim(),
+                  api_key_configured: Boolean(
+                    String(r.api_key || "").trim() ||
+                      String(r.api_key_env || "").trim(),
+                  ),
+                };
+                creds.push(cred);
+              } else if (cred && String(r.api_key || "").trim()) {
+                cred.api_key_configured = true;
+              }
+              return {
+                ...r,
+                api_credential_id: cred ? cred.id : r.api_credential_id,
+                api_credential_name: cred ? cred.name : r.api_credential_name,
+                provider_base_url: cred ? cred.base_url : normalizedURL,
+                api_key_env: cred ? cred.api_key_env : r.api_key_env,
+                api_key_configured: cred
+                  ? cred.api_key_configured
+                  : Boolean(r.api_key_configured),
+              };
+            });
+            settings = {
+              ...settings,
+              ...incoming,
+              api_credentials: creds,
+              routes: nextRoutes,
+            };
             return data(res, settings);
           }
           return data(res, settings);
+        }
+        if (route === "/agent/provider-models" && req.method === "POST") {
+          return data(res, [
+            { id: "example-model", name: "Example Model" },
+            { id: "example-model-pro", name: "Example Model Pro" },
+          ]);
         }
         if (route === "/agent/model-auth")
           return data(res, [

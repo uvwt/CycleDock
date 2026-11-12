@@ -12,7 +12,6 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
@@ -93,7 +92,7 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 
 	client := modelclient.NewWithHTTPClient(server.Client())
 	settings := store.AgentSettings{
-		Routes: []db.WorkspaceModelRoute{
+		Routes: []store.ModelRoute{
 			{
 				ID:              routeID,
 				Enabled:         true,
@@ -143,7 +142,7 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 	defer errServer.Close()
 
 	errSettings := settings
-	errSettings.Routes = []db.WorkspaceModelRoute{
+	errSettings.Routes = []store.ModelRoute{
 		{
 			ID:              routeID,
 			Enabled:         true,
