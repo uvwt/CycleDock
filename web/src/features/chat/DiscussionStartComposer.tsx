@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
+import { loadCardPage } from "../../app/route-preload";
+import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
 
 const STORAGE_KEY = "cycledock.new-discussion.drafts.v2";
 
@@ -80,7 +82,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     writeDraft(projectID);
     setPending(null);
     setContent("");
-    await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+    void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
     navigate(
       `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
     );
@@ -90,12 +92,14 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     const value = content.trim();
     if (!value || sending || !modelConfigured) return;
     setSending(true);
+    void loadCardPage();
     // 发起发送时固定设备选择与模型选择；创建 Card 的网络等待期间切换不改变这条消息。
     const deviceTarget = target;
     const preferredModelRouteID = draftRouteId || undefined;
     try {
       const card = await api.createDiscussion(projectID, preferredModelRouteID);
-      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      upsertCachedProjectCard(queryClient, projectID, card);
+      void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       const draft: SavedDraft = {
         content: value,
         deviceTarget,
@@ -128,6 +132,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     )
       return;
     setSending(true);
+    void loadCardPage();
     try {
       await finish(pending.pendingCardID, pending);
     } catch (error) {
@@ -173,7 +178,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          {pending?.pendingCardID && (
+          {!sending && pending?.pendingCardID && (
             <button
               type="button"
               onMouseDown={(event) => event.preventDefault()}

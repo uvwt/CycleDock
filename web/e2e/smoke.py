@@ -347,7 +347,8 @@ class CycleDockSmoke(unittest.TestCase):
             content_type="text/event-stream", body=": connected\n\n"
         ))
         self.page.goto(BASE + "/board/demo-project")
-        expect(self.page.get_by_label("有新回复")).to_have_count(1)
+        expect(self.page.locator("main").get_by_label("有新回复")).to_have_count(1)
+        expect(self.page.get_by_label("有新回复")).to_have_count(2)
         self.page.get_by_role("button", name=re.compile(card["title"])).first.click()
         self.page.wait_for_url("**/cards/demo-project/todo-1")
         self.page.get_by_text("检查完成", exact=True).wait_for()

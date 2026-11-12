@@ -34,7 +34,9 @@ import {
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
 import { stripMarkdownSummary } from "../../shared/lib/markdown";
-import type { Card, TodoState } from "../../shared/api/types";
+import { loadCardPage } from "../../app/route-preload";
+import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
+import type { Card, Project, TodoState } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 
 const states: TodoState[] = ["todo", "working", "review", "done"];
@@ -443,26 +445,38 @@ export default function BoardPage() {
         name: name.trim(),
         description: description.trim(),
       }),
-    onSuccess: async (project) => {
+    onSuccess: (project) => {
       setCreating(false);
       setName("");
       setDescription("");
-      await queryClient.invalidateQueries({ queryKey: keys.projects });
+      queryClient.setQueryData<Project[]>(keys.projects, (old) =>
+        old ? [...old, project] : [project],
+      );
+      void queryClient.invalidateQueries({ queryKey: keys.projects });
       setProjectID(project.id);
       navigate("/board/" + project.id);
     },
     onError: (e) => toast.error(String(e)),
   });
   const createTodo = useMutation({
-    mutationFn: () =>
-      api.createTodo(projectID!, todoTitle.trim(), todoDescription.trim()),
-    onSuccess: async (card) => {
+    mutationFn: () => {
+      void loadCardPage();
+      return api.createTodo(
+        projectID!,
+        todoTitle.trim(),
+        todoDescription.trim(),
+      );
+    },
+    onSuccess: (card) => {
       setCreatingTodo(false);
       setTodoTitle("");
       setTodoDescription("");
-      await queryClient.invalidateQueries({
-        queryKey: keys.cards(projectID || ""),
-      });
+      if (projectID) {
+        upsertCachedProjectCard(queryClient, projectID, card);
+        void queryClient.invalidateQueries({
+          queryKey: keys.cards(projectID),
+        });
+      }
       navigate(`/cards/${projectID}/${card.id}`);
     },
     onError: (e) => toast.error(String(e)),

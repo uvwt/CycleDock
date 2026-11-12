@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -98,6 +100,7 @@ type registryEntry struct {
 
 var (
 	onlineRegistryMu        sync.RWMutex
+	onlineRegistryFlight    singleflight.Group
 	onlineRegistryEntries   map[string]registryEntry
 	onlineRegistryExpiresAt time.Time
 	onlineRegistryNextRetry time.Time
@@ -135,6 +138,17 @@ func SetOnlineRegistryURLsForTest(modelsDevURL, openRouterURL string) func() {
 	}
 }
 
+// WarmOnlineRegistryAsync 在后台异步预热在线模型目录，不阻塞只读 HTTP 请求；测试环境自动跳过。
+func (c *Client) WarmOnlineRegistryAsync() {
+	onlineRegistryMu.RLock()
+	testMode := onlineRegistryTestMode
+	onlineRegistryMu.RUnlock()
+	if flag.Lookup("test.v") != nil && !testMode {
+		return
+	}
+	go c.EnsureOnlineRegistry(context.Background())
+}
+
 // EnsureOnlineRegistry 按需同步 models.dev（主）与 OpenRouter（辅）的实时模型容量目录。
 // 结果缓存 6 小时；若外网不可达则冷却 5 分钟并自动回退内置 curatedModelRegistry，永不阻塞业务流程。
 func (c *Client) EnsureOnlineRegistry(ctx context.Context) {
@@ -155,16 +169,30 @@ func (c *Client) EnsureOnlineRegistry(ctx context.Context) {
 		return
 	}
 
-	httpClient := &http.Client{Timeout: onlineRegistryFetchTimeout}
-	if c != nil && c.httpClient != nil {
-		copied := *c.httpClient
-		copied.Timeout = onlineRegistryFetchTimeout
-		httpClient = &copied
-	}
-	_ = SyncOnlineModelRegistryFromURLs(ctx, httpClient, mURL, oURL)
+	// 合并并发同步请求，避免多个请求同时冷启动穿透外部注册表。
+	_, _, _ = onlineRegistryFlight.Do(mURL+"|"+oURL, func() (any, error) {
+		nowCheck := time.Now().UTC()
+		onlineRegistryMu.RLock()
+		stillFresh := len(onlineRegistryEntries) > 0 && nowCheck.Before(onlineRegistryExpiresAt)
+		stillCooling := !onlineRegistryNextRetry.IsZero() && nowCheck.Before(onlineRegistryNextRetry)
+		onlineRegistryMu.RUnlock()
+		if stillFresh || stillCooling {
+			return nil, nil
+		}
+
+		httpClient := &http.Client{Timeout: onlineRegistryFetchTimeout}
+		if c != nil && c.httpClient != nil {
+			copied := *c.httpClient
+			copied.Timeout = onlineRegistryFetchTimeout
+			httpClient = &copied
+		}
+		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), onlineRegistryFetchTimeout*2)
+		defer cancel()
+		return nil, SyncOnlineModelRegistryFromURLs(syncCtx, httpClient, mURL, oURL)
+	})
 }
 
-// SyncOnlineModelRegistryFromURLs 从 models.dev（主源，区分 context/input/output）和 OpenRouter（辅源，补充长尾模型）拉取并合并实时模型目录。
+// SyncOnlineModelRegistryFromURLs 从 models.dev（主源，区分 context/input/output）和 OpenRouter（辅源，补充长尾模型）并行拉取并合并实时模型目录。
 func SyncOnlineModelRegistryFromURLs(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -175,21 +203,49 @@ func SyncOnlineModelRegistryFromURLs(
 		httpClient = &http.Client{Timeout: onlineRegistryFetchTimeout}
 	}
 	now := time.Now().UTC()
-	merged := make(map[string]registryEntry, 512)
-	var firstErr error
 
-	// 1. 主源：models.dev/api.json（优先采用，具备完整的 context / input / output 三元组）
+	var (
+		wg             sync.WaitGroup
+		primaryEntries map[string]registryEntry
+		primaryErr     error
+		backupEntries  map[string]registryEntry
+		backupErr      error
+	)
+
 	if strings.TrimSpace(modelsDevURL) != "" {
-		if err := fetchModelsDevCatalog(ctx, httpClient, modelsDevURL, merged); err != nil {
-			firstErr = err
+		primaryEntries = make(map[string]registryEntry, 512)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			primaryErr = fetchModelsDevCatalog(ctx, httpClient, modelsDevURL, primaryEntries)
+		}()
+	}
+
+	if strings.TrimSpace(openRouterURL) != "" {
+		backupEntries = make(map[string]registryEntry, 512)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			backupErr = fetchOpenRouterCatalog(ctx, httpClient, openRouterURL, backupEntries)
+		}()
+	}
+
+	wg.Wait()
+
+	merged := make(map[string]registryEntry, len(primaryEntries)+len(backupEntries))
+	for k, v := range primaryEntries {
+		merged[k] = v
+	}
+	// 辅源仅补充主源尚未收录的模型 ID，严格保持原有优先级。
+	for k, v := range backupEntries {
+		if _, exists := merged[k]; !exists {
+			merged[k] = v
 		}
 	}
 
-	// 2. 辅源：openrouter.ai/api/v1/models（仅补充主源尚未收录的模型 ID）
-	if strings.TrimSpace(openRouterURL) != "" {
-		if err := fetchOpenRouterCatalog(ctx, httpClient, openRouterURL, merged); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	firstErr := primaryErr
+	if firstErr == nil {
+		firstErr = backupErr
 	}
 
 	onlineRegistryMu.Lock()

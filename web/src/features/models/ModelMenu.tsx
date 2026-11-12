@@ -9,7 +9,8 @@ import { keys } from "../../app/query";
 import { cn } from "../../shared/lib/utils";
 import { useModelSelection } from "./model-selection";
 import { ProviderIcon } from "./provider-logos";
-import type { Provider } from "../../shared/api/types";
+import type { Card, Provider } from "../../shared/api/types";
+import { patchCachedCard } from "../../shared/lib/card-cache";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +56,7 @@ export function ModelMenu({
   const agentQuery = useQuery({
     queryKey: keys.agent,
     queryFn: api.agentSettings,
+    enabled: owner,
     staleTime: 30_000,
   });
 
@@ -82,26 +84,43 @@ export function ModelMenu({
       if (!cardID) return Promise.resolve(null);
       return api.setCardModelRoute(cardID, routeId);
     },
-    onSuccess: (updatedCard) => {
-      if (!cardID) return;
-      queryClient.setQueryData(keys.card(cardID), (old: any) => {
-        if (!old) return old;
-        return {
-          ...old,
-          card: {
-            ...old.card,
-            preferred_model_route_id: updatedCard
-              ? updatedCard.preferred_model_route_id
-              : null,
-          },
-        };
+    onMutate: (routeId: string | null) => {
+      if (!cardID) return { prevRouteId: controlledRouteId };
+      const prevRouteId = controlledRouteId ?? null;
+      patchCachedCard(queryClient, cardID, projectID, {
+        preferred_model_route_id: routeId,
       });
       if (projectID) {
-        queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
-        queryClient.invalidateQueries({ queryKey: keys.mainDiscussion(projectID) });
+        queryClient.setQueryData<Card | undefined>(
+          keys.mainDiscussion(projectID),
+          (old) =>
+            old && old.id === cardID
+              ? { ...old, preferred_model_route_id: routeId }
+              : old,
+        );
+      }
+      return { prevRouteId };
+    },
+    onSuccess: (updatedCard) => {
+      if (!cardID) return;
+      patchCachedCard(queryClient, cardID, projectID, {
+        preferred_model_route_id: updatedCard
+          ? updatedCard.preferred_model_route_id
+          : null,
+      });
+      if (projectID) {
+        void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+        void queryClient.invalidateQueries({
+          queryKey: keys.mainDiscussion(projectID),
+        });
       }
     },
-    onError: (err) => {
+    onError: (err, _routeId, context) => {
+      if (cardID) {
+        patchCachedCard(queryClient, cardID, projectID, {
+          preferred_model_route_id: context?.prevRouteId ?? null,
+        });
+      }
       toast.error(err instanceof Error ? err.message : t("更新卡片模型失败"));
     },
   });

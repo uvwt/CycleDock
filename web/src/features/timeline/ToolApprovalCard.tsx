@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import type { ToolApproval } from "../../shared/api/types";
+import type { CardDetail, ToolApproval } from "../../shared/api/types";
 import { api } from "../../shared/api/client";
 import { queryClient, keys } from "../../app/query";
 
@@ -83,13 +83,27 @@ export function ToolApprovalCard({
     if (!cardID || submitting) return;
     setSubmitting(action);
     try {
-      await api.resolveToolApproval(
+      const resolved = await api.resolveToolApproval(
         cardID,
         approval!.id,
         action,
         action === "reject" ? rejectComment.trim() : undefined,
       );
-      await queryClient.invalidateQueries({ queryKey: keys.card(cardID) });
+      if (resolved?.approval) {
+        queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) =>
+          old && old.card
+            ? {
+                ...old,
+                timeline: old.timeline.map((ev) =>
+                  ev.tool_approval?.id === approval!.id
+                    ? { ...ev, tool_approval: resolved.approval }
+                    : ev,
+                ),
+              }
+            : old,
+        );
+      }
+      void queryClient.invalidateQueries({ queryKey: keys.card(cardID) });
       if (action === "approve_once") {
         toast.success(t("已批准本次执行，正在恢复任务"));
       } else if (action === "approve_session") {

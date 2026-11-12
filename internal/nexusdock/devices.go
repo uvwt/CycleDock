@@ -23,14 +23,50 @@ type Device struct {
 	AgentVersion string `json:"agent_version"`
 }
 
+type devicesCacheEntry struct {
+	devices   []Device
+	fetchedAt time.Time
+}
+
+const devicesCacheTTL = 15 * time.Second
+
 func (s *Service) Devices(ctx context.Context, workspaceID uuid.UUID) ([]Device, error) {
+	if s == nil {
+		return nil, ErrDisabled
+	}
+	// 短时复用同一 Workspace 的设备在线摘要，避免高频切换卡片时每次同步穿透远端 NexusDock。
+	s.devicesMu.RLock()
+	cached, found := s.devicesCache[workspaceID]
+	s.devicesMu.RUnlock()
+	if found && time.Since(cached.fetchedAt) < devicesCacheTTL {
+		out := make([]Device, len(cached.devices))
+		copy(out, cached.devices)
+		return out, nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	connection, err := s.Runtime(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	return s.fetchDevices(ctx, connection)
+	devices, err := s.fetchDevices(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+
+	copied := make([]Device, len(devices))
+	copy(copied, devices)
+	s.devicesMu.Lock()
+	if s.devicesCache == nil {
+		s.devicesCache = make(map[uuid.UUID]devicesCacheEntry)
+	}
+	s.devicesCache[workspaceID] = devicesCacheEntry{
+		devices:   copied,
+		fetchedAt: time.Now(),
+	}
+	s.devicesMu.Unlock()
+	return devices, nil
 }
 
 func (s *Service) fetchDevices(ctx context.Context, connection RuntimeConnection) ([]Device, error) {

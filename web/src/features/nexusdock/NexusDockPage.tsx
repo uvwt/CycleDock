@@ -62,11 +62,28 @@ export default function NexusDockPage() {
 
   const disconnect = useMutation({
     mutationFn: api.nexusDisconnect,
-    onSuccess: async () => {
-      toast.success(t("已断开 NexusDock 设备连接"));
-      await queryClient.invalidateQueries({ queryKey: keys.nexus });
-      await queryClient.invalidateQueries({ queryKey: keys.nexusFleet(workspaceID) });
+    onSuccess: () => {
+      queryClient.setQueryData(
+        keys.nexus,
+        (old: { available?: boolean } | undefined) =>
+          old
+            ? { ...old, connected: false }
+            : { available: true, connected: false },
+      );
+      queryClient.setQueryData(keys.nexusFleet(workspaceID), {
+        available: true,
+        connected: false,
+        devices: [],
+      });
       setSelectedDeviceId(null);
+      toast.success(t("已断开 NexusDock 设备连接"));
+      void queryClient.invalidateQueries({ queryKey: keys.nexus });
+      void queryClient.invalidateQueries({
+        queryKey: keys.nexusDevices(workspaceID),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: keys.nexusFleet(workspaceID),
+      });
     },
     onError: (e) => toast.error(t("断开连接失败：") + String(e)),
   });
@@ -105,12 +122,10 @@ export default function NexusDockPage() {
     try {
       const data = await api.nexusFleet(true);
       queryClient.setQueryData(keys.nexusFleet(workspaceID), data);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: keys.nexus }),
-        queryClient.invalidateQueries({
-          queryKey: keys.deviceToolGuards(workspaceID),
-        }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: keys.nexus });
+      void queryClient.invalidateQueries({
+        queryKey: keys.deviceToolGuards(workspaceID),
+      });
       toast.success(t("已更新 NexusDock 设备与运行能力"));
     } catch (err) {
       toast.error(t("刷新失败：") + String(err));

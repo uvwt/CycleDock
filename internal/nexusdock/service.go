@@ -52,15 +52,17 @@ type Config struct {
 }
 
 type Service struct {
-	pool        *pgxpool.Pool
-	queries     *db.Queries
-	mcpURL      string
-	webURL      string
-	callbackURL string
-	aead        cipher.AEAD
-	client      *http.Client
-	fleetMu     sync.RWMutex
-	fleetCache  map[uuid.UUID]fleetCacheEntry
+	pool         *pgxpool.Pool
+	queries      *db.Queries
+	mcpURL       string
+	webURL       string
+	callbackURL  string
+	aead         cipher.AEAD
+	client       *http.Client
+	fleetMu      sync.RWMutex
+	fleetCache   map[uuid.UUID]fleetCacheEntry
+	devicesMu    sync.RWMutex
+	devicesCache map[uuid.UUID]devicesCacheEntry
 }
 
 type Status struct {
@@ -152,10 +154,25 @@ func New(pool *pgxpool.Pool, config Config) (*Service, error) {
 	}
 	return &Service{
 		pool: pool, queries: db.New(pool), mcpURL: config.MCPURL, webURL: config.WebURL,
-		callbackURL: config.PublicURL + "/auth/nexusdock-device/callback",
-		aead:        aead, client: client,
-		fleetCache: make(map[uuid.UUID]fleetCacheEntry),
+		callbackURL:  config.PublicURL + "/auth/nexusdock-device/callback",
+		aead:         aead,
+		client:       client,
+		fleetCache:   make(map[uuid.UUID]fleetCacheEntry),
+		devicesCache: make(map[uuid.UUID]devicesCacheEntry),
 	}, nil
+}
+
+func (s *Service) invalidateWorkspaceCaches(workspaceID uuid.UUID) {
+	if s == nil {
+		return
+	}
+	s.fleetMu.Lock()
+	delete(s.fleetCache, workspaceID)
+	s.fleetMu.Unlock()
+
+	s.devicesMu.Lock()
+	delete(s.devicesCache, workspaceID)
+	s.devicesMu.Unlock()
 }
 
 func (s *Service) Enabled() bool {
@@ -290,7 +307,11 @@ func (s *Service) CompleteAuthorization(ctx context.Context, workspaceID, humanA
 		}
 		return ErrAuthorization
 	}
-	return s.storeTokens(ctx, workspaceID, metadata.Resource, flow.ClientID, tokens)
+	if err := s.storeTokens(ctx, workspaceID, metadata.Resource, flow.ClientID, tokens); err != nil {
+		return err
+	}
+	s.invalidateWorkspaceCaches(workspaceID)
+	return nil
 }
 
 func (s *Service) Runtime(ctx context.Context, workspaceID uuid.UUID) (RuntimeConnection, error) {
@@ -355,6 +376,7 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 	if _, err := s.queries.DeleteWorkspaceNexusDockConnection(ctx, workspaceID); err != nil {
 		return fmt.Errorf("delete NexusDock connection: %w", err)
 	}
+	s.invalidateWorkspaceCaches(workspaceID)
 	return nil
 }
 

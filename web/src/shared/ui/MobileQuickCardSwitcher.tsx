@@ -33,6 +33,7 @@ import {
   type CardVisualStatus,
 } from "./CardStatusDot";
 import { buildFocusSummary, getCardFocusReason } from "../lib/card-focus";
+import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
 import { ConfirmDialog } from "./components";
 import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
@@ -271,26 +272,37 @@ export function QuickCardSwitcherModal({
   const mainDiscussion = useQuery({
     queryKey: keys.mainDiscussion(projectID),
     queryFn: () => api.mainDiscussion(projectID),
-    enabled: Boolean(projectID),
+    enabled: open && Boolean(projectID),
   });
   const mainDiscussionID = mainDiscussion.data?.id || "";
 
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
       api.pinCard(id, pinned),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+    onMutate: ({ id, pinned }) => {
+      const target = cards.find((item) => item.id === id);
+      const prevPinnedAt = target?.pinned_at;
+      patchCachedCard(queryClient, id, projectID, {
+        pinned_at: pinned ? new Date().toISOString() : undefined,
+      });
+      return { prevPinnedAt };
+    },
+    onSuccess: (updated) => {
+      patchCachedCard(queryClient, updated.id, projectID, updated);
+      void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+    },
+    onError: (_err, variables, context) => {
+      patchCachedCard(queryClient, variables.id, projectID, {
+        pinned_at: context?.prevPinnedAt,
+      });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
     onSuccess: (_, deletedCard) => {
-      queryClient.setQueryData(keys.card(deletedCard.id), {
-        card: null,
-        notFound: true,
-      });
-      queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      removeCachedCard(queryClient, deletedCard);
+      void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       setDeleteTarget(null);
     },
   });

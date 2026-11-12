@@ -6,6 +6,10 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
+import {
+  patchCachedCard,
+  removeCachedCard,
+} from "../../shared/lib/card-cache";
 import { CardActions } from "../cards/CardActions";
 import type { Card } from "../../shared/api/types";
 import {
@@ -78,25 +82,34 @@ export function DiscussionSidebar({
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
       api.pinCard(id, pinned),
-    onSuccess: async (updated) => {
-      await queryClient.invalidateQueries({
+    onMutate: async ({ id, pinned }) => {
+      const target = discussions.find((item) => item.id === id);
+      const prevPinnedAt = target?.pinned_at;
+      patchCachedCard(queryClient, id, target?.project_id || projectID, {
+        pinned_at: pinned ? new Date().toISOString() : undefined,
+      });
+      return { prevPinnedAt, cardProjectID: target?.project_id || projectID };
+    },
+    onSuccess: (updated) => {
+      patchCachedCard(queryClient, updated.id, updated.project_id, updated);
+      void queryClient.invalidateQueries({
         queryKey: keys.cards(updated.project_id),
       });
       toast.success(updated.pinned_at ? "已置顶" : "已取消置顶");
     },
-    onError: (err) => {
+    onError: (err, variables, context) => {
+      patchCachedCard(queryClient, variables.id, context?.cardProjectID, {
+        pinned_at: context?.prevPinnedAt,
+      });
       toast.error("操作失败：" + String(err));
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
-    onSuccess: async (_, card) => {
-      queryClient.setQueryData(keys.card(card.id), {
-        card: null,
-        notFound: true,
-      });
-      await queryClient.invalidateQueries({
+    onSuccess: (_, card) => {
+      removeCachedCard(queryClient, card);
+      void queryClient.invalidateQueries({
         queryKey: keys.cards(card.project_id),
       });
       toast.success("讨论已删除");

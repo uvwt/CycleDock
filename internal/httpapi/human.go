@@ -392,30 +392,38 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	activeCards, err := api.store.ListProjectActiveCardSummaries(
-		r.Context(), identity.WorkspaceID, projectID, identity.SourceID,
+	var (
+		activeCards []db.ListProjectActiveCardSummariesRow
+		doneCards   []db.ListProjectDoneCardsPagedRow
 	)
-	if err != nil {
+	group, groupCtx := errgroup.WithContext(r.Context())
+	group.Go(func() error {
+		var err error
+		activeCards, err = api.store.ListProjectActiveCardSummaries(
+			groupCtx, identity.WorkspaceID, projectID, identity.SourceID,
+		)
+		return err
+	})
+	if doneLimit > 0 {
+		group.Go(func() error {
+			var err error
+			doneCards, err = api.store.ListProjectDoneCardsPaged(
+				groupCtx, identity.WorkspaceID, projectID, identity.SourceID, int32(doneLimit), 0,
+			)
+			return err
+		})
+	}
+	if err := group.Wait(); err != nil {
 		api.handleError(w, err)
 		return
 	}
 
-	response := make([]cardResponse, 0, len(activeCards)+doneLimit)
+	response := make([]cardResponse, 0, len(activeCards)+len(doneCards))
 	for _, card := range activeCards {
 		response = append(response, activeCardSummaryToResponse(card))
 	}
-
-	if doneLimit > 0 {
-		doneCards, err := api.store.ListProjectDoneCardsPaged(
-			r.Context(), identity.WorkspaceID, projectID, identity.SourceID, int32(doneLimit), 0,
-		)
-		if err != nil {
-			api.handleError(w, err)
-			return
-		}
-		for _, card := range doneCards {
-			response = append(response, doneCardSummaryToResponse(card))
-		}
+	for _, card := range doneCards {
+		response = append(response, doneCardSummaryToResponse(card))
 	}
 
 	writeJSON(w, http.StatusOK, response)

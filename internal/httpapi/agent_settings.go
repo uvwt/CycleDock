@@ -96,8 +96,9 @@ func (api *API) getAgentSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireWorkspaceOwner(w, identity.Role) {
 		return
 	}
+	// 读取已持久化的模型路由不依赖外网模型目录；改为后台异步预热，避免首屏因外网超时卡顿。
 	if api.model != nil {
-		api.model.EnsureOnlineRegistry(r.Context())
+		api.model.WarmOnlineRegistryAsync()
 	}
 	settings, err := api.store.GetAgentSettings(r.Context(), identity.WorkspaceID)
 	if errors.Is(err, domain.ErrNotFound) {

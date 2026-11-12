@@ -1,17 +1,23 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link2, ListChecks, Calendar, Activity, Check, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../shared/api/client";
+import { keys, queryClient } from "../../app/query";
 import type { Card, CardDetail } from "../../shared/api/types";
+import { patchCachedCard } from "../../shared/lib/card-cache";
 import type { TaskProgress } from "../../shared/realtime/cardStreamState";
 import { Badge } from "../../shared/ui/badge";
+import { Spinner } from "../../shared/ui/components";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
-import { ScheduleEditor } from "./TaskDetailsPanel";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { RichText } from "../timeline/RichText";
+
+const ScheduleEditor = lazy(() =>
+  import("./TaskDetailsPanel").then((m) => ({ default: m.ScheduleEditor })),
+);
 
 function CardDescriptionCollapsible({ description }: { description: string }) {
   const { t } = useTranslation();
@@ -88,8 +94,20 @@ export function CardHeaderInfoCard({
 
   const acknowledgeMutation = useMutation({
     mutationFn: () => api.acknowledgeCheckin(card.id),
-    onSuccess: async () => {
-      if (onSync) await onSync();
+    onSuccess: () => {
+      queryClient.setQueryData<CardDetail>(keys.card(card.id), (old) =>
+        old && old.card
+          ? {
+              ...old,
+              health: "acknowledged",
+              card: { ...old.card, health: "acknowledged" },
+            }
+          : old,
+      );
+      patchCachedCard(queryClient, card.id, card.project_id, {
+        health: "acknowledged",
+      });
+      if (onSync) void onSync();
       toast.success(t("已标记为已确认"));
     },
     onError: (error) =>
@@ -388,11 +406,19 @@ export function CardHeaderInfoCard({
             <Calendar className="size-3.5 text-muted-foreground" />
             <span>{t("执行计划")}</span>
           </div>
-          <ScheduleEditor
-            cardID={card.id}
-            schedules={detail.schedules || []}
-            onChange={onSync}
-          />
+          <Suspense
+            fallback={
+              <div className="py-2">
+                <Spinner />
+              </div>
+            }
+          >
+            <ScheduleEditor
+              cardID={card.id}
+              schedules={detail.schedules || []}
+              onChange={onSync}
+            />
+          </Suspense>
         </div>
       )}
     </section>

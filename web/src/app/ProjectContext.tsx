@@ -58,13 +58,17 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const preferredProjectExists = projects.some(
     (project) => project.id === preferredProjectID,
   );
+  // 项目列表尚未返回时，若当前 URL 已明确指定项目 ID，先乐观透传给子查询并行拉取卡片，
+  // 列表返回后再严格按归属校验收敛，消除 /projects -> /cards 的串行瀑布等待。
   const projectID = routeProjectExists
     ? routeProjectID
-    : persistedProjectExists
-      ? persistedProjectID
-      : preferredProjectExists
-        ? preferredProjectID
-        : projects[0]?.id || "";
+    : projectsQuery.isPending && routeProjectID
+      ? routeProjectID
+      : persistedProjectExists
+        ? persistedProjectID
+        : preferredProjectExists
+          ? preferredProjectID
+          : projects[0]?.id || "";
 
   function selectProjectID(nextProjectID: string) {
     try {
