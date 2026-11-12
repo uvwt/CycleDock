@@ -25,7 +25,6 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 const (
@@ -354,7 +353,7 @@ func ensureADKSession(
 	return nil
 }
 
-func (r *Runner) resolveAttemptCompactionThreshold(routes []db.WorkspaceModelRoute) int {
+func (r *Runner) resolveAttemptCompactionThreshold(routes []store.ModelRoute) int {
 	if r.compactionTokenThreshold > 0 && r.compactionTokenThreshold != defaultCompactionTokenThreshold {
 		return r.compactionTokenThreshold
 	}

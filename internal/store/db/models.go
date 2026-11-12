@@ -402,6 +402,17 @@ type WorkspaceAgentSetting struct {
 	PlanModelRouteID       uuid.NullUUID      `json:"plan_model_route_id"`
 }
 
+type WorkspaceApiCredential struct {
+	ID               uuid.UUID          `json:"id"`
+	WorkspaceID      uuid.UUID          `json:"workspace_id"`
+	Name             string             `json:"name"`
+	BaseUrl          string             `json:"base_url"`
+	ApiKeyEnv        string             `json:"api_key_env"`
+	ApiKeyCiphertext []byte             `json:"api_key_ciphertext"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WorkspaceDeviceToolGuard struct {
 	ID             uuid.UUID          `json:"id"`
 	WorkspaceID    uuid.UUID          `json:"workspace_id"`
@@ -448,18 +459,16 @@ type WorkspaceModelRoute struct {
 	Enabled             bool               `json:"enabled"`
 	ProviderType        string             `json:"provider_type"`
 	CredentialID        uuid.NullUUID      `json:"credential_id"`
-	ProviderBaseUrl     string             `json:"provider_base_url"`
 	Model               string             `json:"model"`
-	ApiKeyEnv           string             `json:"api_key_env"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	ApiKeyCiphertext    []byte             `json:"api_key_ciphertext"`
 	BaseModel           string             `json:"base_model"`
 	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
 	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
 	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
 	LimitsSource        string             `json:"limits_source"`
 	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
+	ApiCredentialID     uuid.NullUUID      `json:"api_credential_id"`
 }
 
 type WorkspaceNexusdockConnection struct {

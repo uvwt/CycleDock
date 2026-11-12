@@ -20,7 +20,6 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 // ToolGuardDecision 表示安全守卫的评估结论
@@ -352,7 +351,7 @@ func resolveGuardRouteConfig(
 	storeInstance *store.Store,
 	modelAuthService *modelauth.Service,
 	workspaceID uuid.UUID,
-	route db.WorkspaceModelRoute,
+	route store.ModelRoute,
 	timeout time.Duration,
 ) (modelclient.Config, error) {
 	switch route.ProviderType {
@@ -427,7 +426,7 @@ func evaluateDynamicModel(
 	}
 
 	// 确定评估使用的模型路由：优先使用该设备或 MCP 绑定的模型路由
-	var selectedRoute *db.WorkspaceModelRoute
+	var selectedRoute *store.ModelRoute
 	if policy.ModelRouteID.Valid {
 		for i := range settings.Routes {
 			if settings.Routes[i].ID == policy.ModelRouteID.UUID && settings.Routes[i].Enabled {

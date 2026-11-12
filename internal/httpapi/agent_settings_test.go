@@ -424,3 +424,202 @@ func TestAgentSettingsModelLimitsResolutionAndOverride(t *testing.T) {
 		t.Fatalf("expected 409 for invalid token bounds, got %d %s", invalid.Code, invalid.Body.String())
 	}
 }
+
+func TestCustomAPICredentialLifecycleAndMultiRouteKeySharing(t *testing.T) {
+	var lastAuthHeader string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuthHeader = r.Header.Get("Authorization")
+		if lastAuthHeader == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"Missing API key"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"cpa-claude-sonnet"},{"id":"cpa-gpt-5"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{
+				"id":"chatcmpl-test",
+				"choices":[{"index":0,"message":{"role":"assistant","content":"OK"}}]
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer provider.Close()
+
+	handler, _, _ := newHTTPIntegration(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+
+	// 1. 创建服务商级统一凭据（输入带尾部斜杠，落库应自动归一化且不回显明文密钥）
+	createCred := doJSON(t, handler, http.MethodPost, "/api/v1/agent/api-credentials", map[string]any{
+		"name":     "CPA 主力网关",
+		"base_url": provider.URL + "/v1/",
+		"api_key":  "sk-cpa-shared-v1",
+	}, cookie, nil)
+	if createCred.Code != http.StatusCreated {
+		t.Fatalf("create credential status=%d body=%s", createCred.Code, createCred.Body.String())
+	}
+	if strings.Contains(createCred.Body.String(), "sk-cpa-shared-v1") {
+		t.Fatalf("plaintext api_key leaked: %s", createCred.Body.String())
+	}
+	var credA apiCredentialResponse
+	decodeRecorder(t, createCred, &credA)
+	if credA.BaseURL != provider.URL+"/v1" || credA.Name != "CPA 主力网关" || !credA.APIKeyConfigured {
+		t.Fatalf("unexpected created credential: %+v", credA)
+	}
+
+	// 2. 通过 api_credential_id 或带末尾斜杠的同地址 URL 读取模型列表，均应携带已保存 Bearer Key
+	for _, payload := range []map[string]any{
+		{"api_credential_id": credA.ID},
+		{"provider_base_url": provider.URL + "/v1/"},
+	} {
+		lastAuthHeader = ""
+		modelsResp := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-models", payload, cookie, nil)
+		if modelsResp.Code != http.StatusOK {
+			t.Fatalf("provider-models payload=%v status=%d body=%s", payload, modelsResp.Code, modelsResp.Body.String())
+		}
+		if lastAuthHeader != "Bearer sk-cpa-shared-v1" {
+			t.Fatalf("expected Bearer sk-cpa-shared-v1, got %q", lastAuthHeader)
+		}
+	}
+
+	// 3. 先保存模型 A，再新增第二个模型 B（api_key 为空）：验证刷新后及连通性测试时模型 B 不会丢失密钥
+	routeAID := uuid.NewString()
+	saveFirst := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
+		"routes": []map[string]any{{
+			"id":                routeAID,
+			"enabled":           true,
+			"provider_type":     "openai_compatible",
+			"api_credential_id": credA.ID,
+			"model":             "cpa-claude-sonnet",
+		}},
+		"system_instructions": "",
+	}, cookie, nil)
+	if saveFirst.Code != http.StatusOK {
+		t.Fatalf("save first route status=%d body=%s", saveFirst.Code, saveFirst.Body.String())
+	}
+
+	routeBID := uuid.NewString()
+	saveSecond := doJSON(t, handler, http.MethodPut, "/api/v1/agent/settings", map[string]any{
+		"routes": []map[string]any{
+			{
+				"id":                routeAID,
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"api_credential_id": credA.ID,
+				"model":             "cpa-claude-sonnet",
+			},
+			{
+				"id":                routeBID,
+				"enabled":           true,
+				"provider_type":     "openai_compatible",
+				"api_credential_id": credA.ID,
+				"model":             "cpa-gpt-5",
+				"api_key":           "",
+			},
+		},
+		"system_instructions": "",
+	}, cookie, nil)
+	if saveSecond.Code != http.StatusOK {
+		t.Fatalf("save second route status=%d body=%s", saveSecond.Code, saveSecond.Body.String())
+	}
+
+	reloaded := doJSON(t, handler, http.MethodGet, "/api/v1/agent/settings", nil, cookie, nil)
+	if reloaded.Code != http.StatusOK {
+		t.Fatalf("reload settings status=%d body=%s", reloaded.Code, reloaded.Body.String())
+	}
+	var reloadedBody agentSettingsResponse
+	decodeRecorder(t, reloaded, &reloadedBody)
+	if len(reloadedBody.Routes) != 2 || !reloadedBody.Routes[1].APIKeyConfigured || reloadedBody.Routes[1].APICredentialID != credA.ID {
+		t.Fatalf("route B lost credential binding after reload: %+v", reloadedBody)
+	}
+
+	lastAuthHeader = ""
+	testRouteB := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-test", map[string]any{
+		"provider_type":     "openai_compatible",
+		"api_credential_id": credA.ID,
+		"route_id":          routeBID,
+		"model":             "cpa-gpt-5",
+	}, cookie, nil)
+	if testRouteB.Code != http.StatusOK || !strings.Contains(testRouteB.Body.String(), `"ok":true`) {
+		t.Fatalf("test route B failed: status=%d body=%s", testRouteB.Code, testRouteB.Body.String())
+	}
+	if lastAuthHeader != "Bearer sk-cpa-shared-v1" {
+		t.Fatalf("route B test auth=%q, want Bearer sk-cpa-shared-v1", lastAuthHeader)
+	}
+
+	// 4. 在凭据卡片上原地轮换 API Key，无需逐条重建路由即可立即对所有关联路由生效
+	rotateCred := doJSON(t, handler, http.MethodPut, "/api/v1/agent/api-credentials/"+credA.ID, map[string]any{
+		"name":     "CPA 主力网关",
+		"base_url": provider.URL + "/v1",
+		"api_key":  "sk-cpa-shared-v2",
+	}, cookie, nil)
+	if rotateCred.Code != http.StatusOK {
+		t.Fatalf("rotate credential status=%d body=%s", rotateCred.Code, rotateCred.Body.String())
+	}
+	lastAuthHeader = ""
+	testRotated := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-test", map[string]any{
+		"provider_type": "openai_compatible",
+		"route_id":      routeBID,
+		"model":         "cpa-gpt-5",
+	}, cookie, nil)
+	if testRotated.Code != http.StatusOK || lastAuthHeader != "Bearer sk-cpa-shared-v2" {
+		t.Fatalf("expected rotated key on route B, status=%d auth=%q body=%s", testRotated.Code, lastAuthHeader, testRotated.Body.String())
+	}
+
+	// 5. 同一网关地址支持创建第二个独立命名凭据，互不窜用密钥
+	createCredB := doJSON(t, handler, http.MethodPost, "/api/v1/agent/api-credentials", map[string]any{
+		"name":     "CPA 备用分组 Key",
+		"base_url": provider.URL + "/v1",
+		"api_key":  "sk-cpa-secondary-key",
+	}, cookie, nil)
+	if createCredB.Code != http.StatusCreated {
+		t.Fatalf("create second credential status=%d body=%s", createCredB.Code, createCredB.Body.String())
+	}
+	var credB apiCredentialResponse
+	decodeRecorder(t, createCredB, &credB)
+	lastAuthHeader = ""
+	modelsCredB := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-models", map[string]any{
+		"api_credential_id": credB.ID,
+	}, cookie, nil)
+	if modelsCredB.Code != http.StatusOK || lastAuthHeader != "Bearer sk-cpa-secondary-key" {
+		t.Fatalf("second credential models auth=%q status=%d", lastAuthHeader, modelsCredB.Code)
+	}
+
+	// 6. 修改服务商地址但未替换/清空密钥时必须拦截，防止把已有密钥转发到其他地址
+	changeURLWithoutKey := doJSON(t, handler, http.MethodPut, "/api/v1/agent/api-credentials/"+credA.ID, map[string]any{
+		"name":     "CPA 主力网关",
+		"base_url": "http://127.0.0.1:19999/v1",
+	}, cookie, nil)
+	if changeURLWithoutKey.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when changing base_url without replacing key, got %d %s", changeURLWithoutKey.Code, changeURLWithoutKey.Body.String())
+	}
+	probeChangedURL := doJSON(t, handler, http.MethodPost, "/api/v1/agent/provider-models", map[string]any{
+		"api_credential_id": credA.ID,
+		"provider_base_url": "http://127.0.0.1:19999/v1",
+	}, cookie, nil)
+	if probeChangedURL.Code != http.StatusBadRequest || !strings.Contains(probeChangedURL.Body.String(), "api_url_changed") {
+		t.Fatalf("expected 400 api_url_changed, got %d %s", probeChangedURL.Code, probeChangedURL.Body.String())
+	}
+
+	// 7. 删除凭据 A 时级联清理其关联路由，保留凭据 B
+	deleteCredA := doJSON(t, handler, http.MethodDelete, "/api/v1/agent/api-credentials/"+credA.ID, nil, cookie, nil)
+	if deleteCredA.Code != http.StatusNoContent {
+		t.Fatalf("delete credential A status=%d body=%s", deleteCredA.Code, deleteCredA.Body.String())
+	}
+	afterDelete := doJSON(t, handler, http.MethodGet, "/api/v1/agent/settings", nil, cookie, nil)
+	var afterDeleteBody agentSettingsResponse
+	decodeRecorder(t, afterDelete, &afterDeleteBody)
+	if len(afterDeleteBody.Routes) != 0 || len(afterDeleteBody.APICredentials) != 1 || afterDeleteBody.APICredentials[0].ID != credB.ID {
+		t.Fatalf("unexpected state after deleting credential A: %+v", afterDeleteBody)
+	}
+}
+

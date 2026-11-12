@@ -32,6 +32,7 @@ import { safeRandomUUID } from "../../shared/lib/utils";
 import { api } from "../../shared/api/client";
 import type {
   AgentSettings,
+  APICredential,
   ModelAuth,
   ModelCatalogItem,
   ModelLimitsSource,
@@ -127,6 +128,10 @@ function ProviderLogo({
   return <Bot className={className} />;
 }
 
+function normalizeBaseURL(raw: string): string {
+  return raw.trim().replace(/\/+$/, "");
+}
+
 function providerAccounts(auth: ModelAuth[], provider: Provider) {
   if (provider === "openai_compatible") return [];
   return auth.find((item) => item.provider === provider)?.accounts ?? [];
@@ -135,11 +140,13 @@ function providerAccounts(auth: ModelAuth[], provider: Provider) {
 function SortableRouteEditor({
   route,
   auth,
+  apiCredentials,
   onChange,
   onRemove,
 }: {
   route: ModelRoute;
   auth: ModelAuth[];
+  apiCredentials: APICredential[];
   onChange: (route: ModelRoute) => void;
   onRemove: () => void;
 }) {
@@ -163,6 +170,25 @@ function SortableRouteEditor({
   const accountLabel =
     currentAccount?.display_label || route.credential_id || "未指定账号";
 
+  const currentAPICredential =
+    apiCredentials.find((c) => c.id === route.api_credential_id) ??
+    apiCredentials.find(
+      (c) =>
+        !route.api_credential_id &&
+        normalizeBaseURL(c.base_url) ===
+          normalizeBaseURL(route.provider_base_url),
+    );
+  const effectiveBaseURL = normalizeBaseURL(
+    currentAPICredential?.base_url || route.provider_base_url,
+  );
+  const effectiveAPICredentialID =
+    route.api_credential_id || currentAPICredential?.id || "";
+  const customProviderDisplay =
+    currentAPICredential?.name &&
+    currentAPICredential.name !== currentAPICredential.base_url
+      ? `${currentAPICredential.name} (${currentAPICredential.base_url})`
+      : effectiveBaseURL || "未设置 Base URL";
+
   const catalog = useQuery({
     queryKey: keys.models(route.provider_type, route.credential_id),
     queryFn: () =>
@@ -174,14 +200,16 @@ function SortableRouteEditor({
   });
 
   const customCatalog = useQuery({
-    queryKey: keys.providerModels(route.provider_base_url.trim()),
+    queryKey: keys.providerModels(effectiveBaseURL, effectiveAPICredentialID),
     queryFn: () =>
       api.providerModels({
-        provider_base_url: route.provider_base_url.trim(),
+        api_credential_id: effectiveAPICredentialID || undefined,
+        provider_base_url: effectiveBaseURL,
         api_key: route.api_key,
         api_key_env: route.api_key_env,
       }),
-    enabled: !subscription && !!route.provider_base_url.trim(),
+    enabled:
+      !subscription && Boolean(effectiveAPICredentialID || effectiveBaseURL),
   });
   const [manualInput, setManualInput] = useState(false);
   const [editingLimits, setEditingLimits] = useState(false);
@@ -249,7 +277,8 @@ function SortableRouteEditor({
       api.testProvider({
         provider_type: route.provider_type,
         credential_id: route.credential_id,
-        provider_base_url: route.provider_base_url,
+        api_credential_id: effectiveAPICredentialID || undefined,
+        provider_base_url: effectiveBaseURL || route.provider_base_url,
         model: route.model,
         api_key: route.api_key,
         api_key_env: route.api_key_env,
@@ -286,7 +315,10 @@ function SortableRouteEditor({
               className="size-4 shrink-0 text-foreground"
             />
             <p className="truncate text-sm font-semibold">
-              {names[route.provider_type]}
+              {!subscription &&
+              (currentAPICredential?.name || route.api_credential_name)
+                ? `${names[route.provider_type]} · ${currentAPICredential?.name || route.api_credential_name}`
+                : names[route.provider_type]}
             </p>
           </div>
         </div>
@@ -370,13 +402,46 @@ function SortableRouteEditor({
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 min-w-0">
-          <div
-            className="flex h-9 w-full min-w-0 items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none"
-            title={route.provider_base_url || "未设置 Base URL"}
-            aria-label="服务商 Endpoint"
-          >
-            <span className="truncate">{route.provider_base_url || "未设置 Base URL"}</span>
-          </div>
+          {apiCredentials.length > 1 ? (
+            <Select
+              value={effectiveAPICredentialID}
+              onChange={(event) => {
+                const selected = apiCredentials.find(
+                  (c) => c.id === event.target.value,
+                );
+                if (!selected) return;
+                onChange({
+                  ...route,
+                  api_credential_id: selected.id,
+                  api_credential_name: selected.name,
+                  provider_base_url: selected.base_url,
+                  api_key: "",
+                  api_key_env: selected.api_key_env,
+                  api_key_configured: selected.api_key_configured,
+                });
+              }}
+              aria-label="服务商 Endpoint"
+            >
+              {!effectiveAPICredentialID && (
+                <option value="">{customProviderDisplay}</option>
+              )}
+              {apiCredentials.map((cred) => (
+                <option key={cred.id} value={cred.id}>
+                  {cred.name && cred.name !== cred.base_url
+                    ? `${cred.name} (${cred.base_url})`
+                    : cred.base_url}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <div
+              className="flex h-9 w-full min-w-0 items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none"
+              title={customProviderDisplay}
+              aria-label="服务商 Endpoint"
+            >
+              <span className="truncate">{customProviderDisplay}</span>
+            </div>
+          )}
 
           {customCatalog.data && customCatalog.data.length > 0 && !manualInput ? (
             <div className="flex min-w-0 items-center gap-1.5">
@@ -708,8 +773,13 @@ export function ModelsSettings() {
   };
 
   const [addingOpenAI, setAddingOpenAI] = useState(false);
+  const [editingCredentialID, setEditingCredentialID] = useState<string | null>(
+    null,
+  );
+  const [credName, setCredName] = useState("");
   const [newBaseURL, setNewBaseURL] = useState("");
   const [newAPIKey, setNewAPIKey] = useState("");
+  const [clearSavedAPIKey, setClearSavedAPIKey] = useState(false);
   const [pendingDisconnectAccount, setPendingDisconnectAccount] = useState<{
     provider: "chatgpt" | "grok";
     credentialID: string;
@@ -718,99 +788,324 @@ export function ModelsSettings() {
   } | null>(null);
   const [pendingDeleteCustomProvider, setPendingDeleteCustomProvider] =
     useState<{
+      id: string;
+      name: string;
       baseURL: string;
       routeCount: number;
     } | null>(null);
+
+  const apiCredentials = useMemo(
+    () => draft?.api_credentials ?? settings.data?.api_credentials ?? [],
+    [draft?.api_credentials, settings.data?.api_credentials],
+  );
+
+  const editingCredential = useMemo(
+    () =>
+      editingCredentialID
+        ? apiCredentials.find((c) => c.id === editingCredentialID) ?? null
+        : null,
+    [apiCredentials, editingCredentialID],
+  );
+
+  const isCredentialDirty = useMemo(() => {
+    const normalizedURL = normalizeBaseURL(newBaseURL);
+    if (!normalizedURL) return false;
+    if (!editingCredential) return true;
+    const trimmedName = credName.trim();
+    return (
+      (trimmedName !== "" && trimmedName !== editingCredential.name) ||
+      normalizedURL !== normalizeBaseURL(editingCredential.base_url) ||
+      Boolean(newAPIKey.trim()) ||
+      clearSavedAPIKey
+    );
+  }, [credName, newBaseURL, newAPIKey, clearSavedAPIKey, editingCredential]);
+
   const customModels = useMutation({
     mutationFn: () =>
       api.providerModels({
-        provider_base_url: newBaseURL.trim(),
-        api_key: newAPIKey.trim(),
+        api_credential_id: editingCredential?.id || undefined,
+        provider_base_url: normalizeBaseURL(newBaseURL),
+        api_key: newAPIKey.trim() || undefined,
       }),
     onError: (error) => toast.error(String(error)),
   });
 
+  // 将工作区已持久化的自定义 API 凭据与尚未落库关联的草稿路由归并展示，确保多模型共享同一服务商凭据卡片。
   const configuredOpenAIProviders = useMemo(() => {
-    const map = new Map<
+    const items: {
+      id: string;
+      name: string;
+      baseURL: string;
+      routeCount: number;
+      hasCredential: boolean;
+    }[] = apiCredentials.map((cred) => {
+      const normalizedCredURL = normalizeBaseURL(cred.base_url);
+      const routeCount = (draft?.routes ?? []).filter(
+        (r) =>
+          r.provider_type === "openai_compatible" &&
+          (r.api_credential_id === cred.id ||
+            (!r.api_credential_id &&
+              normalizeBaseURL(r.provider_base_url) === normalizedCredURL)),
+      ).length;
+      return {
+        id: cred.id,
+        name: cred.name || cred.base_url,
+        baseURL: cred.base_url,
+        routeCount,
+        hasCredential: cred.api_key_configured,
+      };
+    });
+
+    const unlinkedMap = new Map<
       string,
-      { baseURL: string; routeCount: number; hasCredential: boolean }
+      { routeCount: number; hasCredential: boolean }
     >();
     for (const route of draft?.routes ?? []) {
-      if (route.provider_type === "openai_compatible") {
-        const baseURL = route.provider_base_url.trim();
-        if (!baseURL) continue;
-        const hasKey = Boolean(route.api_key_configured || route.api_key?.trim() || route.api_key_env?.trim());
-        const existing = map.get(baseURL);
-        if (existing) {
-          existing.routeCount += 1;
-          if (hasKey) existing.hasCredential = true;
-        } else {
-          map.set(baseURL, {
-            baseURL,
-            routeCount: 1,
-            hasCredential: hasKey,
-          });
-        }
+      if (route.provider_type !== "openai_compatible") continue;
+      if (
+        route.api_credential_id &&
+        apiCredentials.some((c) => c.id === route.api_credential_id)
+      ) {
+        continue;
+      }
+      const baseURL = normalizeBaseURL(route.provider_base_url);
+      if (!baseURL) continue;
+      if (
+        apiCredentials.some((c) => normalizeBaseURL(c.base_url) === baseURL)
+      ) {
+        continue;
+      }
+      const hasKey = Boolean(
+        route.api_key_configured ||
+          route.api_key?.trim() ||
+          route.api_key_env?.trim(),
+      );
+      const prev = unlinkedMap.get(baseURL);
+      if (prev) {
+        prev.routeCount += 1;
+        if (hasKey) prev.hasCredential = true;
+      } else {
+        unlinkedMap.set(baseURL, { routeCount: 1, hasCredential: hasKey });
       }
     }
-    return Array.from(map.values());
-  }, [draft?.routes]);
+    for (const [baseURL, summary] of unlinkedMap.entries()) {
+      items.push({
+        id: "",
+        name: baseURL,
+        baseURL,
+        routeCount: summary.routeCount,
+        hasCredential: summary.hasCredential,
+      });
+    }
+    return items;
+  }, [apiCredentials, draft?.routes]);
 
-  const addRouteForOpenAIProvider = (
-    baseURL: string,
-    apiKey = "",
-    model = "",
-  ) => {
-    if (!draft) return;
-    const normalizedBaseURL = baseURL.trim();
-    const normalizedKey = apiKey.trim();
+  const syncSavedCredential = (saved: APICredential) => {
+    const mergeSettings = (prev: AgentSettings | null | undefined) => {
+      if (!prev) return prev ?? null;
+      const prevCreds = prev.api_credentials ?? [];
+      const exists = prevCreds.some((c) => c.id === saved.id);
+      const nextCreds = exists
+        ? prevCreds.map((c) => (c.id === saved.id ? saved : c))
+        : [...prevCreds, saved];
+      const nextRoutes = prev.routes.map((route) => {
+        if (route.provider_type !== "openai_compatible") return route;
+        const matchesID = route.api_credential_id === saved.id;
+        const matchesUnlinkedURL =
+          !route.api_credential_id &&
+          normalizeBaseURL(route.provider_base_url) ===
+            normalizeBaseURL(saved.base_url);
+        if (!matchesID && !matchesUnlinkedURL) return route;
+        return {
+          ...route,
+          api_credential_id: saved.id,
+          api_credential_name: saved.name,
+          provider_base_url: saved.base_url,
+          api_key: "",
+          api_key_env: saved.api_key_env,
+          api_key_configured: saved.api_key_configured,
+          clear_api_key: undefined,
+        };
+      });
+      return {
+        ...prev,
+        api_credentials: nextCreds,
+        routes: nextRoutes,
+      };
+    };
+
+    queryClient.setQueryData<AgentSettings | undefined>(keys.agent, (old) =>
+      old ? (mergeSettings(old) ?? old) : old,
+    );
+    setDraft((prev) => mergeSettings(prev ?? baseSettings));
+    void queryClient.invalidateQueries({
+      queryKey: ["provider-models", saved.base_url],
+    });
+  };
+
+  const persistAPICredential = useMutation({
+    mutationFn: async (): Promise<APICredential> => {
+      const normalizedURL = normalizeBaseURL(newBaseURL);
+      const payload = {
+        name: credName.trim(),
+        base_url: normalizedURL,
+        api_key: newAPIKey.trim() || undefined,
+        clear_api_key: clearSavedAPIKey || undefined,
+      };
+      if (editingCredential) {
+        return api.updateAPICredential(editingCredential.id, payload);
+      }
+      return api.createAPICredential(payload);
+    },
+    onSuccess: (saved) => {
+      syncSavedCredential(saved);
+      setEditingCredentialID(saved.id);
+      setCredName(saved.name);
+      setNewBaseURL(saved.base_url);
+      setNewAPIKey("");
+      setClearSavedAPIKey(false);
+    },
+    onError: (error) => toast.error(String(error)),
+  });
+
+  const appendRouteForCredential = (cred: APICredential, model = "") => {
     const normalizedModel = model.trim();
-    const alreadyExists =
-      normalizedModel &&
-      draft.routes.some(
-        (route) =>
-          route.provider_type === "openai_compatible" &&
-          route.provider_base_url.trim() === normalizedBaseURL &&
-          route.model.trim() === normalizedModel,
-      );
-    if (alreadyExists) {
+    let duplicate = false;
+    setDraft((prev) => {
+      const target = prev ?? baseSettings;
+      if (!target) return prev;
+      if (
+        normalizedModel &&
+        target.routes.some(
+          (route) =>
+            route.provider_type === "openai_compatible" &&
+            (route.api_credential_id === cred.id ||
+              (!route.api_credential_id &&
+                normalizeBaseURL(route.provider_base_url) ===
+                  normalizeBaseURL(cred.base_url))) &&
+            route.model.trim() === normalizedModel,
+        )
+      ) {
+        duplicate = true;
+        return target;
+      }
+      const newRouteItem: ModelRoute = {
+        id: safeRandomUUID(),
+        enabled: true,
+        provider_type: "openai_compatible",
+        credential_id: "",
+        api_credential_id: cred.id || undefined,
+        api_credential_name: cred.name,
+        provider_base_url: cred.base_url,
+        model: normalizedModel,
+        api_key: "",
+        api_key_configured: cred.api_key_configured,
+        api_key_env: cred.api_key_env,
+      };
+      return {
+        ...target,
+        routes: [...target.routes, newRouteItem],
+      };
+    });
+    if (duplicate) {
       toast.message("这个模型已经在路由中");
       return;
     }
-
-    const providerExistingRoute = draft.routes.find(
-      (r) =>
-        r.provider_type === "openai_compatible" &&
-        r.provider_base_url.trim() === normalizedBaseURL &&
-        (r.api_key_configured || Boolean(r.api_key?.trim()) || Boolean(r.api_key_env?.trim())),
-    );
-
-    const isConfigured = Boolean(
-      normalizedKey ||
-        (providerExistingRoute && (providerExistingRoute.api_key_configured || providerExistingRoute.api_key?.trim())),
-    );
-
-    const newRouteItem: ModelRoute = {
-      id: safeRandomUUID(),
-      enabled: true,
-      provider_type: "openai_compatible",
-      credential_id: "",
-      provider_base_url: normalizedBaseURL,
-      model: normalizedModel,
-      api_key: normalizedKey,
-      api_key_configured: isConfigured,
-      api_key_env: normalizedKey ? "" : (providerExistingRoute?.api_key_env || ""),
-    };
-    setDraft({
-      ...draft,
-      routes: [...draft.routes, newRouteItem],
-    });
     toast.success(
       normalizedModel
         ? `已添加 ${normalizedModel} 到模型路由`
         : "已添加模型 Route，请在下方填写模型 ID",
     );
   };
+
+  const handleAddOpenAIRoute = async (model = "") => {
+    if (!draft) return;
+    // 若当前编辑的是已持久化凭据且未修改凭据字段，直接同步追加路由，避免无谓网络往返。
+    if (editingCredential && !isCredentialDirty) {
+      appendRouteForCredential(editingCredential, model);
+      return;
+    }
+    try {
+      const saved = await persistAPICredential.mutateAsync();
+      appendRouteForCredential(saved, model);
+    } catch {
+      // 错误已由 persistAPICredential.onError 提示
+    }
+  };
+
+  const handleFinishOpenAIModal = async () => {
+    if (isCredentialDirty && normalizeBaseURL(newBaseURL)) {
+      try {
+        await persistAPICredential.mutateAsync();
+        toast.success("服务商凭据已保存");
+      } catch {
+        return;
+      }
+    }
+    setAddingOpenAI(false);
+  };
+
+  const deleteCustomProvider = useMutation({
+    mutationFn: async (target: {
+      id: string;
+      name: string;
+      baseURL: string;
+      routeCount: number;
+    }) => {
+      if (target.id) {
+        await api.deleteAPICredential(target.id);
+      }
+      return target;
+    },
+    onSuccess: async (target) => {
+      const targetURL = normalizeBaseURL(target.baseURL);
+      setDraft((prev) => {
+        const current = prev ?? baseSettings;
+        if (!current) return prev;
+        const removedRouteIDs = new Set<string>();
+        const remainingRoutes = current.routes.filter((route) => {
+          if (route.provider_type !== "openai_compatible") return true;
+          const shouldRemove = target.id
+            ? route.api_credential_id === target.id
+            : !route.api_credential_id &&
+              normalizeBaseURL(route.provider_base_url) === targetURL;
+          if (shouldRemove && route.id) {
+            removedRouteIDs.add(route.id);
+          }
+          return !shouldRemove;
+        });
+        return {
+          ...current,
+          api_credentials: target.id
+            ? (current.api_credentials ?? []).filter((c) => c.id !== target.id)
+            : current.api_credentials,
+          routes: remainingRoutes,
+          default_model_route_id:
+            current.default_model_route_id &&
+            removedRouteIDs.has(current.default_model_route_id)
+              ? undefined
+              : current.default_model_route_id,
+          discussion_model_route_id:
+            current.discussion_model_route_id &&
+            removedRouteIDs.has(current.discussion_model_route_id)
+              ? undefined
+              : current.discussion_model_route_id,
+          plan_model_route_id:
+            current.plan_model_route_id &&
+            removedRouteIDs.has(current.plan_model_route_id)
+              ? undefined
+              : current.plan_model_route_id,
+        };
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.agent }),
+        queryClient.invalidateQueries({ queryKey: keys.agentStatus }),
+      ]);
+      toast.success("已移除该服务商及其模型 Route");
+      setPendingDeleteCustomProvider(null);
+    },
+    onError: (error) => toast.error(String(error)),
+  });
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -826,15 +1121,13 @@ export function ModelsSettings() {
   const save = useMutation({
     mutationFn: () => {
       if (!draft) throw Error("未加载配置");
-      const { configured: unused, source_id: unusedSource, ...input } = draft;
-      void unused;
-      void unusedSource;
-      // 显式提取持久化所需字段，避免将前端只读状态（如 api_key_configured）当作未知字段提交
-      const routes = (input.routes || []).map((r) => ({
+      // 显式提取持久化所需字段，避免将只读状态（如 configured、api_credentials）作为未知字段提交
+      const routes = (draft.routes || []).map((r) => ({
         id: r.id,
         enabled: r.enabled ?? true,
         provider_type: r.provider_type,
         credential_id: r.credential_id,
+        api_credential_id: r.api_credential_id,
         provider_base_url: r.provider_base_url,
         model: r.model,
         base_model: r.base_model,
@@ -846,7 +1139,13 @@ export function ModelsSettings() {
         max_output_tokens: r.max_output_tokens,
         limits_source: r.limits_source,
       }));
-      return api.saveAgent({ ...input, routes });
+      return api.saveAgent({
+        routes,
+        system_instructions: draft.system_instructions,
+        default_model_route_id: draft.default_model_route_id,
+        discussion_model_route_id: draft.discussion_model_route_id,
+        plan_model_route_id: draft.plan_model_route_id,
+      });
     },
     onSuccess: (result) => {
       queryClient.setQueryData(keys.agent, result);
@@ -1242,14 +1541,17 @@ export function ModelsSettings() {
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {configuredOpenAIProviders.length
-                      ? `已配置 ${configuredOpenAIProviders.length} 个服务商`
+                      ? `已配置 ${configuredOpenAIProviders.length} 个服务商凭据`
                       : "自建 API、DeepSeek、Ollama 等"}
                   </p>
                 </div>
                 <Button
                   onClick={() => {
+                    setEditingCredentialID(null);
+                    setCredName("");
                     setNewBaseURL("");
                     setNewAPIKey("");
+                    setClearSavedAPIKey(false);
                     customModels.reset();
                     setAddingOpenAI(true);
                   }}
@@ -1267,30 +1569,46 @@ export function ModelsSettings() {
                 ) : (
                   configuredOpenAIProviders.map((item) => (
                     <div
-                      key={item.baseURL}
+                      key={item.id || item.baseURL}
                       className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
                     >
                       <div className="min-w-0">
                         <p
                           className="truncate text-sm font-medium"
-                          title={item.baseURL}
+                          title={
+                            item.name !== item.baseURL
+                              ? `${item.name} (${item.baseURL})`
+                              : item.baseURL
+                          }
                         >
-                          {item.baseURL}
+                          {item.name}
                         </p>
                         <p className="truncate text-[11px] text-muted-foreground">
+                          {item.name !== item.baseURL ? `${item.baseURL} · ` : ""}
+                          {item.hasCredential ? "已配置密钥" : "无密钥"}
+                          {" · "}
                           {item.routeCount > 0
-                            ? `已配置 ${item.routeCount} 条模型 Route`
-                            : "可用于模型 Route"}
+                            ? `${item.routeCount} 条 Route`
+                            : "可用于 Route"}
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Button
                           className="px-2"
-                          title="查看可用模型"
+                          title="查看可用模型或编辑凭据"
                           aria-label="查看可用模型"
                           onClick={() => {
+                            setEditingCredentialID(item.id || null);
+                            setCredName(
+                              item.id && item.name !== item.baseURL
+                                ? item.name
+                                : item.id
+                                  ? item.name
+                                  : "",
+                            );
                             setNewBaseURL(item.baseURL);
                             setNewAPIKey("");
+                            setClearSavedAPIKey(false);
                             customModels.reset();
                             setAddingOpenAI(true);
                           }}
@@ -1299,10 +1617,13 @@ export function ModelsSettings() {
                         </Button>
                         <Button
                           className="px-2"
+                          disabled={deleteCustomProvider.isPending}
                           title="删除此服务商及其所有路由"
                           aria-label="删除此服务商及其所有路由"
                           onClick={() => {
                             setPendingDeleteCustomProvider({
+                              id: item.id,
+                              name: item.name,
                               baseURL: item.baseURL,
                               routeCount: item.routeCount,
                             });
@@ -1344,6 +1665,7 @@ export function ModelsSettings() {
                     key={route.id || String(index)}
                     route={route}
                     auth={statuses}
+                    apiCredentials={apiCredentials}
                     onChange={(next) => updateRoute(index, next)}
                     onRemove={() => removeRoute(index)}
                   />
@@ -1474,15 +1796,28 @@ export function ModelsSettings() {
         onOpenChange={(open) => {
           setAddingOpenAI(open);
           if (!open) {
+            setEditingCredentialID(null);
+            setCredName("");
             setNewBaseURL("");
             setNewAPIKey("");
+            setClearSavedAPIKey(false);
             customModels.reset();
           }
         }}
         title="配置服务商接口"
-        description="填写兼容 OpenAI 规范的服务地址后，可读取 /models 目录并直接把模型加入路由。"
+        description="服务商凭据统一加密保存；同一凭据下的多条模型 Route 共享同一份密钥，也支持为同一地址添加多个不同名称的 API Key。"
       >
         <div className="space-y-4 pt-1">
+          <Field
+            label="服务名称（可选）"
+            hint="用于区分同一服务商地址下的不同 API Key；留空默认使用域名。"
+          >
+            <TextInput
+              value={credName}
+              onChange={(event) => setCredName(event.target.value)}
+              placeholder="如 CPA 主力网关 / DeepSeek 生产"
+            />
+          </Field>
           <Field label="Base URL">
             <TextInput
               value={newBaseURL}
@@ -1496,54 +1831,64 @@ export function ModelsSettings() {
           <Field
             label="API Key（可选）"
             hint={
-              draft?.routes.some(
-                (r) =>
-                  r.provider_type === "openai_compatible" &&
-                  r.provider_base_url.trim() === newBaseURL.trim() &&
-                  (r.api_key_configured || Boolean(r.api_key?.trim()) || Boolean(r.api_key_env?.trim())),
-              )
-                ? "该服务商已配置凭据。留空将自动复用已保存的密钥，填写新值将更新。"
-                : "填入服务商 API Key。CycleDock 服务端会加密保存；无鉴权服务（如本地 Ollama）可留空。"
+              clearSavedAPIKey
+                ? "保存后将清除已存储的 API Key，切换为无鉴权模式。"
+                : editingCredential?.api_key_configured
+                  ? "该服务商凭据已配置密钥。留空保持原密钥不变，输入新值保存后将同步对所有关联模型 Route 生效。"
+                  : "填入服务商 API Key，服务端将加密持久化；无鉴权服务（如本地 Ollama）可留空。"
             }
           >
-            <TextInput
-              type="password"
-              autoComplete="new-password"
-              value={newAPIKey}
-              onChange={(event) => {
-                setNewAPIKey(event.target.value);
-                customModels.reset();
-              }}
-              placeholder={
-                draft?.routes.some(
-                  (r) =>
-                    r.provider_type === "openai_compatible" &&
-                    r.provider_base_url.trim() === newBaseURL.trim() &&
-                    (r.api_key_configured || Boolean(r.api_key?.trim()) || Boolean(r.api_key_env?.trim())),
-                )
-                  ? "已配置凭据（留空复用已有密钥）"
-                  : "输入 API Key，如 sk-...（无鉴权可留空）"
-              }
-            />
+            <div className="space-y-2">
+              <TextInput
+                type="password"
+                autoComplete="new-password"
+                value={newAPIKey}
+                onChange={(event) => {
+                  setNewAPIKey(event.target.value);
+                  if (event.target.value.trim()) {
+                    setClearSavedAPIKey(false);
+                  }
+                  customModels.reset();
+                }}
+                placeholder={
+                  editingCredential?.api_key_configured && !clearSavedAPIKey
+                    ? "已加密保存密钥（留空复用，输入新值可轮换更新）"
+                    : "输入 API Key，如 sk-...（无鉴权可留空）"
+                }
+              />
+              {editingCredential?.api_key_configured && !newAPIKey.trim() && (
+                <div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setClearSavedAPIKey((prev) => !prev)}
+                  >
+                    {clearSavedAPIKey ? "取消清除已保存密钥" : "清除已保存密钥"}
+                  </Button>
+                </div>
+              )}
+            </div>
           </Field>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="primary"
-              disabled={!newBaseURL.trim() || customModels.isPending}
+              disabled={
+                !normalizeBaseURL(newBaseURL) ||
+                customModels.isPending ||
+                persistAPICredential.isPending
+              }
               onClick={() => customModels.mutate()}
             >
               <Search className="size-4" />
               查看可用模型
             </Button>
             <Button
-              disabled={!newBaseURL.trim()}
-              onClick={() =>
-                addRouteForOpenAIProvider(
-                  newBaseURL.trim(),
-                  newAPIKey.trim(),
-                )
+              disabled={
+                !normalizeBaseURL(newBaseURL) || persistAPICredential.isPending
               }
+              onClick={() => void handleAddOpenAIRoute()}
             >
               <Plus className="size-4" />
               手动添加模型 Route
@@ -1559,24 +1904,26 @@ export function ModelsSettings() {
               </p>
               <div className="max-h-72 space-y-1.5 overflow-y-auto rounded-xl border border-line bg-canvas p-2">
                 {customModels.data.map((model) => {
+                  const normalizedModalURL = normalizeBaseURL(newBaseURL);
                   const added = draft.routes.some(
                     (route) =>
                       route.provider_type === "openai_compatible" &&
-                      route.provider_base_url.trim() === newBaseURL.trim() &&
+                      (editingCredential
+                        ? route.api_credential_id === editingCredential.id ||
+                          (!route.api_credential_id &&
+                            normalizeBaseURL(route.provider_base_url) ===
+                              normalizedModalURL)
+                        : !route.api_credential_id &&
+                          normalizeBaseURL(route.provider_base_url) ===
+                            normalizedModalURL) &&
                       route.model.trim() === model.id,
                   );
                   return (
                     <button
                       key={model.id}
                       type="button"
-                      disabled={added}
-                      onClick={() =>
-                        addRouteForOpenAIProvider(
-                          newBaseURL,
-                          newAPIKey,
-                          model.id,
-                        )
-                      }
+                      disabled={added || persistAPICredential.isPending}
+                      onClick={() => void handleAddOpenAIRoute(model.id)}
                       className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-muted disabled:cursor-default disabled:opacity-60"
                     >
                       <span className="min-w-0">
@@ -1597,8 +1944,28 @@ export function ModelsSettings() {
             </div>
           )}
 
-          <div className="flex justify-end border-t border-line pt-3">
-            <Button variant="ghost" onClick={() => setAddingOpenAI(false)}>
+          <div className="flex justify-end gap-2 border-t border-line pt-3">
+            {isCredentialDirty && Boolean(normalizeBaseURL(newBaseURL)) && (
+              <Button
+                variant="primary"
+                disabled={persistAPICredential.isPending}
+                onClick={async () => {
+                  try {
+                    await persistAPICredential.mutateAsync();
+                    toast.success("服务商凭据已保存");
+                  } catch {
+                    // 错误由 onError 提示
+                  }
+                }}
+              >
+                保存凭据
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              disabled={persistAPICredential.isPending}
+              onClick={() => void handleFinishOpenAIModal()}
+            >
               完成
             </Button>
           </div>
@@ -1635,7 +2002,7 @@ export function ModelsSettings() {
       <ConfirmDialog
         open={Boolean(pendingDeleteCustomProvider)}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !deleteCustomProvider.isPending) {
             setPendingDeleteCustomProvider(null);
           }
         }}
@@ -1643,24 +2010,18 @@ export function ModelsSettings() {
         description={
           pendingDeleteCustomProvider
             ? pendingDeleteCustomProvider.routeCount > 0
-              ? `确定删除服务商 “${pendingDeleteCustomProvider.baseURL}” 吗？此操作将同时从列表中移除引用该服务商的 ${pendingDeleteCustomProvider.routeCount} 条模型 Route。`
-              : `确定删除服务商 “${pendingDeleteCustomProvider.baseURL}” 吗？`
+              ? `确定删除服务商 “${pendingDeleteCustomProvider.name}” 吗？此操作将同时删除引用该凭据的 ${pendingDeleteCustomProvider.routeCount} 条模型 Route。`
+              : `确定删除服务商 “${pendingDeleteCustomProvider.name}” 吗？`
             : ""
         }
         confirmLabel="删除服务商"
+        pending={deleteCustomProvider.isPending}
         onConfirm={() => {
-          if (pendingDeleteCustomProvider) {
-            setDraft({
-              ...draft,
-              routes: draft.routes.filter(
-                (route) =>
-                  route.provider_type !== "openai_compatible" ||
-                  route.provider_base_url.trim() !==
-                    pendingDeleteCustomProvider.baseURL,
-              ),
-            });
-            toast.success("已移除该服务商及其模型 Route");
-            setPendingDeleteCustomProvider(null);
+          if (
+            pendingDeleteCustomProvider &&
+            !deleteCustomProvider.isPending
+          ) {
+            deleteCustomProvider.mutate(pendingDeleteCustomProvider);
           }
         }}
       />

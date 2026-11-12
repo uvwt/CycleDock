@@ -1,6 +1,8 @@
 import { safeRandomUUID } from "../lib/utils";
 import type {
   AgentSettings,
+  APICredential,
+  APICredentialInput,
   AuthorizedAIClient,
   DeviceTarget,
   Card,
@@ -274,14 +276,30 @@ export const api = {
     request<void>(`/cards/${id}/schedules/${schedule}`, "DELETE"),
   agentStatus: () => request<{ model_configured: boolean }>("/agent/status"),
   agentSettings: () => request<AgentSettings>("/agent/settings"),
-  saveAgent: (x: Omit<AgentSettings, "configured" | "source_id">) =>
-    request<AgentSettings>("/agent/settings", "PUT", x),
+  saveAgent: (
+    x: Omit<AgentSettings, "configured" | "source_id" | "api_credentials">,
+  ) => request<AgentSettings>("/agent/settings", "PUT", x),
+  apiCredentials: () => request<APICredential[]>("/agent/api-credentials"),
+  createAPICredential: (value: APICredentialInput) =>
+    request<APICredential>("/agent/api-credentials", "POST", value),
+  updateAPICredential: (id: string, value: APICredentialInput) =>
+    request<APICredential>(
+      `/agent/api-credentials/${encodeURIComponent(id)}`,
+      "PUT",
+      value,
+    ),
+  deleteAPICredential: (id: string) =>
+    request<void>(
+      `/agent/api-credentials/${encodeURIComponent(id)}`,
+      "DELETE",
+    ),
   authStatuses: () => request<ModelAuth[]>("/agent/model-auth"),
   models: (p: "chatgpt" | "grok", credentialID?: string) =>
     request<ModelCatalogItem[]>(
       `/agent/models?provider=${p}${credentialID ? `&credential_id=${encodeURIComponent(credentialID)}` : ""}`,
     ),
   providerModels: (value: {
+    api_credential_id?: string;
     provider_base_url: string;
     api_key?: string;
     api_key_env?: string;
@@ -315,6 +333,7 @@ export const api = {
   testProvider: (value: {
     provider_type: Provider;
     credential_id?: string;
+    api_credential_id?: string;
     provider_base_url?: string;
     model: string;
     api_key?: string;

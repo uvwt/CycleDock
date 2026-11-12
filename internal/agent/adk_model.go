@@ -19,7 +19,6 @@ import (
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 type TokenUsageSource string
@@ -60,7 +59,7 @@ type adkRouteModel struct {
 	turnID       uuid.UUID
 	attemptID    uuid.UUID
 	purpose      string
-	routes       []db.WorkspaceModelRoute
+	routes       []store.ModelRoute
 	budgetPolicy CompactionBudgetPolicy
 
 	mu              sync.Mutex
@@ -71,20 +70,20 @@ type adkRouteModel struct {
 }
 
 func prioritizeRoutes(
-	routes []db.WorkspaceModelRoute,
+	routes []store.ModelRoute,
 	preferredID uuid.NullUUID,
 	kindDefaultID uuid.NullUUID,
 	workspaceDefaultID uuid.NullUUID,
-) []db.WorkspaceModelRoute {
+) []store.ModelRoute {
 	if len(routes) == 0 {
 		return routes
 	}
-	routeByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(routes))
+	routeByID := make(map[uuid.UUID]store.ModelRoute, len(routes))
 	for _, r := range routes {
 		routeByID[r.ID] = r
 	}
 
-	ordered := make([]db.WorkspaceModelRoute, 0, len(routes))
+	ordered := make([]store.ModelRoute, 0, len(routes))
 	seen := make(map[uuid.UUID]bool, len(routes))
 
 	candidates := []uuid.NullUUID{preferredID, kindDefaultID, workspaceDefaultID}
@@ -111,12 +110,12 @@ func newADKRouteModel(
 	auth *modelauth.Service,
 	dataStore *store.Store,
 	workspaceID uuid.UUID,
-	routes []db.WorkspaceModelRoute,
+	routes []store.ModelRoute,
 ) (*adkRouteModel, error) {
 	if client == nil {
 		client = modelclient.New()
 	}
-	enabled := make([]db.WorkspaceModelRoute, 0, len(routes))
+	enabled := make([]store.ModelRoute, 0, len(routes))
 	for _, route := range routes {
 		if route.Enabled {
 			enabled = append(enabled, route)
@@ -161,9 +160,9 @@ func (m *adkRouteModel) ActiveModel() string {
 	return strings.TrimSpace(route.Model)
 }
 
-func (m *adkRouteModel) ActiveRoute() (db.WorkspaceModelRoute, bool) {
+func (m *adkRouteModel) ActiveRoute() (store.ModelRoute, bool) {
 	if m == nil {
-		return db.WorkspaceModelRoute{}, false
+		return store.ModelRoute{}, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -173,7 +172,7 @@ func (m *adkRouteModel) ActiveRoute() (db.WorkspaceModelRoute, bool) {
 	if len(m.routes) > 0 {
 		return m.routes[0], true
 	}
-	return db.WorkspaceModelRoute{}, false
+	return store.ModelRoute{}, false
 }
 
 func (m *adkRouteModel) LastObservation() (RouteCallObservation, bool) {
@@ -398,7 +397,7 @@ func (m *adkRouteModel) recordTraceModelCall(ctx context.Context, params store.R
 
 func (m *adkRouteModel) routeConfig(
 	ctx context.Context,
-	route db.WorkspaceModelRoute,
+	route store.ModelRoute,
 ) (modelclient.Config, error) {
 	timeout := agentconfig.DefaultModelRequestTimeout
 	switch route.ProviderType {
@@ -663,7 +662,7 @@ func normalizedProviderType(provider string) string {
 	return trimmed
 }
 
-func buildModelResponseMetadata(route db.WorkspaceModelRoute, usageSource TokenUsageSource) map[string]any {
+func buildModelResponseMetadata(route store.ModelRoute, usageSource TokenUsageSource) map[string]any {
 	meta := map[string]any{
 		tokenUsageSourceKey: string(usageSource),
 		modelProviderKey:    normalizedProviderType(route.ProviderType),

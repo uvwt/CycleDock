@@ -205,11 +205,27 @@ export type ModelCatalogItem = {
   name: string;
   limits?: ModelLimits;
 };
+export type APICredential = {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key_env: string;
+  api_key_configured: boolean;
+};
+export type APICredentialInput = {
+  name: string;
+  base_url: string;
+  api_key?: string;
+  api_key_env?: string;
+  clear_api_key?: boolean;
+};
 export type ModelRoute = {
   id: string;
   enabled: boolean;
   provider_type: Provider;
   credential_id: string;
+  api_credential_id?: string;
+  api_credential_name?: string;
   provider_base_url: string;
   model: string;
   base_model?: string;
@@ -226,6 +242,7 @@ export type ModelRoute = {
 export type AgentSettings = {
   configured: boolean;
   routes: ModelRoute[];
+  api_credentials?: APICredential[];
   system_instructions: string;
   source_id?: string;
   default_model_route_id?: string;

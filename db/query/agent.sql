@@ -20,31 +20,113 @@ SET system_instructions = EXCLUDED.system_instructions,
     updated_at = now()
 RETURNING *;
 
--- name: ListWorkspaceModelRoutes :many
+-- name: ListWorkspaceAPICredentials :many
 SELECT *
-FROM workspace_model_routes
+FROM workspace_api_credentials
 WHERE workspace_id = sqlc.arg(workspace_id)
-ORDER BY position, id;
+ORDER BY created_at ASC, id ASC;
 
--- name: DeleteWorkspaceModelRoutes :exec
+-- name: GetWorkspaceAPICredential :one
+SELECT *
+FROM workspace_api_credentials
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id);
+
+-- name: UpsertWorkspaceAPICredential :one
+INSERT INTO workspace_api_credentials (
+    id, workspace_id, name, base_url, api_key_env, api_key_ciphertext
+)
+VALUES (
+    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(name), sqlc.arg(base_url),
+    sqlc.arg(api_key_env), sqlc.narg(api_key_ciphertext)
+)
+ON CONFLICT (workspace_id, id) DO UPDATE
+SET name = EXCLUDED.name,
+    base_url = EXCLUDED.base_url,
+    api_key_env = EXCLUDED.api_key_env,
+    api_key_ciphertext = CASE
+        WHEN sqlc.arg(replace_api_key)::boolean THEN EXCLUDED.api_key_ciphertext
+        ELSE workspace_api_credentials.api_key_ciphertext
+    END,
+    updated_at = now()
+WHERE workspace_api_credentials.base_url = EXCLUDED.base_url
+   OR workspace_api_credentials.api_key_ciphertext IS NULL
+   OR sqlc.arg(replace_api_key)::boolean
+RETURNING *;
+
+-- name: DeleteWorkspaceAPICredential :execrows
+DELETE FROM workspace_api_credentials
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id);
+
+-- name: ListWorkspaceModelRoutes :many
+SELECT
+    r.id,
+    r.workspace_id,
+    r.position,
+    r.enabled,
+    r.provider_type,
+    r.credential_id,
+    r.api_credential_id,
+    COALESCE(ac.name, '')::text AS api_credential_name,
+    COALESCE(ac.base_url, '')::text AS provider_base_url,
+    r.model,
+    r.base_model,
+    COALESCE(ac.api_key_env, '')::text AS api_key_env,
+    ac.api_key_ciphertext,
+    r.context_window_tokens,
+    r.max_input_tokens,
+    r.max_output_tokens,
+    r.limits_source,
+    r.limits_verified_at,
+    r.created_at,
+    r.updated_at
+FROM workspace_model_routes r
+LEFT JOIN workspace_api_credentials ac
+  ON ac.workspace_id = r.workspace_id
+ AND ac.id = r.api_credential_id
+WHERE r.workspace_id = sqlc.arg(workspace_id)
+ORDER BY r.position, r.id;
+
+-- name: DeleteRemovedWorkspaceModelRoutes :exec
 DELETE FROM workspace_model_routes
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND NOT (id = ANY(sqlc.arg(keep_ids)::uuid[]));
+
+-- name: ShiftWorkspaceModelRoutePositions :exec
+UPDATE workspace_model_routes
+SET position = position + 1000
 WHERE workspace_id = sqlc.arg(workspace_id);
 
--- name: CreateWorkspaceModelRoute :one
+-- name: UpsertWorkspaceModelRoute :one
 INSERT INTO workspace_model_routes (
-    id, workspace_id, position, enabled, provider_type, credential_id,
-    provider_base_url, model, base_model, api_key_env, api_key_ciphertext,
+    id, workspace_id, position, enabled, provider_type, credential_id, api_credential_id,
+    model, base_model,
     context_window_tokens, max_input_tokens, max_output_tokens,
     limits_source, limits_verified_at
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(position), sqlc.arg(enabled),
-    sqlc.arg(provider_type), sqlc.narg(credential_id),
-    sqlc.arg(provider_base_url), sqlc.arg(model), sqlc.arg(base_model), sqlc.arg(api_key_env),
-    sqlc.narg(api_key_ciphertext),
+    sqlc.arg(provider_type), sqlc.narg(credential_id), sqlc.narg(api_credential_id),
+    sqlc.arg(model), sqlc.arg(base_model),
     sqlc.narg(context_window_tokens), sqlc.narg(max_input_tokens), sqlc.narg(max_output_tokens),
     COALESCE(NULLIF(btrim(sqlc.arg(limits_source)::text), ''), 'unknown'), sqlc.narg(limits_verified_at)
 )
+ON CONFLICT (id) DO UPDATE
+SET position = EXCLUDED.position,
+    enabled = EXCLUDED.enabled,
+    provider_type = EXCLUDED.provider_type,
+    credential_id = EXCLUDED.credential_id,
+    api_credential_id = EXCLUDED.api_credential_id,
+    model = EXCLUDED.model,
+    base_model = EXCLUDED.base_model,
+    context_window_tokens = EXCLUDED.context_window_tokens,
+    max_input_tokens = EXCLUDED.max_input_tokens,
+    max_output_tokens = EXCLUDED.max_output_tokens,
+    limits_source = EXCLUDED.limits_source,
+    limits_verified_at = EXCLUDED.limits_verified_at,
+    updated_at = now()
+WHERE workspace_model_routes.workspace_id = EXCLUDED.workspace_id
 RETURNING *;
 
 -- name: ListWorkspaceMCPConnections :many
