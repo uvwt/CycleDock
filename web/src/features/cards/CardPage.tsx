@@ -1,6 +1,14 @@
 import { useDeviceSelection } from "../devices/device-selection";
 import { DeviceMenu } from "../devices/DeviceMenu";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -11,12 +19,23 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import { ErrorView, Sheet } from "../../shared/ui/components";
-import type { Attempt, TimelineEvent } from "../../shared/api/types";
+import type {
+  Attempt,
+  Card,
+  CardDetail,
+  DeviceTarget,
+  Identity,
+  PendingTurn,
+  TimelineEvent,
+} from "../../shared/api/types";
+import {
+  applyOptimisticSentTurn,
+  patchCachedCard,
+} from "../../shared/lib/card-cache";
 import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
-import { AgentTracePanel } from "../trace/AgentTracePanel";
 import { ConversationSkeleton } from "../timeline/ConversationSkeleton";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
@@ -26,13 +45,18 @@ import { ConversationComposer } from "./ConversationComposer";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { PlanSidebar } from "../plans/PlanSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
-import type { Card, DeviceTarget, PendingTurn } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import { useContextSidebarVisible } from "../../app/context-sidebar";
 import {
   QuickCardSwitcherTrigger,
   QuickCardSwitcherModal,
 } from "../../shared/ui/MobileQuickCardSwitcher";
+
+const AgentTracePanel = lazy(() =>
+  import("../trace/AgentTracePanel").then((m) => ({
+    default: m.AgentTracePanel,
+  })),
+);
 
 type NavigationState = {
   initialMessage?: string;
@@ -460,24 +484,34 @@ function CardPageContent({
   };
 
   const send = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const text = comment.trim();
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
-      return api.send(
+      const deviceTarget = target;
+      const result = await api.send(
         cardID,
         content,
         "enqueue",
         undefined,
-        target,
+        deviceTarget,
         card?.preferred_model_route_id || undefined,
       );
+      return { ...result, content, deviceTarget };
     },
-    onSuccess: async () => {
+    onSuccess: (result) => {
       setComment("");
       setReplyTo(null);
-      await sync();
+      const me = queryClient.getQueryData<Identity>(keys.me);
+      applyOptimisticSentTurn(queryClient, cardID, {
+        eventID: result.event_id,
+        turnID: result.turn_id,
+        content: result.content,
+        actorName: me?.display_name,
+        deviceTarget: result.deviceTarget,
+      });
+      void sync();
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
@@ -485,7 +519,12 @@ function CardPageContent({
 
   const cancelAttempt = useMutation({
     mutationFn: () => api.cancelAttempt(cardID, current!.id),
-    onSuccess: sync,
+    onSuccess: () => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) =>
+        old && old.card ? { ...old, current_attempt: null } : old,
+      );
+      void sync();
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("取消失败")),
   });
@@ -493,7 +532,20 @@ function CardPageContent({
   const cancelTurn = useMutation({
     mutationFn: (turnID: string) => api.cancelTurn(cardID, turnID),
     onMutate: (turnID) => setCancelingTurnID(turnID),
-    onSuccess: sync,
+    onSuccess: (_, turnID) => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) => {
+        if (!old || !old.card) return old;
+        const removed = old.pending_turns.find((item) => item.id === turnID);
+        return {
+          ...old,
+          pending_turns: old.pending_turns.filter((item) => item.id !== turnID),
+          timeline: removed?.source_event_id
+            ? old.timeline.filter((ev) => ev.id !== removed.source_event_id)
+            : old.timeline,
+        };
+      });
+      void sync();
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("取消排队失败")),
     onSettled: () => setCancelingTurnID(""),
@@ -502,7 +554,27 @@ function CardPageContent({
   const steerTurn = useMutation({
     mutationFn: (turnID: string) => api.steerTurn(cardID, turnID),
     onMutate: (turnID) => setSteeringTurnID(turnID),
-    onSuccess: sync,
+    onSuccess: (_, turnID) => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) => {
+        if (!old || !old.card) return old;
+        const steered = old.pending_turns.find((item) => item.id === turnID);
+        return {
+          ...old,
+          pending_turns: old.pending_turns.filter((item) => item.id !== turnID),
+          current_attempt:
+            old.current_attempt && steered
+              ? {
+                  ...old.current_attempt,
+                  turn_id: steered.id,
+                  source_event_id:
+                    steered.source_event_id ||
+                    old.current_attempt.source_event_id,
+                }
+              : old.current_attempt,
+        };
+      });
+      void sync();
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("引导失败")),
     onSettled: () => setSteeringTurnID(""),
@@ -511,7 +583,9 @@ function CardPageContent({
   const retryAttempt = useMutation({
     mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
     onMutate: (attemptID) => setRetryingAttemptID(attemptID),
-    onSuccess: sync,
+    onSuccess: () => {
+      void sync();
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("重试失败")),
     onSettled: () => setRetryingAttemptID(""),
@@ -526,33 +600,22 @@ function CardPageContent({
           ? queryClient.cancelQueries({ queryKey: keys.cards(card.project_id) })
           : Promise.resolve(),
       ]);
-      const prevCard = queryClient.getQueryData<Card>(keys.card(cardID));
+      const prevDetail = queryClient.getQueryData<CardDetail>(
+        keys.card(cardID),
+      );
       const prevCards = card?.project_id
         ? queryClient.getQueryData<Card[]>(keys.cards(card.project_id))
         : undefined;
 
-      if (prevCard) {
-        queryClient.setQueryData<Card>(keys.card(cardID), {
-          ...prevCard,
-          todo_state: "done",
-          updated_at: new Date().toISOString(),
-        });
-      }
-      if (prevCards && card?.project_id) {
-        queryClient.setQueryData<Card[]>(
-          keys.cards(card.project_id),
-          prevCards.map((c) =>
-            c.id === cardID
-              ? { ...c, todo_state: "done", updated_at: new Date().toISOString() }
-              : c,
-          ),
-        );
-      }
-      return { prevCard, prevCards };
+      patchCachedCard(queryClient, cardID, card?.project_id, {
+        todo_state: "done",
+        updated_at: new Date().toISOString(),
+      });
+      return { prevDetail, prevCards };
     },
     onError: (error, _variables, context) => {
-      if (context?.prevCard) {
-        queryClient.setQueryData(keys.card(cardID), context.prevCard);
+      if (context?.prevDetail) {
+        queryClient.setQueryData(keys.card(cardID), context.prevDetail);
       }
       if (context?.prevCards && card?.project_id) {
         queryClient.setQueryData(keys.cards(card.project_id), context.prevCards);
@@ -561,16 +624,7 @@ function CardPageContent({
     },
     onSuccess: (updatedCard) => {
       if (updatedCard) {
-        queryClient.setQueryData<Card>(keys.card(cardID), (old) =>
-          old ? { ...old, ...updatedCard } : updatedCard,
-        );
-        if (card?.project_id) {
-          queryClient.setQueryData<Card[]>(keys.cards(card.project_id), (old) =>
-            old
-              ? old.map((c) => (c.id === updatedCard.id ? { ...c, ...updatedCard } : c))
-              : old,
-          );
-        }
+        patchCachedCard(queryClient, cardID, card?.project_id, updatedCard);
       }
       void sync();
       toast.success(t("已通过验收"));
@@ -579,8 +633,20 @@ function CardPageContent({
 
   const acknowledgeCheckin = useMutation({
     mutationFn: () => api.acknowledgeCheckin(cardID),
-    onSuccess: async () => {
-      await sync();
+    onSuccess: () => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) =>
+        old && old.card
+          ? {
+              ...old,
+              health: "acknowledged",
+              card: { ...old.card, health: "acknowledged" },
+            }
+          : old,
+      );
+      patchCachedCard(queryClient, cardID, card?.project_id, {
+        health: "acknowledged",
+      });
+      void sync();
       toast.success(t("已标记为已确认"));
     },
     onError: (error) =>
@@ -939,7 +1005,21 @@ function CardPageContent({
                         await api.editComment(cardID, eventID, content);
                         setOlderEvents([]);
                         setOlderAttempts([]);
-                        await sync();
+                        queryClient.setQueryData<CardDetail>(
+                          keys.card(cardID),
+                          (old) =>
+                            old && old.card
+                              ? {
+                                  ...old,
+                                  timeline: old.timeline.map((ev) =>
+                                    ev.id === eventID
+                                      ? { ...ev, content }
+                                      : ev,
+                                  ),
+                                }
+                              : old,
+                        );
+                        void sync();
                       }
                     : undefined
                 }
@@ -1029,7 +1109,29 @@ function CardPageContent({
                     onSteer={(turnID) => steerTurn.mutate(turnID)}
                     onEdit={async (turnID, content) => {
                       await api.editTurn(cardID, turnID, content);
-                      await sync();
+                      queryClient.setQueryData<CardDetail>(
+                        keys.card(cardID),
+                        (old) => {
+                          if (!old || !old.card) return old;
+                          const edited = old.pending_turns.find(
+                            (item) => item.id === turnID,
+                          );
+                          return {
+                            ...old,
+                            pending_turns: old.pending_turns.map((item) =>
+                              item.id === turnID ? { ...item, content } : item,
+                            ),
+                            timeline: edited?.source_event_id
+                              ? old.timeline.map((ev) =>
+                                  ev.id === edited.source_event_id
+                                    ? { ...ev, content }
+                                    : ev,
+                                )
+                              : old.timeline,
+                          };
+                        },
+                      );
+                      void sync();
                     }}
                   />
                   <ConversationComposer
@@ -1069,11 +1171,13 @@ function CardPageContent({
           </div>
         </section>
         {traceAttemptID && (
-          <AgentTracePanel
-            cardID={cardID}
-            attemptID={traceAttemptID}
-            onClose={() => setTraceAttemptID("")}
-          />
+          <Suspense fallback={null}>
+            <AgentTracePanel
+              cardID={cardID}
+              attemptID={traceAttemptID}
+              onClose={() => setTraceAttemptID("")}
+            />
+          </Suspense>
         )}
     </>
   );

@@ -59,24 +59,42 @@ export function DeviceToolGuardSection({
         timeout_seconds: draft.timeoutSeconds,
         custom_rules: draft.customRules,
       }),
-    onSuccess: async () => {
+    onSuccess: (saved) => {
+      queryClient.setQueryData<DeviceToolGuard[]>(
+        keys.deviceToolGuards(workspaceID),
+        (old) => {
+          if (!old) return [saved];
+          const idx = old.findIndex(
+            (item) => item.device_node_id === saved.device_node_id,
+          );
+          if (idx === -1) return [...old, saved];
+          const next = [...old];
+          next[idx] = saved;
+          return next;
+        },
+      );
       toast.success(t("设备安全守卫配置已保存"));
-      await queryClient.invalidateQueries({
+      setIsEditing(false);
+      void queryClient.invalidateQueries({
         queryKey: keys.deviceToolGuards(workspaceID),
       });
-      setIsEditing(false);
     },
     onError: (err) => toast.error(String(err)),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteDeviceToolGuard(device.id),
-    onSuccess: async () => {
+    onSuccess: () => {
+      queryClient.setQueryData<DeviceToolGuard[]>(
+        keys.deviceToolGuards(workspaceID),
+        (old) =>
+          old ? old.filter((item) => item.device_node_id !== device.id) : old,
+      );
       toast.success(t("已重置为默认策略"));
-      await queryClient.invalidateQueries({
+      setIsEditing(false);
+      void queryClient.invalidateQueries({
         queryKey: keys.deviceToolGuards(workspaceID),
       });
-      setIsEditing(false);
     },
     onError: (err) => toast.error(String(err)),
   });

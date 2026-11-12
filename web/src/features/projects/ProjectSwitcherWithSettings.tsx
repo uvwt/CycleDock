@@ -83,10 +83,13 @@ function ProjectCreateDialog({
         name: name.trim(),
         description: description.trim(),
       }),
-    onSuccess: async (created) => {
+    onSuccess: (created) => {
       setName("");
       setDescription("");
-      await queryClient.invalidateQueries({ queryKey: keys.projects });
+      queryClient.setQueryData<Project[]>(keys.projects, (old) =>
+        old ? [...old, created] : [created],
+      );
+      void queryClient.invalidateQueries({ queryKey: keys.projects });
       toast.success(t("项目已创建"));
       onOpenChange(false);
       onCreated(created.id);
@@ -167,10 +170,15 @@ function ProjectSettingsDialog({
         name: name.trim(),
         description: description.trim(),
       }),
-    onSuccess: async (updated) => {
+    onSuccess: (updated) => {
       setName(updated.name);
       setDescription(updated.description);
-      await queryClient.invalidateQueries({ queryKey: keys.projects });
+      queryClient.setQueryData<Project[]>(keys.projects, (old) =>
+        old
+          ? old.map((item) => (item.id === updated.id ? updated : item))
+          : old,
+      );
+      void queryClient.invalidateQueries({ queryKey: keys.projects });
       toast.success(t("项目已保存"));
       onOpenChange(false);
     },

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api } from "../api/client";
 import type { Card } from "../api/types";
 import { keys } from "../../app/query";
+import { patchCachedCard } from "../lib/card-cache";
 import { Button, Field, Modal, TextArea, TextInput } from "./components";
 
 export interface EditCardDialogProps {
@@ -34,9 +35,12 @@ function EditCardDialogContent({
   const updateMutation = useMutation({
     mutationFn: () => api.updateCard(card.id, title.trim(), description.trim()),
     onSuccess: (updatedCard) => {
-      queryClient.invalidateQueries({ queryKey: keys.card(card.id) });
-      queryClient.invalidateQueries({ queryKey: keys.cards(card.project_id) });
-      queryClient.invalidateQueries({
+      patchCachedCard(queryClient, card.id, card.project_id, updatedCard);
+      void queryClient.invalidateQueries({ queryKey: keys.card(card.id) });
+      void queryClient.invalidateQueries({
+        queryKey: keys.cards(card.project_id),
+      });
+      void queryClient.invalidateQueries({
         queryKey: keys.schedules(card.project_id),
       });
       toast.success(t("已保存"));

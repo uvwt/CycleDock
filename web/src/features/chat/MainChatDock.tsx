@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Expand, X } from "lucide-react";
@@ -8,20 +8,44 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
-import { ConversationComposer } from "../cards/ConversationComposer";
-import { PendingTurnQueue } from "../cards/PendingTurnQueue";
-import type { Attempt, TimelineEvent } from "../../shared/api/types";
+import type {
+  Attempt,
+  CardDetail,
+  Identity,
+  TimelineEvent,
+} from "../../shared/api/types";
 import {
-  ConversationView,
-  type QuotedMessage,
-} from "../timeline/ConversationView";
-import { AgentTracePanel } from "../trace/AgentTracePanel";
+  applyOptimisticSentTurn,
+  upsertCachedProjectCard,
+} from "../../shared/lib/card-cache";
+import type { QuotedMessage } from "../timeline/ConversationView";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import {
   cardMessageEvent,
   type CardMessageDetail,
 } from "../../shared/realtime/cardUpdates";
 import { Spinner } from "../../shared/ui/components";
+
+const ConversationView = lazy(() =>
+  import("../timeline/ConversationView").then((m) => ({
+    default: m.ConversationView,
+  })),
+);
+const PendingTurnQueue = lazy(() =>
+  import("../cards/PendingTurnQueue").then((m) => ({
+    default: m.PendingTurnQueue,
+  })),
+);
+const ConversationComposer = lazy(() =>
+  import("../cards/ConversationComposer").then((m) => ({
+    default: m.ConversationComposer,
+  })),
+);
+const AgentTracePanel = lazy(() =>
+  import("../trace/AgentTracePanel").then((m) => ({
+    default: m.AgentTracePanel,
+  })),
+);
 
 const BUBBLE_BOTTOM_STORAGE_KEY = "cycledock.main-chat.bubble-bottom";
 
@@ -213,9 +237,10 @@ export function MainChatDock() {
 
   const openChat = useMutation({
     mutationFn: () => api.openMainDiscussion(projectID),
-    onSuccess: async (card) => {
+    onSuccess: (card) => {
       queryClient.setQueryData(keys.mainDiscussion(projectID), card);
-      await queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
+      upsertCachedProjectCard(queryClient, projectID, card);
+      void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
@@ -304,24 +329,34 @@ export function MainChatDock() {
   }
 
   const send = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const text = comment.trim();
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
-      return api.send(
+      const deviceTarget = target;
+      const result = await api.send(
         cardID,
         content,
         "enqueue",
         undefined,
-        target,
+        deviceTarget,
         main.data?.preferred_model_route_id || undefined,
       );
+      return { ...result, content, deviceTarget };
     },
-    onSuccess: async () => {
+    onSuccess: (result) => {
       setComment("");
       setReplyTo(null);
-      await sync();
+      const me = queryClient.getQueryData<Identity>(keys.me);
+      applyOptimisticSentTurn(queryClient, cardID, {
+        eventID: result.event_id,
+        turnID: result.turn_id,
+        content: result.content,
+        actorName: me?.display_name,
+        deviceTarget: result.deviceTarget,
+      });
+      void sync();
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("发送失败")),
@@ -329,7 +364,12 @@ export function MainChatDock() {
 
   const cancelAttempt = useMutation({
     mutationFn: () => api.cancelAttempt(cardID, current!.id),
-    onSuccess: sync,
+    onSuccess: () => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) =>
+        old && old.card ? { ...old, current_attempt: null } : old,
+      );
+      void sync();
+    },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("取消失败")),
   });
@@ -337,21 +377,56 @@ export function MainChatDock() {
   const cancelTurn = useMutation({
     mutationFn: (turnID: string) => api.cancelTurn(cardID, turnID),
     onMutate: (turnID) => setCancelingTurnID(turnID),
-    onSuccess: sync,
+    onSuccess: (_, turnID) => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) => {
+        if (!old || !old.card) return old;
+        const removed = old.pending_turns.find((item) => item.id === turnID);
+        return {
+          ...old,
+          pending_turns: old.pending_turns.filter((item) => item.id !== turnID),
+          timeline: removed?.source_event_id
+            ? old.timeline.filter((ev) => ev.id !== removed.source_event_id)
+            : old.timeline,
+        };
+      });
+      void sync();
+    },
     onSettled: () => setCancelingTurnID(""),
   });
 
   const steerTurn = useMutation({
     mutationFn: (turnID: string) => api.steerTurn(cardID, turnID),
     onMutate: (turnID) => setSteeringTurnID(turnID),
-    onSuccess: sync,
+    onSuccess: (_, turnID) => {
+      queryClient.setQueryData<CardDetail>(keys.card(cardID), (old) => {
+        if (!old || !old.card) return old;
+        const steered = old.pending_turns.find((item) => item.id === turnID);
+        return {
+          ...old,
+          pending_turns: old.pending_turns.filter((item) => item.id !== turnID),
+          current_attempt:
+            old.current_attempt && steered
+              ? {
+                  ...old.current_attempt,
+                  turn_id: steered.id,
+                  source_event_id:
+                    steered.source_event_id ||
+                    old.current_attempt.source_event_id,
+                }
+              : old.current_attempt,
+        };
+      });
+      void sync();
+    },
     onSettled: () => setSteeringTurnID(""),
   });
 
   const retryAttempt = useMutation({
     mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
     onMutate: (attemptID) => setRetryingAttemptID(attemptID),
-    onSuccess: sync,
+    onSuccess: () => {
+      void sync();
+    },
     onSettled: () => setRetryingAttemptID(""),
   });
 
@@ -689,71 +764,103 @@ export function MainChatDock() {
             </div>
           </header>
 
-          <div className="flex min-h-0 flex-1 flex-col select-auto">
-            {!cardID || detail.isPending || openChat.isPending ? (
-              <div className="grid flex-1 place-items-center">
+          <Suspense
+            fallback={
+              <div className="grid min-h-0 flex-1 place-items-center">
                 <Spinner />
               </div>
-            ) : (
-              <ConversationView
-                events={combinedTimeline}
-                live={stream.live}
-                cardKind="discussion"
-                pendingTurns={detail.data?.pending_turns || []}
-                currentAttempt={current || null}
-                attemptHistory={combinedAttempts}
-                hasMoreBefore={hasMoreBefore}
-                loadingMoreBefore={loadingMoreBefore}
-                onLoadMoreBefore={loadMoreBefore}
-                bottomSpacerClass="h-2 shrink-0"
-                compact
-                retryingAttemptID={retryingAttemptID}
-                onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
-                onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
-                onReply={setReplyTo}
-                onEditMessage={async (eventID, content) => {
-                  await api.editComment(cardID, eventID, content);
-                  setOlderEvents([]);
-                  setOlderAttempts([]);
-                  await sync();
+            }
+          >
+            <div className="flex min-h-0 flex-1 flex-col select-auto">
+              {!cardID || detail.isPending || openChat.isPending ? (
+                <div className="grid flex-1 place-items-center">
+                  <Spinner />
+                </div>
+              ) : (
+                <ConversationView
+                  events={combinedTimeline}
+                  live={stream.live}
+                  cardKind="discussion"
+                  pendingTurns={detail.data?.pending_turns || []}
+                  currentAttempt={current || null}
+                  attemptHistory={combinedAttempts}
+                  hasMoreBefore={hasMoreBefore}
+                  loadingMoreBefore={loadingMoreBefore}
+                  onLoadMoreBefore={loadMoreBefore}
+                  bottomSpacerClass="h-2 shrink-0"
+                  compact
+                  retryingAttemptID={retryingAttemptID}
+                  onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+                  onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
+                  onReply={setReplyTo}
+                  onEditMessage={async (eventID, content) => {
+                    await api.editComment(cardID, eventID, content);
+                    setOlderEvents([]);
+                    setOlderAttempts([]);
+                    queryClient.setQueryData<CardDetail>(
+                      keys.card(cardID),
+                      (old) =>
+                        old && old.card
+                          ? {
+                              ...old,
+                              timeline: old.timeline.map((ev) =>
+                                ev.id === eventID ? { ...ev, content } : ev,
+                              ),
+                            }
+                          : old,
+                    );
+                    void sync();
+                  }}
+                />
+              )}
+            </div>
+
+            <div className="shrink-0 space-y-2 bg-canvas px-2.5 pt-1 pb-2.5 select-auto">
+              <PendingTurnQueue
+                turns={detail.data?.pending_turns || []}
+                cancelingTurnID={cancelingTurnID}
+                steeringTurnID={steeringTurnID}
+                onCancel={(turnID) => cancelTurn.mutate(turnID)}
+                onSteer={(turnID) => steerTurn.mutate(turnID)}
+                onEdit={async (turnID, content) => {
+                  await api.editTurn(cardID, turnID, content);
+                  queryClient.setQueryData<CardDetail>(
+                    keys.card(cardID),
+                    (old) => {
+                      if (!old || !old.card) return old;
+                      return {
+                        ...old,
+                        pending_turns: old.pending_turns.map((item) =>
+                          item.id === turnID ? { ...item, content } : item,
+                        ),
+                      };
+                    },
+                  );
+                  void sync();
                 }}
               />
-            )}
-          </div>
-
-          <div className="shrink-0 space-y-2 bg-canvas px-2.5 pt-1 pb-2.5 select-auto">
-            <PendingTurnQueue
-              turns={detail.data?.pending_turns || []}
-              cancelingTurnID={cancelingTurnID}
-              steeringTurnID={steeringTurnID}
-              onCancel={(turnID) => cancelTurn.mutate(turnID)}
-              onSteer={(turnID) => steerTurn.mutate(turnID)}
-              onEdit={async (turnID, content) => {
-                await api.editTurn(cardID, turnID, content);
-                await sync();
-              }}
-            />
-            <ConversationComposer
-              cardID={cardID}
-              projectID={projectID}
-              selectedRouteId={main.data?.preferred_model_route_id}
-              comment={comment}
-              setComment={setComment}
-              replyTo={replyTo}
-              onCancelReply={() => setReplyTo(null)}
-              blocked={Boolean(blocked) || !cardID}
-              hasCurrent={hasCurrent}
-              sendPending={send.isPending}
-              streamConnected={stream.connected || !cardID}
-              streamError={stream.lastError}
-              cancelPending={cancelAttempt.isPending}
-              onSubmit={() => {
-                if (!comment.trim() || blocked || send.isPending) return;
-                send.mutate();
-              }}
-              onCancel={() => cancelAttempt.mutate()}
-            />
-          </div>
+              <ConversationComposer
+                cardID={cardID}
+                projectID={projectID}
+                selectedRouteId={main.data?.preferred_model_route_id}
+                comment={comment}
+                setComment={setComment}
+                replyTo={replyTo}
+                onCancelReply={() => setReplyTo(null)}
+                blocked={Boolean(blocked) || !cardID}
+                hasCurrent={hasCurrent}
+                sendPending={send.isPending}
+                streamConnected={stream.connected || !cardID}
+                streamError={stream.lastError}
+                cancelPending={cancelAttempt.isPending}
+                onSubmit={() => {
+                  if (!comment.trim() || blocked || send.isPending) return;
+                  send.mutate();
+                }}
+                onCancel={() => cancelAttempt.mutate()}
+              />
+            </div>
+          </Suspense>
         </section>
       )}
 
@@ -800,11 +907,13 @@ export function MainChatDock() {
         </div>
       )}
       {traceAttemptID && (
-        <AgentTracePanel
-          cardID={cardID}
-          attemptID={traceAttemptID}
-          onClose={() => setTraceAttemptID("")}
-        />
+        <Suspense fallback={null}>
+          <AgentTracePanel
+            cardID={cardID}
+            attemptID={traceAttemptID}
+            onClose={() => setTraceAttemptID("")}
+          />
+        </Suspense>
       )}
     </>
   );

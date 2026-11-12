@@ -38,19 +38,33 @@ export function MCPSettings() {
   const save = useMutation({
     mutationFn: (value: MCPInput) =>
       picked ? api.updateMCP(picked.id, value) : api.addMCP(value),
-    onSuccess: async () => {
+    onSuccess: (saved) => {
+      queryClient.setQueryData<MCPConnection[]>(keys.mcp, (old) => {
+        if (!old) return [saved];
+        const idx = old.findIndex((item) => item.id === saved.id);
+        if (idx === -1) return [...old, saved];
+        const next = [...old];
+        next[idx] = saved;
+        return next;
+      });
       toast.success("MCP 连接已保存");
       setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: keys.mcp });
+      void queryClient.invalidateQueries({ queryKey: keys.mcp });
     },
     onError: (e) => toast.error(String(e)),
   });
   const remove = useMutation({
     mutationFn: () => api.removeMCP(picked!.id),
-    onSuccess: async () => {
+    onSuccess: () => {
+      const removedID = picked?.id;
+      if (removedID) {
+        queryClient.setQueryData<MCPConnection[]>(keys.mcp, (old) =>
+          old ? old.filter((item) => item.id !== removedID) : old,
+        );
+      }
       toast.success("已删除");
       setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: keys.mcp });
+      void queryClient.invalidateQueries({ queryKey: keys.mcp });
     },
     onError: (e) => toast.error(String(e)),
   });
@@ -77,9 +91,14 @@ export function MCPSettings() {
         tool_guard_timeout_seconds: connection.tool_guard_timeout_seconds,
         tool_guard_custom_rules: connection.tool_guard_custom_rules,
       }),
-    onSuccess: async (_, variables) => {
+    onSuccess: (updated, variables) => {
+      queryClient.setQueryData<MCPConnection[]>(keys.mcp, (old) =>
+        old
+          ? old.map((item) => (item.id === updated.id ? updated : item))
+          : old,
+      );
       toast.success(variables.enabled ? "已停用此 MCP 连接" : "已启用此 MCP 连接");
-      await queryClient.invalidateQueries({ queryKey: keys.mcp });
+      void queryClient.invalidateQueries({ queryKey: keys.mcp });
     },
     onError: (e) => toast.error(String(e)),
   });

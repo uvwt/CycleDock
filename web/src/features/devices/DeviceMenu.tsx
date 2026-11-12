@@ -33,6 +33,7 @@ export function DeviceMenu({ className }: { className?: string } = {}) {
     queryKey: keys.nexusDevices(me.data?.workspace.id || ""),
     queryFn: api.nexusDevices,
     enabled: Boolean(me.data?.workspace.id),
+    staleTime: 15_000,
     retry: false,
     // 收起时维持在线数量；展开后加快刷新，后台标签页不轮询。
     refetchInterval: (query) =>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   FileText,
@@ -13,7 +13,10 @@ import { toast } from "sonner";
 import { api } from "../../shared/api/client";
 import type { Card, CardDetail } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
-import { TaskDetailsPanel } from "./TaskDetailsPanel";
+import {
+  patchCachedCard,
+  removeCachedCard,
+} from "../../shared/lib/card-cache";
 import {
   Button,
   ConfirmDialog,
@@ -22,9 +25,14 @@ import {
   MenuItem,
   MenuSeparator,
   Modal,
+  Spinner,
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
+
+const TaskDetailsPanel = lazy(() =>
+  import("./TaskDetailsPanel").then((m) => ({ default: m.TaskDetailsPanel })),
+);
 import {
   Sheet as UISheet,
   SheetContent,
@@ -79,31 +87,45 @@ export function CardActions({
 
   const update = useMutation({
     mutationFn: () => api.updateCard(card.id, title.trim(), description.trim()),
-    onSuccess: async () => {
-      await sync();
+    onSuccess: (updated) => {
+      patchCachedCard(queryClient, card.id, card.project_id, updated);
       setEditOpen(false);
       toast.success("已保存");
+      void sync();
     },
     onError: showError,
   });
 
   const togglePin = useMutation({
     mutationFn: (pinned: boolean) => api.pinCard(card.id, pinned),
-    onSuccess: async (updated) => {
-      await sync();
-      toast.success(updated.pinned_at ? "已置顶" : "已取消置顶");
+    onMutate: async (pinned: boolean) => {
+      await queryClient.cancelQueries({
+        queryKey: keys.cards(card.project_id),
+      });
+      const prevPinnedAt = card.pinned_at;
+      patchCachedCard(queryClient, card.id, card.project_id, {
+        pinned_at: pinned ? new Date().toISOString() : undefined,
+      });
+      return { prevPinnedAt };
     },
-    onError: showError,
+    onSuccess: (updated) => {
+      patchCachedCard(queryClient, card.id, card.project_id, updated);
+      toast.success(updated.pinned_at ? "已置顶" : "已取消置顶");
+      void sync();
+    },
+    onError: (error, _pinned, context) => {
+      patchCachedCard(queryClient, card.id, card.project_id, {
+        pinned_at: context?.prevPinnedAt,
+      });
+      showError(error);
+    },
   });
 
   const remove = useMutation({
     mutationFn: () => api.deleteCard(card.id),
-    onSuccess: async () => {
-      queryClient.setQueryData(keys.card(card.id), {
-        card: null,
-        notFound: true,
-      });
-      await queryClient.invalidateQueries({
+    onSuccess: () => {
+      removeCachedCard(queryClient, card);
+      void queryClient.invalidateQueries({
         queryKey: keys.cards(card.project_id),
       });
       const cardTypeLabel =
@@ -334,11 +356,21 @@ export function CardActions({
           title="任务详情"
           description="查看任务目标、来源关系，以及定时任务的健康状态和定时日程。"
         >
-          <TaskDetailsPanel
-            detail={taskDetails.detail}
-            projectCards={taskDetails.projectCards}
-            onChange={sync}
-          />
+          {detailsOpen && (
+            <Suspense
+              fallback={
+                <div className="grid py-8 place-items-center">
+                  <Spinner />
+                </div>
+              }
+            >
+              <TaskDetailsPanel
+                detail={taskDetails.detail}
+                projectCards={taskDetails.projectCards}
+                onChange={sync}
+              />
+            </Suspense>
+          )}
         </Modal>
       )}
 

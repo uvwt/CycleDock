@@ -69,6 +69,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
 	router.Use(api.securityHeaders)
+	router.Use(compressExceptStreams())
 	router.Get("/healthz", api.health)
 	router.Get("/readyz", api.ready)
 	router.Get("/auth/nexusdock/start", api.oidcLoginStart)
@@ -145,6 +146,25 @@ func (api *API) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// compressExceptStreams 对 JSON API 与前端静态资源启用 Gzip 压缩；
+// 跳过 SSE 与 MCP 长连接流，避免压缩缓冲区阻塞逐帧 Flush。
+func compressExceptStreams() func(http.Handler) http.Handler {
+	compressor := middleware.NewCompressor(5)
+	compressHandler := compressor.Handler
+	return func(next http.Handler) http.Handler {
+		compressed := compressHandler(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/mcp") ||
+				strings.HasSuffix(r.URL.Path, "/stream") ||
+				strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			compressed.ServeHTTP(w, r)
+		})
+	}
+}
+
 func spaHandler(root string) http.Handler {
 	fileServer := http.FileServer(http.Dir(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +174,14 @@ func spaHandler(root string) http.Handler {
 		}
 		if !strings.HasPrefix(clean, "..") {
 			if info, err := os.Stat(filepath.Join(root, clean)); err == nil && !info.IsDir() {
+				slashPath := filepath.ToSlash(clean)
+				switch {
+				case strings.HasPrefix(slashPath, "assets/"):
+					// Vite 构建产物文件名带内容哈希，允许浏览器永久强缓存，刷新零重验。
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				case slashPath == "index.html" || slashPath == "notifications-sw.js" || slashPath == "manifest.webmanifest":
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
@@ -173,6 +201,7 @@ func spaHandler(root string) http.Handler {
 			http.Error(w, "web assets unavailable", http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeContent(w, r, "index.html", info.ModTime(), index)
 	})
 }

@@ -1,4 +1,11 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,6 +20,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { useProject } from "../app/project-context";
 import { keys } from "../app/query";
+import { preloadRouteForPathname } from "../app/route-preload";
 import { api } from "../shared/api/client";
 import type { Card } from "../shared/api/types";
 import { ProjectSwitcherWithSettings } from "../features/projects/ProjectSwitcherWithSettings";
@@ -26,11 +34,24 @@ import {
   QuickCardSwitcherModal,
   QuickCardSwitcherTrigger,
 } from "../shared/ui/MobileQuickCardSwitcher";
-import { HintTooltip, Sheet } from "../shared/ui/components";
+import { HintTooltip, Sheet, Spinner } from "../shared/ui/components";
 import { MainChatDock } from "../features/chat/MainChatDock";
-import { DiscussionSidebar } from "../features/chat/DiscussionSidebar";
-import { WorkSidebar } from "../features/board/WorkSidebar";
-import { PlanSidebar } from "../features/plans/PlanSidebar";
+
+const DiscussionSidebar = lazy(() =>
+  import("../features/chat/DiscussionSidebar").then((m) => ({
+    default: m.DiscussionSidebar,
+  })),
+);
+const WorkSidebar = lazy(() =>
+  import("../features/board/WorkSidebar").then((m) => ({
+    default: m.WorkSidebar,
+  })),
+);
+const PlanSidebar = lazy(() =>
+  import("../features/plans/PlanSidebar").then((m) => ({
+    default: m.PlanSidebar,
+  })),
+);
 
 function getResetPath(pathname: string, projectID: string): string {
   if (pathname.startsWith("/board") || pathname.startsWith("/cards/")) {
@@ -252,6 +273,8 @@ export function Shell({ children }: { children: ReactNode }) {
                 aria-expanded={
                   item.activePath === listSection ? listVisible : undefined
                 }
+                onMouseEnter={() => preloadRouteForPathname(item.activePath)}
+                onFocus={() => preloadRouteForPathname(item.activePath)}
                 onClick={(event) => selectPrimary(event, item.activePath)}
                 className={({ isActive }) => {
                   const active = primaryActive(item.activePath, isActive);
@@ -313,6 +336,8 @@ export function Shell({ children }: { children: ReactNode }) {
           <HintTooltip content={t("设置")} side="right">
             <NavLink
               to="/settings/general"
+              onMouseEnter={() => preloadRouteForPathname("/settings/general")}
+              onFocus={() => preloadRouteForPathname("/settings/general")}
               onClick={() => projectID && setProjectID(projectID)}
               aria-label={t("设置")}
               className={({ isActive }) =>
@@ -388,50 +413,64 @@ export function Shell({ children }: { children: ReactNode }) {
                 }
               }}
             >
-              {location.pathname.startsWith("/board") ? (
-                <WorkSidebar
-                  cards={projectCards}
-                  onSelect={(card: Card) => {
-                    setMobileDrawerOpen(false);
-                    navigate(
-                      `/cards/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
-                    );
-                  }}
-                  loading={cardsQuery.isPending}
-                />
-              ) : location.pathname.startsWith("/plans") ? (
-                <PlanSidebar
-                  cards={projectCards.filter((card) => card.kind === "ongoing")}
-                  activeCardID=""
-                  onSelect={(card: Card) => {
-                    setMobileDrawerOpen(false);
-                    navigate(
-                      `/plans/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
-                    );
-                  }}
-                  loading={cardsQuery.isPending}
-                />
-              ) : (
-                <DiscussionSidebar
-                  discussions={projectCards
-                    .filter((card) => card.kind === "discussion")
-                    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))}
-                  onSelect={(card: Card) => {
-                    setMobileDrawerOpen(false);
-                    navigate(
-                      `/chat/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
-                    );
-                  }}
-                  onCreate={() => {
-                    setMobileDrawerOpen(false);
-                    navigate(
-                      projectID
-                        ? `/chat?project=${encodeURIComponent(projectID)}`
-                        : "/chat",
-                    );
-                  }}
-                  loading={cardsQuery.isPending}
-                />
+              {mobileDrawerOpen && (
+                <Suspense
+                  fallback={
+                    <div className="grid flex-1 place-items-center p-6">
+                      <Spinner />
+                    </div>
+                  }
+                >
+                  {location.pathname.startsWith("/board") ? (
+                    <WorkSidebar
+                      cards={projectCards}
+                      onSelect={(card: Card) => {
+                        setMobileDrawerOpen(false);
+                        navigate(
+                          `/cards/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                        );
+                      }}
+                      loading={cardsQuery.isPending}
+                    />
+                  ) : location.pathname.startsWith("/plans") ? (
+                    <PlanSidebar
+                      cards={projectCards.filter(
+                        (card) => card.kind === "ongoing",
+                      )}
+                      activeCardID=""
+                      onSelect={(card: Card) => {
+                        setMobileDrawerOpen(false);
+                        navigate(
+                          `/plans/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                        );
+                      }}
+                      loading={cardsQuery.isPending}
+                    />
+                  ) : (
+                    <DiscussionSidebar
+                      discussions={projectCards
+                        .filter((card) => card.kind === "discussion")
+                        .sort((a, b) =>
+                          b.updated_at.localeCompare(a.updated_at),
+                        )}
+                      onSelect={(card: Card) => {
+                        setMobileDrawerOpen(false);
+                        navigate(
+                          `/chat/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                        );
+                      }}
+                      onCreate={() => {
+                        setMobileDrawerOpen(false);
+                        navigate(
+                          projectID
+                            ? `/chat?project=${encodeURIComponent(projectID)}`
+                            : "/chat",
+                        );
+                      }}
+                      loading={cardsQuery.isPending}
+                    />
+                  )}
+                </Suspense>
               )}
             </div>
           </Sheet>

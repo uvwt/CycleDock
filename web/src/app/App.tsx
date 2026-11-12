@@ -16,20 +16,35 @@ import { NotificationPermissionPrompt } from "../shared/realtime/NotificationPer
 import { useCardNotifications } from "../shared/realtime/useCardNotifications";
 import { loadPushPublicKey } from "../shared/realtime/notifications";
 import { Shell } from "../layouts/Shell";
-import { LoginPage } from "./LoginPage";
 import { ProjectProvider } from "./ProjectContext";
 import { useProject } from "./project-context";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-const ChatHome = lazy(() => import("../features/chat/ChatHome"));
-const BoardPage = lazy(() => import("../features/board/BoardPage"));
-const PlanPage = lazy(() => import("../features/plans/PlanPage"));
-const ActivityPage = lazy(() => import("../features/activity/ActivityPage"));
-const CardPage = lazy(() => import("../features/cards/CardPage"));
-const SettingsPage = lazy(() => import("../features/settings/SettingsPage"));
-const NexusDockPage = lazy(
-  () => import("../features/nexusdock/NexusDockPage"),
+import {
+  loadActivityPage,
+  loadBoardPage,
+  loadCardPage,
+  loadChatHome,
+  loadNexusDockPage,
+  loadPlanPage,
+  loadSettingsPage,
+  preloadRouteForPathname,
+} from "./route-preload";
+
+const LoginPage = lazy(() =>
+  import("./LoginPage").then((m) => ({ default: m.LoginPage })),
 );
+const ChatHome = lazy(loadChatHome);
+const BoardPage = lazy(loadBoardPage);
+const PlanPage = lazy(loadPlanPage);
+const ActivityPage = lazy(loadActivityPage);
+const CardPage = lazy(loadCardPage);
+const SettingsPage = lazy(loadSettingsPage);
+const NexusDockPage = lazy(loadNexusDockPage);
+
+if (typeof window !== "undefined") {
+  preloadRouteForPathname(window.location.pathname);
+}
 
 function Authenticated() {
   const { t } = useTranslation();
@@ -134,7 +149,17 @@ function Authenticated() {
       </main>
     );
   if (me.error instanceof APIError && me.error.status === 401)
-    return <LoginPage />;
+    return (
+      <Suspense
+        fallback={
+          <main className="grid h-full min-h-0 place-items-center">
+            <Spinner text={t("正在加载登录页…")} />
+          </main>
+        }
+      >
+        <LoginPage />
+      </Suspense>
+    );
   // 仅当首次加载尚无身份数据时展示全屏错误；后台重刷若偶发网络波动，保留当前已渲染的工作台与草稿。
   if (!me.data)
     return (

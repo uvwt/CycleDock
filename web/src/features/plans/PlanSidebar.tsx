@@ -5,7 +5,10 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Card } from "../../shared/api/types";
 import { api } from "../../shared/api/client";
-import { keys } from "../../app/query";
+import {
+  patchCachedCard,
+  removeCachedCard,
+} from "../../shared/lib/card-cache";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -45,19 +48,30 @@ export function PlanSidebar({
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
       api.pinCard(id, pinned),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["cards"] });
+    onMutate: ({ id, pinned }) => {
+      const target = cards.find((item) => item.id === id);
+      const prevPinnedAt = target?.pinned_at;
+      patchCachedCard(queryClient, id, target?.project_id, {
+        pinned_at: pinned ? new Date().toISOString() : undefined,
+      });
+      return { prevPinnedAt, cardProjectID: target?.project_id };
+    },
+    onSuccess: (updated) => {
+      patchCachedCard(queryClient, updated.id, updated.project_id, updated);
+      void queryClient.invalidateQueries({ queryKey: ["cards"] });
+    },
+    onError: (_err, variables, context) => {
+      patchCachedCard(queryClient, variables.id, context?.cardProjectID, {
+        pinned_at: context?.prevPinnedAt,
+      });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
     onSuccess: (_, deletedCard) => {
-      queryClient.setQueryData(keys.card(deletedCard.id), {
-        card: null,
-        notFound: true,
-      });
-      queryClient.invalidateQueries({ queryKey: ["cards"] });
+      removeCachedCard(queryClient, deletedCard);
+      void queryClient.invalidateQueries({ queryKey: ["cards"] });
       setDeleteTarget(null);
     },
   });
