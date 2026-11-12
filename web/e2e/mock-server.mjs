@@ -795,21 +795,9 @@ http
               ev.tool_approval.resolution_comment = input.comment || "";
               ev.tool_approval.resolved_at = now();
             }
-            events[id].push({
-              id: "event-" + ++seq,
-              sequence: seq,
-              type: "comment",
-              content: input.action === "reject"
-                ? `【工具审批拒绝反馈】\n拒绝原因：${input.comment || "风险过高"}`
-                : `【工具审批通过并已执行（${input.action === "approve_session" ? "本卡片内同类操作不再询问" : "允许本次执行"}）】\n工具 exec_command 已获批准并恢复执行。`,
-              actor_kind: "human",
-              actor_name: "测试用户",
-              created_at: now(),
-            });
             return data(res, {
               approval: ev?.tool_approval,
               turn_id: "turn-demo",
-              event_id: "event-" + seq,
             });
           }
           if (rest === "schedules" && req.method === "POST")

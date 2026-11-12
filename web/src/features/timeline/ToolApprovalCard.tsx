@@ -31,7 +31,10 @@ export function ToolApprovalCard({
   const [rejecting, setRejecting] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
   const [submitting, setSubmitting] = useState<string | null>(null);
-  const [expandedArgs, setExpandedArgs] = useState(true);
+  // 参数默认折叠，避免高危工具参数 JSON 在未点开时撑满半屏对话流
+  const [expandedArgs, setExpandedArgs] = useState(false);
+  // 已审批（允许/拒绝）后默认收敛为单行轻量状态条，按需点击才展开历史参数与原因
+  const [expandedHistory, setExpandedHistory] = useState(false);
 
   if (!approval) {
     return (
@@ -48,10 +51,7 @@ export function ToolApprovalCard({
   const isPending = approval.status === "pending";
   const isApproved = approval.status === "approved";
 
-  const riskBadgeMap: Record<
-    string,
-    { label: string; className: string }
-  > = {
+  const riskBadgeMap: Record<string, { label: string; className: string }> = {
     critical: {
       label: t("极高危 (Critical)"),
       className:
@@ -74,9 +74,7 @@ export function ToolApprovalCard({
     },
   };
 
-  const riskMeta =
-    riskBadgeMap[approval.risk_level] || riskBadgeMap.high;
-
+  const riskMeta = riskBadgeMap[approval.risk_level] || riskBadgeMap.high;
   const formattedArgs = JSON.stringify(approval.arguments || {}, null, 2);
 
   async function handleAction(
@@ -100,11 +98,46 @@ export function ToolApprovalCard({
         toast.info(t("已拒绝该工具调用并通知模型调整方案"));
       }
       setRejecting(false);
+      setExpandedHistory(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(null);
     }
+  }
+
+  if (!isPending && !expandedHistory) {
+    return (
+      <div
+        data-tool-approval-card
+        data-approval-status={approval.status}
+        className="my-1.5"
+      >
+        <button
+          type="button"
+          onClick={() => setExpandedHistory(true)}
+          className="inline-flex max-w-full items-center gap-2 rounded-xl border border-line/70 bg-muted/30 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60"
+        >
+          {isApproved ? (
+            <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+          )}
+          <span className="font-mono font-medium text-foreground">
+            {approval.tool_name}
+          </span>
+          <span className="shrink-0">
+            · {isApproved ? t("已允许执行") : t("已拒绝执行")}
+          </span>
+          {approval.resolution_comment && (
+            <span className="truncate text-faint">
+              · {approval.resolution_comment}
+            </span>
+          )}
+          <ChevronDown className="size-3.5 shrink-0 text-faint" />
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -123,11 +156,11 @@ export function ToolApprovalCard({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 px-4 py-3">
         <div className="flex items-center gap-2">
           {isPending ? (
-            <ShieldAlert className="size-4.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <ShieldAlert className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
           ) : isApproved ? (
-            <ShieldCheck className="size-4.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <ShieldCheck className="size-4.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
           ) : (
-            <ShieldX className="size-4.5 text-rose-600 dark:text-rose-400 shrink-0" />
+            <ShieldX className="size-4.5 shrink-0 text-rose-600 dark:text-rose-400" />
           )}
           <span className="text-xs font-semibold tracking-tight text-heading">
             {isPending
@@ -154,6 +187,16 @@ export function ToolApprovalCard({
             <RefreshCw className="size-2.5" />
             {approval.reversible ? t("可逆操作") : t("不可逆操作")}
           </span>
+          {!isPending && (
+            <button
+              type="button"
+              onClick={() => setExpandedHistory(false)}
+              className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <span>{t("收起详情")}</span>
+              <ChevronUp className="size-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -163,13 +206,14 @@ export function ToolApprovalCard({
           <span className="text-[11px] font-medium text-faint">
             {t("拦截原因与风险说明")}
           </span>
-          <p className="text-xs leading-relaxed text-foreground font-medium">
-            {approval.reason || t("该操作涉及潜在写入或系统变更副作用，需人工确认。")}
+          <p className="text-xs font-medium leading-relaxed text-foreground">
+            {approval.reason ||
+              t("该操作涉及潜在写入或系统变更副作用，需人工确认。")}
           </p>
         </div>
 
-        <div className="rounded-xl border border-line/80 bg-surface/90 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-line/60 px-3 py-2 bg-muted/40">
+        <div className="overflow-hidden rounded-xl border border-line/80 bg-surface/90">
+          <div className="flex items-center justify-between border-b border-line/60 bg-muted/40 px-3 py-2">
             <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-primary">
               <Terminal className="size-3.5 shrink-0" />
               <span>{approval.tool_name}</span>
@@ -194,19 +238,19 @@ export function ToolApprovalCard({
           )}
         </div>
 
-        {/* Resolution feedback if already resolved */}
         {!isPending && approval.resolution_comment && (
           <div className="rounded-lg border border-line/60 bg-muted/30 px-3 py-2 text-xs">
             <span className="font-medium text-muted-foreground">
               {t("审批备注：")}
             </span>
-            <span className="text-foreground">{approval.resolution_comment}</span>
+            <span className="text-foreground">
+              {approval.resolution_comment}
+            </span>
           </div>
         )}
 
-        {/* Interactive Actions when Pending */}
         {isPending && cardID && (
-          <div className="pt-1 space-y-2.5">
+          <div className="space-y-2.5 pt-1">
             {rejecting ? (
               <div className="space-y-2 rounded-xl border border-rose-500/40 bg-surface p-3">
                 <label className="block text-[11px] font-medium text-rose-600 dark:text-rose-400">
@@ -252,7 +296,7 @@ export function ToolApprovalCard({
                   data-action="approve-once"
                   disabled={Boolean(submitting)}
                   onClick={() => void handleAction("approve_once")}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground shadow-2xs transition hover:bg-primary/90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-2xs transition hover:bg-primary/90 disabled:opacity-50"
                 >
                   {submitting === "approve_once" ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -267,7 +311,7 @@ export function ToolApprovalCard({
                   data-action="approve-session"
                   disabled={Boolean(submitting)}
                   onClick={() => void handleAction("approve_session")}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-2 text-xs font-medium text-foreground shadow-2xs transition hover:bg-muted disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-2xs transition hover:bg-muted disabled:opacity-50"
                 >
                   {submitting === "approve_session" ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -282,7 +326,7 @@ export function ToolApprovalCard({
                   data-action="reject"
                   disabled={Boolean(submitting)}
                   onClick={() => setRejecting(true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-500/20 dark:text-rose-300 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-500/20 disabled:opacity-50 dark:text-rose-300"
                 >
                   <X className="size-3.5" />
                   <span>{t("拒绝并补充说明")}</span>
