@@ -38,6 +38,15 @@ const { ProjectContext } = await server.ssrLoadModule(
 const { ModelSelection } = await server.ssrLoadModule(
   "/src/features/models/model-selection.ts",
 );
+const { default: SettingsPage } = await server.ssrLoadModule(
+  "/src/features/settings/SettingsPage.tsx",
+);
+const { default: NexusDockPage } = await server.ssrLoadModule(
+  "/src/features/nexusdock/NexusDockPage.tsx",
+);
+const { ToolApprovalCard } = await server.ssrLoadModule(
+  "/src/features/timeline/ToolApprovalCard.tsx",
+);
 const queryClient = new QueryClient();
 queryClient.setQueryData(["agent-status"], { model_configured: true });
 function renderToStaticMarkup(element) {
@@ -1059,4 +1068,131 @@ test("缺少模型时保留草稿并提示设置，恢复配置后允许发送",
     queryClient.setQueryData(["agent-status"], { model_configured: true });
     queryClient.removeQueries({ queryKey: ["me"] });
   }
+});
+
+test("设置页移除设备守卫入口，远程设备页按当前选中设备展示守卫状态与权限控制", () => {
+  try {
+    queryClient.setQueryData(["me"], {
+      email: "owner@example.com",
+      role: "owner",
+      workspace: { id: "ws-1", name: "Demo" },
+    });
+    queryClient.setQueryData(["authorized-ai-clients"], []);
+    const settingsHtml = renderStatic(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/settings/clients"] },
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(SettingsPage, { role: "owner" }),
+        ),
+      ),
+    );
+    assert.match(settingsHtml, /MCP 服务/);
+    assert.match(settingsHtml, /AI 客户端/);
+    assert.doesNotMatch(settingsHtml, /设备守卫/);
+    assert.doesNotMatch(settingsHtml, /\/settings\/device-guards/);
+
+    queryClient.setQueryData(["nexus"], { available: true, connected: true });
+    queryClient.setQueryData(["nexus", "fleet", "ws-1"], {
+      available: true,
+      connected: true,
+      devices: [
+        {
+          id: "node-rn",
+          name: "RN Server",
+          online: true,
+          os: "linux",
+          arch: "amd64",
+          skills: [],
+          dynamic_mcp: [],
+        },
+      ],
+    });
+    queryClient.setQueryData(["device-tool-guards", "ws-1"], [
+      {
+        id: "guard-rn",
+        device_node_id: "node-rn",
+        device_name: "RN Server",
+        mode: "block_high_risk",
+        timeout_seconds: 10,
+        custom_rules: "严禁直接执行 docker rm",
+      },
+    ]);
+    queryClient.setQueryData(["agent-settings"], { configured: true, routes: [] });
+
+    const ownerNexusHtml = renderToStaticMarkup(createElement(NexusDockPage));
+    assert.match(ownerNexusHtml, /data-device-guard-row="node-rn"/);
+    assert.match(ownerNexusHtml, /设备安全守卫/);
+    assert.match(ownerNexusHtml, /仅拦截高危/);
+    assert.match(ownerNexusHtml, /严禁直接执行 docker rm/);
+    assert.match(ownerNexusHtml, /独立配置/);
+
+    queryClient.setQueryData(["me"], {
+      email: "member@example.com",
+      role: "member",
+      workspace: { id: "ws-1", name: "Demo" },
+    });
+    const memberNexusHtml = renderToStaticMarkup(createElement(NexusDockPage));
+    assert.match(memberNexusHtml, /设备安全守卫/);
+    assert.match(memberNexusHtml, /仅拦截高危/);
+    assert.match(memberNexusHtml, /仅所有者可修改/);
+    assert.doesNotMatch(memberNexusHtml, /独立配置/);
+  } finally {
+    queryClient.removeQueries({ queryKey: ["me"] });
+    queryClient.removeQueries({ queryKey: ["nexus"] });
+    queryClient.removeQueries({ queryKey: ["device-tool-guards"] });
+    queryClient.removeQueries({ queryKey: ["agent-settings"] });
+  }
+});
+
+test("工具安全守卫卡片待确认时保留三按钮并默认折叠参数，处理后收敛为单行状态条", () => {
+  const baseApproval = {
+    id: "approval-1",
+    tool_name: "exec_command",
+    arguments: { node_id: "node-rn", cmd: "docker restart nginx" },
+    risk_level: "high",
+    reversible: false,
+    reason: "重启容器具有短暂中断风险",
+    status: "pending",
+    created_at: "2026-11-13T00:00:00Z",
+  };
+
+  const pendingHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: baseApproval,
+    }),
+  );
+  assert.match(pendingHtml, /允许本次执行/);
+  assert.match(pendingHtml, /本卡片内同类操作不再询问/);
+  assert.match(pendingHtml, /拒绝并补充说明/);
+  assert.match(pendingHtml, /展开参数/);
+  assert.doesNotMatch(pendingHtml, /docker restart nginx/);
+
+  const approvedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: { ...baseApproval, status: "approved" },
+    }),
+  );
+  assert.match(approvedHtml, /exec_command/);
+  assert.match(approvedHtml, /已允许执行/);
+  assert.doesNotMatch(approvedHtml, /允许本次执行/);
+  assert.doesNotMatch(approvedHtml, /重启容器具有短暂中断风险/);
+
+  const rejectedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        status: "rejected",
+        resolution_comment: "改用只读日志查看",
+      },
+    }),
+  );
+  assert.match(rejectedHtml, /已拒绝执行/);
+  assert.match(rejectedHtml, /改用只读日志查看/);
+  assert.doesNotMatch(rejectedHtml, /重启容器具有短暂中断风险/);
 });

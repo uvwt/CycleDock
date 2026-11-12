@@ -795,21 +795,9 @@ http
               ev.tool_approval.resolution_comment = input.comment || "";
               ev.tool_approval.resolved_at = now();
             }
-            events[id].push({
-              id: "event-" + ++seq,
-              sequence: seq,
-              type: "comment",
-              content: input.action === "reject"
-                ? `【工具审批拒绝反馈】\n拒绝原因：${input.comment || "风险过高"}`
-                : `【工具审批通过并已执行（${input.action === "approve_session" ? "本卡片内同类操作不再询问" : "允许本次执行"}）】\n工具 exec_command 已获批准并恢复执行。`,
-              actor_kind: "human",
-              actor_name: "测试用户",
-              created_at: now(),
-            });
             return data(res, {
               approval: ev?.tool_approval,
               turn_id: "turn-demo",
-              event_id: "event-" + seq,
             });
           }
           if (rest === "schedules" && req.method === "POST")
@@ -861,6 +849,54 @@ http
             { id: "node-mac", name: "MacBook Pro", online: true, os: "darwin", arch: "arm64", agent_version: "1.1.1" },
             { id: "node-win", name: "Office PC", online: false, os: "windows", arch: "amd64", agent_version: "1.1.0" },
           ] : [] });
+        if (route === "/agent/nexusdock/fleet")
+          return data(res, {
+            available: true,
+            connected: nexusConnected,
+            devices: nexusConnected
+              ? [
+                  {
+                    id: "node-rn",
+                    name: "RN Server",
+                    online: true,
+                    os: "linux",
+                    arch: "amd64",
+                    agent_version: "1.1.1",
+                    capabilities: ["exec_command", "file_edit"],
+                    skills: [
+                      {
+                        name: "docker-ops",
+                        description: "巡检与管理容器运行状态",
+                        source_type: "managed",
+                      },
+                    ],
+                    dynamic_mcp: [],
+                  },
+                  {
+                    id: "node-mac",
+                    name: "MacBook Pro",
+                    online: true,
+                    os: "darwin",
+                    arch: "arm64",
+                    agent_version: "1.1.1",
+                    capabilities: ["exec_command", "browser_open"],
+                    skills: [],
+                    dynamic_mcp: [],
+                  },
+                  {
+                    id: "node-win",
+                    name: "Office PC",
+                    online: false,
+                    os: "windows",
+                    arch: "amd64",
+                    agent_version: "1.1.0",
+                    capabilities: [],
+                    skills: [],
+                    dynamic_mcp: [],
+                  },
+                ]
+              : [],
+          });
         if (route === "/agent/nexusdock") {
           if (req.method === "DELETE") nexusConnected = false;
           return data(res, { available: true, connected: nexusConnected });

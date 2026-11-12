@@ -178,15 +178,14 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 自动入队新的跟进轮次，唤醒主模型继续推进
+	// 仅入队后台 System Turn 唤醒主模型继续推进，不再伪造人类 comment 聊天事件污染时间线。
 	idempotencyKey := "tool-approval-resolve-" + approvalID.String()
-	commentResult, err := api.store.SubmitSessionComment(r.Context(), store.SubmitSessionCommentParams{
+	turnResult, err := api.store.EnqueueToolApprovalTurn(r.Context(), store.EnqueueToolApprovalTurnParams{
 		WorkspaceID:    identity.WorkspaceID,
 		CardID:         cardID,
-		AuthorSourceID: identity.SourceID,
+		OriginTurnID:   approval.TurnID,
 		Content:        followupContent,
 		IdempotencyKey: idempotencyKey,
-		DispatchMode:   domain.DispatchModeEnqueue,
 	})
 	if err != nil {
 		api.handleError(w, err)
@@ -195,15 +194,13 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 
 	if api.live != nil {
 		api.live.Publish(cardID, realtime.Event{
-			Type:    "card.updated",
-			EventID: commentResult.EventID.String(),
+			Type: "card.updated",
 		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"approval": toolApprovalFromDB(resolved),
-		"turn_id":  commentResult.TurnID.String(),
-		"event_id": commentResult.EventID.String(),
+		"turn_id":  turnResult.Turn.ID.String(),
 	})
 }
 

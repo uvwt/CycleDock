@@ -178,6 +178,7 @@ func (s *Store) ListPendingTurns(
 		WHERE t.workspace_id=$1 AND t.card_id=$2
 		  AND t.cancelled_at IS NULL
 		  AND COALESCE(t.idempotency_key, '') NOT LIKE 'builtin-proactive:%'
+		  AND COALESCE(t.idempotency_key, '') NOT LIKE 'tool-approval-resolve-%'
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM turn_attempts a

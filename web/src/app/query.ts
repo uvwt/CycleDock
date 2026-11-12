@@ -25,6 +25,8 @@ export const keys = {
   nexusDevices: (workspaceID: string) =>
     ["nexus", "devices", workspaceID] as const,
   nexusFleet: (workspaceID: string) => ["nexus", "fleet", workspaceID] as const,
+  deviceToolGuards: (workspaceID: string) =>
+    ["device-tool-guards", workspaceID] as const,
 };
 
 function isSessionUnauthorized(error: unknown): error is APIError {

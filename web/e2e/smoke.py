@@ -1447,6 +1447,66 @@ class CycleDockSmoke(unittest.TestCase):
             self.page.get_by_text("authentication required").count(), 0
         )
 
+    def test_device_guard_moved_from_settings_to_nexusdock_page(self):
+        # 1. 设置页面不再展示「设备守卫」入口，且旧路由自动兼容重定向至 /nexusdock
+        self.page.goto(BASE + "/settings/general")
+        self.page.get_by_role("heading", name="设置", exact=True).wait_for()
+        settings_nav = self.page.get_by_role("navigation", name="设置")
+        self.assertEqual(
+            settings_nav.get_by_role("link", name="设备守卫").count(), 0
+        )
+
+        self.page.goto(BASE + "/settings/device-guards")
+        self.page.wait_for_url("**/nexusdock")
+        self.page.get_by_role("heading", name="远程设备", exact=True).wait_for()
+
+        # 2. 远程设备详情面板直接承载所选设备的安全守卫独立配置与重置闭环
+        self.page.get_by_role("button", name=re.compile("MacBook Pro")).click()
+        guard_panel = self.page.locator('[data-device-guard-row="node-mac"]')
+        guard_panel.wait_for()
+        expect(guard_panel.get_by_text("守卫已关闭")).to_be_visible()
+
+        guard_panel.get_by_role("button", name="独立配置").click()
+        guard_panel.get_by_role("combobox", name="拦截模式").select_option(
+            "block_high_risk"
+        )
+        guard_panel.get_by_role(
+            "textbox", name="此设备专属自定义守卫规则"
+        ).fill("允许本地构建，禁止修改系统钥匙串")
+        guard_panel.get_by_role("button", name="保存设备守卫规则").click()
+
+        expect(guard_panel.get_by_text("仅拦截高危")).to_be_visible()
+        expect(
+            guard_panel.get_by_text("允许本地构建，禁止修改系统钥匙串")
+        ).to_be_visible()
+
+        guard_panel.get_by_role("button", name="重置为默认").click()
+        expect(guard_panel.get_by_text("守卫已关闭")).to_be_visible()
+
+    def test_tool_approval_resolves_into_compact_pill_without_fake_user_comment(self):
+        self.page.goto(BASE + "/cards/demo-project/todo-1")
+        card = self.page.locator('[data-tool-approval-card]').first
+        card.wait_for()
+        expect(card).to_have_attribute("data-approval-status", "pending")
+        expect(card.get_by_role("button", name="允许本次执行")).to_be_visible()
+        expect(card.get_by_role("button", name="本卡片内同类操作不再询问")).to_be_visible()
+        expect(card.get_by_role("button", name="拒绝并补充说明")).to_be_visible()
+        # 默认折叠 JSON 参数，不占满对话流
+        self.assertEqual(card.locator("pre").count(), 0)
+
+        card.get_by_role("button", name="允许本次执行").click()
+        expect(card).to_have_attribute("data-approval-status", "approved")
+        expect(card.get_by_text("已允许执行")).to_be_visible()
+        # 确认后收起为单行胶囊，不保留操作按钮，也不在对话时间线伪造「工具审批通过」人类消息气泡
+        self.assertEqual(card.get_by_role("button", name="允许本次执行").count(), 0)
+        self.assertEqual(self.page.get_by_text("工具审批通过").count(), 0)
+
+        # 按需点击胶囊仍可展开查看当时的风险原因，并可再次收起
+        card.get_by_role("button").first.click()
+        expect(card.get_by_text("拦截原因与风险说明")).to_be_visible()
+        card.get_by_role("button", name="收起详情").click()
+        self.assertEqual(card.get_by_text("拦截原因与风险说明").count(), 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -276,4 +277,105 @@ func (s *Store) PublishToolApprovalEvent(ctx context.Context, p PublishToolAppro
 	}
 	s.notifyWorkReady()
 	return eventID, nil
+}
+
+type EnqueueToolApprovalTurnParams struct {
+	WorkspaceID    uuid.UUID
+	CardID         uuid.UUID
+	OriginTurnID   uuid.NullUUID
+	Content        string
+	IdempotencyKey string
+}
+
+// EnqueueToolApprovalTurn 在工具人工审批完成后入队后台 System Turn 唤醒主模型继续推进。
+// 该轮次继承原挂起轮次的设备目标与优先模型路由，但不生成人类 comment 事件，避免污染聊天时间线。
+func (s *Store) EnqueueToolApprovalTurn(
+	ctx context.Context,
+	p EnqueueToolApprovalTurnParams,
+) (CreateTurnResult, error) {
+	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
+	if p.WorkspaceID == uuid.Nil || p.CardID == uuid.Nil {
+		return CreateTurnResult{}, fmt.Errorf("%w: workspace_id and card_id are required", domain.ErrConflict)
+	}
+	if p.Content == "" {
+		return CreateTurnResult{}, fmt.Errorf("%w: turn content is required", domain.ErrConflict)
+	}
+	if p.IdempotencyKey == "" {
+		return CreateTurnResult{}, fmt.Errorf("%w: idempotency_key is required", domain.ErrConflict)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return CreateTurnResult{}, err
+	}
+	if err := ensureDiscussionAcceptsWork(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return CreateTurnResult{}, err
+	}
+
+	cycleAgentID, err := ensureCycleAgentSource(ctx, tx, p.WorkspaceID)
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+
+	requestHash := stableRequestHash(
+		"tool_approval_turn",
+		p.WorkspaceID.String(),
+		p.CardID.String(),
+		cycleAgentID.String(),
+		p.IdempotencyKey,
+		p.Content,
+	)
+	if existing, found, err := findTurnByIdempotency(ctx, tx, p.WorkspaceID, cycleAgentID, p.IdempotencyKey); err != nil {
+		return CreateTurnResult{}, err
+	} else if found {
+		if existing.requestHash != requestHash {
+			return CreateTurnResult{}, domain.ErrIdempotencyMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CreateTurnResult{}, err
+		}
+		return CreateTurnResult{Turn: existing.turn, Reused: true}, nil
+	}
+
+	var deviceNodeID, deviceName string
+	var preferredRouteID uuid.NullUUID
+	if p.OriginTurnID.Valid {
+		err := tx.QueryRow(ctx, `
+			SELECT device_node_id, device_name, preferred_model_route_id
+			FROM card_turns
+			WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+		`, p.WorkspaceID, p.CardID, p.OriginTurnID.UUID).Scan(&deviceNodeID, &deviceName, &preferredRouteID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return CreateTurnResult{}, err
+		}
+	}
+
+	turn, err := insertTurn(ctx, tx, insertTurnParams{
+		DeviceNodeID:          deviceNodeID,
+		DeviceName:            deviceName,
+		PreferredModelRouteID: preferredRouteID,
+		WorkspaceID:           p.WorkspaceID,
+		CardID:                p.CardID,
+		Source:                domain.TurnSourceSystem,
+		Content:               p.Content,
+		CreatedBySourceID:     uuid.NullUUID{UUID: cycleAgentID, Valid: true},
+		DispatchMode:          domain.DispatchModeEnqueue,
+		IdempotencyKey:        p.IdempotencyKey,
+		RequestHash:           requestHash,
+	})
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return CreateTurnResult{}, err
+	}
+	s.notifyWorkReady()
+	return CreateTurnResult{Turn: turn}, nil
 }

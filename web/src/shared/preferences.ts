@@ -78,6 +78,7 @@ export function useTheme(): [Theme, (next: Theme) => void] {
       };
     },
     () => theme,
+    () => theme,
   );
   return [current, setTheme];
 }
@@ -401,6 +402,33 @@ const en = {
   "正在检查远程设备连接状态…": "Checking remote device connection…",
   "正在连接远程设备并拉取能力快照…":
     "Connecting to remote devices and loading capabilities…",
+  设备安全守卫: "Device tool guard",
+  守卫已关闭: "Guard disabled",
+  仅拦截高危: "Block high-risk",
+  严格模式: "Strict mode",
+  独立配置: "Configure",
+  收起配置: "Collapse",
+  重置为默认: "Reset to default",
+  仅所有者可修改: "Owner only",
+  "针对此设备节点独立配置工具调用安全拦截策略、评估模型与自定义规则。":
+    "Configure tool safety policy, evaluation model, and custom rules for this device.",
+  拦截模式: "Guard mode",
+  关闭拦截: "Disabled",
+  "仅拦截高危不可逆操作（推荐）":
+    "Block high-risk irreversible operations (recommended)",
+  "严格模式（拦截所有写操作）": "Strict mode (block all write operations)",
+  风险评估轻量小模型: "Risk evaluation model",
+  默认使用首个可用路由: "Use first enabled route",
+  "评估超时（秒）": "Evaluation timeout (s)",
+  此设备专属自定义守卫规则: "Custom guard rules for this device",
+  "声明此设备特定目录、容器或环境的放行或严禁要求":
+    "Specify allowed or forbidden directories, containers, or operations on this device",
+  保存设备守卫规则: "Save guard rules",
+  设备安全守卫配置已保存: "Device guard settings saved",
+  已重置为默认策略: "Reset to default guard policy",
+  已允许执行: "Approved",
+  已拒绝执行: "Rejected",
+  收起详情: "Collapse details",
   模型提供商: "Model provider",
   "内置 Agent": "Built-in Agent",
   主导航: "Main navigation",

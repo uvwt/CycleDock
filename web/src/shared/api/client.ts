@@ -239,7 +239,7 @@ export const api = {
     action: "approve_once" | "approve_session" | "reject",
     comment?: string,
   ) =>
-    request<{ approval: ToolApproval; turn_id: string; event_id: string }>(
+    request<{ approval: ToolApproval; turn_id: string }>(
       `/cards/${cardID}/tool-approvals/${approvalID}/resolve`,
       "POST",
       { action, comment: comment || "" },
