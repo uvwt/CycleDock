@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/uvwt/CycleDock/internal/domain"
-	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 func TestCardPreferredModelRouteIntegration(t *testing.T) {
@@ -16,18 +15,18 @@ func TestCardPreferredModelRouteIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. 创建模型路由
-	route, err := s.queries.CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
-		ID:              uuid.New(),
-		WorkspaceID:     f.WorkspaceID,
-		Position:        1,
-		ProviderType:    "openai_compatible",
-		ProviderBaseUrl: "https://api.openai.com/v1",
-		Model:           "gpt-4o",
-		Enabled:         true,
+	savedSettings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
+		Routes: []ModelRouteInput{{
+			ProviderType:    "openai_compatible",
+			ProviderBaseURL: "https://api.openai.com/v1",
+			Model:           "gpt-4o",
+			Enabled:         true,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("create model route: %v", err)
 	}
+	route := savedSettings.Routes[0]
 
 	// 2. 为卡片绑定优先模型路由
 	updated, err := s.SetCardPreferredModelRoute(ctx, f.WorkspaceID, f.CardID, uuid.NullUUID{UUID: route.ID, Valid: true})
@@ -77,31 +76,27 @@ func TestLoadAgentCardContextInheritsCardPreferredModelRoute(t *testing.T) {
 	f := newFixture(t, s, domain.CardKindDiscussion)
 	ctx := context.Background()
 
-	cardRoute, err := s.queries.CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
-		ID:              uuid.New(),
-		WorkspaceID:     f.WorkspaceID,
-		Position:        1,
-		ProviderType:    "openai_compatible",
-		ProviderBaseUrl: "https://api.openai.com/v1",
-		Model:           "card-model",
-		Enabled:         true,
+	savedSettings, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
+		Routes: []ModelRouteInput{
+			{
+				ProviderType:    "openai_compatible",
+				ProviderBaseURL: "https://api.openai.com/v1",
+				Model:           "card-model",
+				Enabled:         true,
+			},
+			{
+				ProviderType:    "openai_compatible",
+				ProviderBaseURL: "https://api.openai.com/v1",
+				Model:           "turn-override-model",
+				Enabled:         true,
+			},
+		},
 	})
 	if err != nil {
-		t.Fatalf("create card route: %v", err)
+		t.Fatalf("save model routes: %v", err)
 	}
-
-	turnOverrideRoute, err := s.queries.CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
-		ID:              uuid.New(),
-		WorkspaceID:     f.WorkspaceID,
-		Position:        2,
-		ProviderType:    "openai_compatible",
-		ProviderBaseUrl: "https://api.openai.com/v1",
-		Model:           "turn-override-model",
-		Enabled:         true,
-	})
-	if err != nil {
-		t.Fatalf("create turn override route: %v", err)
-	}
+	cardRoute := savedSettings.Routes[0]
+	turnOverrideRoute := savedSettings.Routes[1]
 
 	// 设置卡片优先模型
 	if _, err := s.SetCardPreferredModelRoute(ctx, f.WorkspaceID, f.CardID, uuid.NullUUID{UUID: cardRoute.ID, Valid: true}); err != nil {

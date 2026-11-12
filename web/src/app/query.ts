@@ -18,8 +18,8 @@ export const keys = {
   authorizedAIClients: ["authorized-ai-clients"] as const,
   models: (provider: string, credentialID = "") =>
     ["models", provider, credentialID] as const,
-  providerModels: (baseURL: string) =>
-    ["provider-models", baseURL] as const,
+  providerModels: (baseURL: string, apiCredentialID = "") =>
+    ["provider-models", baseURL, apiCredentialID] as const,
   mcp: ["mcp"] as const,
   nexus: ["nexus"] as const,
   nexusDevices: (workspaceID: string) =>

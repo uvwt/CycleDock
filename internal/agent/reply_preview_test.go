@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/realtime"
-	"github.com/uvwt/CycleDock/internal/store/db"
+	"github.com/uvwt/CycleDock/internal/store"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -101,7 +101,7 @@ func TestModelFailoverReplacesDraftWithoutExposingRawText(t *testing.T) {
 	hub.Publish(card, realtime.Event{Type: "attempt.started", AttemptID: attempt.String()})
 	sub, _ := hub.Subscribe(card)
 	defer sub.Close()
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 		{Enabled: true, ProviderBaseUrl: primary.URL, Model: "primary"},
 		{Enabled: true, ProviderBaseUrl: backup.URL, Model: "backup"},
 	})
@@ -159,7 +159,7 @@ func TestStoppingADKStreamCancelsModelRequest(t *testing.T) {
 		close(disconnected)
 	}))
 	defer server.Close()
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestNonStreamingADKCallReturnsOnlyFinalResponse(t *testing.T) {
 		fmt.Fprintln(w, `{"choices":[{"message":{"content":"summary"}}]}`)
 	}))
 	defer server.Close()
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
 	if err != nil {
 		t.Fatal(err)
 	}

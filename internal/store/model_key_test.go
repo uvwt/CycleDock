@@ -9,51 +9,76 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-func TestModelAPIKeyEncryptionBindsWorkspaceAndRoute(t *testing.T) {
+func TestModelAPIKeyEncryptionBindsWorkspaceAndCredential(t *testing.T) {
 	s := &Store{}
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
 	if err := s.ConfigureModelEncryption(key); err != nil {
 		t.Fatal(err)
 	}
-	workspaceID, routeID := uuid.New(), uuid.New()
+	workspaceID, credentialID := uuid.New(), uuid.New()
 	const secret = "sk-ant-api03-model-credential-not-readable-from-postgres"
-	encrypted, err := s.encryptModelAPIKey(workspaceID.String(), routeID.String(), secret)
+	encrypted, err := s.encryptAPICredentialKey(workspaceID.String(), credentialID.String(), secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(encrypted, []byte(secret)) {
 		t.Fatal("ciphertext contains plaintext")
 	}
-	route := db.WorkspaceModelRoute{
+
+	// 多个不同 Route ID 只要引用同一个 ApiCredentialID，均能解密共享凭据
+	for _, routeID := range []uuid.UUID{uuid.New(), uuid.New()} {
+		route := ModelRoute{
+			WorkspaceID:      workspaceID,
+			ID:               routeID,
+			ApiCredentialID:  uuid.NullUUID{UUID: credentialID, Valid: true},
+			ApiKeyCiphertext: append([]byte(nil), encrypted...),
+		}
+		decoded, err := s.ModelRouteAPIKey(route)
+		if err != nil || decoded != secret {
+			t.Fatalf("route %s decrypt failed: %v", routeID, err)
+		}
+	}
+
+	// 兼容 000032 迁移自旧 workspace_model_routes 的密文（cred.ID == 原 route.ID）
+	legacyEncrypted, err := s.encryptLegacyRouteModelAPIKey(workspaceID.String(), credentialID.String(), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migratedCred := db.WorkspaceApiCredential{
+		ID:               credentialID,
 		WorkspaceID:      workspaceID,
-		ID:               routeID,
-		ApiKeyCiphertext: encrypted,
+		ApiKeyCiphertext: legacyEncrypted,
 	}
-	decoded, err := s.ModelRouteAPIKey(route)
-	if err != nil || decoded != secret {
-		t.Fatalf("decrypt failed: %v", err)
+	if decoded, err := s.APICredentialKey(migratedCred); err != nil || decoded != secret {
+		t.Fatalf("legacy migrated credential decrypt failed: %v", err)
 	}
-	route.WorkspaceID = uuid.New()
-	if _, err := s.ModelRouteAPIKey(route); err == nil {
+
+	cred := db.WorkspaceApiCredential{
+		WorkspaceID:      workspaceID,
+		ID:               credentialID,
+		ApiKeyCiphertext: append([]byte(nil), encrypted...),
+	}
+	cred.WorkspaceID = uuid.New()
+	if _, err := s.APICredentialKey(cred); err == nil {
 		t.Fatal("cross-workspace decryption unexpectedly succeeded")
 	}
-	route.WorkspaceID = workspaceID
-	route.ID = uuid.New()
-	if _, err := s.ModelRouteAPIKey(route); err == nil {
-		t.Fatal("cross-route decryption unexpectedly succeeded")
+	cred.WorkspaceID = workspaceID
+	cred.ID = uuid.New()
+	if _, err := s.APICredentialKey(cred); err == nil {
+		t.Fatal("cross-credential decryption unexpectedly succeeded")
 	}
-	route.ID = routeID
-	route.ApiKeyCiphertext[len(route.ApiKeyCiphertext)-1] ^= 1
-	if _, err := s.ModelRouteAPIKey(route); err == nil {
+	cred.ID = credentialID
+	cred.ApiKeyCiphertext[len(cred.ApiKeyCiphertext)-1] ^= 1
+	if _, err := s.APICredentialKey(cred); err == nil {
 		t.Fatal("tampered ciphertext unexpectedly decrypted")
 	}
 	if err := s.ConfigureModelEncryption(""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ModelRouteAPIKey(route); err == nil {
+	if _, err := s.APICredentialKey(cred); err == nil {
 		t.Fatal("missing encryption key unexpectedly decrypted key")
 	}
-	if _, err := s.encryptModelAPIKey(workspaceID.String(), routeID.String(), secret); err == nil {
+	if _, err := s.encryptAPICredentialKey(workspaceID.String(), credentialID.String(), secret); err == nil {
 		t.Fatal("missing encryption key unexpectedly encrypted key")
 	}
 	if err := s.ConfigureModelEncryption("invalid"); err == nil {

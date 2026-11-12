@@ -15,7 +15,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
-	"github.com/uvwt/CycleDock/internal/store/db"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestADKRouteModelFallsBackAfterHTTP402(t *testing.T) {
@@ -34,7 +34,7 @@ func TestADKRouteModelFallsBackAfterHTTP402(t *testing.T) {
 	}))
 	defer backup.Close()
 
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 		{Enabled: true, ProviderBaseUrl: primary.URL, Model: "primary"},
 		{Enabled: true, ProviderBaseUrl: backup.URL, Model: "backup"},
 	})
@@ -110,7 +110,7 @@ func TestADKRouteModelToolLoopLimits(t *testing.T) {
 					}})
 				}))
 				defer server.Close()
-				llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+				llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 					{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"},
 				})
 				if err != nil {
@@ -237,9 +237,9 @@ func TestADKRouteModelRetriesCurrentRouteBeforeFailover(t *testing.T) {
 				writeModelResponse(t, w, "backup recovered", nil)
 			}))
 			defer backup.Close()
-			routes := []db.WorkspaceModelRoute{{Enabled: true, ProviderBaseUrl: primary.URL, Model: "primary"}}
+			routes := []store.ModelRoute{{Enabled: true, ProviderBaseUrl: primary.URL, Model: "primary"}}
 			if test.backup {
-				routes = append(routes, db.WorkspaceModelRoute{Enabled: true, ProviderBaseUrl: backup.URL, Model: "backup"})
+				routes = append(routes, store.ModelRoute{Enabled: true, ProviderBaseUrl: backup.URL, Model: "backup"})
 			}
 			llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), routes)
 			if err != nil {
@@ -285,7 +285,7 @@ func TestADKRouteModelCancellationStopsRetryBackoff(t *testing.T) {
 		http.Error(w, "temporary error", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{{Enabled: true, ProviderBaseUrl: server.URL, Model: "test"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestPrioritizeRoutes(t *testing.T) {
 	id2 := uuid.New()
 	id3 := uuid.New()
 
-	routes := []db.WorkspaceModelRoute{
+	routes := []store.ModelRoute{
 		{ID: id1, Model: "model-1"},
 		{ID: id2, Model: "model-2"},
 		{ID: id3, Model: "model-3"},
@@ -372,7 +372,7 @@ func TestADKRouteModelUsageActualEstimatedAndFailoverRouteTracking(t *testing.T)
 	}))
 	defer relay.Close()
 
-	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 		{ID: primaryID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: primary.URL, Model: "primary-model"},
 		{ID: backupID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: backup.URL, Model: "backup-model"},
 	})
@@ -425,7 +425,7 @@ func TestADKRouteModelUsageActualEstimatedAndFailoverRouteTracking(t *testing.T)
 	}
 
 	// 验证中转不返回 Usage 时，回退为本地估算（estimated）并同样写入 UsageMetadata。
-	relayLLM, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []db.WorkspaceModelRoute{
+	relayLLM, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
 		{ID: relayID, Enabled: true, ProviderType: "openai_compatible", ProviderBaseUrl: relay.URL, Model: "relay-model"},
 	})
 	if err != nil {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,11 +21,24 @@ import (
 
 const maxModelRoutes = 16
 
+// ModelRoute 表示携带关联自定义服务商凭据信息的模型路由读模型。
+type ModelRoute = db.ListWorkspaceModelRoutesRow
+
+type APICredentialInput struct {
+	ID          uuid.UUID
+	Name        string
+	BaseURL     string
+	APIKey      string
+	APIKeyEnv   string
+	ClearAPIKey bool
+}
+
 type ModelRouteInput struct {
 	ID                  uuid.UUID
 	Enabled             bool
 	ProviderType        string
 	CredentialID        *uuid.UUID
+	APICredentialID     *uuid.UUID
 	ProviderBaseURL     string
 	Model               string
 	BaseModel           string
@@ -41,8 +56,8 @@ type AgentSettingsInput struct {
 	SystemInstructions      string
 	Routes                  []ModelRouteInput
 	DefaultModelRouteID     *uuid.UUID
-	DiscussionModelRouteID *uuid.UUID
-	PlanModelRouteID       *uuid.UUID
+	DiscussionModelRouteID  *uuid.UUID
+	PlanModelRouteID        *uuid.UUID
 	ToolGuardMode           string
 	ToolGuardModelRouteID   *uuid.UUID
 	ToolGuardTimeoutSeconds int32
@@ -51,7 +66,178 @@ type AgentSettingsInput struct {
 
 type AgentSettings struct {
 	db.WorkspaceAgentSetting
-	Routes []db.WorkspaceModelRoute
+	Routes         []ModelRoute
+	APICredentials []db.WorkspaceApiCredential
+}
+
+// NormalizeAPIBaseURL 统一裁剪首尾空白与末尾斜杠，避免同一服务商地址因尾部 '/' 不一致导致匹配失败。
+func NormalizeAPIBaseURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
+func defaultAPICredentialName(baseURL string) string {
+	name := baseURL
+	if parsed, err := url.Parse(baseURL); err == nil && parsed.Hostname() != "" {
+		name = parsed.Hostname()
+	}
+	if utf8.RuneCountInString(name) > 80 {
+		runes := []rune(name)
+		name = string(runes[:80])
+	}
+	return name
+}
+
+func (s *Store) ListAPICredentials(ctx context.Context, workspaceID uuid.UUID) ([]db.WorkspaceApiCredential, error) {
+	return s.queries.ListWorkspaceAPICredentials(ctx, workspaceID)
+}
+
+func (s *Store) GetAPICredential(ctx context.Context, workspaceID, id uuid.UUID) (db.WorkspaceApiCredential, error) {
+	credential, err := s.queries.GetWorkspaceAPICredential(ctx, db.GetWorkspaceAPICredentialParams{
+		WorkspaceID: workspaceID, ID: id,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkspaceApiCredential{}, domain.ErrNotFound
+	}
+	return credential, err
+}
+
+func (s *Store) resolveAPICredentialWrite(
+	workspaceID uuid.UUID,
+	input APICredentialInput,
+	existing *db.WorkspaceApiCredential,
+) (db.UpsertWorkspaceAPICredentialParams, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.BaseURL = NormalizeAPIBaseURL(input.BaseURL)
+	input.APIKey = strings.TrimSpace(input.APIKey)
+	input.APIKeyEnv = strings.TrimSpace(input.APIKeyEnv)
+
+	if input.ID == uuid.Nil {
+		input.ID = uuid.New()
+	}
+	if input.BaseURL == "" {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: base_url is required", domain.ErrConflict)
+	}
+	if err := agentconfig.ValidateEndpoint(input.BaseURL); err != nil {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: %v", domain.ErrConflict, err)
+	}
+	if input.Name == "" {
+		if existing != nil && existing.Name != "" {
+			input.Name = existing.Name
+		} else {
+			input.Name = defaultAPICredentialName(input.BaseURL)
+		}
+	}
+	if utf8.RuneCountInString(input.Name) > 80 || strings.ContainsAny(input.Name, "\r\n") {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: API credential name must contain 1-80 characters", domain.ErrConflict)
+	}
+	if len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n") {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: invalid API key", domain.ErrConflict)
+	}
+	if input.APIKey != "" && input.ClearAPIKey {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: cannot set and clear API key together", domain.ErrConflict)
+	}
+	if input.APIKeyEnv != "" && !agentconfig.ValidEnvName(input.APIKeyEnv) {
+		return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: api_key_env must be an environment variable name", domain.ErrConflict)
+	}
+
+	if existing != nil {
+		// 不允许编辑服务商地址时悄悄把原服务的已加密 API Key 带到另一个地址。
+		if existing.BaseUrl != input.BaseURL && len(existing.ApiKeyCiphertext) > 0 && input.APIKey == "" && !input.ClearAPIKey {
+			return db.UpsertWorkspaceAPICredentialParams{}, fmt.Errorf("%w: changing provider base URL requires replacing or clearing its API key", domain.ErrConflict)
+		}
+	}
+
+	var ciphertext []byte
+	var apiKeyEnv string
+	var replaceAPIKey bool
+
+	switch {
+	case input.APIKey != "":
+		var err error
+		ciphertext, err = s.encryptAPICredentialKey(workspaceID.String(), input.ID.String(), input.APIKey)
+		if err != nil {
+			return db.UpsertWorkspaceAPICredentialParams{}, err
+		}
+		apiKeyEnv = input.APIKeyEnv
+		replaceAPIKey = true
+	case input.ClearAPIKey:
+		ciphertext = nil
+		apiKeyEnv = ""
+		replaceAPIKey = true
+	case input.APIKeyEnv != "":
+		apiKeyEnv = input.APIKeyEnv
+		if existing == nil || existing.ApiKeyEnv != input.APIKeyEnv {
+			ciphertext = nil
+			replaceAPIKey = true
+		}
+	default:
+		if existing != nil {
+			apiKeyEnv = existing.ApiKeyEnv
+		}
+	}
+
+	return db.UpsertWorkspaceAPICredentialParams{
+		ID:               input.ID,
+		WorkspaceID:      workspaceID,
+		Name:             input.Name,
+		BaseUrl:          input.BaseURL,
+		ApiKeyEnv:        apiKeyEnv,
+		ApiKeyCiphertext: ciphertext,
+		ReplaceApiKey:    replaceAPIKey,
+	}, nil
+}
+
+func (s *Store) SaveAPICredential(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	input APICredentialInput,
+) (db.WorkspaceApiCredential, error) {
+	isCreate := input.ID == uuid.Nil
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)", workspaceID).Scan(&exists); err != nil {
+		return db.WorkspaceApiCredential{}, err
+	}
+	if !exists {
+		return db.WorkspaceApiCredential{}, domain.ErrNotFound
+	}
+	var existing *db.WorkspaceApiCredential
+	if !isCreate {
+		found, err := s.queries.GetWorkspaceAPICredential(ctx, db.GetWorkspaceAPICredentialParams{
+			WorkspaceID: workspaceID, ID: input.ID,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.WorkspaceApiCredential{}, domain.ErrNotFound
+		}
+		if err != nil {
+			return db.WorkspaceApiCredential{}, err
+		}
+		existing = &found
+	}
+	params, err := s.resolveAPICredentialWrite(workspaceID, input, existing)
+	if err != nil {
+		return db.WorkspaceApiCredential{}, err
+	}
+	credential, err := s.queries.UpsertWorkspaceAPICredential(ctx, params)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.WorkspaceApiCredential{}, fmt.Errorf("%w: changing provider base URL requires replacing or clearing its API key", domain.ErrConflict)
+	}
+	if err != nil {
+		return db.WorkspaceApiCredential{}, mapConstraintError(err)
+	}
+	return credential, nil
+}
+
+func (s *Store) DeleteAPICredential(ctx context.Context, workspaceID, credentialID uuid.UUID) error {
+	affected, err := s.queries.DeleteWorkspaceAPICredential(ctx, db.DeleteWorkspaceAPICredentialParams{
+		WorkspaceID: workspaceID, ID: credentialID,
+	})
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) GetAgentSettings(ctx context.Context, workspaceID uuid.UUID) (AgentSettings, error) {
@@ -66,7 +252,15 @@ func (s *Store) GetAgentSettings(ctx context.Context, workspaceID uuid.UUID) (Ag
 	if err != nil {
 		return AgentSettings{}, err
 	}
-	return AgentSettings{WorkspaceAgentSetting: settings, Routes: routes}, nil
+	apiCredentials, err := s.queries.ListWorkspaceAPICredentials(ctx, workspaceID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	return AgentSettings{
+		WorkspaceAgentSetting: settings,
+		Routes:                routes,
+		APICredentials:        apiCredentials,
+	}, nil
 }
 
 func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
@@ -77,7 +271,7 @@ func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
 	seenIDs := make(map[uuid.UUID]struct{}, len(routes))
 	for i, route := range routes {
 		route.ProviderType = strings.TrimSpace(route.ProviderType)
-		route.ProviderBaseURL = strings.TrimRight(strings.TrimSpace(route.ProviderBaseURL), "/")
+		route.ProviderBaseURL = NormalizeAPIBaseURL(route.ProviderBaseURL)
 		route.Model = strings.TrimSpace(route.Model)
 		route.BaseModel = strings.TrimSpace(route.BaseModel)
 		route.APIKey = strings.TrimSpace(route.APIKey)
@@ -115,19 +309,25 @@ func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
 			if route.CredentialID != nil {
 				return nil, fmt.Errorf("%w: OpenAI-compatible routes cannot use subscription credentials", domain.ErrConflict)
 			}
-			if route.ProviderBaseURL == "" {
-				return nil, fmt.Errorf("%w: provider_base_url is required for OpenAI-compatible routes", domain.ErrConflict)
+			if route.APICredentialID == nil && route.ProviderBaseURL == "" {
+				return nil, fmt.Errorf("%w: api_credential_id or provider_base_url is required for OpenAI-compatible routes", domain.ErrConflict)
 			}
-			if err := agentconfig.ValidateEndpoint(route.ProviderBaseURL); err != nil {
-				return nil, fmt.Errorf("%w: %v", domain.ErrConflict, err)
+			if route.ProviderBaseURL != "" {
+				if err := agentconfig.ValidateEndpoint(route.ProviderBaseURL); err != nil {
+					return nil, fmt.Errorf("%w: %v", domain.ErrConflict, err)
+				}
 			}
 			if len(route.APIKey) > 8192 || strings.ContainsAny(route.APIKey, "\r\n") {
 				return nil, fmt.Errorf("%w: invalid API key", domain.ErrConflict)
+			}
+			if route.APIKey != "" && route.ClearAPIKey {
+				return nil, fmt.Errorf("%w: cannot set and clear API key together", domain.ErrConflict)
 			}
 			if route.APIKeyEnv != "" && !agentconfig.ValidEnvName(route.APIKeyEnv) {
 				return nil, fmt.Errorf("%w: api_key_env must be an environment variable name", domain.ErrConflict)
 			}
 		case "chatgpt", "grok":
+			route.APICredentialID = nil
 			route.ProviderBaseURL = ""
 			route.APIKey = ""
 			route.APIKeyEnv = ""
@@ -140,6 +340,10 @@ func normalizeModelRoutes(routes []ModelRouteInput) ([]ModelRouteInput, error) {
 		normalized[i] = route
 	}
 	return normalized, nil
+}
+
+func apiCredentialHasSecret(c db.WorkspaceApiCredential) bool {
+	return len(c.ApiKeyCiphertext) > 0 || c.ApiKeyEnv != ""
 }
 
 func (s *Store) SaveAgentSettings(
@@ -215,34 +419,159 @@ func (s *Store) SaveAgentSettings(
 		}
 	}
 
+	existingCreds, err := q.ListWorkspaceAPICredentials(ctx, workspaceID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	credByID := make(map[uuid.UUID]db.WorkspaceApiCredential, len(existingCreds))
+	credByURL := make(map[string]db.WorkspaceApiCredential, len(existingCreds))
+	for _, cred := range existingCreds {
+		credByID[cred.ID] = cred
+		prev, exists := credByURL[cred.BaseUrl]
+		if !exists || (!apiCredentialHasSecret(prev) && apiCredentialHasSecret(cred)) {
+			credByURL[cred.BaseUrl] = cred
+		}
+	}
+
 	existingRoutes, err := q.ListWorkspaceModelRoutes(ctx, workspaceID)
 	if err != nil {
 		return AgentSettings{}, err
 	}
-	existingByID := make(map[uuid.UUID]db.WorkspaceModelRoute, len(existingRoutes))
+	existingByID := make(map[uuid.UUID]ModelRoute, len(existingRoutes))
 	for _, r := range existingRoutes {
 		existingByID[r.ID] = r
 	}
-	if err := q.DeleteWorkspaceModelRoutes(ctx, workspaceID); err != nil {
+
+	// 解析并收敛每条 openai_compatible 路由的统一凭据引用：
+	// 1. 显式传入 api_credential_id 时校验归属，并允许在同一事务内更新凭据密钥；
+	// 2. 未传 api_credential_id 时按归一化 base_url 自动复用已有凭据或创建新凭据，保证多模型共享同一份加密密钥。
+	for i := range routes {
+		route := &routes[i]
+		if route.ProviderType != "openai_compatible" {
+			continue
+		}
+		if route.APICredentialID != nil {
+			cred, ok := credByID[*route.APICredentialID]
+			if !ok {
+				return AgentSettings{}, fmt.Errorf("%w: API credential does not exist in this workspace", domain.ErrConflict)
+			}
+			targetURL := cred.BaseUrl
+			if route.ProviderBaseURL != "" {
+				targetURL = route.ProviderBaseURL
+			}
+			if targetURL != cred.BaseUrl || route.APIKey != "" || route.ClearAPIKey || (route.APIKeyEnv != "" && route.APIKeyEnv != cred.ApiKeyEnv) {
+				params, err := s.resolveAPICredentialWrite(workspaceID, APICredentialInput{
+					ID:          cred.ID,
+					Name:        cred.Name,
+					BaseURL:     targetURL,
+					APIKey:      route.APIKey,
+					APIKeyEnv:   route.APIKeyEnv,
+					ClearAPIKey: route.ClearAPIKey,
+				}, &cred)
+				if err != nil {
+					return AgentSettings{}, err
+				}
+				cred, err = q.UpsertWorkspaceAPICredential(ctx, params)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return AgentSettings{}, fmt.Errorf("%w: changing provider base URL requires replacing or clearing its API key", domain.ErrConflict)
+				}
+				if err != nil {
+					return AgentSettings{}, mapConstraintError(err)
+				}
+				credByID[cred.ID] = cred
+				credByURL[cred.BaseUrl] = cred
+			}
+			route.ProviderBaseURL = cred.BaseUrl
+			continue
+		}
+
+		// 兼容未显式指定 api_credential_id 的写入：若原路由已绑定同地址凭据则优先沿用，否则按 base_url 归并。
+		var matched *db.WorkspaceApiCredential
+		if prevRoute, ok := existingByID[route.ID]; ok && prevRoute.ApiCredentialID.Valid {
+			if c, ok := credByID[prevRoute.ApiCredentialID.UUID]; ok && c.BaseUrl == route.ProviderBaseURL {
+				copied := c
+				matched = &copied
+			}
+		}
+		if matched == nil {
+			if c, ok := credByURL[route.ProviderBaseURL]; ok {
+				copied := c
+				matched = &copied
+			}
+		}
+
+		if matched != nil {
+			cred := *matched
+			if route.APIKey != "" || route.ClearAPIKey || (route.APIKeyEnv != "" && route.APIKeyEnv != cred.ApiKeyEnv) {
+				params, err := s.resolveAPICredentialWrite(workspaceID, APICredentialInput{
+					ID:          cred.ID,
+					Name:        cred.Name,
+					BaseURL:     route.ProviderBaseURL,
+					APIKey:      route.APIKey,
+					APIKeyEnv:   route.APIKeyEnv,
+					ClearAPIKey: route.ClearAPIKey,
+				}, &cred)
+				if err != nil {
+					return AgentSettings{}, err
+				}
+				cred, err = q.UpsertWorkspaceAPICredential(ctx, params)
+				if err != nil {
+					return AgentSettings{}, mapConstraintError(err)
+				}
+				credByID[cred.ID] = cred
+				credByURL[cred.BaseUrl] = cred
+			}
+			id := cred.ID
+			route.APICredentialID = &id
+			continue
+		}
+
+		params, err := s.resolveAPICredentialWrite(workspaceID, APICredentialInput{
+			BaseURL:     route.ProviderBaseURL,
+			APIKey:      route.APIKey,
+			APIKeyEnv:   route.APIKeyEnv,
+			ClearAPIKey: route.ClearAPIKey,
+		}, nil)
+		if err != nil {
+			return AgentSettings{}, err
+		}
+		created, err := q.UpsertWorkspaceAPICredential(ctx, params)
+		if err != nil {
+			return AgentSettings{}, mapConstraintError(err)
+		}
+		credByID[created.ID] = created
+		credByURL[created.BaseUrl] = created
+		id := created.ID
+		route.APICredentialID = &id
+	}
+
+	// 仅删除本次真正移除的 Route，保留既有 Route 记录原地更新，
+	// 防止全表 DELETE 触发 cards / card_turns / tool_guard 外键 ON DELETE SET NULL 清空已绑定模型。
+	keepIDs := make([]uuid.UUID, 0, len(routes))
+	for _, route := range routes {
+		keepIDs = append(keepIDs, route.ID)
+	}
+	if err := q.DeleteRemovedWorkspaceModelRoutes(ctx, db.DeleteRemovedWorkspaceModelRoutesParams{
+		WorkspaceID: workspaceID,
+		KeepIds:     keepIDs,
+	}); err != nil {
 		return AgentSettings{}, err
 	}
-	storedRoutes := make([]db.WorkspaceModelRoute, 0, len(routes))
+	if len(routes) > 0 {
+		if err := q.ShiftWorkspaceModelRoutePositions(ctx, workspaceID); err != nil {
+			return AgentSettings{}, err
+		}
+	}
+
+	validRouteIDs := make(map[uuid.UUID]bool, len(routes))
 	for position, route := range routes {
 		credentialID := uuid.NullUUID{}
 		if route.CredentialID != nil {
 			credentialID = uuid.NullUUID{UUID: *route.CredentialID, Valid: true}
 		}
-		var ciphertext []byte
-		if route.APIKey != "" {
-			var err error
-			ciphertext, err = s.encryptModelAPIKey(workspaceID.String(), route.ID.String(), route.APIKey)
-			if err != nil {
-				return AgentSettings{}, err
-			}
-		} else if !route.ClearAPIKey {
-			if existing, ok := existingByID[route.ID]; ok && len(existing.ApiKeyCiphertext) > 0 {
-				ciphertext = existing.ApiKeyCiphertext
-			}
+		apiCredentialID := uuid.NullUUID{}
+		if route.APICredentialID != nil {
+			apiCredentialID = uuid.NullUUID{UUID: *route.APICredentialID, Valid: true}
 		}
 		now := time.Now().UTC()
 		var userOverride modelclient.ModelLimits
@@ -295,27 +624,29 @@ func (s *Store) SaveAgentSettings(
 		if resolvedLimits.VerifiedAt != nil && !resolvedLimits.VerifiedAt.IsZero() {
 			verifiedAt = pgtype.Timestamptz{Time: resolvedLimits.VerifiedAt.UTC(), Valid: true}
 		}
-		stored, err := q.CreateWorkspaceModelRoute(ctx, db.CreateWorkspaceModelRouteParams{
-			ID: route.ID, WorkspaceID: workspaceID, Position: int32(position),
-			Enabled: route.Enabled, ProviderType: route.ProviderType,
-			CredentialID: credentialID, ProviderBaseUrl: route.ProviderBaseURL,
-			Model: route.Model, BaseModel: route.BaseModel, ApiKeyEnv: route.APIKeyEnv,
-			ApiKeyCiphertext:    ciphertext,
+		stored, err := q.UpsertWorkspaceModelRoute(ctx, db.UpsertWorkspaceModelRouteParams{
+			ID:                  route.ID,
+			WorkspaceID:         workspaceID,
+			Position:            int32(position),
+			Enabled:             route.Enabled,
+			ProviderType:        route.ProviderType,
+			CredentialID:        credentialID,
+			ApiCredentialID:     apiCredentialID,
+			Model:               route.Model,
+			BaseModel:           route.BaseModel,
 			ContextWindowTokens: pgtype.Int4{Int32: int32(resolvedLimits.ContextWindowTokens), Valid: resolvedLimits.ContextWindowTokens > 0},
 			MaxInputTokens:      pgtype.Int4{Int32: int32(resolvedLimits.MaxInputTokens), Valid: resolvedLimits.MaxInputTokens > 0},
 			MaxOutputTokens:     pgtype.Int4{Int32: int32(resolvedLimits.MaxOutputTokens), Valid: resolvedLimits.MaxOutputTokens > 0},
 			LimitsSource:        resolvedLimits.Source,
 			LimitsVerifiedAt:    verifiedAt,
 		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AgentSettings{}, fmt.Errorf("%w: model route id belongs to another workspace", domain.ErrConflict)
+		}
 		if err != nil {
 			return AgentSettings{}, mapConstraintError(err)
 		}
-		storedRoutes = append(storedRoutes, stored)
-	}
-
-	validRouteIDs := make(map[uuid.UUID]bool, len(storedRoutes))
-	for _, r := range storedRoutes {
-		validRouteIDs[r.ID] = true
+		validRouteIDs[stored.ID] = true
 	}
 
 	toNullUUID := func(u *uuid.UUID) (uuid.NullUUID, error) {
@@ -351,20 +682,32 @@ func (s *Store) SaveAgentSettings(
 	if err != nil {
 		return AgentSettings{}, mapConstraintError(err)
 	}
+	storedRoutes, err := q.ListWorkspaceModelRoutes(ctx, workspaceID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
+	storedCreds, err := q.ListWorkspaceAPICredentials(ctx, workspaceID)
+	if err != nil {
+		return AgentSettings{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return AgentSettings{}, err
 	}
-	return AgentSettings{WorkspaceAgentSetting: settings, Routes: storedRoutes}, nil
+	return AgentSettings{
+		WorkspaceAgentSetting: settings,
+		Routes:                storedRoutes,
+		APICredentials:        storedCreds,
+	}, nil
 }
 
 type MCPConnectionInput struct {
-	ID               uuid.UUID
-	Name             string
-	URL              string
-	BearerToken      string
-	ClearBearerToken bool
-	Enabled          bool
-	TimeoutMS        int32
+	ID                      uuid.UUID
+	Name                    string
+	URL                     string
+	BearerToken             string
+	ClearBearerToken        bool
+	Enabled                 bool
+	TimeoutMS               int32
 	ToolGuardMode           string
 	ToolGuardModelRouteID   *uuid.UUID
 	ToolGuardTimeoutSeconds int32
