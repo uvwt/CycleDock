@@ -861,6 +861,54 @@ http
             { id: "node-mac", name: "MacBook Pro", online: true, os: "darwin", arch: "arm64", agent_version: "1.1.1" },
             { id: "node-win", name: "Office PC", online: false, os: "windows", arch: "amd64", agent_version: "1.1.0" },
           ] : [] });
+        if (route === "/agent/nexusdock/fleet")
+          return data(res, {
+            available: true,
+            connected: nexusConnected,
+            devices: nexusConnected
+              ? [
+                  {
+                    id: "node-rn",
+                    name: "RN Server",
+                    online: true,
+                    os: "linux",
+                    arch: "amd64",
+                    agent_version: "1.1.1",
+                    capabilities: ["exec_command", "file_edit"],
+                    skills: [
+                      {
+                        name: "docker-ops",
+                        description: "巡检与管理容器运行状态",
+                        source_type: "managed",
+                      },
+                    ],
+                    dynamic_mcp: [],
+                  },
+                  {
+                    id: "node-mac",
+                    name: "MacBook Pro",
+                    online: true,
+                    os: "darwin",
+                    arch: "arm64",
+                    agent_version: "1.1.1",
+                    capabilities: ["exec_command", "browser_open"],
+                    skills: [],
+                    dynamic_mcp: [],
+                  },
+                  {
+                    id: "node-win",
+                    name: "Office PC",
+                    online: false,
+                    os: "windows",
+                    arch: "amd64",
+                    agent_version: "1.1.0",
+                    capabilities: [],
+                    skills: [],
+                    dynamic_mcp: [],
+                  },
+                ]
+              : [],
+          });
         if (route === "/agent/nexusdock") {
           if (req.method === "DELETE") nexusConnected = false;
           return data(res, { available: true, connected: nexusConnected });

@@ -17,12 +17,15 @@ import {
   AlertCircle,
   Wrench,
   Smartphone,
+  ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
+import type { DeviceToolGuard } from "../../shared/api/types";
 import { keys } from "../../app/query";
 import { Spinner, ErrorView, Button } from "../../shared/ui/components";
+import { DeviceToolGuardSection } from "./DeviceToolGuardSection";
 
 export default function NexusDockPage() {
   const { t } = useTranslation();
@@ -40,6 +43,7 @@ export default function NexusDockPage() {
 
   const me = useQuery({ queryKey: keys.me, queryFn: api.me });
   const workspaceID = me.data?.workspace.id || "";
+  const isOwner = me.data?.role === "owner";
 
   // 1. NexusDock 连接状态与管理
   const connection = useQuery({
@@ -75,12 +79,38 @@ export default function NexusDockPage() {
     staleTime: 20_000,
   });
 
+  // 3. 设备独立安全守卫与可选评估模型路由
+  const guards = useQuery({
+    queryKey: keys.deviceToolGuards(workspaceID),
+    queryFn: api.listDeviceToolGuards,
+    enabled: Boolean(workspaceID && connection.data?.connected),
+  });
+
+  const agentSettings = useQuery({
+    queryKey: keys.agent,
+    queryFn: api.agentSettings,
+    enabled: Boolean(isOwner && connection.data?.connected),
+  });
+
+  const guardMap = useMemo(() => {
+    const map = new Map<string, DeviceToolGuard>();
+    for (const guard of guards.data || []) {
+      map.set(guard.device_node_id, guard);
+    }
+    return map;
+  }, [guards.data]);
+
   async function handleRefresh() {
     setIsRefreshing(true);
     try {
       const data = await api.nexusFleet(true);
       queryClient.setQueryData(keys.nexusFleet(workspaceID), data);
-      await queryClient.invalidateQueries({ queryKey: keys.nexus });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.nexus }),
+        queryClient.invalidateQueries({
+          queryKey: keys.deviceToolGuards(workspaceID),
+        }),
+      ]);
       toast.success(t("已更新 NexusDock 设备与运行能力"));
     } catch (err) {
       toast.error(t("刷新失败：") + String(err));
@@ -357,6 +387,7 @@ export default function NexusDockPage() {
                     const isSelected = device.id === activeDeviceId;
                     const skillsCount = device.skills?.length || 0;
                     const mcpCount = device.dynamic_mcp?.length || 0;
+                    const guardMode = guardMap.get(device.id)?.mode || "disabled";
 
                     return (
                       <button
@@ -395,7 +426,7 @@ export default function NexusDockPage() {
                           )}
                         </div>
 
-                        <div className="mt-2 flex items-center gap-2 text-[11px] text-faint">
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-faint">
                           <span>{skillsCount} Skill</span>
                           <span>·</span>
                           <span>{mcpCount} MCP</span>
@@ -404,6 +435,20 @@ export default function NexusDockPage() {
                               <span>·</span>
                               <span>{device.arch}</span>
                             </>
+                          )}
+                          {guardMode !== "disabled" && (
+                            <span
+                              className={`ml-auto inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+                                guardMode === "strict"
+                                  ? "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300"
+                                  : "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-300"
+                              }`}
+                            >
+                              <ShieldAlert className="size-2.5 shrink-0" />
+                              {guardMode === "strict"
+                                ? t("严格模式")
+                                : t("仅拦截高危")}
+                            </span>
                           )}
                         </div>
                       </button>
@@ -493,6 +538,16 @@ export default function NexusDockPage() {
                       <span>{t("同步提示")}: {selectedDevice.error}</span>
                     </div>
                   )}
+
+                  {/* 设备独立安全守卫配置 */}
+                  <DeviceToolGuardSection
+                    key={selectedDevice.id}
+                    workspaceID={workspaceID}
+                    device={selectedDevice}
+                    guard={guardMap.get(selectedDevice.id)}
+                    routes={agentSettings.data?.routes || []}
+                    isOwner={isOwner}
+                  />
 
                   {/* 1. Skill 技能清单 */}
                   <div className="rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3">

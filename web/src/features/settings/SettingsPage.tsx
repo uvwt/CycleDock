@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, useLocation } from "react-router-dom";
-import { Bot, BrainCircuit, LogOut, Plug, Settings, ShieldAlert } from "lucide-react";
+import { Bot, BrainCircuit, LogOut, Plug, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -24,7 +24,6 @@ import { NotificationSettings } from "./NotificationSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { MCPSettings } from "./ConnectionsSettings";
 import { AuthorizedClientsSettings } from "./AuthorizedClientsSettings";
-import { DeviceToolGuardsSettings } from "./DeviceToolGuardsSettings";
 
 const menus = [
   {
@@ -39,7 +38,6 @@ const menus = [
     group: "外部连接",
     items: [
       { id: "mcp", title: "MCP 服务", icon: Plug },
-      { id: "device-guards", title: "设备守卫", icon: ShieldAlert },
       { id: "clients", title: "AI 客户端", icon: Bot },
     ],
   },
@@ -67,12 +65,15 @@ export default function SettingsPage({ role }: { role: string }) {
     onError: (error) => toast.error(String(error)),
   });
 
-  // 旧入口只做兼容跳转，不再保留独立的账号、项目或 Agent 设置页面。
+  // 旧入口只做兼容跳转，不再保留独立的账号、项目、Agent 或设备守卫设置页面。
   if (tab === "account" || tab === "projects") {
     return <Navigate to="/settings/general" replace />;
   }
   if (tab === "agent") {
     return <Navigate to="/settings/models" replace />;
+  }
+  if (tab === "device-guards") {
+    return <Navigate to="/nexusdock" replace />;
   }
 
   return (
@@ -193,7 +194,6 @@ export default function SettingsPage({ role }: { role: string }) {
           )}
           {tab === "models" && isOwner && <ModelsSettings />}
           {tab === "mcp" && isOwner && <MCPSettings />}
-          {tab === "device-guards" && isOwner && <DeviceToolGuardsSettings />}
           {tab === "clients" && <AuthorizedClientsSettings />}
 
           {!current && (
