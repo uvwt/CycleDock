@@ -67,11 +67,11 @@ Session 可以长期存在，但 prompt 不能无限增长。
 
 生产 ADK Runner 使用 Tail Retention Context Compaction：
 
-- 根据当前首选模型路由的实际容量动态计算压缩阈值（`internal/agent/compaction_budget.go`）：`inputLimit = min(MaxInputTokens, ContextWindowTokens - reservedOutput)`，`safetyReserve = max(inputLimit * 15 / 100, 16000)`，`compactAt = inputLimit - safetyReserve`；容量未知（`unknown`）的路由退回独立保守阈值 `TokenThreshold = 24000`，不伪造模型容量。
+- 根据当前首选模型路由的实际容量动态计算压缩阈值（`internal/agent/compaction_budget.go`）：`inputLimit = min(MaxInputTokens, ContextWindowTokens - reservedOutput)`，`safetyReserve = max(inputLimit * 15 / 100, 16000)`，`compactAt = min(inputLimit - safetyReserve, MaxCompactAtTokens)`（默认软上限 `MaxCompactAtTokens = 256000`，同时保留 `EffectiveInputLimit` 为真实路由容量上限）；容量未知（`unknown`）的路由退回独立保守阈值 `TokenThreshold = 24000`，不伪造模型容量。
 - 默认 `EventRetentionSize = 20`，保留近期指代与 function call / response 配对所需 raw tail。
 - summarizer 使用同一 ordered model routes，但不发布内部 summary SSE。
 - summarizer 使用自定义结构化摘要模板（`internal/agent/compaction_prompt.go`），固定输出 `## Objective`、`## Requirements`、`## Decisions`、`## Work State`（区分 `### Completed`、`### Active`、`### Blocked`）、`## Next Move`、`## Relevant Files` 与 `## Important Context`。只有真实执行过且有工具结果或证据支撑的操作才进入 `### Completed`，仅表达计划的内容归入 `### Active` 或 `## Next Move`，并跨轮原样保留用户语言、精确文件路径/符号名、错误结论及外置 `artifact_ref` 引用，防止压缩后丢失执行阶段而反复分析同一批文件。
-- summarizer 对单个工具内容（4,000 字符）与 transcript 本身（120,000 字符）设置上限，避免“为了压缩而先构造无限大压缩请求”。
+- summarizer 对单个工具内容（4,000 字符）与单次 transcript（120,000 字符）设置上限，并通过 `ChunkedSummarizer`（`internal/agent/chunked_summarizer.go`）在积压超长事件窗口时按工具调用/响应配对边界自动分块滚动摘要，将前一片摘要包装为 seed 事件与下一片合并再摘要，避免“为了压缩而先构造无限大压缩请求”或单次超限死锁。
 - 模型路由发生故障切换（failover）时，适配器在发往候选备用路由前校验当前估算 Prompt Token 是否超过该备用路由的 `EffectiveInputLimit`（或未知路由的 32K 保守上限），自动跳过容量不足或容量不明的小窗口备用路由，避免把大窗口会话盲目发往小窗口路由引发无控溢出。
 
 Compaction record 是 Session EventActions 的一部分，由 SessionService 完整持久化。它走独立 bookkeeping ownership guard：只允许当前 running、已绑定 invocation 的 Attempt 对当前 Card Session 已存在事件范围追加 summary；普通 Session Event 的 stale invocation guard 不放宽。

@@ -32,7 +32,13 @@ const (
 	modelRouteIDKey     = "cycledock.model_route_id"
 	modelProviderKey    = "cycledock.model_provider"
 
-	estimatedCharsPerToken = 4
+	// 按 quarter-token（1/4 token）为最小单位累加字符权重：
+	// - ASCII 字符约 4 字符 ≈ 1 token（权重 1）
+	// - 非 ASCII 字符（如中文、日文、全角标点、Emoji）通常占 1~2 token，按 1.5 token/字符（权重 6）估算，
+	//   避免中文长会话或中文字段在发送前容量检查时被严重低估。
+	estimatedTokenScale     = 4
+	asciiCharTokenWeight    = 1
+	nonASCIICharTokenWeight = 6
 )
 
 // RouteCallObservation 记录最近一次成功命中的模型路由及本次调用的 Token 统计与来源。
@@ -716,53 +722,127 @@ func tokenUsageToADKMetadata(usage modelclient.TokenUsage) *genai.GenerateConten
 	}
 }
 
+const (
+	toolDefinitionJSONOverhead  = `{"type":"function","function":{"name":"","description":"","parameters":}}`
+	defaultToolParametersSchema = `{"type":"object","properties":{}}`
+)
+
 func estimateADKRequestTokens(req *model.LLMRequest) int {
-	if req == nil || len(req.Contents) == 0 {
+	if req == nil {
 		return 0
 	}
-	chars := 0
+	units := 0
+	if req.Config != nil {
+		units += estimateContentTokenUnits(req.Config.SystemInstruction)
+		units += estimateToolsTokenUnits(req.Config)
+		units += estimateJSONValueTokenUnits(req.Config.ResponseJsonSchema)
+	}
 	for _, content := range req.Contents {
-		if content == nil {
+		units += estimateContentTokenUnits(content)
+	}
+	return unitsToEstimatedTokens(units)
+}
+
+func estimateContentTokenUnits(content *genai.Content) int {
+	if content == nil {
+		return 0
+	}
+	units := 0
+	for _, part := range content.Parts {
+		if part == nil || part.Thought {
 			continue
 		}
-		for _, part := range content.Parts {
-			if part == nil || part.Thought {
+		units += estimateTextTokenUnits(part.Text)
+		if fc := part.FunctionCall; fc != nil {
+			units += estimateTextTokenUnits(fc.Name) + estimateJSONValueTokenUnits(fc.Args)
+		}
+		if fr := part.FunctionResponse; fr != nil {
+			units += estimateTextTokenUnits(fr.Name) + estimateJSONValueTokenUnits(fr.Response)
+		}
+	}
+	return units
+}
+
+func estimateToolsTokenUnits(config *genai.GenerateContentConfig) int {
+	if config == nil || len(config.Tools) == 0 {
+		return 0
+	}
+	overhead := estimateTextTokenUnits(toolDefinitionJSONOverhead)
+	defaultSchema := estimateTextTokenUnits(defaultToolParametersSchema)
+	units := 0
+	for _, group := range config.Tools {
+		if group == nil {
+			continue
+		}
+		for _, decl := range group.FunctionDeclarations {
+			if decl == nil {
 				continue
 			}
-			chars += utf8.RuneCountInString(part.Text)
-			if fc := part.FunctionCall; fc != nil {
-				chars += utf8.RuneCountInString(fc.Name) + estimateJSONMapChars(fc.Args)
-			}
-			if fr := part.FunctionResponse; fr != nil {
-				chars += utf8.RuneCountInString(fr.Name) + estimateJSONMapChars(fr.Response)
+			units += overhead + estimateTextTokenUnits(decl.Name) + estimateTextTokenUnits(decl.Description)
+			switch {
+			case decl.ParametersJsonSchema != nil:
+				units += estimateJSONValueTokenUnits(decl.ParametersJsonSchema)
+			case decl.Parameters != nil:
+				units += estimateJSONValueTokenUnits(decl.Parameters)
+			default:
+				units += defaultSchema
 			}
 		}
 	}
-	return charsToEstimatedTokens(chars)
+	return units
 }
 
 func estimateCompletionOutputTokens(completion modelclient.Completion) int {
-	chars := utf8.RuneCountInString(completion.Content)
+	units := estimateTextTokenUnits(completion.Content)
 	for _, call := range completion.ToolCalls {
-		chars += utf8.RuneCountInString(call.Function.Name) + utf8.RuneCountInString(call.Function.Arguments)
+		units += estimateTextTokenUnits(call.Function.Name) + estimateTextTokenUnits(call.Function.Arguments)
 	}
-	return charsToEstimatedTokens(chars)
+	return unitsToEstimatedTokens(units)
 }
 
-func estimateJSONMapChars(v map[string]any) int {
-	if len(v) == 0 {
+func estimateTextTokenUnits(s string) int {
+	if s == "" {
+		return 0
+	}
+	units := 0
+	for i := 0; i < len(s); {
+		if s[i] < utf8.RuneSelf {
+			units += asciiCharTokenWeight
+			i++
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		units += nonASCIICharTokenWeight
+		i += size
+	}
+	return units
+}
+
+func estimateJSONValueTokenUnits(v any) int {
+	if v == nil {
 		return 0
 	}
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return 0
 	}
-	return utf8.RuneCount(raw)
+	units := 0
+	for i := 0; i < len(raw); {
+		if raw[i] < utf8.RuneSelf {
+			units += asciiCharTokenWeight
+			i++
+			continue
+		}
+		_, size := utf8.DecodeRune(raw[i:])
+		units += nonASCIICharTokenWeight
+		i += size
+	}
+	return units
 }
 
-func charsToEstimatedTokens(chars int) int {
-	if chars <= 0 {
+func unitsToEstimatedTokens(units int) int {
+	if units <= 0 {
 		return 0
 	}
-	return (chars + estimatedCharsPerToken - 1) / estimatedCharsPerToken
+	return (units + estimatedTokenScale - 1) / estimatedTokenScale
 }

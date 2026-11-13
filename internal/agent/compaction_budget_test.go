@@ -50,9 +50,44 @@ func TestComputeRouteCompactionBudget(t *testing.T) {
 		if budget.SafetyReserve != 154828 {
 			t.Fatalf("SafetyReserve=%d, want 154828", budget.SafetyReserve)
 		}
-		// 1,032,192 - 154,828 = 877,364
-		if budget.CompactAtTokens != 877364 {
-			t.Fatalf("CompactAtTokens=%d, want 877364", budget.CompactAtTokens)
+		// 1,032,192 - 154,828 = 877,364，受 MaxCompactAtTokens 软上限约束为 256,000，
+		// 同时保留 EffectiveInputLimit=1,032,192 作为真实路由容量上限。
+		if budget.CompactAtTokens != 256000 {
+			t.Fatalf("CompactAtTokens=%d, want 256000", budget.CompactAtTokens)
+		}
+	})
+
+	t.Run("1M 路由受软上限约束且 200K 路由保持动态计算", func(t *testing.T) {
+		limits1M := modelclient.ModelLimits{
+			ContextWindowTokens: 1048576,
+			MaxInputTokens:      1048576,
+			MaxOutputTokens:     65536,
+			Source:              modelclient.LimitsSourceRegistry,
+		}
+		budget1M := ComputeRouteCompactionBudget(limits1M, policy)
+		if budget1M.EffectiveInputLimit != 1032192 {
+			t.Fatalf("1M EffectiveInputLimit=%d, want 1032192", budget1M.EffectiveInputLimit)
+		}
+		if budget1M.CompactAtTokens != 256000 {
+			t.Fatalf("1M CompactAtTokens=%d, want 256000", budget1M.CompactAtTokens)
+		}
+
+		// 验证自定义 MaxCompactAtTokens（如 200K）生效且不改变 EffectiveInputLimit
+		customPolicy := policy
+		customPolicy.MaxCompactAtTokens = 200000
+		budgetCustom := ComputeRouteCompactionBudget(limits1M, customPolicy)
+		if budgetCustom.EffectiveInputLimit != 1032192 || budgetCustom.CompactAtTokens != 200000 {
+			t.Fatalf("custom soft cap budget=%+v, want EffectiveInputLimit=1032192 CompactAtTokens=200000", budgetCustom)
+		}
+
+		// 200K 路由（claude-sonnet-4-5）：183,616 - 27,542 = 156,074 < 256,000，不被软上限截断
+		limits200K, ok := modelclient.LookupRegistryModelLimits("claude-sonnet-4-5", "")
+		if !ok {
+			t.Fatal("expected claude-sonnet-4-5 in registry")
+		}
+		budget200K := ComputeRouteCompactionBudget(limits200K, policy)
+		if budget200K.EffectiveInputLimit != 183616 || budget200K.CompactAtTokens != 156074 {
+			t.Fatalf("unexpected 200K budget=%+v", budget200K)
 		}
 	})
 

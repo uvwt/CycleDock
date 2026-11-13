@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -457,4 +459,195 @@ func TestADKRouteModelUsageActualEstimatedAndFailoverRouteTracking(t *testing.T)
 	}
 }
 
+func TestEstimateADKRequestTokens_SystemToolsAndNonASCII(t *testing.T) {
+	if got := estimateADKRequestTokens(nil); got != 0 {
+		t.Fatalf("nil request tokens=%d, want 0", got)
+	}
 
+	// 即使 Contents 为空，SystemInstruction 与 Tools 定义也应计入估算。
+	reqOnlyConfig := &model.LLMRequest{
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: genai.NewContentFromText(strings.Repeat("S", 400), genai.RoleUser),
+			Tools: []*genai.Tool{
+				{
+					FunctionDeclarations: []*genai.FunctionDeclaration{
+						{
+							Name:        "exec_command",
+							Description: strings.Repeat("D", 400),
+							ParametersJsonSchema: map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"cmd": map[string]any{
+										"type":        "string",
+										"description": strings.Repeat("P", 400),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	configTokens := estimateADKRequestTokens(reqOnlyConfig)
+	if configTokens < 300 {
+		t.Fatalf("configTokens=%d, want >= 300 when SystemInstruction and Tools schema are present", configTokens)
+	}
+
+	// 非 ASCII（中文）字符密度高于纯 ASCII 1/4 token，1000 个汉字应估算为 1500 tokens（而非 250）。
+	reqChinese := &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText(strings.Repeat("中", 1000), genai.RoleUser),
+		},
+	}
+	chineseTokens := estimateADKRequestTokens(reqChinese)
+	if chineseTokens != 1500 {
+		t.Fatalf("chineseTokens=%d, want 1500 for 1000 Chinese runes", chineseTokens)
+	}
+
+	// Thought part 不应计入输入估算。
+	thoughtPart := genai.NewPartFromText(strings.Repeat("中", 1000))
+	thoughtPart.Thought = true
+	reqWithThought := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{Role: genai.RoleModel, Parts: []*genai.Part{thoughtPart, genai.NewPartFromText("ok")}},
+		},
+	}
+	if thoughtTokens := estimateADKRequestTokens(reqWithThought); thoughtTokens != 1 {
+		t.Fatalf("thoughtTokens=%d, want 1 (thought parts must be ignored)", thoughtTokens)
+	}
+}
+
+func TestADKRouteModelCapacityInterception_SystemToolsAndChinese(t *testing.T) {
+	t.Run("SystemInstruction 与 Tools Schema 叠加超限时在发送前拦截", func(t *testing.T) {
+		var routeCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			routeCalls.Add(1)
+			http.Error(w, "should not be reached", http.StatusBadRequest)
+		}))
+		defer srv.Close()
+
+		// EffectiveInputLimit = min(10000, 16000-4000) = 10000
+		llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     srv.URL,
+				Model:               "capped-10k-model",
+				ContextWindowTokens: pgtype.Int4{Int32: 16000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 10000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Contents 很小（~500 tokens），但 SystemInstruction (~6000) + Tools (~6000) 总计超过 10000
+		req := &model.LLMRequest{
+			Contents: []*genai.Content{
+				genai.NewContentFromText(strings.Repeat("A", 2000), genai.RoleUser),
+			},
+			Config: &genai.GenerateContentConfig{
+				SystemInstruction: genai.NewContentFromText(strings.Repeat("S", 24000), genai.RoleUser),
+				Tools: []*genai.Tool{
+					{
+						FunctionDeclarations: []*genai.FunctionDeclaration{
+							{
+								Name:        "large_schema_tool",
+								Description: strings.Repeat("T", 12000),
+								ParametersJsonSchema: map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"payload": map[string]any{
+											"type":        "string",
+											"description": strings.Repeat("J", 12000),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		var gotErr error
+		for _, err := range llm.GenerateContent(context.Background(), req, false) {
+			if err != nil {
+				gotErr = err
+				break
+			}
+		}
+		if !errors.Is(gotErr, ErrRouteContextCapacityExceeded) {
+			t.Fatalf("gotErr=%v, want ErrRouteContextCapacityExceeded", gotErr)
+		}
+		if routeCalls.Load() != 0 {
+			t.Fatalf("routeCalls=%d, want 0 (oversized SystemInstruction+Tools must be blocked before HTTP request)", routeCalls.Load())
+		}
+	})
+
+	t.Run("高密度中文输入不再因按4字符除算漏判而绕过容量校验", func(t *testing.T) {
+		var smallCalls, largeCalls atomic.Int32
+		smallSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			smallCalls.Add(1)
+			http.Error(w, "small route should not be called", http.StatusBadRequest)
+		}))
+		defer smallSrv.Close()
+
+		largeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			largeCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			writeModelResponse(t, w, "大窗口备用路由成功接管中文长上下文", nil)
+		}))
+		defer largeSrv.Close()
+
+		// 30,000 个汉字按 1.5 token/字符 ≈ 45,000 tokens；
+		// 旧逻辑按 rune/4 仅算 7,500 tokens，会错误命中 32K 小路由；新逻辑应跳过 32K 路由直接命中 200K 路由。
+		llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     smallSrv.URL,
+				Model:               "small-32k",
+				ContextWindowTokens: pgtype.Int4{Int32: 40000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 32000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+			{
+				ID:              uuid.New(),
+				Enabled:         true,
+				ProviderBaseUrl: largeSrv.URL,
+				Model:           "claude-sonnet-4-5", // 200K registry window
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var answer string
+		for resp, err := range llm.GenerateContent(context.Background(), &model.LLMRequest{
+			Contents: []*genai.Content{
+				genai.NewContentFromText(strings.Repeat("汉", 30000), genai.RoleUser),
+			},
+		}, false) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !resp.Partial {
+				answer = textFromADKContent(resp.Content)
+			}
+		}
+		if smallCalls.Load() != 0 {
+			t.Fatalf("smallCalls=%d, want 0 (45K estimated Chinese prompt must skip 32K route)", smallCalls.Load())
+		}
+		if largeCalls.Load() != 1 {
+			t.Fatalf("largeCalls=%d, want 1", largeCalls.Load())
+		}
+		if answer != "大窗口备用路由成功接管中文长上下文" {
+			t.Fatalf("answer=%q", answer)
+		}
+	})
+}
