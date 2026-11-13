@@ -50,15 +50,20 @@ export function DeviceToolGuardSection({
   const mode: GuardMode = guard?.mode || "disabled";
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      api.saveDeviceToolGuard(device.id, {
+    mutationFn: () => {
+      const normalizedTimeout = Number.isFinite(draft.timeoutSeconds)
+        ? Math.min(60, Math.max(2, Math.trunc(draft.timeoutSeconds)))
+        : 10;
+      const normalizedRouteID = draft.modelRouteID.trim();
+      return api.saveDeviceToolGuard(device.id, {
         device_node_id: device.id,
-        device_name: device.name,
+        device_name: device.name ?? "",
         mode: draft.mode,
-        model_route_id: draft.modelRouteID || undefined,
-        timeout_seconds: draft.timeoutSeconds,
+        model_route_id: normalizedRouteID || undefined,
+        timeout_seconds: normalizedTimeout,
         custom_rules: draft.customRules,
-      }),
+      });
+    },
     onSuccess: (saved) => {
       queryClient.setQueryData<DeviceToolGuard[]>(
         keys.deviceToolGuards(workspaceID),

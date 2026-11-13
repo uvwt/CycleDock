@@ -139,11 +139,11 @@ func (s *Store) AddCardToolWhitelist(ctx context.Context, workspaceID, cardID uu
 		src = uuid.NullUUID{UUID: sourceID, Valid: true}
 	}
 	_, err := s.queries.CreateCardToolWhitelist(ctx, db.CreateCardToolWhitelistParams{
-		ID:                 uuid.New(),
-		WorkspaceID:        workspaceID,
-		CardID:             cardID,
-		ToolName:           strings.TrimSpace(toolName),
-		Pattern:            "*",
+		ID:                uuid.New(),
+		WorkspaceID:       workspaceID,
+		CardID:            cardID,
+		ToolName:          strings.TrimSpace(toolName),
+		Pattern:           "*",
 		CreatedBySourceID: src,
 	})
 	return err
@@ -214,7 +214,7 @@ func (s *Store) SaveDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, 
 	}
 	routeID := toNullableUUID(input.ModelRouteID)
 
-	return s.queries.UpsertWorkspaceDeviceToolGuard(ctx, db.UpsertWorkspaceDeviceToolGuardParams{
+	guard, err := s.queries.UpsertWorkspaceDeviceToolGuard(ctx, db.UpsertWorkspaceDeviceToolGuardParams{
 		ID:             uuid.New(),
 		WorkspaceID:    workspaceID,
 		DeviceNodeID:   nodeID,
@@ -224,6 +224,10 @@ func (s *Store) SaveDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, 
 		TimeoutSeconds: timeout,
 		CustomRules:    strings.TrimSpace(input.CustomRules),
 	})
+	if err != nil {
+		return db.WorkspaceDeviceToolGuard{}, mapConstraintError(err)
+	}
+	return guard, nil
 }
 
 // DeleteDeviceToolGuard 删除指定设备的 Tool Guard 配置
