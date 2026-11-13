@@ -1051,11 +1051,88 @@ http
           }
           if (req.method === "PUT") {
             const input = await body(req);
+            const allowedKeys = new Set([
+              "device_node_id",
+              "device_name",
+              "mode",
+              "model_route_id",
+              "timeout_seconds",
+              "custom_rules",
+            ]);
+            if (
+              !input ||
+              typeof input !== "object" ||
+              Array.isArray(input) ||
+              Object.keys(input).some((key) => !allowedKeys.has(key))
+            ) {
+              return data(
+                res,
+                { error: { code: "invalid_json", message: "invalid JSON request" } },
+                400,
+              );
+            }
+            if (
+              input.device_node_id !== undefined &&
+              input.device_node_id !== null &&
+              String(input.device_node_id).trim() !== "" &&
+              String(input.device_node_id).trim() !== nodeID
+            ) {
+              return data(
+                res,
+                {
+                  error: {
+                    code: "invalid_node_id",
+                    message: "device_node_id must match URL nodeID",
+                  },
+                },
+                400,
+              );
+            }
+            const mode =
+              input.mode === undefined || input.mode === null || String(input.mode).trim() === ""
+                ? "disabled"
+                : String(input.mode).trim();
+            if (!["disabled", "block_high_risk", "strict"].includes(mode)) {
+              return data(
+                res,
+                {
+                  error: {
+                    code: "invalid_mode",
+                    message: "mode must be disabled, block_high_risk, or strict",
+                  },
+                },
+                400,
+              );
+            }
+            const timeout =
+              input.timeout_seconds === undefined || input.timeout_seconds === null
+                ? 10
+                : input.timeout_seconds;
+            if (typeof timeout !== "number" || !Number.isInteger(timeout)) {
+              return data(
+                res,
+                { error: { code: "invalid_json", message: "invalid JSON request" } },
+                400,
+              );
+            }
+            const normalized = {
+              device_node_id: nodeID,
+              device_name:
+                typeof input.device_name === "string" ? input.device_name.trim() : "",
+              mode,
+              model_route_id:
+                typeof input.model_route_id === "string" && input.model_route_id.trim() !== ""
+                  ? input.model_route_id.trim()
+                  : undefined,
+              timeout_seconds: timeout <= 0 ? 10 : Math.min(60, timeout),
+              custom_rules:
+                typeof input.custom_rules === "string" ? input.custom_rules.trim() : "",
+            };
             if (existing) {
-              Object.assign(existing, input, { updated_at: now() });
+              Object.assign(existing, normalized, { updated_at: now() });
               return data(res, existing);
             }
-            const created = { id: "guard-" + Date.now(), device_node_id: nodeID, ...input, created_at: now(), updated_at: now() };
+            const created = { id: "guard-" + Date.now(), ...normalized, created_at: now(), updated_at: now() };
             deviceToolGuards.push(created);
             return data(res, created);
           }

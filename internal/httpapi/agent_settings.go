@@ -798,16 +798,16 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	var request struct {
-		Name                    string `json:"name"`
-		URL                     string `json:"url"`
-		BearerToken             string `json:"bearer_token"`
-		ClearBearerToken        bool   `json:"clear_bearer_token"`
-		Enabled                 *bool  `json:"enabled"`
-		TimeoutMS               int32  `json:"timeout_ms"`
-		ToolGuardMode           string `json:"tool_guard_mode"`
-		ToolGuardModelRouteID   string `json:"tool_guard_model_route_id"`
-		ToolGuardTimeoutSeconds int32  `json:"tool_guard_timeout_seconds"`
-		ToolGuardCustomRules    string `json:"tool_guard_custom_rules"`
+		Name                    string  `json:"name"`
+		URL                     string  `json:"url"`
+		BearerToken             string  `json:"bearer_token"`
+		ClearBearerToken        bool    `json:"clear_bearer_token"`
+		Enabled                 *bool   `json:"enabled"`
+		TimeoutMS               int32   `json:"timeout_ms"`
+		ToolGuardMode           *string `json:"tool_guard_mode"`
+		ToolGuardModelRouteID   *string `json:"tool_guard_model_route_id"`
+		ToolGuardTimeoutSeconds *int32  `json:"tool_guard_timeout_seconds"`
+		ToolGuardCustomRules    *string `json:"tool_guard_custom_rules"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -816,20 +816,44 @@ func (api *API) saveAgentMCPConnection(w http.ResponseWriter, r *http.Request, c
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
+	toolGuardMode := "disabled"
+	if request.ToolGuardMode != nil && strings.TrimSpace(*request.ToolGuardMode) != "" {
+		toolGuardMode = strings.TrimSpace(*request.ToolGuardMode)
+	}
+	switch toolGuardMode {
+	case "disabled", "block_high_risk", "strict":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_mode", "tool_guard_mode must be disabled, block_high_risk, or strict")
+		return
+	}
 	var guardRouteID *uuid.UUID
-	if strings.TrimSpace(request.ToolGuardModelRouteID) != "" {
-		if id, err := uuid.Parse(strings.TrimSpace(request.ToolGuardModelRouteID)); err == nil {
+	if request.ToolGuardModelRouteID != nil {
+		rawGuardRouteID := strings.TrimSpace(*request.ToolGuardModelRouteID)
+		if rawGuardRouteID != "" {
+			id, err := uuid.Parse(rawGuardRouteID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_model_route_id", "tool_guard_model_route_id must be a valid UUID")
+				return
+			}
 			guardRouteID = &id
 		}
+	}
+	var toolGuardTimeout int32
+	if request.ToolGuardTimeoutSeconds != nil {
+		toolGuardTimeout = *request.ToolGuardTimeoutSeconds
+	}
+	toolGuardRules := ""
+	if request.ToolGuardCustomRules != nil {
+		toolGuardRules = *request.ToolGuardCustomRules
 	}
 	connection, err := api.store.SaveMCPConnection(r.Context(), identity.WorkspaceID, store.MCPConnectionInput{
 		ID: connectionID, Name: strings.TrimSpace(request.Name), URL: strings.TrimSpace(request.URL),
 		BearerToken: request.BearerToken, ClearBearerToken: request.ClearBearerToken, Enabled: enabled,
 		TimeoutMS:               request.TimeoutMS,
-		ToolGuardMode:           request.ToolGuardMode,
+		ToolGuardMode:           toolGuardMode,
 		ToolGuardModelRouteID:   guardRouteID,
-		ToolGuardTimeoutSeconds: request.ToolGuardTimeoutSeconds,
-		ToolGuardCustomRules:    request.ToolGuardCustomRules,
+		ToolGuardTimeoutSeconds: toolGuardTimeout,
+		ToolGuardCustomRules:    toolGuardRules,
 	})
 	if err != nil {
 		api.handleError(w, err)
