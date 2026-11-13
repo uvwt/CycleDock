@@ -1,13 +1,72 @@
 import type { Attempt, TimelineEvent } from "../../shared/api/types";
 
+export const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
 export type ExecutionAttempt = {
   kind: "current" | "history";
   value: Attempt;
 };
 
-function order(attempt: ExecutionAttempt) {
-  const value = new Date(attempt.value.created_at).getTime();
-  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+export type TimelineRowLike = {
+  event: TimelineEvent;
+  preview?: unknown;
+  key: string;
+};
+
+export type TimelineItem<TRow extends TimelineRowLike> =
+  | {
+      kind: "event";
+      key: string;
+      row: TRow;
+      orderTime: number | null;
+      displayTime: number | null;
+      displayTimestamp: string;
+    }
+  | {
+      kind: "standalone";
+      key: string;
+      attempts: ExecutionAttempt[];
+      firstTime: number | null;
+      lastTime: number | null;
+      displayTimestamp: string;
+    };
+
+function parseTimestamp(value?: string): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getAttemptTime(attempt: Attempt): number | null {
+  return parseTimestamp(attempt.started_at) ?? parseTimestamp(attempt.created_at);
+}
+
+function compareAttempts(a: Attempt, b: Attempt): number {
+  const timeA = getAttemptTime(a) ?? Number.MAX_SAFE_INTEGER;
+  const timeB = getAttemptTime(b) ?? Number.MAX_SAFE_INTEGER;
+  if (timeA !== timeB) return timeA - timeB;
+  const createdA = parseTimestamp(a.created_at) ?? Number.MAX_SAFE_INTEGER;
+  const createdB = parseTimestamp(b.created_at) ?? Number.MAX_SAFE_INTEGER;
+  if (createdA !== createdB) return createdA - createdB;
+  return a.attempt_number - b.attempt_number;
+}
+
+function buildAttemptLookup(attempts?: Attempt[]) {
+  const sortedAttempts = [...(attempts || [])].sort(compareAttempts);
+  const attemptByID = new Map<string, Attempt>();
+  const promptAttemptBySourceEventID = new Map<string, Attempt>();
+
+  for (const attempt of sortedAttempts) {
+    attemptByID.set(attempt.id, attempt);
+    if (
+      attempt.source_event_id &&
+      !promptAttemptBySourceEventID.has(attempt.source_event_id)
+    ) {
+      promptAttemptBySourceEventID.set(attempt.source_event_id, attempt);
+    }
+  }
+
+  return { attemptByID, promptAttemptBySourceEventID };
 }
 
 export function groupExecutionAttempts(
@@ -57,7 +116,7 @@ export function groupExecutionAttempts(
       ? [{ kind: "current" as const, value: currentAttempt }]
       : []),
   ];
-  attempts.sort((a, b) => order(a) - order(b));
+  attempts.sort((a, b) => compareAttempts(a.value, b.value));
 
   for (const attempt of attempts) {
     const execution = attempt.value;
@@ -98,34 +157,13 @@ export function orderTimelineEvents(
     return [...events].sort((a, b) => a.sequence - b.sequence);
   }
 
-  // 1. 整理 Attempt：按执行时间升序排列
-  const sortedAttempts = [...attempts].sort((a, b) => {
-    const timeA = new Date(a.started_at || a.created_at).getTime();
-    const timeB = new Date(b.started_at || b.created_at).getTime();
-    if (timeA !== timeB) return timeA - timeB;
-    return a.attempt_number - b.attempt_number;
-  });
+  const { attemptByID, promptAttemptBySourceEventID } =
+    buildAttemptLookup(attempts);
 
-  // 2. 建立映射：
-  //    - attemptByID: id -> Attempt
-  //    - promptAttemptBySourceEventID: 记录该人工输入对应的首个 Attempt（重试沿用首次）
-  const attemptByID = new Map<string, Attempt>();
-  const promptAttemptBySourceEventID = new Map<string, Attempt>();
-
-  for (const attempt of sortedAttempts) {
-    attemptByID.set(attempt.id, attempt);
-    if (
-      attempt.source_event_id &&
-      !promptAttemptBySourceEventID.has(attempt.source_event_id)
-    ) {
-      promptAttemptBySourceEventID.set(attempt.source_event_id, attempt);
-    }
-  }
-
-  // 3. 为每个事件计算排序关键元组：
-  //    - groupTime: 归属 Attempt 的执行基准时间（若是独立事件则为自身时间）
-  //    - role: 0 为本轮人工提问（置于该 Attempt 所有回复之前），1 为 Attempt 执行产生的回复或事件
-  //    - sequence: 同角色或同 Attempt 内保持原有递增 sequence
+  // 为每个事件计算排序关键元组：
+  // - groupTime: 归属 Attempt 的执行基准时间（若是独立事件则为自身时间）
+  // - role: 0 为本轮人工提问（置于该 Attempt 所有回复之前），1 为 Attempt 执行产生的回复或事件
+  // - sequence: 同角色或同 Attempt 内保持原有递增 sequence
   type EventKey = {
     groupTime: number;
     role: number;
@@ -135,11 +173,8 @@ export function orderTimelineEvents(
   const getEventKey = (event: TimelineEvent): EventKey => {
     const promptAttempt = promptAttemptBySourceEventID.get(event.id);
     if (promptAttempt) {
-      const groupTime = new Date(
-        promptAttempt.started_at || promptAttempt.created_at,
-      ).getTime();
       return {
-        groupTime: Number.isFinite(groupTime) ? groupTime : 0,
+        groupTime: getAttemptTime(promptAttempt) ?? 0,
         role: 0,
         sequence: event.sequence,
       };
@@ -148,11 +183,8 @@ export function orderTimelineEvents(
     if (event.attempt_id) {
       const executionAttempt = attemptByID.get(event.attempt_id);
       if (executionAttempt) {
-        const groupTime = new Date(
-          executionAttempt.started_at || executionAttempt.created_at,
-        ).getTime();
         return {
-          groupTime: Number.isFinite(groupTime) ? groupTime : 0,
+          groupTime: getAttemptTime(executionAttempt) ?? 0,
           role: 1,
           sequence: event.sequence,
         };
@@ -160,9 +192,8 @@ export function orderTimelineEvents(
     }
 
     // 独立事件（如卡片状态变更、未关联 Attempt 的事件等）
-    const selfTime = new Date(event.created_at).getTime();
     return {
-      groupTime: Number.isFinite(selfTime) ? selfTime : 0,
+      groupTime: parseTimestamp(event.created_at) ?? 0,
       role: 0,
       sequence: event.sequence,
     };
@@ -180,4 +211,106 @@ export function orderTimelineEvents(
     }
     return keyA.sequence - keyB.sequence;
   });
+}
+
+/**
+ * 将未关联消息的系统触发执行（standalone）按实际发生时间（started_at || created_at）
+ * 穿插到对应事件前后，避免旧系统失败记录被永久固定在时间线末尾。
+ * 相邻且间隔不超过两小时的连续系统触发会合并为同一展示组；跨过两小时则拆分以便渲染时间分隔线。
+ */
+export function buildTimelineItems<TRow extends TimelineRowLike>(
+  rows: TRow[],
+  standalone: ExecutionAttempt[],
+  attempts?: Attempt[],
+): TimelineItem<TRow>[] {
+  const sortedStandalone = [...standalone].sort((a, b) =>
+    compareAttempts(a.value, b.value),
+  );
+  const { attemptByID, promptAttemptBySourceEventID } =
+    buildAttemptLookup(attempts);
+
+  const getRowOrderTime = (row: TRow): number | null => {
+    const event = row.event;
+    const promptAttempt = promptAttemptBySourceEventID.get(event.id);
+    if (promptAttempt) {
+      return (
+        getAttemptTime(promptAttempt) ?? parseTimestamp(event.created_at)
+      );
+    }
+    if (event.attempt_id) {
+      const executionAttempt = attemptByID.get(event.attempt_id);
+      if (executionAttempt) {
+        return (
+          getAttemptTime(executionAttempt) ?? parseTimestamp(event.created_at)
+        );
+      }
+    }
+    return parseTimestamp(event.created_at);
+  };
+
+  const items: TimelineItem<TRow>[] = [];
+  const pushStandalone = (attempt: ExecutionAttempt) => {
+    const time = getAttemptTime(attempt.value);
+    const timestampValue =
+      attempt.value.started_at || attempt.value.created_at || "";
+    const lastItem = items.at(-1);
+    if (
+      lastItem?.kind === "standalone" &&
+      (lastItem.lastTime === null ||
+        time === null ||
+        time - lastItem.lastTime <= TWO_HOURS_MS)
+    ) {
+      lastItem.attempts.push(attempt);
+      if (lastItem.firstTime === null) lastItem.firstTime = time;
+      if (time !== null) lastItem.lastTime = time;
+      if (!lastItem.displayTimestamp && timestampValue) {
+        lastItem.displayTimestamp = timestampValue;
+      }
+      return;
+    }
+    items.push({
+      kind: "standalone",
+      key: `standalone:${attempt.kind}:${attempt.value.id}`,
+      attempts: [attempt],
+      firstTime: time,
+      lastTime: time,
+      displayTimestamp: timestampValue,
+    });
+  };
+
+  let standaloneIndex = 0;
+  for (const row of rows) {
+    const rawOrderTime = getRowOrderTime(row);
+    // 尚未拿到时间戳的实时预览默认视为当前末尾，防止历史系统失败记录被压到实时回复之后。
+    const effectiveOrderTime =
+      rawOrderTime ?? (row.preview ? Number.MAX_SAFE_INTEGER : null);
+
+    if (effectiveOrderTime !== null) {
+      while (standaloneIndex < sortedStandalone.length) {
+        const candidate = sortedStandalone[standaloneIndex];
+        const candidateTime = getAttemptTime(candidate.value);
+        if (candidateTime === null || candidateTime >= effectiveOrderTime) {
+          break;
+        }
+        pushStandalone(candidate);
+        standaloneIndex += 1;
+      }
+    }
+
+    items.push({
+      kind: "event",
+      key: row.key,
+      row,
+      orderTime: effectiveOrderTime,
+      displayTime: parseTimestamp(row.event.created_at),
+      displayTimestamp: row.event.created_at,
+    });
+  }
+
+  while (standaloneIndex < sortedStandalone.length) {
+    pushStandalone(sortedStandalone[standaloneIndex]);
+    standaloneIndex += 1;
+  }
+
+  return items;
 }

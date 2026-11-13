@@ -55,13 +55,14 @@ import { ToolApprovalCard } from "./ToolApprovalCard";
 import { usePacedTimeline } from "./usePacedTimeline";
 import { cn } from "../../shared/lib/utils";
 import {
+  TWO_HOURS_MS,
+  buildTimelineItems,
   groupExecutionAttempts,
   orderTimelineEvents,
   type ExecutionAttempt,
 } from "./execution";
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
-const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const systemTypes = new Set([
   "status_change",
   "progress",
@@ -1165,27 +1166,35 @@ export function ConversationView({
   const displayLive = live ? { ...live, replies: pendingReplies } : null;
   const { byEvent, standalone, statusByReply, running } =
     groupExecutionAttempts(orderedEvents, currentAttempt, attemptHistory);
+  const timelineItems = buildTimelineItems(rows, standalone, executions);
 
   const groupStarts = new Set<string>();
   const statusByHeader = new Map<string, Attempt[]>();
   let headerID = "";
-  for (const [index, event] of displayEvents.entries()) {
-    const previous = displayEvents[index - 1];
-    const interval = previous
-      ? Date.parse(event.created_at) - Date.parse(previous.created_at)
+  let previousEvent: TimelineEvent | undefined;
+  for (const item of timelineItems) {
+    if (item.kind === "standalone") {
+      // 独立系统执行块会打断前后消息的同组连续展示，避免隔着系统提示仍隐藏发送者名称。
+      previousEvent = undefined;
+      headerID = "";
+      continue;
+    }
+    const event = item.row.event;
+    const interval = previousEvent
+      ? Date.parse(event.created_at) - Date.parse(previousEvent.created_at)
       : NaN;
     // 执行信息归到消息组首，避免在连续回复中重复展示发送者。
     const continuesGroup =
-      !!previous &&
-      !systemTypes.has(previous.type) &&
+      !!previousEvent &&
+      !systemTypes.has(previousEvent.type) &&
       !systemTypes.has(event.type) &&
       (!(
         previewKeys.has(event.id) ||
         (live && event.attempt_id === live.attemptID)
       ) ||
-        previous.attempt_id === event.attempt_id) &&
-      previous.actor_kind === event.actor_kind &&
-      senderLabel(previous.actor_kind, previous.actor_name) ===
+        previousEvent.attempt_id === event.attempt_id) &&
+      previousEvent.actor_kind === event.actor_kind &&
+      senderLabel(previousEvent.actor_kind, previousEvent.actor_name) ===
         senderLabel(event.actor_kind, event.actor_name) &&
       interval >= 0 &&
       interval <= FIVE_MINUTES_MS;
@@ -1199,8 +1208,13 @@ export function ConversationView({
       attempts.push(execution);
       statusByHeader.set(headerID, attempts);
     }
+    previousEvent = event;
   }
-  const lastEvent = displayEvents.at(-1);
+  const lastTimelineItem = timelineItems.at(-1);
+  const lastEvent =
+    lastTimelineItem?.kind === "event"
+      ? lastTimelineItem.row.event
+      : undefined;
   const latestConfirmID = displayEvents.findLast(
     (event) => event.type === "confirm",
   )?.id;
@@ -1243,6 +1257,7 @@ export function ConversationView({
   // 仅在真实新内容到达或底部避让高度变化（而非用户滚动触发的组件重渲染）时，若处于吸底状态则跟随最新内容滚动
   const contentSignature = [
     sortedEvents.length,
+    standalone.map((item) => `${item.value.id}:${item.value.status}`).join(","),
     live?.attemptID,
     live?.stage,
     live?.replies?.map((r) => r.text.length).join(","),
@@ -1296,7 +1311,7 @@ export function ConversationView({
       }
       prevScrollHeightRef.current = null;
     }
-  }, [sortedEvents.length]);
+  }, [sortedEvents.length, standalone.length]);
 
   function handleLoadMoreBefore() {
     if (!hasMoreBefore || loadingMoreBefore || !onLoadMoreBefore) return;
@@ -1447,16 +1462,40 @@ export function ConversationView({
             </div>
           )}
 
-        {rows.map(({ event, preview, key }, index) => {
-          const previous = displayEvents[index - 1];
+        {timelineItems.map((item, index) => {
+          const previousItem = timelineItems[index - 1];
+          const prevEndTime =
+            previousItem?.kind === "event"
+              ? previousItem.displayTime
+              : previousItem?.kind === "standalone"
+                ? previousItem.lastTime
+                : null;
+          const currentStartTime =
+            item.kind === "event" ? item.displayTime : item.firstTime;
           const showTime =
-            !!previous &&
-            new Date(event.created_at).getTime() -
-              new Date(previous.created_at).getTime() >
-              TWO_HOURS_MS;
+            prevEndTime !== null &&
+            currentStartTime !== null &&
+            currentStartTime - prevEndTime > TWO_HOURS_MS;
+
+          if (item.kind === "standalone") {
+            return (
+              <div key={item.key} className={index === 0 ? "" : "mt-3"}>
+                {showTime && <TimeSeparator value={item.displayTimestamp} />}
+                <StandaloneExecution
+                  attempts={item.attempts}
+                  live={displayLive}
+                  {...actions}
+                />
+              </div>
+            );
+          }
+
+          const { event, preview, key } = item.row;
+          const previousEventRow =
+            previousItem?.kind === "event" ? previousItem.row.event : undefined;
           const continuesGroup = !groupStarts.has(event.id);
           const isConsecutiveStatusChange =
-            previous?.type === "status_change" &&
+            previousEventRow?.type === "status_change" &&
             event.type === "status_change";
           const matchedAttempt = executions.find(
             (attempt) => attempt.id === event.attempt_id,
@@ -1471,7 +1510,7 @@ export function ConversationView({
               key={key}
               className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : isConsecutiveStatusChange ? "mt-0.5" : continuesGroup ? "mt-2.5" : "mt-4"}`}
             >
-              {showTime && <TimeSeparator value={event.created_at} />}
+              {showTime && <TimeSeparator value={item.displayTimestamp} />}
               <EventRow
                 event={event}
                 cardID={card?.id}
@@ -1482,7 +1521,7 @@ export function ConversationView({
                 attempts={byEvent.get(event.id) || []}
                 headerAttempts={rowHeaderAttempts}
                 live={displayLive}
-                isLatest={!running && index === rows.length - 1}
+                isLatest={!running && index === timelineItems.length - 1}
                 compact={compact}
                 {...actions}
                 canApproveReview={
@@ -1497,16 +1536,6 @@ export function ConversationView({
             </div>
           );
         })}
-
-        {standalone.length > 0 && (
-          <div className="mt-3">
-            <StandaloneExecution
-              attempts={standalone}
-              live={displayLive}
-              {...actions}
-            />
-          </div>
-        )}
         {running && (
           <div className={runningContinues ? "mt-1.5" : "mt-3"}>
             <ExecutionStatus
