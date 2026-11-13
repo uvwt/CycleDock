@@ -56,6 +56,10 @@ export type ToolApproval = {
   risk_level: "low" | "medium" | "high" | "critical" | string;
   reversible: boolean;
   reason: string;
+  scope_type?: "device" | "mcp" | "tool" | string;
+  scope_target?: string;
+  scope_label?: string;
+  allow_session_whitelist?: boolean;
   status: "pending" | "approved" | "rejected";
   resolution_comment?: string;
   resolved_at?: string;

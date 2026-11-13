@@ -128,23 +128,27 @@ type CardSchedule struct {
 }
 
 type CardToolApproval struct {
-	ID                 uuid.UUID          `json:"id"`
-	WorkspaceID        uuid.UUID          `json:"workspace_id"`
-	CardID             uuid.UUID          `json:"card_id"`
-	TurnID             uuid.NullUUID      `json:"turn_id"`
-	AttemptID          uuid.NullUUID      `json:"attempt_id"`
-	ToolCallID         string             `json:"tool_call_id"`
-	ToolName           string             `json:"tool_name"`
-	Arguments          []byte             `json:"arguments"`
-	RiskLevel          string             `json:"risk_level"`
-	Reversible         bool               `json:"reversible"`
-	Reason             string             `json:"reason"`
-	Status             string             `json:"status"`
-	ResolutionComment  string             `json:"resolution_comment"`
-	ResolvedBySourceID uuid.NullUUID      `json:"resolved_by_source_id"`
-	ResolvedAt         pgtype.Timestamptz `json:"resolved_at"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ID                    uuid.UUID          `json:"id"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	CardID                uuid.UUID          `json:"card_id"`
+	TurnID                uuid.NullUUID      `json:"turn_id"`
+	AttemptID             uuid.NullUUID      `json:"attempt_id"`
+	ToolCallID            string             `json:"tool_call_id"`
+	ToolName              string             `json:"tool_name"`
+	Arguments             []byte             `json:"arguments"`
+	RiskLevel             string             `json:"risk_level"`
+	Reversible            bool               `json:"reversible"`
+	Reason                string             `json:"reason"`
+	Status                string             `json:"status"`
+	ResolutionComment     string             `json:"resolution_comment"`
+	ResolvedBySourceID    uuid.NullUUID      `json:"resolved_by_source_id"`
+	ResolvedAt            pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	ScopeType             string             `json:"scope_type"`
+	ScopeTarget           string             `json:"scope_target"`
+	ScopeLabel            string             `json:"scope_label"`
+	AllowSessionWhitelist bool               `json:"allow_session_whitelist"`
 }
 
 type CardToolWhitelist struct {
@@ -155,6 +159,8 @@ type CardToolWhitelist struct {
 	Pattern           string             `json:"pattern"`
 	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ScopeType         string             `json:"scope_type"`
+	ScopeTarget       string             `json:"scope_target"`
 }
 
 type CardTurn struct {

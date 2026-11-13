@@ -494,6 +494,11 @@ const en = {
   清空搜索: "Clear search",
   未找到匹配的卡片: "No matching cards found",
   返回上级: "Back",
+  "本卡片允许此设备": "Allow this device on card",
+  "本卡片允许此 MCP": "Allow this MCP on card",
+  "本卡片允许 {{target}}": "Allow {{target}} on card",
+  "设备 · {{target}}": "Device · {{target}}",
+  "MCP · {{target}}": "MCP · {{target}}",
 } as const;
 
 void i18n.use(initReactI18next).init({

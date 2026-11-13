@@ -16,16 +16,20 @@ import (
 )
 
 type CreateToolApprovalParams struct {
-	WorkspaceID uuid.UUID
-	CardID      uuid.UUID
-	TurnID      *uuid.UUID
-	AttemptID   *uuid.UUID
-	ToolCallID  string
-	ToolName    string
-	Arguments   map[string]any
-	RiskLevel   string // "low", "medium", "high", "critical"
-	Reversible  bool
-	Reason      string
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	TurnID                *uuid.UUID
+	AttemptID             *uuid.UUID
+	ToolCallID            string
+	ToolName              string
+	Arguments             map[string]any
+	RiskLevel             string // "low", "medium", "high", "critical"
+	Reversible            bool
+	Reason                string
+	ScopeType             string // "", "device", "mcp", "tool"
+	ScopeTarget           string
+	ScopeLabel            string
+	AllowSessionWhitelist *bool
 }
 
 type ToolApproval struct {
@@ -46,6 +50,16 @@ func (s *Store) CreateToolApproval(ctx context.Context, p CreateToolApprovalPara
 	default:
 		riskLevel = "high"
 	}
+	scopeType := strings.ToLower(strings.TrimSpace(p.ScopeType))
+	switch scopeType {
+	case "", "device", "mcp", "tool":
+	default:
+		scopeType = ""
+	}
+	allowSessionWhitelist := true
+	if p.AllowSessionWhitelist != nil {
+		allowSessionWhitelist = *p.AllowSessionWhitelist
+	}
 	argsRaw, err := json.Marshal(p.Arguments)
 	if err != nil {
 		argsRaw = []byte("{}")
@@ -62,17 +76,21 @@ func (s *Store) CreateToolApproval(ctx context.Context, p CreateToolApprovalPara
 	}
 
 	return s.queries.CreateCardToolApproval(ctx, db.CreateCardToolApprovalParams{
-		ID:          id,
-		WorkspaceID: p.WorkspaceID,
-		CardID:      p.CardID,
-		TurnID:      turnID,
-		AttemptID:   attemptID,
-		ToolCallID:  strings.TrimSpace(p.ToolCallID),
-		ToolName:    strings.TrimSpace(p.ToolName),
-		Arguments:   argsRaw,
-		RiskLevel:   riskLevel,
-		Reversible:  p.Reversible,
-		Reason:      strings.TrimSpace(p.Reason),
+		ID:                    id,
+		WorkspaceID:           p.WorkspaceID,
+		CardID:                p.CardID,
+		TurnID:                turnID,
+		AttemptID:             attemptID,
+		ToolCallID:            strings.TrimSpace(p.ToolCallID),
+		ToolName:              strings.TrimSpace(p.ToolName),
+		Arguments:             argsRaw,
+		RiskLevel:             riskLevel,
+		Reversible:            p.Reversible,
+		Reason:                strings.TrimSpace(p.Reason),
+		ScopeType:             scopeType,
+		ScopeTarget:           strings.TrimSpace(p.ScopeTarget),
+		ScopeLabel:            strings.TrimSpace(p.ScopeLabel),
+		AllowSessionWhitelist: allowSessionWhitelist,
 	})
 }
 
@@ -132,29 +150,52 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 	return approval, err
 }
 
-// AddCardToolWhitelist 为卡片添加同类工具白名单规则
-func (s *Store) AddCardToolWhitelist(ctx context.Context, workspaceID, cardID uuid.UUID, toolName string, sourceID uuid.UUID) error {
+// AddCardScopeWhitelist 为卡片添加按作用域（device / mcp / 兜底 tool）的临时放行白名单
+func (s *Store) AddCardScopeWhitelist(ctx context.Context, workspaceID, cardID uuid.UUID, scopeType, scopeTarget string, sourceID uuid.UUID) error {
+	if workspaceID == uuid.Nil || cardID == uuid.Nil {
+		return fmt.Errorf("%w: workspace_id and card_id are required", domain.ErrConflict)
+	}
+	scopeType = strings.ToLower(strings.TrimSpace(scopeType))
+	scopeTarget = strings.TrimSpace(scopeTarget)
+	switch scopeType {
+	case "device", "mcp", "tool":
+	default:
+		return fmt.Errorf("%w: invalid whitelist scope_type %q", domain.ErrConflict, scopeType)
+	}
+	if scopeTarget == "" {
+		return fmt.Errorf("%w: whitelist scope_target is required", domain.ErrConflict)
+	}
+	toolName := ""
+	if scopeType == "tool" {
+		toolName = scopeTarget
+	}
 	var src uuid.NullUUID
 	if sourceID != uuid.Nil {
 		src = uuid.NullUUID{UUID: sourceID, Valid: true}
 	}
-	_, err := s.queries.CreateCardToolWhitelist(ctx, db.CreateCardToolWhitelistParams{
+	return s.queries.UpsertCardToolWhitelist(ctx, db.UpsertCardToolWhitelistParams{
 		ID:                uuid.New(),
 		WorkspaceID:       workspaceID,
 		CardID:            cardID,
-		ToolName:          strings.TrimSpace(toolName),
-		Pattern:           "*",
+		ToolName:          toolName,
+		ScopeType:         scopeType,
+		ScopeTarget:       scopeTarget,
 		CreatedBySourceID: src,
 	})
-	return err
 }
 
-// IsCardToolWhitelisted 检查工具是否在该卡片的白名单中
-func (s *Store) IsCardToolWhitelisted(ctx context.Context, workspaceID, cardID uuid.UUID, toolName string) (bool, error) {
-	return s.queries.CheckCardToolWhitelisted(ctx, db.CheckCardToolWhitelistedParams{
+// IsCardScopeWhitelisted 检查当前作用域（device / mcp / 兜底 tool）是否在该卡片的临时白名单中
+func (s *Store) IsCardScopeWhitelisted(ctx context.Context, workspaceID, cardID uuid.UUID, scopeType, scopeTarget string) (bool, error) {
+	scopeType = strings.ToLower(strings.TrimSpace(scopeType))
+	scopeTarget = strings.TrimSpace(scopeTarget)
+	if scopeType == "" || scopeTarget == "" {
+		return false, nil
+	}
+	return s.queries.CheckCardScopeWhitelisted(ctx, db.CheckCardScopeWhitelistedParams{
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
-		ToolName:    strings.TrimSpace(toolName),
+		ScopeType:   scopeType,
+		ScopeTarget: scopeTarget,
 	})
 }
 
