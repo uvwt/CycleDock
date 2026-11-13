@@ -111,18 +111,18 @@ export function Field({
   error?: string;
 }) {
   return (
-    <Label className="block min-w-0 space-y-1.5 font-normal leading-5 select-auto">
+    <Label className="block w-full min-w-0 space-y-1.5 font-normal leading-5 select-auto">
       <span className="block truncate text-xs font-semibold text-secondary-foreground" title={label}>
         {label}
       </span>
       {children}
       {error && (
-        <span role="alert" className="block text-xs text-danger">
+        <span role="alert" className="block text-xs text-danger break-words [overflow-wrap:anywhere]">
           {error}
         </span>
       )}
       {hint && (
-        <span className="block text-xs text-muted-foreground">{hint}</span>
+        <span className="block text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">{hint}</span>
       )}
     </Label>
   );
@@ -303,13 +303,13 @@ export function Modal({
         onInteractOutside={
           preventOutsideClose ? (e) => e.preventDefault() : undefined
         }
-        className="max-h-[85dvh] overflow-y-auto sm:max-w-[520px]"
+        className="max-h-[85dvh] overflow-y-auto overflow-x-hidden sm:max-w-[520px]"
       >
         <DialogHeader className="pr-6 text-left">
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
-        {children}
+        <div className="min-w-0">{children}</div>
       </DialogContent>
     </Dialog>
   );

@@ -202,7 +202,7 @@ export default function NexusDockPage() {
   const mcpCount = selectedDevice?.dynamic_mcp?.length || 0;
 
   return (
-    <main className="mx-auto flex-1 min-h-0 w-full max-w-7xl space-y-4 overflow-y-auto px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
+    <main className="mx-auto flex-1 min-h-0 min-w-0 w-full max-w-7xl space-y-4 overflow-y-auto overflow-x-hidden px-4 py-4 pb-24 md:space-y-7 md:px-8 md:py-8 md:pb-24">
       {/* 统一全局页面头部 */}
       <header className="flex flex-wrap items-center justify-between gap-3 md:gap-4">
         <div>
@@ -331,10 +331,10 @@ export default function NexusDockPage() {
         </div>
       ) : (
         /* 已连接：搜索筛选栏 + Master-Detail 工作台 */
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {/* 筛选与检索栏 */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="relative min-w-[240px] max-w-sm flex-1">
+            <div className="relative w-full min-w-0 flex-1 sm:min-w-[240px] sm:max-w-sm">
               <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground/60" />
               <input
                 type="text"
@@ -384,9 +384,9 @@ export default function NexusDockPage() {
           </div>
 
           {/* 设备列表与详情主区域 */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 gap-5 min-w-0 lg:grid-cols-[320px_minmax(0,1fr)]">
             {/* 左侧设备列表卡片 */}
-            <div className="overflow-hidden rounded-2xl border border-line bg-surface p-2 shadow-2xs">
+            <div className="min-w-0 overflow-hidden rounded-2xl border border-line bg-surface p-2 shadow-2xs">
               <div className="px-2 py-2 text-xs font-semibold text-muted-foreground tracking-wide">
                 {t("设备列表")} ({filteredDevices.length})
               </div>
@@ -474,14 +474,14 @@ export default function NexusDockPage() {
             </div>
 
             {/* 右侧设备能力详情检查器 */}
-            <div className="min-w-0 rounded-2xl border border-line bg-surface p-6 shadow-2xs space-y-6">
+            <div className="min-w-0 rounded-2xl border border-line bg-surface p-4 sm:p-6 shadow-2xs space-y-6">
               {selectedDevice ? (
                 <>
                   {/* 设备概览 Header */}
                   <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line pb-5">
-                    <div className="flex items-center gap-3.5">
+                    <div className="flex min-w-0 flex-1 items-center gap-3.5">
                       <div
-                        className={`grid size-12 place-items-center rounded-2xl ${
+                        className={`grid size-12 shrink-0 place-items-center rounded-2xl ${
                           selectedDevice.online
                             ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
                             : "bg-muted text-muted-foreground border border-line"
@@ -499,9 +499,9 @@ export default function NexusDockPage() {
                         )}
                       </div>
 
-                      <div>
-                        <div className="flex items-center gap-2.5">
-                          <h2 className="text-xl font-semibold tracking-tight text-heading">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <h2 className="min-w-0 max-w-full break-words [overflow-wrap:anywhere] text-xl font-semibold tracking-tight text-heading">
                             {selectedDevice.name}
                           </h2>
                           {selectedDevice.online ? (
@@ -548,9 +548,11 @@ export default function NexusDockPage() {
                   </div>
 
                   {selectedDevice.error && (
-                    <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-700 dark:text-amber-400">
-                      <AlertCircle className="size-4 shrink-0" />
-                      <span>{t("同步提示")}: {selectedDevice.error}</span>
+                    <div className="flex min-w-0 items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                      <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+                        {t("同步提示")}: {selectedDevice.error}
+                      </span>
                     </div>
                   )}
 
@@ -565,22 +567,22 @@ export default function NexusDockPage() {
                   />
 
                   {/* 1. Skill 技能清单 */}
-                  <div className="rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3">
+                  <div className="min-w-0 rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3">
                     <button
                       type="button"
                       onClick={() => setShowSkills((v) => !v)}
-                      className="flex w-full items-center justify-between text-xs font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
+                      className="flex w-full min-w-0 items-center justify-between gap-2 text-xs font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
                     >
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="size-4 text-primary" />
-                        <h3 className="text-sm font-semibold text-foreground">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Sparkles className="size-4 shrink-0 text-primary" />
+                        <h3 className="truncate text-sm font-semibold text-foreground">
                           {t("Skill 技能清单")}
                         </h3>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                           {skillsCount}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                         <span>{showSkills ? t("收起") : t("展开")}</span>
                         {showSkills ? (
                           <ChevronUp className="size-4" />
@@ -598,15 +600,15 @@ export default function NexusDockPage() {
                           </div>
                         ) : (
                           <>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
                               {selectedDevice.skills.slice(0, skillPageSize).map((skill) => (
                                 <div
                                   key={skill.name}
-                                  className="flex flex-col justify-between rounded-xl border border-line bg-canvas/40 p-4 shadow-2xs hover:border-line/90 transition-all"
+                                  className="flex min-w-0 flex-col justify-between rounded-xl border border-line bg-canvas/40 p-4 shadow-2xs hover:border-line/90 transition-all"
                                 >
-                                  <div>
-                                    <div className="flex items-start justify-between gap-2">
-                                      <h4 className="text-xs font-semibold text-foreground truncate">
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-start justify-between gap-2">
+                                      <h4 className="min-w-0 flex-1 text-xs font-semibold text-foreground truncate">
                                         {skill.name}
                                       </h4>
                                       {skill.source_type && (
@@ -627,7 +629,7 @@ export default function NexusDockPage() {
                                         </span>
                                       )}
                                     </div>
-                                    <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                                    <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2 break-words [overflow-wrap:anywhere] leading-relaxed">
                                       {skill.description || t("暂无技能描述")}
                                     </p>
                                   </div>
@@ -665,22 +667,22 @@ export default function NexusDockPage() {
                   </div>
 
                   {/* 2. 动态 MCP 服务 */}
-                  <div className="rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3">
+                  <div className="min-w-0 rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3">
                     <button
                       type="button"
                       onClick={() => setShowDynamicMcp((v) => !v)}
-                      className="flex w-full items-center justify-between text-xs font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
+                      className="flex w-full min-w-0 items-center justify-between gap-2 text-xs font-semibold text-foreground hover:text-primary transition-colors cursor-pointer"
                     >
-                      <div className="flex items-center gap-2">
-                        <Plug className="size-4 text-purple-600 dark:text-purple-400" />
-                        <h3 className="text-sm font-semibold text-foreground">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Plug className="size-4 shrink-0 text-purple-600 dark:text-purple-400" />
+                        <h3 className="truncate text-sm font-semibold text-foreground">
                           {t("动态 MCP 服务")}
                         </h3>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                           {mcpCount}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                         <span>{showDynamicMcp ? t("收起") : t("展开")}</span>
                         {showDynamicMcp ? (
                           <ChevronUp className="size-4" />
@@ -698,15 +700,15 @@ export default function NexusDockPage() {
                           </div>
                         ) : (
                           <>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
                               {selectedDevice.dynamic_mcp.slice(0, mcpPageSize).map((mcp) => (
                                 <div
                                   key={mcp.name}
-                                  className="flex flex-col justify-between rounded-xl border border-line bg-canvas/40 p-4 shadow-2xs hover:border-line/90 transition-all"
+                                  className="flex min-w-0 flex-col justify-between rounded-xl border border-line bg-canvas/40 p-4 shadow-2xs hover:border-line/90 transition-all"
                                 >
-                                  <div>
-                                    <div className="flex items-start justify-between gap-2">
-                                      <h4 className="text-xs font-semibold text-foreground truncate">
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-start justify-between gap-2">
+                                      <h4 className="min-w-0 flex-1 text-xs font-semibold text-foreground truncate">
                                         {mcp.display_name || mcp.name}
                                       </h4>
                                       <span
@@ -719,7 +721,7 @@ export default function NexusDockPage() {
                                         {mcp.status || t("活跃")}
                                       </span>
                                     </div>
-                                    <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                                    <p className="mt-1.5 text-xs text-muted-foreground line-clamp-2 break-words [overflow-wrap:anywhere] leading-relaxed">
                                       {mcp.description || t("无服务描述")}
                                     </p>
                                   </div>
@@ -767,20 +769,20 @@ export default function NexusDockPage() {
 
                   {/* 3. 内置底层能力 */}
                   {selectedDevice.capabilities && selectedDevice.capabilities.length > 0 && (
-                    <div className="rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs">
+                    <div className="min-w-0 rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs">
                       <button
                         type="button"
                         onClick={() => setShowCapabilities((v) => !v)}
-                        className="flex w-full items-center justify-between text-xs font-medium text-foreground hover:text-primary transition-colors"
+                        className="flex w-full min-w-0 items-center justify-between gap-2 text-xs font-medium text-foreground hover:text-primary transition-colors"
                       >
-                        <div className="flex items-center gap-2">
-                          <Wrench className="size-3.5 text-muted-foreground" />
-                          <span>{t("内置底层能力")} ({selectedDevice.capabilities.length})</span>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{t("内置底层能力")} ({selectedDevice.capabilities.length})</span>
                         </div>
                         {showCapabilities ? (
-                          <ChevronUp className="size-4 text-muted-foreground" />
+                          <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ChevronDown className="size-4 text-muted-foreground" />
+                          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                         )}
                       </button>
 
@@ -789,7 +791,7 @@ export default function NexusDockPage() {
                           {selectedDevice.capabilities.map((cap) => (
                             <span
                               key={cap}
-                              className="rounded-md border border-line bg-muted/60 px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground"
+                              className="max-w-full break-all rounded-md border border-line bg-muted/60 px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground"
                             >
                               {cap}
                             </span>

@@ -88,7 +88,7 @@ export default function SettingsPage({ role }: { role: string }) {
           </p>
         </div>
       </header>
-      <div className="space-y-4 md:space-y-6">
+      <div className="min-w-0 space-y-4 md:space-y-6">
         <nav
           aria-label={t("设置")}
           className="scrollbar-none flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1 md:w-fit"
@@ -165,9 +165,9 @@ export default function SettingsPage({ role }: { role: string }) {
                   <ErrorView error={me.error} />
                 ) : (
                   <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
+                    <div className="min-w-0">
                       <p className="text-xs text-faint">{t("邮箱")}</p>
-                      <p className="mt-1 text-sm font-medium text-foreground">
+                      <p className="mt-1 text-sm font-medium text-foreground break-all">
                         {me.data?.email || t("未提供")}
                       </p>
                     </div>

@@ -293,15 +293,15 @@ function SortableRouteEditor({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-xl border border-line bg-surface p-3.5 space-y-3 transition-all ${
+      className={`min-w-0 rounded-xl border border-line bg-surface p-3.5 space-y-3 transition-all ${
         isDragging ? "z-10 opacity-70 shadow-lg ring-2 ring-primary/40" : ""
       } ${route.enabled === false ? "opacity-75 bg-muted/20" : ""}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <button
             type="button"
-            className="cursor-grab active:cursor-grabbing rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground touch-none"
+            className="shrink-0 cursor-grab active:cursor-grabbing rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground touch-none"
             aria-label="拖拽调整优先级"
             title="拖拽调整优先级"
             {...attributes}
@@ -368,7 +368,7 @@ function SortableRouteEditor({
       </div>
 
       {subscription ? (
-        <div className="grid gap-3 sm:grid-cols-2 min-w-0">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
           <div
             className="flex h-9 w-full min-w-0 items-center rounded-md border border-line bg-muted/40 px-3 text-[13px] font-medium text-foreground select-none"
             title={accountLabel}
@@ -401,7 +401,7 @@ function SortableRouteEditor({
           )}
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 min-w-0">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
           {apiCredentials.length > 1 ? (
             <Select
               value={effectiveAPICredentialID}
@@ -496,7 +496,7 @@ function SortableRouteEditor({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2 text-xs">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
           <span>
             上下文窗口:{" "}
             <strong className="font-mono text-foreground">
@@ -517,7 +517,7 @@ function SortableRouteEditor({
           </span>
           {route.base_model &&
           route.base_model.toLowerCase() !== route.model.trim().toLowerCase() ? (
-            <span>
+            <span className="max-w-full break-all">
               底层模型:{" "}
               <strong className="font-mono text-foreground">
                 {route.base_model}
@@ -535,7 +535,7 @@ function SortableRouteEditor({
         <Button
           type="button"
           variant="ghost"
-          className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+          className="h-6 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
           onClick={() => setEditingLimits((prev) => !prev)}
         >
           {editingLimits ? "收起容量设置" : "编辑容量"}
@@ -543,8 +543,8 @@ function SortableRouteEditor({
       </div>
 
       {editingLimits && (
-        <div className="space-y-3 rounded-lg border border-line bg-canvas p-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+        <div className="min-w-0 space-y-3 rounded-lg border border-line bg-canvas p-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 min-w-0">
             <Field label="上下文窗口 (Tokens)">
               <TextInput
                 type="number"
@@ -636,7 +636,7 @@ function SortableRouteEditor({
           </div>
 
           {effectiveSource === "user" && (
-            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>当前使用手动覆盖容量，保存后将按用户配置计算动态压缩预算。</span>
               <Button
                 type="button"
@@ -1373,23 +1373,23 @@ export function ModelsSettings() {
   const routeIds = draft.routes.map((route, i) => route.id || String(i));
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5">
       <Section
         title="模型账号与服务"
         description="支持 ChatGPT 与 Grok 订阅账号连接，也支持直接添加 OpenAI 兼容的自定义 API 服务。"
       >
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 min-w-0 lg:grid-cols-3">
           {(["chatgpt", "grok"] as const).map((provider) => {
             const status = statuses.find((item) => item.provider === provider);
             const accounts = status?.accounts ?? [];
             return (
               <div
                 key={provider}
-                className="flex flex-col justify-between rounded-xl border border-line bg-surface p-4"
+                className="flex min-w-0 flex-col justify-between rounded-xl border border-line bg-surface p-4"
               >
-                <div>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <ProviderLogo
                           provider={provider}
@@ -1409,6 +1409,7 @@ export function ModelsSettings() {
                     </div>
                     {status?.available && (
                       <Button
+                        className="shrink-0"
                         disabled={chatgpt.isPending || grok.isPending}
                         onClick={() =>
                           provider === "chatgpt"
@@ -1430,9 +1431,9 @@ export function ModelsSettings() {
                       return (
                         <div
                           key={account.id}
-                          className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
+                          className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
                         >
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium">
                               {account.display_label}
                             </p>
@@ -1442,7 +1443,7 @@ export function ModelsSettings() {
                                 : "可用于模型 Route"}
                             </p>
                           </div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex shrink-0 items-center gap-1.5">
                             <Button
                               className="px-2"
                               title="为此账号再添加一条模型 Route"
@@ -1485,7 +1486,7 @@ export function ModelsSettings() {
                       href={authorizationURL}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-2 text-sky-700 underline"
+                      className="inline-flex max-w-full items-center gap-2 break-all text-sky-700 underline"
                     >
                       <ExternalLink className="size-3" />
                       打开 OpenAI 登录
@@ -1507,9 +1508,9 @@ export function ModelsSettings() {
 
                 {provider === "grok" && flow && (
                   <div className="mt-4 space-y-2 rounded-lg bg-sky-50 p-3 text-sm">
-                    <p>
+                    <p className="break-words">
                       在 xAI 授权页输入代码：
-                      <strong className="ml-1 font-mono">{flow.code}</strong>
+                      <strong className="ml-1 font-mono break-all">{flow.code}</strong>
                     </p>
                     <div>
                       <Button
@@ -1526,10 +1527,10 @@ export function ModelsSettings() {
           })}
 
           {/* 第三个并列卡片：兼容 OpenAI 接口的自定义服务商 */}
-          <div className="flex flex-col justify-between rounded-xl border border-line bg-surface p-4">
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <div>
+          <div className="flex min-w-0 flex-col justify-between rounded-xl border border-line bg-surface p-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <ProviderLogo
                       provider="openai_compatible"
@@ -1546,6 +1547,7 @@ export function ModelsSettings() {
                   </p>
                 </div>
                 <Button
+                  className="shrink-0"
                   onClick={() => {
                     setEditingCredentialID(null);
                     setCredName("");
@@ -1570,9 +1572,9 @@ export function ModelsSettings() {
                   configuredOpenAIProviders.map((item) => (
                     <div
                       key={item.id || item.baseURL}
-                      className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
+                      className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-2"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p
                           className="truncate text-sm font-medium"
                           title={
@@ -1592,7 +1594,7 @@ export function ModelsSettings() {
                             : "可用于 Route"}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex shrink-0 items-center gap-1.5">
                         <Button
                           className="px-2"
                           title="查看可用模型或编辑凭据"
@@ -1659,7 +1661,7 @@ export function ModelsSettings() {
               items={routeIds}
               strategy={verticalListSortingStrategy}
             >
-              <div className="space-y-3">
+              <div className="min-w-0 space-y-3">
                 {draft.routes.map((route, index) => (
                   <SortableRouteEditor
                     key={route.id || String(index)}
@@ -1807,7 +1809,7 @@ export function ModelsSettings() {
         title="配置服务商接口"
         description="服务商凭据统一加密保存；同一凭据下的多条模型 Route 共享同一份密钥，也支持为同一地址添加多个不同名称的 API Key。"
       >
-        <div className="space-y-4 pt-1">
+        <div className="min-w-0 space-y-4 pt-1">
           <Field
             label="服务名称（可选）"
             hint="用于区分同一服务商地址下的不同 API Key；留空默认使用域名。"
@@ -1898,11 +1900,11 @@ export function ModelsSettings() {
           {customModels.isPending && <Spinner text="正在读取可用模型…" />}
 
           {customModels.data && (
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <p className="text-xs font-semibold text-secondary-foreground">
                 可用模型
               </p>
-              <div className="max-h-72 space-y-1.5 overflow-y-auto rounded-xl border border-line bg-canvas p-2">
+              <div className="max-h-72 space-y-1.5 overflow-x-hidden overflow-y-auto rounded-xl border border-line bg-canvas p-2">
                 {customModels.data.map((model) => {
                   const normalizedModalURL = normalizeBaseURL(newBaseURL);
                   const added = draft.routes.some(
@@ -1924,9 +1926,9 @@ export function ModelsSettings() {
                       type="button"
                       disabled={added || persistAPICredential.isPending}
                       onClick={() => void handleAddOpenAIRoute(model.id)}
-                      className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-muted disabled:cursor-default disabled:opacity-60"
+                      className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition hover:bg-muted disabled:cursor-default disabled:opacity-60"
                     >
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium text-foreground">
                           {model.name}
                         </span>
@@ -1944,7 +1946,7 @@ export function ModelsSettings() {
             </div>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-line pt-3">
+          <div className="flex flex-wrap justify-end gap-2 border-t border-line pt-3">
             {isCredentialDirty && Boolean(normalizeBaseURL(newBaseURL)) && (
               <Button
                 variant="primary"
