@@ -109,10 +109,10 @@ export function DeviceToolGuardSection({
   return (
     <div
       data-device-guard-row={device.id}
-      className="rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3"
+      className="min-w-0 rounded-xl border border-line bg-canvas/30 p-4 shadow-2xs space-y-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ShieldAlert className="size-4 text-primary shrink-0" />
           <h3 className="text-sm font-semibold text-foreground">
             {t("设备安全守卫")}
@@ -175,7 +175,7 @@ export function DeviceToolGuardSection({
       </div>
 
       {!isEditing && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
+        <p className="text-xs leading-relaxed text-muted-foreground break-words [overflow-wrap:anywhere]">
           {customRuleSummary
             ? customRuleSummary
             : t(
@@ -185,8 +185,8 @@ export function DeviceToolGuardSection({
       )}
 
       {isOwner && isEditing && (
-        <div className="pt-3 border-t border-line/60 space-y-3 text-[13px]">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="min-w-0 pt-3 border-t border-line/60 space-y-3 text-[13px]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 min-w-0">
             <Field label={t("拦截模式")}>
               <Select
                 aria-label={t("拦截模式")}
@@ -265,7 +265,7 @@ export function DeviceToolGuardSection({
             />
           </Field>
 
-          <div className="flex justify-end gap-2 pt-1">
+          <div className="flex flex-wrap justify-end gap-2 pt-1">
             <Button variant="ghost" onClick={() => setIsEditing(false)}>
               {t("取消")}
             </Button>

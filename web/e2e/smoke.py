@@ -5,6 +5,7 @@ Run: MOCK_PORT=4190 node e2e/mock-server.mjs
 This fixture is not a substitute for PostgreSQL integration testing.
 """
 import copy
+import json
 import re
 import sys
 import unittest
@@ -1654,6 +1655,219 @@ class CycleDockSmoke(unittest.TestCase):
         self.page.goto(BASE + "/chat")
         self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
         expect(self.page.locator('div[aria-label="当前焦点"]')).to_have_count(0)
+
+    def test_mobile_models_settings_and_device_guard_no_horizontal_overflow(self):
+        long_model = "claude-opus-4-5-20251101-extended-thinking-very-long-model-identifier-v2"
+        long_url = "https://very-long-custom-llm-gateway-endpoint.internal.example.com/v1/openai"
+
+        def assert_no_overflow(page, label):
+            report = page.evaluate(
+                """() => {
+                    const vw = window.innerWidth;
+                    const doc = document.documentElement;
+                    const main = document.querySelector('main');
+                    const overflowEls = [];
+                    for (const el of document.querySelectorAll('*')) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.right > vw + 1) {
+                            overflowEls.push(el.tagName + ':' + String(el.className).slice(0, 48));
+                        }
+                    }
+                    const dlg = document.querySelector('[role=dialog], [role=alertdialog]');
+                    let dlgOverflow = false;
+                    if (dlg) {
+                        const dr = dlg.getBoundingClientRect();
+                        dlgOverflow = dlg.scrollWidth > dlg.clientWidth + 1 || dr.right > vw + 1;
+                        for (const el of dlg.querySelectorAll('*')) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.right > dr.right + 1) {
+                                dlgOverflow = true;
+                            }
+                        }
+                    }
+                    return {
+                        docOverflow: doc.scrollWidth > doc.clientWidth,
+                        mainOverflow: main ? main.scrollWidth > main.clientWidth : false,
+                        overflowEls: overflowEls.slice(0, 5),
+                        dlgOverflow,
+                    };
+                }"""
+            )
+            self.assertFalse(report["docOverflow"], f"{label}: doc horizontal overflow: {report}")
+            self.assertFalse(report["mainOverflow"], f"{label}: main horizontal overflow: {report}")
+            self.assertEqual(report["overflowEls"], [], f"{label}: elements exceed viewport: {report}")
+            self.assertFalse(report["dlgOverflow"], f"{label}: dialog horizontal overflow: {report}")
+
+        for width, height in ((375, 812), (390, 844)):
+            ctx = self.browser.new_context(viewport={"width": width, "height": height})
+            try:
+                page = ctx.new_page()
+                page.on("pageerror", lambda error: self.errors.append(str(error)))
+                page.route(
+                    "**/api/v1/agent/settings",
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "api_credentials": [
+                                    {
+                                        "id": "cred-1",
+                                        "name": "Production OpenAI Compatible Gateway Ultra",
+                                        "base_url": long_url,
+                                        "api_key_env": "",
+                                        "api_key_configured": True,
+                                    },
+                                    {
+                                        "id": "cred-2",
+                                        "name": "Secondary Gateway",
+                                        "base_url": "https://secondary.example.com/v1",
+                                        "api_key_env": "",
+                                        "api_key_configured": True,
+                                    },
+                                ],
+                                "routes": [
+                                    {
+                                        "id": "r-1",
+                                        "enabled": True,
+                                        "provider_type": "openai_compatible",
+                                        "credential_id": "",
+                                        "api_credential_id": "cred-1",
+                                        "api_credential_name": "Production OpenAI Compatible Gateway Ultra",
+                                        "provider_base_url": long_url,
+                                        "model": long_model,
+                                        "base_model": long_model + "-base",
+                                        "api_key_configured": True,
+                                        "context_window_tokens": 200000,
+                                        "max_input_tokens": 180000,
+                                        "max_output_tokens": 32000,
+                                        "limits_source": "provider",
+                                    },
+                                    {
+                                        "id": "r-2",
+                                        "enabled": True,
+                                        "provider_type": "chatgpt",
+                                        "credential_id": "acc-1",
+                                        "provider_base_url": "",
+                                        "model": "gpt-5.4-codex-max-reasoning-high",
+                                        "limits_source": "registry",
+                                    },
+                                ],
+                                "system_instructions": "test",
+                            }
+                        ),
+                    )
+                    if route.request.method == "GET"
+                    else route.continue_(),
+                )
+                page.route(
+                    "**/api/v1/agent/model-auth",
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            [
+                                {
+                                    "provider": "chatgpt",
+                                    "available": True,
+                                    "connected": True,
+                                    "accounts": [
+                                        {
+                                            "id": "acc-1",
+                                            "display_label": "very.long.enterprise.developer.account@subdomain.example.com",
+                                        }
+                                    ],
+                                },
+                                {
+                                    "provider": "grok",
+                                    "available": True,
+                                    "connected": False,
+                                    "accounts": [],
+                                },
+                            ]
+                        ),
+                    ),
+                )
+                models_json = json.dumps(
+                    [
+                        {"id": "gpt-5.4-codex-max-reasoning-high", "name": "gpt-5.4-codex-max-reasoning-high"},
+                        {"id": long_model, "name": long_model},
+                    ]
+                )
+                page.route("**/api/v1/agent/models*", lambda route: route.fulfill(status=200, content_type="application/json", body=models_json))
+                page.route("**/api/v1/agent/provider-models", lambda route: route.fulfill(status=200, content_type="application/json", body=models_json))
+                page.route(
+                    "**/api/v1/agent/nexusdock/fleet*",
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "available": True,
+                                "connected": True,
+                                "devices": [
+                                    {
+                                        "id": "node-long-1",
+                                        "name": "Very-Long-Device-Hostname-Without-Spaces.corp.internal.example.com",
+                                        "online": True,
+                                        "os": "linux",
+                                        "arch": "amd64",
+                                        "agent_version": "1.1.1",
+                                        "error": "https://very-long-error-url-without-spaces.example.com/diagnostic/path",
+                                        "capabilities": ["very_long_capability_name_that_must_wrap_cleanly_on_mobile_viewports"],
+                                        "skills": [{"name": "very-long-skill-name-without-spaces-abcdefghijklmnopqrstuvwxyz", "description": "https://example.com/long/unbroken/skill/url", "source_type": "managed"}],
+                                        "dynamic_mcp": [{"name": "very-long-mcp-name", "display_name": "very-long-mcp-display-name-without-spaces-abcdefghijklmnopqrstuvwxyz", "description": "https://example.com/long/unbroken/mcp/url", "status": "active", "tool_count": 12}],
+                                    }
+                                ],
+                            }
+                        ),
+                    ),
+                )
+                page.route(
+                    "**/api/v1/agent/device-tool-guards",
+                    lambda route: route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            [
+                                {
+                                    "id": "g1",
+                                    "device_node_id": "node-long-1",
+                                    "device_name": "Very-Long-Device-Hostname-Without-Spaces.corp.internal.example.com",
+                                    "mode": "block_high_risk",
+                                    "model_route_id": "r-1",
+                                    "timeout_seconds": 10,
+                                    "custom_rules": "https://example.com/very/long/unbroken/rule/path/without/spaces/to/verify/wrapping",
+                                }
+                            ]
+                        ),
+                    ),
+                )
+
+                page.goto(BASE + "/settings/models")
+                page.get_by_role("heading", name="模型账号与服务").wait_for()
+                page.get_by_role("button", name="编辑容量").first.click()
+                assert_no_overflow(page, f"settings/models {width}x{height}")
+
+                page.get_by_role("button", name="查看可用模型").first.click()
+                dlg = page.get_by_role("dialog", name="配置服务商接口")
+                dlg.wait_for()
+                dlg.get_by_role("button", name="查看可用模型").click()
+                dlg.get_by_text(long_model).first.wait_for()
+                assert_no_overflow(page, f"settings/models modal {width}x{height}")
+                dlg.get_by_role("button", name="完成", exact=True).click()
+                dlg.wait_for(state="hidden")
+
+                page.goto(BASE + "/nexusdock")
+                page.get_by_role("button", name="独立配置").wait_for()
+                page.get_by_role("button", name="独立配置").click()
+                page.get_by_role("button", name="Skill 技能清单").click()
+                page.get_by_role("button", name="动态 MCP 服务").click()
+                page.get_by_role("button", name="内置底层能力").click()
+                assert_no_overflow(page, f"nexusdock {width}x{height}")
+            finally:
+                ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
