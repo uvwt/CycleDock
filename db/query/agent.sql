@@ -211,12 +211,14 @@ ORDER BY call_index ASC, started_at ASC;
 INSERT INTO card_tool_approvals (
     id, workspace_id, card_id, turn_id, attempt_id,
     tool_call_id, tool_name, arguments, risk_level,
-    reversible, reason, status
+    reversible, reason, status,
+    scope_type, scope_target, scope_label, allow_session_whitelist
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9,
-    $10, $11, 'pending'
+    $10, $11, 'pending',
+    $12, $13, $14, $15
 )
 RETURNING *;
 
@@ -246,19 +248,24 @@ FROM card_tool_approvals
 WHERE workspace_id = $1 AND card_id = $2
 ORDER BY created_at DESC;
 
--- name: CreateCardToolWhitelist :one
+-- name: UpsertCardToolWhitelist :exec
 INSERT INTO card_tool_whitelists (
-    id, workspace_id, card_id, tool_name, pattern, created_by_source_id
+    id, workspace_id, card_id, tool_name, pattern,
+    scope_type, scope_target, created_by_source_id
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6
+    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(card_id), sqlc.arg(tool_name), '*',
+    sqlc.arg(scope_type), sqlc.arg(scope_target), sqlc.arg(created_by_source_id)
 )
-RETURNING *;
+ON CONFLICT (workspace_id, card_id, scope_type, scope_target) DO NOTHING;
 
--- name: CheckCardToolWhitelisted :one
+-- name: CheckCardScopeWhitelisted :one
 SELECT EXISTS (
     SELECT 1 FROM card_tool_whitelists
-    WHERE workspace_id = $1 AND card_id = $2 AND tool_name = $3
+    WHERE workspace_id = sqlc.arg(workspace_id)
+      AND card_id = sqlc.arg(card_id)
+      AND scope_type = sqlc.arg(scope_type)
+      AND scope_target = sqlc.arg(scope_target)
 ) AS whitelisted;
 
 -- name: GetWorkspaceDeviceToolGuard :one

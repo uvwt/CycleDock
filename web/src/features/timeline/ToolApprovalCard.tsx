@@ -76,6 +76,31 @@ export function ToolApprovalCard({
 
   const riskMeta = riskBadgeMap[approval.risk_level] || riskBadgeMap.high;
   const formattedArgs = JSON.stringify(approval.arguments || {}, null, 2);
+  const scopeType = approval.scope_type;
+  const scopeLabel = approval.scope_label?.trim();
+  const canApproveSession = approval.allow_session_whitelist !== false;
+
+  let approveSessionLabel = t("本卡片内同类操作不再询问");
+  if (scopeType === "device") {
+    approveSessionLabel = scopeLabel
+      ? t("本卡片允许 {{target}}", { target: scopeLabel })
+      : t("本卡片允许此设备");
+  } else if (scopeType === "mcp") {
+    approveSessionLabel = scopeLabel
+      ? t("本卡片允许 {{target}}", { target: scopeLabel })
+      : t("本卡片允许此 MCP");
+  }
+
+  let scopeBadgeLabel: string | null = null;
+  if (scopeType === "device") {
+    scopeBadgeLabel = scopeLabel
+      ? t("设备 · {{target}}", { target: scopeLabel })
+      : t("设备");
+  } else if (scopeType === "mcp") {
+    scopeBadgeLabel = scopeLabel
+      ? t("MCP · {{target}}", { target: scopeLabel })
+      : "MCP";
+  }
 
   async function handleAction(
     action: "approve_once" | "approve_session" | "reject",
@@ -230,9 +255,14 @@ export function ToolApprovalCard({
 
         <div className="overflow-hidden rounded-xl border border-line/80 bg-surface/90">
           <div className="flex items-center justify-between border-b border-line/60 bg-muted/40 px-3 py-2">
-            <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-primary">
+            <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs font-semibold text-primary">
               <Terminal className="size-3.5 shrink-0" />
-              <span>{approval.tool_name}</span>
+              <span className="truncate">{approval.tool_name}</span>
+              {scopeBadgeLabel && (
+                <span className="inline-flex shrink-0 items-center rounded-md border border-line/70 bg-surface px-1.5 py-0.5 font-sans text-[10px] font-medium text-muted-foreground">
+                  {scopeBadgeLabel}
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -322,20 +352,22 @@ export function ToolApprovalCard({
                   <span>{t("允许本次执行")}</span>
                 </button>
 
-                <button
-                  type="button"
-                  data-action="approve-session"
-                  disabled={Boolean(submitting)}
-                  onClick={() => void handleAction("approve_session")}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-2xs transition hover:bg-muted disabled:opacity-50"
-                >
-                  {submitting === "approve_session" ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <CheckCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-                  )}
-                  <span>{t("本卡片内同类操作不再询问")}</span>
-                </button>
+                {canApproveSession && (
+                  <button
+                    type="button"
+                    data-action="approve-session"
+                    disabled={Boolean(submitting)}
+                    onClick={() => void handleAction("approve_session")}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-2xs transition hover:bg-muted disabled:opacity-50"
+                  >
+                    {submitting === "approve_session" ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <CheckCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                    )}
+                    <span>{approveSessionLabel}</span>
+                  </button>
+                )}
 
                 <button
                   type="button"

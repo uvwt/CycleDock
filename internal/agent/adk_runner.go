@@ -195,7 +195,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		instructions += "\n\n本次执行不可用的外部连接：\n" + strings.Join(mcpContext.warnings, "\n") + "\n这些状态仅用于判断工具可用性，不要主动或逐轮重复报告连接故障。请继续处理不依赖这些连接的请求；只有用户当前请求确实依赖这些工具时才简要说明限制，不得声称已执行。"
 	}
 	deviceCallbacks := operatingDeviceCallbacks(liveForAttempt, cardContext.CardID, cardContext.AttemptID, deviceNames, replies)
-	toolGuardCb := ToolGuardCallback(r, liveForAttempt, cardContext, settings, replies)
+	toolGuardCb := ToolGuardCallback(r, liveForAttempt, cardContext, settings, deviceNames, replies)
 	beforeCallbacks := append(deviceCallbacks.before, toolGuardCb)
 	rootAgent, err := llmagent.New(llmagent.Config{
 		Name:            "cycle_agent",

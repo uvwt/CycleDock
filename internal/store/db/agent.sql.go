@@ -12,21 +12,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const checkCardToolWhitelisted = `-- name: CheckCardToolWhitelisted :one
+const checkCardScopeWhitelisted = `-- name: CheckCardScopeWhitelisted :one
 SELECT EXISTS (
     SELECT 1 FROM card_tool_whitelists
-    WHERE workspace_id = $1 AND card_id = $2 AND tool_name = $3
+    WHERE workspace_id = $1
+      AND card_id = $2
+      AND scope_type = $3
+      AND scope_target = $4
 ) AS whitelisted
 `
 
-type CheckCardToolWhitelistedParams struct {
+type CheckCardScopeWhitelistedParams struct {
 	WorkspaceID uuid.UUID `json:"workspace_id"`
 	CardID      uuid.UUID `json:"card_id"`
-	ToolName    string    `json:"tool_name"`
+	ScopeType   string    `json:"scope_type"`
+	ScopeTarget string    `json:"scope_target"`
 }
 
-func (q *Queries) CheckCardToolWhitelisted(ctx context.Context, arg CheckCardToolWhitelistedParams) (bool, error) {
-	row := q.db.QueryRow(ctx, checkCardToolWhitelisted, arg.WorkspaceID, arg.CardID, arg.ToolName)
+func (q *Queries) CheckCardScopeWhitelisted(ctx context.Context, arg CheckCardScopeWhitelistedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, checkCardScopeWhitelisted,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.ScopeType,
+		arg.ScopeTarget,
+	)
 	var whitelisted bool
 	err := row.Scan(&whitelisted)
 	return whitelisted, err
@@ -36,28 +45,34 @@ const createCardToolApproval = `-- name: CreateCardToolApproval :one
 INSERT INTO card_tool_approvals (
     id, workspace_id, card_id, turn_id, attempt_id,
     tool_call_id, tool_name, arguments, risk_level,
-    reversible, reason, status
+    reversible, reason, status,
+    scope_type, scope_target, scope_label, allow_session_whitelist
 )
 VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9,
-    $10, $11, 'pending'
+    $10, $11, 'pending',
+    $12, $13, $14, $15
 )
-RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist
 `
 
 type CreateCardToolApprovalParams struct {
-	ID          uuid.UUID     `json:"id"`
-	WorkspaceID uuid.UUID     `json:"workspace_id"`
-	CardID      uuid.UUID     `json:"card_id"`
-	TurnID      uuid.NullUUID `json:"turn_id"`
-	AttemptID   uuid.NullUUID `json:"attempt_id"`
-	ToolCallID  string        `json:"tool_call_id"`
-	ToolName    string        `json:"tool_name"`
-	Arguments   []byte        `json:"arguments"`
-	RiskLevel   string        `json:"risk_level"`
-	Reversible  bool          `json:"reversible"`
-	Reason      string        `json:"reason"`
+	ID                    uuid.UUID     `json:"id"`
+	WorkspaceID           uuid.UUID     `json:"workspace_id"`
+	CardID                uuid.UUID     `json:"card_id"`
+	TurnID                uuid.NullUUID `json:"turn_id"`
+	AttemptID             uuid.NullUUID `json:"attempt_id"`
+	ToolCallID            string        `json:"tool_call_id"`
+	ToolName              string        `json:"tool_name"`
+	Arguments             []byte        `json:"arguments"`
+	RiskLevel             string        `json:"risk_level"`
+	Reversible            bool          `json:"reversible"`
+	Reason                string        `json:"reason"`
+	ScopeType             string        `json:"scope_type"`
+	ScopeTarget           string        `json:"scope_target"`
+	ScopeLabel            string        `json:"scope_label"`
+	AllowSessionWhitelist bool          `json:"allow_session_whitelist"`
 }
 
 func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardToolApprovalParams) (CardToolApproval, error) {
@@ -73,6 +88,10 @@ func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardTool
 		arg.RiskLevel,
 		arg.Reversible,
 		arg.Reason,
+		arg.ScopeType,
+		arg.ScopeTarget,
+		arg.ScopeLabel,
+		arg.AllowSessionWhitelist,
 	)
 	var i CardToolApproval
 	err := row.Scan(
@@ -93,47 +112,10 @@ func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardTool
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const createCardToolWhitelist = `-- name: CreateCardToolWhitelist :one
-INSERT INTO card_tool_whitelists (
-    id, workspace_id, card_id, tool_name, pattern, created_by_source_id
-)
-VALUES (
-    $1, $2, $3, $4, $5, $6
-)
-RETURNING id, workspace_id, card_id, tool_name, pattern, created_by_source_id, created_at
-`
-
-type CreateCardToolWhitelistParams struct {
-	ID                uuid.UUID     `json:"id"`
-	WorkspaceID       uuid.UUID     `json:"workspace_id"`
-	CardID            uuid.UUID     `json:"card_id"`
-	ToolName          string        `json:"tool_name"`
-	Pattern           string        `json:"pattern"`
-	CreatedBySourceID uuid.NullUUID `json:"created_by_source_id"`
-}
-
-func (q *Queries) CreateCardToolWhitelist(ctx context.Context, arg CreateCardToolWhitelistParams) (CardToolWhitelist, error) {
-	row := q.db.QueryRow(ctx, createCardToolWhitelist,
-		arg.ID,
-		arg.WorkspaceID,
-		arg.CardID,
-		arg.ToolName,
-		arg.Pattern,
-		arg.CreatedBySourceID,
-	)
-	var i CardToolWhitelist
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.CardID,
-		&i.ToolName,
-		&i.Pattern,
-		&i.CreatedBySourceID,
-		&i.CreatedAt,
+		&i.ScopeType,
+		&i.ScopeTarget,
+		&i.ScopeLabel,
+		&i.AllowSessionWhitelist,
 	)
 	return i, err
 }
@@ -212,7 +194,7 @@ func (q *Queries) DeleteWorkspaceMCPConnection(ctx context.Context, arg DeleteWo
 }
 
 const getCardToolApproval = `-- name: GetCardToolApproval :one
-SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist
 FROM card_tool_approvals
 WHERE workspace_id = $1 AND card_id = $2 AND id = $3
 `
@@ -244,12 +226,16 @@ func (q *Queries) GetCardToolApproval(ctx context.Context, arg GetCardToolApprov
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ScopeType,
+		&i.ScopeTarget,
+		&i.ScopeLabel,
+		&i.AllowSessionWhitelist,
 	)
 	return i, err
 }
 
 const getCardToolApprovalByID = `-- name: GetCardToolApprovalByID :one
-SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist
 FROM card_tool_approvals
 WHERE workspace_id = $1 AND id = $2
 `
@@ -280,6 +266,10 @@ func (q *Queries) GetCardToolApprovalByID(ctx context.Context, arg GetCardToolAp
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ScopeType,
+		&i.ScopeTarget,
+		&i.ScopeLabel,
+		&i.AllowSessionWhitelist,
 	)
 	return i, err
 }
@@ -457,7 +447,7 @@ func (q *Queries) ListAttemptModelCalls(ctx context.Context, arg ListAttemptMode
 }
 
 const listCardToolApprovals = `-- name: ListCardToolApprovals :many
-SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist
 FROM card_tool_approvals
 WHERE workspace_id = $1 AND card_id = $2
 ORDER BY created_at DESC
@@ -495,6 +485,10 @@ func (q *Queries) ListCardToolApprovals(ctx context.Context, arg ListCardToolApp
 			&i.ResolvedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ScopeType,
+			&i.ScopeTarget,
+			&i.ScopeLabel,
+			&i.AllowSessionWhitelist,
 		); err != nil {
 			return nil, err
 		}
@@ -862,7 +856,7 @@ SET status = $4,
     resolved_at = now(),
     updated_at = now()
 WHERE workspace_id = $1 AND card_id = $2 AND id = $3 AND status = 'pending'
-RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist
 `
 
 type ResolveCardToolApprovalParams struct {
@@ -902,6 +896,10 @@ func (q *Queries) ResolveCardToolApproval(ctx context.Context, arg ResolveCardTo
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ScopeType,
+		&i.ScopeTarget,
+		&i.ScopeLabel,
+		&i.AllowSessionWhitelist,
 	)
 	return i, err
 }
@@ -914,6 +912,41 @@ WHERE workspace_id = $1
 
 func (q *Queries) ShiftWorkspaceModelRoutePositions(ctx context.Context, workspaceID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, shiftWorkspaceModelRoutePositions, workspaceID)
+	return err
+}
+
+const upsertCardToolWhitelist = `-- name: UpsertCardToolWhitelist :exec
+INSERT INTO card_tool_whitelists (
+    id, workspace_id, card_id, tool_name, pattern,
+    scope_type, scope_target, created_by_source_id
+)
+VALUES (
+    $1, $2, $3, $4, '*',
+    $5, $6, $7
+)
+ON CONFLICT (workspace_id, card_id, scope_type, scope_target) DO NOTHING
+`
+
+type UpsertCardToolWhitelistParams struct {
+	ID                uuid.UUID     `json:"id"`
+	WorkspaceID       uuid.UUID     `json:"workspace_id"`
+	CardID            uuid.UUID     `json:"card_id"`
+	ToolName          string        `json:"tool_name"`
+	ScopeType         string        `json:"scope_type"`
+	ScopeTarget       string        `json:"scope_target"`
+	CreatedBySourceID uuid.NullUUID `json:"created_by_source_id"`
+}
+
+func (q *Queries) UpsertCardToolWhitelist(ctx context.Context, arg UpsertCardToolWhitelistParams) error {
+	_, err := q.db.Exec(ctx, upsertCardToolWhitelist,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.ToolName,
+		arg.ScopeType,
+		arg.ScopeTarget,
+		arg.CreatedBySourceID,
+	)
 	return err
 }
 

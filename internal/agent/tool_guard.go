@@ -26,10 +26,14 @@ import (
 
 // ToolGuardDecision 表示安全守卫的评估结论
 type ToolGuardDecision struct {
-	Reversible bool   `json:"reversible"`
-	RiskLevel  string `json:"risk_level"` // "low", "medium", "high", "critical"
-	Decision   string `json:"decision"`   // "allow", "ask_human"
-	Reason     string `json:"reason"`
+	Reversible            bool   `json:"reversible"`
+	RiskLevel             string `json:"risk_level"` // "low", "medium", "high", "critical"
+	Decision              string `json:"decision"`   // "allow", "ask_human"
+	Reason                string `json:"reason"`
+	ScopeType             string `json:"scope_type,omitempty"`
+	ScopeTarget           string `json:"scope_target,omitempty"`
+	ScopeLabel            string `json:"scope_label,omitempty"`
+	AllowSessionWhitelist bool   `json:"allow_session_whitelist"`
 }
 
 // 只读及系统内部协同工具清单（0 延迟、0 Token 消耗直接放行）
@@ -754,6 +758,13 @@ func hasApprovedMatchingToolCall(
 	return false
 }
 
+// ToolGuardScope 描述被守卫工具在当前卡片内的临时白名单作用域（设备 / MCP / 兜底工具名）
+type ToolGuardScope struct {
+	ScopeType   string // "device" | "mcp" | "tool"
+	ScopeTarget string // device_node_id | MCP 连接名 | tool_name
+	ScopeLabel  string // 用于前端展示的设备名 / MCP 连接名 / 工具名
+}
+
 // ScopedGuardPolicy 描述具体执行目标（设备或具体 MCP 连接）的独立守卫策略
 type ScopedGuardPolicy struct {
 	ScopeType      string // "device" | "mcp"
@@ -764,30 +775,104 @@ type ScopedGuardPolicy struct {
 	CustomRules    string
 }
 
-// resolveScopedGuardPolicy 根据即将调用的工具类型与入参，精准解析对应的设备级或 MCP 级策略
-func resolveScopedGuardPolicy(
+func isDeviceScopedToolName(toolName string) bool {
+	switch toolName {
+	case "exec_command", "file_edit", "session_act", "file_publish",
+		"skill_manage", "plugin_manage", "mcp_manage", "mcp_tool_call",
+		"node_tool_call", "task_create", "task_manage", "evolve":
+		return true
+	default:
+		return strings.HasPrefix(toolName, "browser_") || strings.HasPrefix(toolName, "acp_")
+	}
+}
+
+// resolveToolGuardScope 识别工具调用归属的作用域：MCP 连接 > 设备节点 > 兜底工具名。
+func resolveToolGuardScope(
 	ctx context.Context,
 	storeInstance *store.Store,
 	workspaceID uuid.UUID,
 	cardDeviceNodeID string,
+	deviceNames map[string]string,
 	toolName string,
 	args map[string]any,
+) ToolGuardScope {
+	trimmedTool := strings.TrimSpace(toolName)
+
+	// 1. 外部 MCP 工具：按 MCP 连接名归属（大小写不敏感匹配工作区连接名以保证白名单一致）
+	if trimmedTool == "call_mcp_tool" {
+		toolID, _ := args["tool_id"].(string)
+		serverName, _, ok := mcpclient.ParseToolID(toolID)
+		serverName = strings.TrimSpace(serverName)
+		if ok && serverName != "" {
+			canonicalName := serverName
+			if storeInstance != nil {
+				if conns, err := storeInstance.ListMCPConnections(ctx, workspaceID); err == nil {
+					for _, c := range conns {
+						if strings.EqualFold(c.Name, serverName) {
+							canonicalName = c.Name
+							break
+						}
+					}
+				}
+			}
+			return ToolGuardScope{
+				ScopeType:   "mcp",
+				ScopeTarget: canonicalName,
+				ScopeLabel:  canonicalName,
+			}
+		}
+		return ToolGuardScope{
+			ScopeType:   "tool",
+			ScopeTarget: trimmedTool,
+			ScopeLabel:  trimmedTool,
+		}
+	}
+
+	// 2. 设备类工具：优先读取显式 node_id 参数，否则对设备类工具继承本轮卡片设备目标
+	targetNodeID, _ := args["node_id"].(string)
+	targetNodeID = strings.TrimSpace(targetNodeID)
+	if targetNodeID == "" && isDeviceScopedToolName(trimmedTool) {
+		targetNodeID = strings.TrimSpace(cardDeviceNodeID)
+	}
+	if targetNodeID != "" {
+		label := strings.TrimSpace(deviceNames[targetNodeID])
+		if label == "" && storeInstance != nil {
+			if guard, err := storeInstance.GetDeviceToolGuard(ctx, workspaceID, targetNodeID); err == nil {
+				label = strings.TrimSpace(guard.DeviceName)
+			}
+		}
+		return ToolGuardScope{
+			ScopeType:   "device",
+			ScopeTarget: targetNodeID,
+			ScopeLabel:  label,
+		}
+	}
+
+	// 3. 无法归属到具体设备或 MCP 的工具：保留按工具名放行的安全兜底
+	return ToolGuardScope{
+		ScopeType:   "tool",
+		ScopeTarget: trimmedTool,
+		ScopeLabel:  trimmedTool,
+	}
+}
+
+// resolveScopedGuardPolicyFromScope 根据已解析的作用域查找对应的设备或 MCP 守卫策略
+func resolveScopedGuardPolicyFromScope(
+	ctx context.Context,
+	storeInstance *store.Store,
+	workspaceID uuid.UUID,
+	scope ToolGuardScope,
 ) (ScopedGuardPolicy, bool) {
 	if storeInstance == nil {
 		return ScopedGuardPolicy{}, false
 	}
 
-	// 1. 如果是 call_mcp_tool
-	if toolName == "call_mcp_tool" {
-		toolID, _ := args["tool_id"].(string)
-		serverName, _, ok := mcpclient.ParseToolID(toolID)
-		if !ok || serverName == "" {
-			return ScopedGuardPolicy{}, false
-		}
+	switch scope.ScopeType {
+	case "mcp":
 		conns, err := storeInstance.ListMCPConnections(ctx, workspaceID)
 		if err == nil {
 			for _, c := range conns {
-				if strings.EqualFold(c.Name, serverName) {
+				if strings.EqualFold(c.Name, scope.ScopeTarget) {
 					return ScopedGuardPolicy{
 						ScopeType:      "mcp",
 						ScopeTarget:    c.Name,
@@ -800,40 +885,40 @@ func resolveScopedGuardPolicy(
 			}
 		}
 		return ScopedGuardPolicy{}, false
-	}
-
-	// 2. 如果是针对设备的工具（例如包含 node_id 参数，或者继承本轮 cardDeviceNodeID）
-	targetNodeID, _ := args["node_id"].(string)
-	targetNodeID = strings.TrimSpace(targetNodeID)
-	if targetNodeID == "" {
-		targetNodeID = strings.TrimSpace(cardDeviceNodeID)
-	}
-
-	// 设备级工具判断：具备 node_id 或者是常见的设备执行/文件/进程类工具
-	isDeviceTool := targetNodeID != "" || toolName == "exec_command" || toolName == "file_edit" || toolName == "session_act" || strings.HasPrefix(toolName, "browser_")
-
-	if isDeviceTool && targetNodeID != "" {
-		guard, err := storeInstance.GetDeviceToolGuard(ctx, workspaceID, targetNodeID)
+	case "device":
+		guard, err := storeInstance.GetDeviceToolGuard(ctx, workspaceID, scope.ScopeTarget)
 		if err == nil {
 			return ScopedGuardPolicy{
 				ScopeType:      "device",
-				ScopeTarget:    targetNodeID,
+				ScopeTarget:    scope.ScopeTarget,
 				Mode:           guard.Mode,
 				ModelRouteID:   guard.ModelRouteID,
 				TimeoutSeconds: guard.TimeoutSeconds,
 				CustomRules:    guard.CustomRules,
 			}, true
 		}
-		// 若该设备尚未单独配置，默认使用推荐的 block_high_risk 兜底
 		return ScopedGuardPolicy{
 			ScopeType:      "device",
-			ScopeTarget:    targetNodeID,
+			ScopeTarget:    scope.ScopeTarget,
 			Mode:           "disabled",
 			TimeoutSeconds: 10,
 		}, true
+	default:
+		return ScopedGuardPolicy{}, false
 	}
+}
 
-	return ScopedGuardPolicy{}, false
+// resolveScopedGuardPolicy 根据即将调用的工具类型与入参，精准解析对应的设备级或 MCP 级策略
+func resolveScopedGuardPolicy(
+	ctx context.Context,
+	storeInstance *store.Store,
+	workspaceID uuid.UUID,
+	cardDeviceNodeID string,
+	toolName string,
+	args map[string]any,
+) (ScopedGuardPolicy, bool) {
+	scope := resolveToolGuardScope(ctx, storeInstance, workspaceID, cardDeviceNodeID, nil, toolName, args)
+	return resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, scope)
 }
 
 // EvaluateToolGuard 执行三层守卫流水线评估（基于设备与 MCP 连接精准独立判定）
@@ -845,6 +930,7 @@ func EvaluateToolGuard(
 	settings store.AgentSettings,
 	workspaceID, cardID uuid.UUID,
 	cardDeviceNodeID string,
+	deviceNames map[string]string,
 	cardTitle, cardDescription string,
 	toolName string,
 	args map[string]any,
@@ -853,52 +939,72 @@ func EvaluateToolGuard(
 	// 1. 只读及系统内部协同工具放行（0 延迟、0 Token 消耗，直接放行）
 	if isSafeReadOnlyTool(toolName, args) {
 		return ToolGuardDecision{
-			Reversible: true,
-			RiskLevel:  "low",
-			Decision:   "allow",
-			Reason:     "只读或系统协同工具无破坏副作用，直接安全放行",
+			Reversible:            true,
+			RiskLevel:             "low",
+			Decision:              "allow",
+			Reason:                "只读或系统协同工具无破坏副作用，直接安全放行",
+			AllowSessionWhitelist: true,
 		}
 	}
 
-	// 2. 卡片内白名单规则检查（用户交互“同类操作不再询问”）或已批准的完全相同操作重试
-	if storeInstance != nil {
-		whitelisted, err := storeInstance.IsCardToolWhitelisted(ctx, workspaceID, cardID, toolName)
-		if err == nil && whitelisted {
-			return ToolGuardDecision{
-				Reversible: true,
-				RiskLevel:  "low",
-				Decision:   "allow",
-				Reason:     "本卡片已将同类工具操作加入临时白名单，自动放行",
-			}
-		}
-		if hasApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
-			return ToolGuardDecision{
-				Reversible: true,
-				RiskLevel:  "low",
-				Decision:   "allow",
-				Reason:     "该工具调用已获人工批准，放行执行",
-			}
-		}
-	}
+	scope := resolveToolGuardScope(ctx, storeInstance, workspaceID, cardDeviceNodeID, deviceNames, toolName, args)
 
-	// 3. 明确高危系统级破坏命令（如 rm -rf /、drop database）无论设备配置如何直接必审
+	// 2. 明确高危系统级破坏命令（如 rm -rf /、drop database）必须位于白名单之前，
+	// 确保即便卡片已临时允许某设备，高危系统级破坏命令仍强制人工确认且不允许加入临时白名单。
 	if isCrit, critReason := isCriticalDestructiveCommand(toolName, args); isCrit {
 		return ToolGuardDecision{
-			Reversible: false,
-			RiskLevel:  "critical",
-			Decision:   "ask_human",
-			Reason:     critReason,
+			Reversible:            false,
+			RiskLevel:             "critical",
+			Decision:              "ask_human",
+			Reason:                critReason,
+			ScopeType:             scope.ScopeType,
+			ScopeTarget:           scope.ScopeTarget,
+			ScopeLabel:            scope.ScopeLabel,
+			AllowSessionWhitelist: false,
+		}
+	}
+
+	// 3. 卡片临时白名单检查（当前卡片 + 设备 / MCP / 兜底工具）及单次已批准防死循环检查
+	if storeInstance != nil {
+		if hasApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
+			return ToolGuardDecision{
+				Reversible:            true,
+				RiskLevel:             "low",
+				Decision:              "allow",
+				Reason:                "该工具调用已获人工批准，放行执行",
+				ScopeType:             scope.ScopeType,
+				ScopeTarget:           scope.ScopeTarget,
+				ScopeLabel:            scope.ScopeLabel,
+				AllowSessionWhitelist: true,
+			}
+		}
+		whitelisted, err := storeInstance.IsCardScopeWhitelisted(ctx, workspaceID, cardID, scope.ScopeType, scope.ScopeTarget)
+		if err == nil && whitelisted {
+			return ToolGuardDecision{
+				Reversible:            true,
+				RiskLevel:             "low",
+				Decision:              "allow",
+				Reason:                "本卡片已临时允许该作用域操作，自动放行",
+				ScopeType:             scope.ScopeType,
+				ScopeTarget:           scope.ScopeTarget,
+				ScopeLabel:            scope.ScopeLabel,
+				AllowSessionWhitelist: true,
+			}
 		}
 	}
 
 	// 4. 解析对应的具体设备或 MCP 连接级独立安全策略
-	policy, ok := resolveScopedGuardPolicy(ctx, storeInstance, workspaceID, cardDeviceNodeID, toolName, args)
+	policy, ok := resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, scope)
 	if !ok || policy.Mode == "disabled" {
 		return ToolGuardDecision{
-			Reversible: true,
-			RiskLevel:  "low",
-			Decision:   "allow",
-			Reason:     "目标设备或 MCP 连接未启用安全守卫，予以放行",
+			Reversible:            true,
+			RiskLevel:             "low",
+			Decision:              "allow",
+			Reason:                "目标设备或 MCP 连接未启用安全守卫，予以放行",
+			ScopeType:             scope.ScopeType,
+			ScopeTarget:           scope.ScopeTarget,
+			ScopeLabel:            scope.ScopeLabel,
+			AllowSessionWhitelist: true,
 		}
 	}
 
@@ -926,12 +1032,21 @@ func EvaluateToolGuard(
 			"error", dynamicErr,
 		)
 		return ToolGuardDecision{
-			Reversible: false,
-			RiskLevel:  "high",
-			Decision:   "ask_human",
-			Reason:     fmt.Sprintf("安全守卫小模型评估异常（%v），依据安全兜底策略挂起等待人工确认", dynamicErr),
+			Reversible:            false,
+			RiskLevel:             "high",
+			Decision:              "ask_human",
+			Reason:                fmt.Sprintf("安全守卫小模型评估异常（%v），依据安全兜底策略挂起等待人工确认", dynamicErr),
+			ScopeType:             scope.ScopeType,
+			ScopeTarget:           scope.ScopeTarget,
+			ScopeLabel:            scope.ScopeLabel,
+			AllowSessionWhitelist: true,
 		}
 	}
+
+	dynamicDecision.ScopeType = scope.ScopeType
+	dynamicDecision.ScopeTarget = scope.ScopeTarget
+	dynamicDecision.ScopeLabel = scope.ScopeLabel
+	dynamicDecision.AllowSessionWhitelist = true
 
 	// 根据目标设备或 MCP 的具体模式最终确定决策
 	if policy.Mode == "block_high_risk" {
@@ -1213,6 +1328,7 @@ func ToolGuardCallback(
 	live *realtime.Hub,
 	cardContext store.AgentCardContext,
 	settings store.AgentSettings,
+	deviceNames map[string]string,
 	replies *replyState,
 ) func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 	return func(ctx agent.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
@@ -1226,7 +1342,7 @@ func ToolGuardCallback(
 
 		toolName := t.Name()
 
-		// 执行安全守卫评估（支持继承 cardContext.DeviceNodeID）
+		// 执行安全守卫评估（支持继承 cardContext.DeviceNodeID 与设备名展示）
 		decision := EvaluateToolGuard(
 			ctx,
 			runner.store,
@@ -1236,6 +1352,7 @@ func ToolGuardCallback(
 			cardContext.WorkspaceID,
 			cardContext.CardID,
 			cardContext.DeviceNodeID,
+			deviceNames,
 			cardContext.CardTitle,
 			cardContext.CardDescription,
 			toolName,
@@ -1247,18 +1364,23 @@ func ToolGuardCallback(
 			return nil, nil
 		}
 
+		allowSessionWhitelist := decision.AllowSessionWhitelist
 		// 判定为需要人工确认：挂起当前执行
 		approval, err := runner.store.CreateToolApproval(ctx, store.CreateToolApprovalParams{
-			WorkspaceID: cardContext.WorkspaceID,
-			CardID:      cardContext.CardID,
-			TurnID:      &cardContext.TurnID,
-			AttemptID:   &cardContext.AttemptID,
-			ToolCallID:  ctx.FunctionCallID(),
-			ToolName:    toolName,
-			Arguments:   args,
-			RiskLevel:   decision.RiskLevel,
-			Reversible:  decision.Reversible,
-			Reason:      decision.Reason,
+			WorkspaceID:           cardContext.WorkspaceID,
+			CardID:                cardContext.CardID,
+			TurnID:                &cardContext.TurnID,
+			AttemptID:             &cardContext.AttemptID,
+			ToolCallID:            ctx.FunctionCallID(),
+			ToolName:              toolName,
+			Arguments:             args,
+			RiskLevel:             decision.RiskLevel,
+			Reversible:            decision.Reversible,
+			Reason:                decision.Reason,
+			ScopeType:             decision.ScopeType,
+			ScopeTarget:           decision.ScopeTarget,
+			ScopeLabel:            decision.ScopeLabel,
+			AllowSessionWhitelist: &allowSessionWhitelist,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create tool approval record: %w", err)

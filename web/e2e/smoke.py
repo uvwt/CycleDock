@@ -1555,7 +1555,7 @@ class CycleDockSmoke(unittest.TestCase):
         card.wait_for()
         expect(card).to_have_attribute("data-approval-status", "pending")
         expect(card.get_by_role("button", name="允许本次执行")).to_be_visible()
-        expect(card.get_by_role("button", name="本卡片内同类操作不再询问")).to_be_visible()
+        expect(card.get_by_role("button", name="本卡片允许 RN Server")).to_be_visible()
         expect(card.get_by_role("button", name="拒绝并补充说明")).to_be_visible()
         # 默认折叠 JSON 参数，不占满对话流
         self.assertEqual(card.locator("pre").count(), 0)
