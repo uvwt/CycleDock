@@ -1172,6 +1172,82 @@ test("工具安全守卫卡片待确认时保留三按钮并默认折叠参数�
   assert.match(pendingHtml, /展开参数/);
   assert.doesNotMatch(pendingHtml, /docker restart nginx/);
 
+  const deviceNamedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        scope_type: "device",
+        scope_target: "node-rn",
+        scope_label: "RN Server",
+        allow_session_whitelist: true,
+      },
+    }),
+  );
+  assert.match(deviceNamedHtml, /本卡片允许 RN Server/);
+  assert.match(deviceNamedHtml, /设备 · RN Server/);
+
+  const deviceUnnamedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        scope_type: "device",
+        scope_target: "node-rn",
+        allow_session_whitelist: true,
+      },
+    }),
+  );
+  assert.match(deviceUnnamedHtml, /本卡片允许此设备/);
+
+  const mcpNamedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        tool_name: "call_mcp_tool",
+        scope_type: "mcp",
+        scope_target: "github",
+        scope_label: "github",
+        allow_session_whitelist: true,
+      },
+    }),
+  );
+  assert.match(mcpNamedHtml, /本卡片允许 github/);
+  assert.match(mcpNamedHtml, /MCP · github/);
+
+  const mcpUnnamedHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        tool_name: "call_mcp_tool",
+        scope_type: "mcp",
+        scope_target: "github",
+        allow_session_whitelist: true,
+      },
+    }),
+  );
+  assert.match(mcpUnnamedHtml, /本卡片允许此 MCP/);
+
+  const criticalRedlineHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: {
+        ...baseApproval,
+        risk_level: "critical",
+        scope_type: "device",
+        scope_target: "node-rn",
+        scope_label: "RN Server",
+        allow_session_whitelist: false,
+      },
+    }),
+  );
+  assert.match(criticalRedlineHtml, /允许本次执行/);
+  assert.match(criticalRedlineHtml, /拒绝并补充说明/);
+  assert.doesNotMatch(criticalRedlineHtml, /data-action="approve-session"/);
+  assert.doesNotMatch(criticalRedlineHtml, /本卡片允许/);
+
   const approvedHtml = renderToStaticMarkup(
     createElement(ToolApprovalCard, {
       cardID: "card-1",

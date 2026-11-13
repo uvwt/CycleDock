@@ -32,7 +32,7 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 		}
 		dec := EvaluateToolGuard(
 			ctx, nil, nil, nil,
-			settings, workspaceID, cardID, "",
+			settings, workspaceID, cardID, "", nil,
 			"测试卡片", "测试描述",
 			name, map[string]any{},
 		)
@@ -58,12 +58,15 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 	}
 	critDec := EvaluateToolGuard(
 		ctx, nil, nil, nil,
-		settings, workspaceID, cardID, "node-1",
+		settings, workspaceID, cardID, "node-1", map[string]string{"node-1": "TianYi"},
 		"测试卡片", "测试描述",
 		"exec_command", map[string]any{"cmd": "sudo rm -rf /"},
 	)
 	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.Reversible {
 		t.Fatalf("expected critical destructive command to ask_human immediately, got %+v", critDec)
+	}
+	if critDec.ScopeType != "device" || critDec.ScopeTarget != "node-1" || critDec.ScopeLabel != "TianYi" || critDec.AllowSessionWhitelist {
+		t.Fatalf("expected critical destructive command scope=device:node-1(TianYi) and allow_session_whitelist=false, got %+v", critDec)
 	}
 }
 
@@ -114,12 +117,12 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 
 	// 明确高危系统指令必审测试
 	critDec := EvaluateToolGuard(
-		ctx, nil, client, nil, settings, workspaceID, cardID, "node-prod-server",
+		ctx, nil, client, nil, settings, workspaceID, cardID, "node-prod-server", nil,
 		"测试卡片", "测试描述",
 		"exec_command", map[string]any{"cmd": "sudo rm -rf / --no-preserve-root"},
 	)
-	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" {
-		t.Fatalf("expected critical command to ask_human, got %+v", critDec)
+	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.AllowSessionWhitelist {
+		t.Fatalf("expected critical command to ask_human with allow_session_whitelist=false, got %+v", critDec)
 	}
 
 	dec, err := evaluateDynamicModel(
@@ -328,5 +331,52 @@ func TestToolGuard_DynamicModelRouteFailover(t *testing.T) {
 	}
 	if primaryCalls != 1 || backupCalls != 1 {
 		t.Fatalf("expected no additional route requests on canceled context, got primary=%d backup=%d", primaryCalls, backupCalls)
+	}
+}
+
+func TestToolGuard_ResolveScope(t *testing.T) {
+	ctx := context.Background()
+	workspaceID := uuid.New()
+	deviceNames := map[string]string{"node-tianyi": "TianYi"}
+
+	// 1. 外部 MCP 工具优先归属到 mcp 连接名
+	mcpScope := resolveToolGuardScope(ctx, nil, workspaceID, "node-tianyi", deviceNames, "call_mcp_tool", map[string]any{
+		"tool_id": "github:create_issue",
+	})
+	if mcpScope.ScopeType != "mcp" || mcpScope.ScopeTarget != "github" || mcpScope.ScopeLabel != "github" {
+		t.Fatalf("unexpected mcp scope: %+v", mcpScope)
+	}
+
+	// 2. 显式携带 node_id 的设备工具应归属到目标设备节点
+	explicitDeviceScope := resolveToolGuardScope(ctx, nil, workspaceID, "node-tianyi", deviceNames, "exec_command", map[string]any{
+		"node_id": "node-rn",
+		"cmd":     "systemctl restart app",
+	})
+	if explicitDeviceScope.ScopeType != "device" || explicitDeviceScope.ScopeTarget != "node-rn" || explicitDeviceScope.ScopeLabel != "" {
+		t.Fatalf("unexpected explicit device scope: %+v", explicitDeviceScope)
+	}
+
+	// 3. 缺省 node_id 的设备类工具继承卡片设备上下文与设备名
+	inheritedDeviceScope := resolveToolGuardScope(ctx, nil, workspaceID, "node-tianyi", deviceNames, "file_edit", map[string]any{
+		"path": "C:\\temp\\a.txt",
+	})
+	if inheritedDeviceScope.ScopeType != "device" || inheritedDeviceScope.ScopeTarget != "node-tianyi" || inheritedDeviceScope.ScopeLabel != "TianYi" {
+		t.Fatalf("unexpected inherited device scope: %+v", inheritedDeviceScope)
+	}
+
+	// 4. 非设备类工具（如 recall_write）不误继承卡片设备，兜底到 tool 作用域
+	recallScope := resolveToolGuardScope(ctx, nil, workspaceID, "node-tianyi", deviceNames, "recall_write", map[string]any{
+		"action": "create",
+	})
+	if recallScope.ScopeType != "tool" || recallScope.ScopeTarget != "recall_write" || recallScope.ScopeLabel != "recall_write" {
+		t.Fatalf("unexpected recall fallback scope: %+v", recallScope)
+	}
+
+	// 5. 无任何设备目标时兜底到 tool 作用域
+	noTargetDeviceScope := resolveToolGuardScope(ctx, nil, workspaceID, "", nil, "exec_command", map[string]any{
+		"cmd": "ls",
+	})
+	if noTargetDeviceScope.ScopeType != "tool" || noTargetDeviceScope.ScopeTarget != "exec_command" {
+		t.Fatalf("unexpected fallback scope: %+v", noTargetDeviceScope)
 	}
 }

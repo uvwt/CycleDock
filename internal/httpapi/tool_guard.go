@@ -13,41 +13,72 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 type toolApprovalResponse struct {
-	ID                string          `json:"id"`
-	ToolName          string          `json:"tool_name"`
-	Arguments         json.RawMessage `json:"arguments"`
-	RiskLevel         string          `json:"risk_level"`
-	Reversible        bool            `json:"reversible"`
-	Reason            string          `json:"reason"`
-	Status            string          `json:"status"`
-	ResolutionComment string          `json:"resolution_comment,omitempty"`
-	ResolvedAt        *time.Time      `json:"resolved_at,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
+	ID                    string          `json:"id"`
+	ToolName              string          `json:"tool_name"`
+	Arguments             json.RawMessage `json:"arguments"`
+	RiskLevel             string          `json:"risk_level"`
+	Reversible            bool            `json:"reversible"`
+	Reason                string          `json:"reason"`
+	ScopeType             string          `json:"scope_type,omitempty"`
+	ScopeTarget           string          `json:"scope_target,omitempty"`
+	ScopeLabel            string          `json:"scope_label,omitempty"`
+	AllowSessionWhitelist bool            `json:"allow_session_whitelist"`
+	Status                string          `json:"status"`
+	ResolutionComment     string          `json:"resolution_comment,omitempty"`
+	ResolvedAt            *time.Time      `json:"resolved_at,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
 }
 
 func toolApprovalFromDB(row db.CardToolApproval) *toolApprovalResponse {
 	resp := &toolApprovalResponse{
-		ID:                row.ID.String(),
-		ToolName:          row.ToolName,
-		Arguments:         json.RawMessage(row.Arguments),
-		RiskLevel:         row.RiskLevel,
-		Reversible:        row.Reversible,
-		Reason:            row.Reason,
-		Status:            row.Status,
-		ResolutionComment: row.ResolutionComment,
-		CreatedAt:         row.CreatedAt.Time,
+		ID:                    row.ID.String(),
+		ToolName:              row.ToolName,
+		Arguments:             json.RawMessage(row.Arguments),
+		RiskLevel:             row.RiskLevel,
+		Reversible:            row.Reversible,
+		Reason:                row.Reason,
+		ScopeType:             row.ScopeType,
+		ScopeTarget:           row.ScopeTarget,
+		ScopeLabel:            row.ScopeLabel,
+		AllowSessionWhitelist: row.AllowSessionWhitelist,
+		Status:                row.Status,
+		ResolutionComment:     row.ResolutionComment,
+		CreatedAt:             row.CreatedAt.Time,
 	}
 	if row.ResolvedAt.Valid {
 		ts := row.ResolvedAt.Time
 		resp.ResolvedAt = &ts
 	}
 	return resp
+}
+
+// resolveApprovalScope 解析审批记录对应的白名单作用域；若为迁移前的历史记录则按参数兜底推导。
+func resolveApprovalScope(approval db.CardToolApproval) (string, string) {
+	scopeType := strings.TrimSpace(approval.ScopeType)
+	scopeTarget := strings.TrimSpace(approval.ScopeTarget)
+	if scopeType != "" && scopeTarget != "" {
+		return scopeType, scopeTarget
+	}
+
+	var args map[string]any
+	_ = json.Unmarshal(approval.Arguments, &args)
+	if approval.ToolName == "call_mcp_tool" {
+		toolID, _ := args["tool_id"].(string)
+		if serverName, _, ok := mcpclient.ParseToolID(toolID); ok && strings.TrimSpace(serverName) != "" {
+			return "mcp", strings.TrimSpace(serverName)
+		}
+	}
+	if nodeID, _ := args["node_id"].(string); strings.TrimSpace(nodeID) != "" {
+		return "device", strings.TrimSpace(nodeID)
+	}
+	return "tool", strings.TrimSpace(approval.ToolName)
 }
 
 func (api *API) attachToolApprovals(ctx context.Context, workspaceID, cardID uuid.UUID, events []eventResponse) {
@@ -120,6 +151,10 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "already_resolved", "tool approval has already been resolved")
 		return
 	}
+	if request.Action == "approve_session" && !approval.AllowSessionWhitelist {
+		writeError(w, http.StatusConflict, "session_whitelist_not_allowed", "critical destructive tool call cannot be added to card whitelist")
+		return
+	}
 
 	status := "approved"
 	if request.Action == "reject" {
@@ -139,8 +174,12 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scopeType, scopeTarget := resolveApprovalScope(approval)
 	if request.Action == "approve_session" {
-		_ = api.store.AddCardToolWhitelist(r.Context(), identity.WorkspaceID, cardID, approval.ToolName, identity.SourceID)
+		if err := api.store.AddCardScopeWhitelist(r.Context(), identity.WorkspaceID, cardID, scopeType, scopeTarget, identity.SourceID); err != nil {
+			api.handleError(w, err)
+			return
+		}
 	}
 
 	var followupContent string
@@ -166,7 +205,14 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 
 		modeLabel := "允许本次执行"
 		if request.Action == "approve_session" {
-			modeLabel = "允许执行（本卡片内同类操作不再询问）"
+			switch scopeType {
+			case "device":
+				modeLabel = "允许执行（本卡片已临时允许该设备操作）"
+			case "mcp":
+				modeLabel = "允许执行（本卡片已临时允许该 MCP 连接操作）"
+			default:
+				modeLabel = "允许执行（本卡片内同类操作不再询问）"
+			}
 		}
 		if execErr != nil {
 			followupContent = fmt.Sprintf("【工具审批通过（%s）】\n你请求调用的工具 `%s` 已获人工批准，已自动加入放行白名单或允许执行。请重新调用该工具或根据当前状态继续推进后续步骤。", modeLabel, approval.ToolName)
