@@ -38,6 +38,7 @@ const { ProjectContext } = await server.ssrLoadModule(
 const { ModelSelection } = await server.ssrLoadModule(
   "/src/features/models/model-selection.ts",
 );
+const { api: apiClient } = await server.ssrLoadModule("/src/shared/api/client.ts");
 const { default: SettingsPage } = await server.ssrLoadModule(
   "/src/features/settings/SettingsPage.tsx",
 );
@@ -1195,4 +1196,43 @@ test("工具安全守卫卡片待确认时保留三按钮并默认折叠参数�
   assert.match(rejectedHtml, /已拒绝执行/);
   assert.match(rejectedHtml, /改用只读日志查看/);
   assert.doesNotMatch(rejectedHtml, /重启容器具有短暂中断风险/);
+});
+
+test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范化可选字段", async (t) => {
+  let captured;
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    captured = { url, init };
+    return new Response(
+      JSON.stringify({
+        id: "guard-1",
+        device_node_id: "node_tianyi",
+        device_name: "TianYi",
+        mode: "block_high_risk",
+        timeout_seconds: 15,
+        custom_rules: "allow /workspace",
+      }),
+      { status: 200 },
+    );
+  });
+
+  const saved = await apiClient.saveDeviceToolGuard("node_tianyi", {
+    device_node_id: "node_tianyi",
+    device_name: "TianYi",
+    mode: "block_high_risk",
+    model_route_id: undefined,
+    timeout_seconds: 15,
+    custom_rules: "allow /workspace",
+  });
+
+  assert.equal(captured.url, "/api/v1/agent/device-tool-guards/node_tianyi");
+  assert.equal(captured.init.method, "PUT");
+  assert.equal(captured.init.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    device_node_id: "node_tianyi",
+    device_name: "TianYi",
+    mode: "block_high_risk",
+    timeout_seconds: 15,
+    custom_rules: "allow /workspace",
+  });
+  assert.equal(saved.mode, "block_high_risk");
 });
