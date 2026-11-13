@@ -65,6 +65,11 @@ func TestResolveToolApproval_EnqueuesSilentSystemTurnWithoutHumanComment(t *test
 		t.Fatalf("create tool approval: %v", err)
 	}
 
+	// 挂起期间 Attempt 已结束，焦点列表只能依赖卡片列表返回的待确认数量。
+	if got := pendingToolApprovalCountInList(t, handler, cookie, project.ID, card.ID); got != 1 {
+		t.Fatalf("expected pending_tool_approval_count 1 before resolve, got %d", got)
+	}
+
 	var beforeCommentCount int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM events WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'comment'
@@ -95,6 +100,10 @@ func TestResolveToolApproval_EnqueuesSilentSystemTurnWithoutHumanComment(t *test
 		t.Fatalf("expected status approved, got %q", resolvedResp.Approval.Status)
 	}
 	followupTurnID := uuid.MustParse(resolvedResp.TurnID)
+
+	if got := pendingToolApprovalCountInList(t, handler, cookie, project.ID, card.ID); got != 0 {
+		t.Fatalf("expected pending_tool_approval_count 0 after resolve, got %d", got)
+	}
 
 	// 4. 断言未新增任何伪造的人类 comment 气泡事件
 	var afterCommentCount int
@@ -140,4 +149,25 @@ func TestResolveToolApproval_EnqueuesSilentSystemTurnWithoutHumanComment(t *test
 			t.Fatalf("internal tool-approval followup turn %s should be hidden from pending_turns", pt.ID)
 		}
 	}
+}
+
+func pendingToolApprovalCountInList(t *testing.T, handler http.Handler, cookie *http.Cookie, projectID, cardID uuid.UUID) int64 {
+	t.Helper()
+	rec := doJSON(t, handler, http.MethodGet, "/api/v1/projects/"+projectID.String()+"/cards", nil, cookie, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list project cards: %d %s", rec.Code, rec.Body.String())
+	}
+	var cards []cardResponse
+	decodeRecorder(t, rec, &cards)
+	for _, item := range cards {
+		if item.ID != cardID.String() {
+			continue
+		}
+		if item.PendingToolApprovalCount == nil {
+			t.Fatalf("card %s summary is missing pending_tool_approval_count", cardID)
+		}
+		return *item.PendingToolApprovalCount
+	}
+	t.Fatalf("card %s not found in project card list", cardID)
+	return 0
 }
