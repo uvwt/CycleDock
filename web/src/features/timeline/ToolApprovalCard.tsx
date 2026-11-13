@@ -104,6 +104,8 @@ export function ToolApprovalCard({
         );
       }
       void queryClient.invalidateQueries({ queryKey: keys.card(cardID) });
+      // 待确认数量来自卡片列表摘要，处理完立即刷新列表，让焦点列表与导航状态点同步消失。
+      void queryClient.invalidateQueries({ queryKey: ["cards"] });
       if (action === "approve_once") {
         toast.success(t("已批准本次执行，正在恢复任务"));
       } else if (action === "approve_session") {

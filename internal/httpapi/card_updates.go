@@ -27,7 +27,7 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 	rows, err := api.pool.Query(ctx, `
  SELECT c.id::text, c.project_id::text, c.kind, c.title,
  md5(concat_ws('|', c.updated_at::text, e.sequence::text, a.id::text, a.status,
-   t.sequence::text, t.cancelled_at::text, s.updated_at::text, s.count::text)),
+   t.sequence::text, t.cancelled_at::text, s.updated_at::text, s.count::text, ap.pending::text)),
  COALESCE(m.sequence::text, '0'), COALESCE(m.preview, ''), COALESCE(a.status, '')
  FROM cards c
  LEFT JOIN LATERAL (
@@ -59,6 +59,11 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
  LEFT JOIN LATERAL (
    SELECT MAX(updated_at) AS updated_at, COUNT(*) AS count FROM card_schedules WHERE workspace_id=c.workspace_id AND card_id=c.id
  ) s ON true
+ -- 待人工确认数量决定焦点列表，审批挂起与处理完成都要让其他页面刷新卡片列表。
+ LEFT JOIN LATERAL (
+   SELECT COUNT(*) AS pending FROM card_tool_approvals
+   WHERE workspace_id=c.workspace_id AND card_id=c.id AND status='pending'
+ ) ap ON true
  WHERE c.workspace_id=$1 ORDER BY c.id`, workspaceID)
 	if err != nil {
 		return nil, err

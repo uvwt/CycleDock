@@ -1,7 +1,4 @@
-import {
-  getCardVisualStatus,
-  type CardVisualStatus,
-} from "../lib/card-focus";
+import { getCardVisualStatus, type CardVisualStatus } from "../lib/card-focus";
 
 export { getCardVisualStatus, type CardVisualStatus };
 
@@ -37,6 +34,18 @@ export function CardStatusDot({
         aria-label="有新回复"
       >
         <span className="inline-flex size-2 rounded-full bg-sky-500 shadow-[0_0_4px_rgba(14,165,233,0.4)]" />
+      </span>
+    );
+  }
+
+  if (status === "approval") {
+    return (
+      <span
+        className={`flex size-2.5 shrink-0 items-center justify-center ${className}`}
+        title="等待人工确认"
+        aria-label="等待人工确认"
+      >
+        <span className="inline-flex size-2 rounded-full bg-orange-500 shadow-[0_0_5px_rgba(249,115,22,0.5)]" />
       </span>
     );
   }
