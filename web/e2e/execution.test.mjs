@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildTimelineItems,
   groupExecutionAttempts,
   orderTimelineEvents,
 } from "../src/features/timeline/execution.ts";
@@ -206,4 +207,166 @@ test("历史消息加载后执行重新挂回消息", () => {
   const grouped = groupExecutionAttempts([comment], null, [attempt]);
   assert.equal(grouped.byEvent.get(comment.id)[0].value, attempt);
   assert.equal(grouped.standalone.length, 0);
+});
+
+test("系统触发执行按 started_at || created_at 穿插到对应事件位置，不再垫底", () => {
+  const q1 = {
+    id: "q1",
+    sequence: 1,
+    type: "comment",
+    actor_kind: "human",
+    created_at: "2026-10-31T10:00:00Z",
+  };
+  const a1 = {
+    id: "a1",
+    sequence: 2,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: "att1",
+    created_at: "2026-10-31T10:01:00Z",
+  };
+  const q2 = {
+    id: "q2",
+    sequence: 3,
+    type: "comment",
+    actor_kind: "human",
+    created_at: "2026-10-31T11:00:00Z",
+  };
+  const a2 = {
+    id: "a2",
+    sequence: 4,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: "att2",
+    created_at: "2026-10-31T11:01:00Z",
+  };
+  const att1 = {
+    id: "att1",
+    source_event_id: "q1",
+    status: "completed",
+    created_at: "2026-10-31T10:00:00Z",
+    started_at: "2026-10-31T10:00:05Z",
+    attempt_number: 1,
+  };
+  const att2 = {
+    id: "att2",
+    source_event_id: "q2",
+    status: "completed",
+    created_at: "2026-10-31T11:00:00Z",
+    started_at: "2026-10-31T11:00:05Z",
+    attempt_number: 1,
+  };
+  // created_at 更早但 started_at 在 att1 与 att2 之间的系统触发失败记录
+  const sysMid = {
+    id: "sys-mid",
+    status: "failed",
+    error_summary: "子任务回调超时",
+    created_at: "2026-10-31T09:50:00Z",
+    started_at: "2026-10-31T10:30:00Z",
+    attempt_number: 1,
+  };
+  const sysBefore = {
+    id: "sys-before",
+    status: "failed",
+    created_at: "2026-10-31T09:00:00Z",
+    attempt_number: 1,
+  };
+  const sysAfter = {
+    id: "sys-after",
+    status: "failed",
+    created_at: "2026-10-31T12:00:00Z",
+    attempt_number: 1,
+  };
+  const attempts = [att1, att2, sysMid, sysBefore, sysAfter];
+  const ordered = orderTimelineEvents([q1, a1, q2, a2], attempts);
+  const grouped = groupExecutionAttempts(ordered, null, attempts);
+  assert.deepEqual(
+    grouped.standalone.map((item) => item.value.id),
+    ["sys-before", "sys-mid", "sys-after"],
+  );
+  const rows = ordered.map((event) => ({ key: event.id, event }));
+  const items = buildTimelineItems(rows, grouped.standalone, attempts);
+  assert.deepEqual(
+    items.map((item) =>
+      item.kind === "standalone"
+        ? `standalone:${item.attempts.map((a) => a.value.id).join(",")}`
+        : item.row.event.id,
+    ),
+    ["standalone:sys-before", "q1", "a1", "standalone:sys-mid", "q2", "a2", "standalone:sys-after"],
+  );
+});
+
+test("连续系统触发两小时内合并，超过两小时拆分以保留时间分隔线，且不会切分同轮问答", () => {
+  const q1 = {
+    id: "q1",
+    sequence: 1,
+    type: "comment",
+    actor_kind: "human",
+    created_at: "2026-10-31T10:00:00Z",
+  };
+  const a1 = {
+    id: "a1",
+    sequence: 2,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: "att1",
+    created_at: "2026-10-31T10:00:20Z",
+  };
+  const att1 = {
+    id: "att1",
+    source_event_id: "q1",
+    status: "completed",
+    created_at: "2026-10-31T10:00:00Z",
+    started_at: "2026-10-31T10:00:00Z",
+    attempt_number: 1,
+  };
+  // 与 q1/att1 同一时间戳的系统触发不得拆散 q1 与 a1
+  const sysSame = {
+    id: "sys-same",
+    status: "failed",
+    created_at: "2026-10-31T10:00:00Z",
+    attempt_number: 1,
+  };
+  const sysNear = {
+    id: "sys-near",
+    status: "failed",
+    created_at: "2026-10-31T10:45:00Z",
+    attempt_number: 1,
+  };
+  const sysFar = {
+    id: "sys-far",
+    status: "failed",
+    created_at: "2026-10-31T13:30:00Z",
+    attempt_number: 1,
+  };
+  const livePreviewRow = {
+    key: "preview-1",
+    preview: { id: "preview-1", text: "正在回复" },
+    event: {
+      id: "preview-1",
+      sequence: 99,
+      type: "message",
+      actor_kind: "cycle_agent",
+      content: "正在回复",
+      created_at: "",
+    },
+  };
+  const rows = [
+    { key: q1.id, event: q1 },
+    { key: a1.id, event: a1 },
+    livePreviewRow,
+  ];
+  const standalone = [sysSame, sysNear, sysFar].map((value) => ({
+    kind: "history",
+    value,
+  }));
+  const items = buildTimelineItems(rows, standalone, [att1]);
+  assert.deepEqual(
+    items.map((item) =>
+      item.kind === "standalone"
+        ? `standalone:${item.attempts.map((a) => a.value.id).join(",")}`
+        : item.row.event.id,
+    ),
+    ["q1", "a1", "standalone:sys-same,sys-near", "standalone:sys-far", "preview-1"],
+  );
 });

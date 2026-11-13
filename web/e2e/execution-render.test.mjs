@@ -1312,3 +1312,203 @@ test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范�
   });
   assert.equal(saved.mode, "block_high_risk");
 });
+
+test("旧的系统触发失败记录按发生时间穿插在历史位置，不被后续正常对话压在最底部", () => {
+  const historyAttempts = [
+    {
+      id: "att-old-q",
+      source_event_id: "ev-old-q",
+      status: "completed",
+      created_at: "2026-10-31T08:00:00Z",
+      started_at: "2026-10-31T08:00:00Z",
+      finished_at: "2026-10-31T08:00:10Z",
+      attempt_number: 1,
+    },
+    {
+      id: "att-sys-fail",
+      status: "failed",
+      error_summary: "定时巡检节点离线",
+      can_retry: true,
+      created_at: "2026-10-31T08:20:00Z",
+      started_at: "2026-10-31T08:20:00Z",
+      finished_at: "2026-10-31T08:20:05Z",
+      attempt_number: 1,
+    },
+    {
+      id: "att-new-q",
+      source_event_id: "ev-new-q",
+      status: "completed",
+      created_at: "2026-10-31T11:30:00Z",
+      started_at: "2026-10-31T11:30:00Z",
+      finished_at: "2026-10-31T11:30:12Z",
+      attempt_number: 1,
+    },
+  ];
+  const events = [
+    {
+      id: "ev-old-q",
+      sequence: 1,
+      type: "comment",
+      actor_kind: "human",
+      actor_name: "测试用户",
+      content: "早上先检查一下状态",
+      created_at: "2026-10-31T08:00:00Z",
+    },
+    {
+      id: "ev-old-a",
+      sequence: 2,
+      type: "result",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      attempt_id: "att-old-q",
+      content: "早上检查正常",
+      created_at: "2026-10-31T08:00:10Z",
+    },
+    {
+      id: "ev-new-q",
+      sequence: 3,
+      type: "comment",
+      actor_kind: "human",
+      actor_name: "测试用户",
+      content: "现在重新检查一下",
+      created_at: "2026-10-31T11:30:00Z",
+    },
+    {
+      id: "ev-new-a",
+      sequence: 4,
+      type: "result",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      attempt_id: "att-new-q",
+      content: "最新检查一切正常",
+      created_at: "2026-10-31T11:30:12Z",
+    },
+  ];
+  const currentRunning = {
+    id: "att-running-now",
+    source_event_id: "ev-new-q",
+    status: "running",
+    current_stage: "正在汇总最新指标",
+    created_at: "2026-10-31T11:31:00Z",
+    started_at: "2026-10-31T11:31:00Z",
+    attempt_number: 1,
+  };
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "discussion",
+      pendingTurns: [],
+      currentAttempt: currentRunning,
+      attemptHistory: historyAttempts,
+      onCancelTurn() {},
+      onRetryAttempt() {},
+    }),
+  );
+  const oldReplyIndex = html.indexOf("早上检查正常");
+  const standaloneHeaderIndex = html.indexOf("系统触发 / 未关联历史");
+  const standaloneErrIndex = html.indexOf("定时巡检节点离线");
+  const separatorIndex = html.indexOf("data-time-separator");
+  const newQuestionIndex = html.indexOf("现在重新检查一下");
+  const newReplyIndex = html.indexOf("最新检查一切正常");
+  const runningIndex = html.indexOf("正在汇总最新指标");
+
+  assert.ok(oldReplyIndex >= 0);
+  assert.ok(standaloneHeaderIndex > oldReplyIndex);
+  assert.ok(standaloneErrIndex > standaloneHeaderIndex);
+  assert.ok(separatorIndex > standaloneErrIndex);
+  assert.ok(newQuestionIndex > separatorIndex);
+  assert.ok(newReplyIndex > newQuestionIndex);
+  assert.ok(runningIndex > newReplyIndex);
+  assert.match(html, /重试/);
+});
+
+test("系统触发执行打断前后同发送者消息时重新展示发送者，连续两小时内系统执行仅渲染一个分组标题", () => {
+  const events = [
+    {
+      id: "msg-1",
+      sequence: 1,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "第一段输出",
+      created_at: "2026-10-31T10:00:00Z",
+    },
+    {
+      id: "msg-2",
+      sequence: 2,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "第二段输出",
+      created_at: "2026-10-31T10:03:00Z",
+    },
+  ];
+  const attempts = [
+    {
+      id: "sys-1",
+      status: "failed",
+      error_summary: "中间系统回调失败 1",
+      created_at: "2026-10-31T10:01:00Z",
+      started_at: "2026-10-31T10:01:00Z",
+      attempt_number: 1,
+    },
+    {
+      id: "sys-2",
+      status: "failed",
+      error_summary: "中间系统回调失败 2",
+      created_at: "2026-10-31T10:02:00Z",
+      started_at: "2026-10-31T10:02:00Z",
+      attempt_number: 1,
+    },
+  ];
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: attempts,
+      onCancelTurn() {},
+      onRetryAttempt() {},
+    }),
+  );
+  assert.equal((html.match(/系统触发 \/ 未关联历史/g) || []).length, 1);
+  const msg1Idx = html.indexOf("第一段输出");
+  const sys1Idx = html.indexOf("中间系统回调失败 1");
+  const sys2Idx = html.indexOf("中间系统回调失败 2");
+  const msg2Idx = html.indexOf("第二段输出");
+  assert.ok(msg1Idx >= 0 && sys1Idx > msg1Idx && sys2Idx > sys1Idx && msg2Idx > sys2Idx);
+  // msg-2 位于系统执行块之后，必须重新渲染发送者标题（与 msg-1 一样带 Cycle 发送者头）
+  const betweenSys2AndMsg2 = html.slice(sys2Idx, msg2Idx);
+  assert.match(betweenSys2AndMsg2, /Cycle/);
+});
+
+test("只有系统触发失败记录且无历史消息时正常展示，不显示空白协作占位", () => {
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [],
+      live: null,
+      cardKind: "ongoing",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [
+        {
+          id: "sys-only",
+          status: "failed",
+          error_summary: "定时检查执行异常",
+          can_retry: true,
+          created_at: "2026-10-31T09:00:00Z",
+          started_at: "2026-10-31T09:00:00Z",
+          attempt_number: 1,
+        },
+      ],
+      onCancelTurn() {},
+      onRetryAttempt() {},
+    }),
+  );
+  assert.match(html, /系统触发 \/ 未关联历史/);
+  assert.match(html, /定时检查执行异常/);
+  assert.doesNotMatch(html, /从第一句话开始|开始协作/);
+});
