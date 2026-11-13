@@ -18,7 +18,6 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
@@ -179,15 +178,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 	summaryLLM.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "compaction")
-	summarizer, err := compaction.NewLLMSummarizer(compaction.LLMSummarizerConfig{
-		Model:               summaryLLM,
-		PromptTemplate:      compactionPromptTemplate,
-		MaxToolContentChars: 4000,
-		MaxTranscriptChars:  120000,
-		Timeout:             agentconfig.DefaultModelRequestTimeout,
-	})
+	summarizer, err := newADKCompactionSummarizer(summaryLLM)
 	if err != nil {
-		return fmt.Errorf("create ADK context summarizer: %w", err)
+		return err
 	}
 
 	instructions := buildADKInstructions(cardContext, settings.SystemInstructions, nexusContext)

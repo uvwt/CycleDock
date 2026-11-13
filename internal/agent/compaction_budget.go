@@ -22,11 +22,13 @@ const (
 	defaultSafetyReservePercent  = 15
 	defaultMinSafetyReserve      = 16000
 	defaultMinCompactAtTokens    = 8000
+	defaultMaxCompactAtTokens    = 256000
 	defaultUnknownInputMaxTokens = 32000
 )
 
 // CompactionBudgetPolicy 定义动态上下文压缩预算的计算策略。
-// 支持按模型实际容量计算压缩点，避免所有模型固定在 24K 触发压缩。
+// 支持按模型实际容量计算压缩点，避免所有模型固定在 24K 触发压缩；
+// 同时通过 MaxCompactAtTokens 软上限避免 1M 等超大窗口模型攒到近百万 Token 才首次压缩。
 type CompactionBudgetPolicy struct {
 	UnknownThresholdTokens int
 	UnknownMaxInputTokens  int
@@ -34,6 +36,7 @@ type CompactionBudgetPolicy struct {
 	SafetyReservePercent   int
 	MinSafetyReserveTokens int
 	MinCompactAtTokens     int
+	MaxCompactAtTokens     int
 }
 
 func DefaultCompactionBudgetPolicy() CompactionBudgetPolicy {
@@ -44,6 +47,7 @@ func DefaultCompactionBudgetPolicy() CompactionBudgetPolicy {
 		SafetyReservePercent:   defaultSafetyReservePercent,
 		MinSafetyReserveTokens: defaultMinSafetyReserve,
 		MinCompactAtTokens:     defaultMinCompactAtTokens,
+		MaxCompactAtTokens:     defaultMaxCompactAtTokens,
 	}
 }
 
@@ -66,6 +70,9 @@ func (p CompactionBudgetPolicy) withDefaults() CompactionBudgetPolicy {
 	}
 	if p.MinCompactAtTokens <= 0 {
 		p.MinCompactAtTokens = def.MinCompactAtTokens
+	}
+	if p.MaxCompactAtTokens <= 0 {
+		p.MaxCompactAtTokens = def.MaxCompactAtTokens
 	}
 	return p
 }
@@ -182,6 +189,11 @@ func ComputeRouteCompactionBudget(limits modelclient.ModelLimits, policy Compact
 	compactAt := inputLimit - safetyReserve
 	if compactAt <= 0 {
 		compactAt = max(inputLimit*3/4, 1)
+	}
+	// 对 1M 等大上下文路由限制软上限，让会话在 ~256K 即可平滑滚动压缩，
+	// 同时保持 EffectiveInputLimit 为真实路由容量上限供发送前容量校验使用。
+	if policy.MaxCompactAtTokens > 0 && compactAt > policy.MaxCompactAtTokens {
+		compactAt = policy.MaxCompactAtTokens
 	}
 
 	return RouteBudget{
