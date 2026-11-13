@@ -133,6 +133,9 @@ type cardResponse struct {
 	PinnedAt                *time.Time `json:"pinned_at,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
+
+	// 只在列表摘要中返回：被安全守卫挂起、等待人工确认的工具调用数量。
+	PendingToolApprovalCount *int64 `json:"pending_tool_approval_count,omitempty"`
 }
 
 type cardReadResponse struct {
@@ -1608,13 +1611,15 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
+	pendingToolApprovalCount := card.PendingToolApprovalCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
-		LatestMessageSequence:   &latestMessageSequence,
-		LastReadMessageSequence: &lastReadMessageSequence,
-		Unread:                  &unread,
+		LatestMessageSequence:    &latestMessageSequence,
+		LastReadMessageSequence:  &lastReadMessageSequence,
+		Unread:                   &unread,
+		PendingToolApprovalCount: &pendingToolApprovalCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String
@@ -1649,13 +1654,15 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
+	pendingToolApprovalCount := card.PendingToolApprovalCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
-		LatestMessageSequence:   &latestMessageSequence,
-		LastReadMessageSequence: &lastReadMessageSequence,
-		Unread:                  &unread,
+		LatestMessageSequence:    &latestMessageSequence,
+		LastReadMessageSequence:  &lastReadMessageSequence,
+		Unread:                   &unread,
+		PendingToolApprovalCount: &pendingToolApprovalCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String
@@ -1690,13 +1697,15 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
+	pendingToolApprovalCount := card.PendingToolApprovalCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
-		LatestMessageSequence:   &latestMessageSequence,
-		LastReadMessageSequence: &lastReadMessageSequence,
-		Unread:                  &unread,
+		LatestMessageSequence:    &latestMessageSequence,
+		LastReadMessageSequence:  &lastReadMessageSequence,
+		Unread:                   &unread,
+		PendingToolApprovalCount: &pendingToolApprovalCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String

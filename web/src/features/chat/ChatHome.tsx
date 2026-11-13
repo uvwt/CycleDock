@@ -1,5 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
-import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
+import {
+  useSwipeGesture,
+  useSwipeUpGesture,
+} from "../../shared/lib/useSwipeGesture";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -47,13 +50,21 @@ export default function ChatHome() {
   });
 
   const handleSwipeRight = useCallback(() => {
-    if (typeof window !== "undefined" && window.innerWidth < 768 && !mobileListOpen) {
+    if (
+      typeof window !== "undefined" &&
+      window.innerWidth < 768 &&
+      !mobileListOpen
+    ) {
       setMobileListOpen(true);
     }
   }, [mobileListOpen]);
 
   const handleSwipeLeft = useCallback(() => {
-    if (typeof window !== "undefined" && window.innerWidth < 768 && mobileListOpen) {
+    if (
+      typeof window !== "undefined" &&
+      window.innerWidth < 768 &&
+      mobileListOpen
+    ) {
       setMobileListOpen(false);
     }
   }, [mobileListOpen]);
@@ -156,7 +167,10 @@ export default function ChatHome() {
             />
           </div>
 
-          <section ref={containerRef} className="relative flex min-h-0 min-w-0 flex-col">
+          <section
+            ref={containerRef}
+            className="relative flex min-h-0 min-w-0 flex-col"
+          >
             <div className="absolute top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 z-10 flex items-center gap-1.5 md:hidden">
               <button
                 type="button"
@@ -185,11 +199,7 @@ export default function ChatHome() {
                   </h1>
                 </div>
 
-                <div
-                  ref={composerRef}
-                  data-no-swipe="true"
-                  className="w-full"
-                >
+                <div ref={composerRef} data-no-swipe="true" className="w-full">
                   <DiscussionStartComposer
                     key={projectID}
                     projectID={projectID}
@@ -207,6 +217,14 @@ export default function ChatHome() {
                           <Sparkles className="size-3.5 text-primary" />
                           {t("当前焦点")}
                         </span>
+                        {focusSummary.approvalCount > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/12 px-2 py-0.5 text-[11px] font-medium text-orange-700 dark:text-orange-300">
+                            <span className="size-1.5 rounded-full bg-orange-500" />
+                            {t("{{count}} 待确认", {
+                              count: focusSummary.approvalCount,
+                            })}
+                          </span>
+                        )}
                         {focusSummary.answeringCount > 0 && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/12 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                             <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -293,6 +311,11 @@ export default function ChatHome() {
                             </div>
 
                             <div className="flex shrink-0 items-center gap-1.5">
+                              {reason === "approval" && (
+                                <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-700 dark:text-orange-300">
+                                  {t("待确认")}
+                                </span>
+                              )}
                               {reason === "answering" && (
                                 <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
                                   {t("运行中")}

@@ -42,6 +42,8 @@ export type Card = {
   latest_message_sequence?: number;
   last_read_message_sequence?: number;
   unread?: boolean;
+  /** 被安全守卫挂起、等待人工确认的工具调用数量；仅列表摘要返回。 */
+  pending_tool_approval_count?: number;
   pinned_at?: string;
   preferred_model_route_id?: string | null;
   created_at: string;
@@ -411,4 +413,3 @@ export type TraceEvent = {
 export type TraceEventsResponse = {
   events: TraceEvent[];
 };
-

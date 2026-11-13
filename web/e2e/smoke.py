@@ -1574,5 +1574,86 @@ class CycleDockSmoke(unittest.TestCase):
         self.assertEqual(card.get_by_text("拦截原因与风险说明").count(), 0)
 
 
+    def test_pending_tool_approval_card_appears_in_focus_list_and_clears_on_resolve(self):
+        original_cards = self.page.request.get(BASE + "/api/v1/projects/demo-project/cards").json()
+        original_detail = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
+
+        cards = copy.deepcopy(original_cards)
+        target = next(c for c in cards if c["id"] == "todo-1")
+        target.pop("current_attempt_status", None)
+        target["todo_state"] = "todo"
+        target["pending_tool_approval_count"] = 1
+
+        detail = copy.deepcopy(original_detail)
+        detail["card"] = copy.deepcopy(target)
+        detail["current_attempt"] = None
+
+        resolved_state = {"done": False}
+
+        def list_cards(route):
+            payload = copy.deepcopy(cards)
+            item = next(c for c in payload if c["id"] == "todo-1")
+            item["pending_tool_approval_count"] = 0 if resolved_state["done"] else 1
+            route.fulfill(json=payload)
+
+        def get_detail(route):
+            payload = copy.deepcopy(detail)
+            if resolved_state["done"]:
+                payload["card"]["pending_tool_approval_count"] = 0
+                for ev in payload["timeline"]:
+                    if ev.get("tool_approval"):
+                        ev["tool_approval"]["status"] = "approved"
+            route.fulfill(json=payload)
+
+        def resolve_approval(route):
+            resolved_state["done"] = True
+            route.fulfill(json={
+                "approval": {
+                    "id": "approval-demo-1",
+                    "tool_name": "exec_command",
+                    "arguments": {"node_id": "node-rn", "cmd": "docker restart nginx-proxy"},
+                    "risk_level": "high",
+                    "reversible": False,
+                    "reason": "重启容器并删除历史日志",
+                    "status": "approved",
+                    "created_at": target["created_at"],
+                },
+                "turn_id": "turn-demo",
+                "event_id": "event-resolved-1",
+            })
+
+        self.page.route("**/api/v1/projects/demo-project/cards", list_cards)
+        self.page.route("**/api/v1/cards/todo-1", get_detail)
+        self.page.route("**/api/v1/cards/todo-1/tool-approvals/*/resolve", resolve_approval)
+        self.page.route("**/api/v1/cards/todo-1/stream", lambda route: route.fulfill(
+            content_type="text/event-stream", body=": connected\n\n"
+        ))
+
+        self.page.goto(BASE + "/chat")
+        focus = self.page.locator('div[aria-label="当前焦点"]')
+        focus.wait_for()
+        expect(focus.get_by_text("1 待确认")).to_be_visible()
+        expect(focus.get_by_text("待确认", exact=True)).to_be_visible()
+        expect(focus.get_by_label("等待人工确认")).to_be_visible()
+
+        # 打开快速切换弹窗，确认焦点 Tab 中也显示待确认统计与徽标
+        focus.get_by_role("button", name=re.compile("全部")).click()
+        switcher = self.page.get_by_role("dialog")
+        switcher.wait_for()
+        expect(switcher.get_by_text("1 待确认")).to_be_visible()
+        expect(switcher.get_by_text("待确认", exact=True)).to_be_visible()
+        switcher.get_by_role("button", name=re.compile("检查 RN 服务器异常日志")).click()
+
+        self.page.wait_for_url("**/cards/demo-project/todo-1")
+        card = self.page.locator('[data-tool-approval-card]').first
+        card.wait_for()
+        card.get_by_role("button", name="允许本次执行").click()
+        expect(card).to_have_attribute("data-approval-status", "approved")
+
+        # 处理完审批返回首页，卡片从当前焦点列表中退出
+        self.page.goto(BASE + "/chat")
+        self.page.get_by_role("heading", name="今天想推进什么？").wait_for()
+        expect(self.page.locator('div[aria-label="当前焦点"]')).to_have_count(0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

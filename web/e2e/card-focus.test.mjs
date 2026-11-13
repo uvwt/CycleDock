@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildFocusSummary,
   getCardFocusReason,
+  getCardVisualStatus,
   getKindVisualStatus,
 } from "../src/shared/lib/card-focus.ts";
 
@@ -124,4 +125,107 @@ test("导航分类状态点按 answering > unread > idle 聚合对应类型的�
   assert.equal(getKindVisualStatus(cards, "discussion", "d1"), "idle");
   assert.equal(getKindVisualStatus(cards, "todo"), "answering");
   assert.equal(getKindVisualStatus(cards, "ongoing"), "idle");
+});
+
+test("工具调用挂起等待人工确认的卡片进入焦点列表，并排在运行中之前", () => {
+  const cards = [
+    makeCard({
+      id: "ongoing-running",
+      kind: "ongoing",
+      ongoing_state: "active",
+      current_attempt_status: "running",
+      updated_at: "2026-11-08T09:00:00Z",
+    }),
+    // 挂起后 Attempt 已结束，current_attempt_status 为空，只剩待确认数量
+    makeCard({
+      id: "todo-awaiting-approval",
+      kind: "todo",
+      todo_state: "working",
+      pending_tool_approval_count: 1,
+      updated_at: "2026-11-08T02:00:00Z",
+    }),
+    makeCard({
+      id: "disc-awaiting-approval",
+      kind: "discussion",
+      discussion_state: "active",
+      pending_tool_approval_count: 2,
+      updated_at: "2026-11-08T03:00:00Z",
+    }),
+    makeCard({
+      id: "disc-unread",
+      kind: "discussion",
+      unread: true,
+      updated_at: "2026-11-08T08:00:00Z",
+    }),
+  ];
+
+  const summary = buildFocusSummary(cards);
+
+  assert.deepEqual(
+    summary.cards.map((c) => c.id),
+    [
+      "disc-awaiting-approval",
+      "todo-awaiting-approval",
+      "ongoing-running",
+      "disc-unread",
+    ],
+  );
+  assert.equal(summary.approvalCount, 2);
+  assert.equal(summary.answeringCount, 1);
+  assert.equal(summary.unreadCount, 1);
+  assert.equal(summary.workingCount, 0);
+  // 有卡片仍在运行时角标保持绿色；只剩待确认时角标为橙色
+  assert.equal(summary.highestVisualStatus, "answering");
+  assert.equal(
+    buildFocusSummary(cards.slice(1)).highestVisualStatus,
+    "approval",
+  );
+});
+
+test("待确认状态在查看中、后台已有新运行时都保留；归档或审批处理完后退出焦点", () => {
+  const pending = makeCard({
+    id: "disc-pending",
+    kind: "discussion",
+    discussion_state: "active",
+    pending_tool_approval_count: 1,
+  });
+
+  // 正在查看该卡片也不能抑制，否则用户会错过需要处理的审批
+  assert.equal(getCardFocusReason(pending, true), "approval");
+  assert.equal(getCardVisualStatus(pending, true), "approval");
+  // 同卡片又有新的 Turn 在运行时，焦点原因仍是待确认，状态点展示运行中
+  const runningAgain = { ...pending, current_attempt_status: "running" };
+  assert.equal(getCardFocusReason(runningAgain), "approval");
+  assert.equal(getCardVisualStatus(runningAgain), "answering");
+
+  assert.equal(
+    getCardFocusReason({ ...pending, discussion_state: "archived" }),
+    null,
+  );
+  assert.equal(
+    getCardFocusReason({ ...pending, pending_tool_approval_count: 0 }),
+    null,
+  );
+});
+
+test("导航分类状态点：待确认优先于未读，低于运行中", () => {
+  const cards = [
+    makeCard({ id: "d1", kind: "discussion", unread: true }),
+    makeCard({ id: "d2", kind: "discussion", pending_tool_approval_count: 1 }),
+    makeCard({
+      id: "t1",
+      kind: "todo",
+      todo_state: "working",
+      pending_tool_approval_count: 1,
+    }),
+    makeCard({
+      id: "t2",
+      kind: "todo",
+      todo_state: "working",
+      current_attempt_status: "running",
+    }),
+  ];
+
+  assert.equal(getKindVisualStatus(cards, "discussion"), "approval");
+  assert.equal(getKindVisualStatus(cards, "todo"), "answering");
 });

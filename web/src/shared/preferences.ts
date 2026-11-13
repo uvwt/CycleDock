@@ -165,12 +165,14 @@ const en = {
   "Agent 设置": "Agent settings",
   "MCP 服务": "MCP services",
   "AI 客户端": "AI clients",
-  "无法确认模型配置，请重试。": "Could not check model configuration. Please retry.",
+  "无法确认模型配置，请重试。":
+    "Could not check model configuration. Please retry.",
   "正在检查模型配置…": "Checking model configuration…",
   "尚未配置可用模型，Agent 暂时无法回复。草稿会保留，已排队的消息将在配置完成后继续执行。":
     "No model is enabled, so the Agent cannot reply yet. Your draft is preserved. Queued messages will run once a model is configured.",
   配置模型: "Configure model",
-  "请联系工作区所有者配置并启用模型。": "Ask the workspace owner to configure and enable a model.",
+  "请联系工作区所有者配置并启用模型。":
+    "Ask the workspace owner to configure and enable a model.",
   项目设置: "Project settings",
   "修改当前项目的名称与项目说明。":
     "Edit this project's name and project details.",
@@ -472,20 +474,22 @@ const en = {
   编辑讨论: "Edit discussion",
   编辑定时任务: "Edit scheduled task",
   已保存: "Saved",
-  "保存失败": "Failed to save",
+  保存失败: "Failed to save",
   "保存中…": "Saving…",
   讨论标题: "Discussion title",
   任务标题: "Task title",
   定时任务标题: "Scheduled task title",
   焦点: "Focus",
   当前焦点: "In focus",
+  待确认: "Needs approval",
+  "{{count}} 待确认": "{{count}} awaiting approval",
   "{{count}} 运行中": "{{count}} running",
   "{{count}} 未读": "{{count}} unread",
   "{{count}} 待验收": "{{count}} in review",
   "全部 ({{count}})": "All ({{count}})",
   "查看全部 {{count}} 个焦点事项": "View all {{count}} focus items",
-  "当前没有正在运行、未读或待处理的事项":
-    "No running, unread, or pending items right now",
+  "当前没有待确认、正在运行、未读或待处理的事项":
+    "No items awaiting approval, running, unread, or pending right now",
   "搜索卡片标题或描述...": "Search card title or description...",
   清空搜索: "Clear search",
   未找到匹配的卡片: "No matching cards found",

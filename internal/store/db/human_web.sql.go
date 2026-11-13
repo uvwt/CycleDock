@@ -457,7 +457,8 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -505,6 +506,13 @@ LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = $1
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS pending_count
+    FROM card_tool_approvals ta
+    WHERE ta.workspace_id = c.workspace_id
+      AND ta.card_id = c.id
+      AND ta.status = 'pending'
+) pending_approval ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
   AND (c.todo_state IS NULL OR c.todo_state <> 'done')
@@ -518,33 +526,35 @@ type ListProjectActiveCardSummariesParams struct {
 }
 
 type ListProjectActiveCardSummariesRow struct {
-	ID                      uuid.UUID          `json:"id"`
-	WorkspaceID             uuid.UUID          `json:"workspace_id"`
-	ProjectID               uuid.UUID          `json:"project_id"`
-	Kind                    string             `json:"kind"`
-	Title                   string             `json:"title"`
-	Description             string             `json:"description"`
-	DiscussionState         pgtype.Text        `json:"discussion_state"`
-	TodoState               pgtype.Text        `json:"todo_state"`
-	OngoingState            pgtype.Text        `json:"ongoing_state"`
-	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
-	RequiredConfirmations   int32              `json:"required_confirmations"`
-	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
-	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
-	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
-	ConfirmationRound       int64              `json:"confirmation_round"`
-	PreferredModelRouteID   uuid.NullUUID      `json:"preferred_model_route_id"`
-	Health                  string             `json:"health"`
-	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
-	LatestAttemptStatus     string             `json:"latest_attempt_status"`
-	LatestMessageSequence   int64              `json:"latest_message_sequence"`
-	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
-	Unread                  bool               `json:"unread"`
+	ID                       uuid.UUID          `json:"id"`
+	WorkspaceID              uuid.UUID          `json:"workspace_id"`
+	ProjectID                uuid.UUID          `json:"project_id"`
+	Kind                     string             `json:"kind"`
+	Title                    string             `json:"title"`
+	Description              string             `json:"description"`
+	DiscussionState          pgtype.Text        `json:"discussion_state"`
+	TodoState                pgtype.Text        `json:"todo_state"`
+	OngoingState             pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID       uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations    int32              `json:"required_confirmations"`
+	CreatedBySourceID        uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey     pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash        pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
+	ConfirmationRound        int64              `json:"confirmation_round"`
+	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	Health                   string             `json:"health"`
+	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus      string             `json:"latest_attempt_status"`
+	LatestMessageSequence    int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	Unread                   bool               `json:"unread"`
+	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 }
 
+// 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
 func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListProjectActiveCardSummariesParams) ([]ListProjectActiveCardSummariesRow, error) {
 	rows, err := q.db.Query(ctx, listProjectActiveCardSummaries, arg.SourceID, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
@@ -580,6 +590,7 @@ func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListPr
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
 			&i.Unread,
+			&i.PendingToolApprovalCount,
 		); err != nil {
 			return nil, err
 		}
@@ -747,7 +758,8 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -795,6 +807,13 @@ LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = $1
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS pending_count
+    FROM card_tool_approvals ta
+    WHERE ta.workspace_id = c.workspace_id
+      AND ta.card_id = c.id
+      AND ta.status = 'pending'
+) pending_approval ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
@@ -807,33 +826,35 @@ type ListProjectCardSummariesParams struct {
 }
 
 type ListProjectCardSummariesRow struct {
-	ID                      uuid.UUID          `json:"id"`
-	WorkspaceID             uuid.UUID          `json:"workspace_id"`
-	ProjectID               uuid.UUID          `json:"project_id"`
-	Kind                    string             `json:"kind"`
-	Title                   string             `json:"title"`
-	Description             string             `json:"description"`
-	DiscussionState         pgtype.Text        `json:"discussion_state"`
-	TodoState               pgtype.Text        `json:"todo_state"`
-	OngoingState            pgtype.Text        `json:"ongoing_state"`
-	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
-	RequiredConfirmations   int32              `json:"required_confirmations"`
-	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
-	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
-	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
-	ConfirmationRound       int64              `json:"confirmation_round"`
-	PreferredModelRouteID   uuid.NullUUID      `json:"preferred_model_route_id"`
-	Health                  string             `json:"health"`
-	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
-	LatestAttemptStatus     string             `json:"latest_attempt_status"`
-	LatestMessageSequence   int64              `json:"latest_message_sequence"`
-	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
-	Unread                  bool               `json:"unread"`
+	ID                       uuid.UUID          `json:"id"`
+	WorkspaceID              uuid.UUID          `json:"workspace_id"`
+	ProjectID                uuid.UUID          `json:"project_id"`
+	Kind                     string             `json:"kind"`
+	Title                    string             `json:"title"`
+	Description              string             `json:"description"`
+	DiscussionState          pgtype.Text        `json:"discussion_state"`
+	TodoState                pgtype.Text        `json:"todo_state"`
+	OngoingState             pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID       uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations    int32              `json:"required_confirmations"`
+	CreatedBySourceID        uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey     pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash        pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
+	ConfirmationRound        int64              `json:"confirmation_round"`
+	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	Health                   string             `json:"health"`
+	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus      string             `json:"latest_attempt_status"`
+	LatestMessageSequence    int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	Unread                   bool               `json:"unread"`
+	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 }
 
+// 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
 func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectCardSummariesParams) ([]ListProjectCardSummariesRow, error) {
 	rows, err := q.db.Query(ctx, listProjectCardSummaries, arg.SourceID, arg.WorkspaceID, arg.ProjectID)
 	if err != nil {
@@ -869,6 +890,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
 			&i.Unread,
+			&i.PendingToolApprovalCount,
 		); err != nil {
 			return nil, err
 		}
@@ -941,7 +963,8 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread
+    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -989,6 +1012,13 @@ LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = $1
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS pending_count
+    FROM card_tool_approvals ta
+    WHERE ta.workspace_id = c.workspace_id
+      AND ta.card_id = c.id
+      AND ta.status = 'pending'
+) pending_approval ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
   AND c.todo_state = 'done'
@@ -1006,33 +1036,35 @@ type ListProjectDoneCardsPagedParams struct {
 }
 
 type ListProjectDoneCardsPagedRow struct {
-	ID                      uuid.UUID          `json:"id"`
-	WorkspaceID             uuid.UUID          `json:"workspace_id"`
-	ProjectID               uuid.UUID          `json:"project_id"`
-	Kind                    string             `json:"kind"`
-	Title                   string             `json:"title"`
-	Description             string             `json:"description"`
-	DiscussionState         pgtype.Text        `json:"discussion_state"`
-	TodoState               pgtype.Text        `json:"todo_state"`
-	OngoingState            pgtype.Text        `json:"ongoing_state"`
-	SourceDiscussionID      uuid.NullUUID      `json:"source_discussion_id"`
-	RequiredConfirmations   int32              `json:"required_confirmations"`
-	CreatedBySourceID       uuid.UUID          `json:"created_by_source_id"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	CreateIdempotencyKey    pgtype.Text        `json:"create_idempotency_key"`
-	CreateRequestHash       pgtype.Text        `json:"create_request_hash"`
-	PinnedAt                pgtype.Timestamptz `json:"pinned_at"`
-	ConfirmationRound       int64              `json:"confirmation_round"`
-	PreferredModelRouteID   uuid.NullUUID      `json:"preferred_model_route_id"`
-	Health                  string             `json:"health"`
-	CurrentAttemptStatus    pgtype.Text        `json:"current_attempt_status"`
-	LatestAttemptStatus     string             `json:"latest_attempt_status"`
-	LatestMessageSequence   int64              `json:"latest_message_sequence"`
-	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
-	Unread                  bool               `json:"unread"`
+	ID                       uuid.UUID          `json:"id"`
+	WorkspaceID              uuid.UUID          `json:"workspace_id"`
+	ProjectID                uuid.UUID          `json:"project_id"`
+	Kind                     string             `json:"kind"`
+	Title                    string             `json:"title"`
+	Description              string             `json:"description"`
+	DiscussionState          pgtype.Text        `json:"discussion_state"`
+	TodoState                pgtype.Text        `json:"todo_state"`
+	OngoingState             pgtype.Text        `json:"ongoing_state"`
+	SourceDiscussionID       uuid.NullUUID      `json:"source_discussion_id"`
+	RequiredConfirmations    int32              `json:"required_confirmations"`
+	CreatedBySourceID        uuid.UUID          `json:"created_by_source_id"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey     pgtype.Text        `json:"create_idempotency_key"`
+	CreateRequestHash        pgtype.Text        `json:"create_request_hash"`
+	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
+	ConfirmationRound        int64              `json:"confirmation_round"`
+	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	Health                   string             `json:"health"`
+	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus      string             `json:"latest_attempt_status"`
+	LatestMessageSequence    int64              `json:"latest_message_sequence"`
+	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	Unread                   bool               `json:"unread"`
+	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 }
 
+// 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
 func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProjectDoneCardsPagedParams) ([]ListProjectDoneCardsPagedRow, error) {
 	rows, err := q.db.Query(ctx, listProjectDoneCardsPaged,
 		arg.SourceID,
@@ -1074,6 +1106,7 @@ func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProject
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
 			&i.Unread,
+			&i.PendingToolApprovalCount,
 		); err != nil {
 			return nil, err
 		}
