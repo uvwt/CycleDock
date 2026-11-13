@@ -168,3 +168,165 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 		t.Fatalf("expected error when small model returns 504")
 	}
 }
+
+func TestToolGuard_CommandSemanticsAvoidsFalsePositives(t *testing.T) {
+	// 非破坏性命令（即使包含 format/shutdown/drop database/rm -rf /tmp 等字眼）不应被静态高危规则误杀
+	safeOrNonCriticalCmds := []string{
+		`docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"`,
+		`git log --format="%H %s" -n 5`,
+		`rm -rf /tmp/build-cache`,
+		`rm -rf ./dist`,
+		`rmdir /s /q C:\Temp\build`,
+		`del /f /s /q D:\workspace\cache`,
+		`grep -rn "shutdown" /var/log`,
+		`rg "drop database" ./db/migrations`,
+		`echo "format C: and reboot"`,
+		`dd if=/dev/zero of=./swap.img bs=1M count=10`,
+		`chmod -R 777 /tmp/shared`,
+	}
+	for _, cmd := range safeOrNonCriticalCmds {
+		isCrit, reason := isCriticalDestructiveCommand("exec_command", map[string]any{"cmd": cmd})
+		if isCrit {
+			t.Fatalf("expected command %q NOT to be flagged as critical destructive, got reason=%q", cmd, reason)
+		}
+	}
+
+	// 真正高危系统破坏性命令仍应触发必审
+	criticalCmds := []string{
+		`sudo rm -rf / --no-preserve-root`,
+		`rm -rf /*`,
+		`env FOO=bar sh -c "rm -rf /"`,
+		`echo "$(rm -rf /)"`,
+		`format C: /q`,
+		`cmd /c "format D:"`,
+		`rmdir /s /q C:\`,
+		`del /f /s /q C:\`,
+		`mkfs.ext4 /dev/sda1`,
+		`dd if=/dev/zero of=/dev/sda bs=4M`,
+		`psql -c "DROP DATABASE production;"`,
+		`echo "TRUNCATE TABLE users;" | mysql app`,
+		`docker exec pg psql -U postgres -c "DROP SCHEMA public CASCADE;"`,
+		`:(){ :|:& };:`,
+		`chmod -R 777 /`,
+		`shutdown -h now`,
+		`reboot`,
+		`init 0`,
+	}
+	for _, cmd := range criticalCmds {
+		isCrit, reason := isCriticalDestructiveCommand("exec_command", map[string]any{"cmd": cmd})
+		if !isCrit || reason == "" {
+			t.Fatalf("expected command %q to be flagged as critical destructive", cmd)
+		}
+	}
+}
+
+func TestToolGuard_DynamicModelRouteFailover(t *testing.T) {
+	ctx := context.Background()
+	workspaceID := uuid.New()
+
+	primaryID := uuid.New()
+	disabledID := uuid.New()
+	backupID := uuid.New()
+
+	primaryCalls := 0
+	primaryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls++
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer primaryServer.Close()
+
+	disabledCalls := 0
+	disabledServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		disabledCalls++
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer disabledServer.Close()
+
+	backupCalls := 0
+	backupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls++
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"reversible": true, "risk_level": "low", "decision": "allow", "reason": "docker ps 仅查询容器运行状态，无副作用"}`,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer backupServer.Close()
+
+	settings := store.AgentSettings{
+		Routes: []store.ModelRoute{
+			{
+				ID:              backupID,
+				Enabled:         true,
+				ProviderType:    "openai_compatible",
+				ProviderBaseUrl: backupServer.URL,
+				Model:           "backup-model",
+			},
+			{
+				ID:              disabledID,
+				Enabled:         false,
+				ProviderType:    "openai_compatible",
+				ProviderBaseUrl: disabledServer.URL,
+				Model:           "disabled-model",
+			},
+			{
+				ID:              primaryID,
+				Enabled:         true,
+				ProviderType:    "openai_compatible",
+				ProviderBaseUrl: primaryServer.URL,
+				Model:           "primary-guard-model",
+			},
+		},
+	}
+	policy := ScopedGuardPolicy{
+		ScopeType:      "device",
+		ScopeTarget:    "node-linux",
+		Mode:           "block_high_risk",
+		ModelRouteID:   uuid.NullUUID{UUID: primaryID, Valid: true},
+		TimeoutSeconds: 5,
+	}
+
+	client := modelclient.NewWithHTTPClient(backupServer.Client())
+	dec, err := evaluateDynamicModel(
+		ctx, nil, client, nil, settings, policy, workspaceID,
+		"巡检容器", "查看容器运行状态",
+		"exec_command", map[string]any{"cmd": `docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"`},
+	)
+	if err != nil {
+		t.Fatalf("expected backup route to succeed after primary failed, got error: %v", err)
+	}
+	if dec.Decision != "allow" || dec.RiskLevel != "low" || !dec.Reversible {
+		t.Fatalf("unexpected decision from backup route: %+v", dec)
+	}
+	if primaryCalls != 1 {
+		t.Fatalf("expected primary route to be tried once, got %d", primaryCalls)
+	}
+	if disabledCalls != 0 {
+		t.Fatalf("expected disabled route to be skipped, got %d calls", disabledCalls)
+	}
+	if backupCalls != 1 {
+		t.Fatalf("expected backup route to be tried once, got %d", backupCalls)
+	}
+
+	// 父上下文已取消时，不得继续顺延请求后续路由
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = evaluateDynamicModel(
+		canceledCtx, nil, client, nil, settings, policy, workspaceID,
+		"巡检容器", "查看容器运行状态",
+		"exec_command", map[string]any{"cmd": "docker ps"},
+	)
+	if err == nil {
+		t.Fatalf("expected error when parent context is canceled")
+	}
+	if primaryCalls != 1 || backupCalls != 1 {
+		t.Fatalf("expected no additional route requests on canceled context, got primary=%d backup=%d", primaryCalls, backupCalls)
+	}
+}
