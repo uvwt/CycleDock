@@ -69,46 +69,49 @@ func TestToolGuard_ScopedCardWhitelistIntegration(t *testing.T) {
 	}
 	routeID := settings.Routes[0].ID
 
-	// 配置两台设备的守卫（均启用拦截）
-	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspace.ID, store.DeviceToolGuardInput{
-		DeviceNodeID:   "node-tianyi",
-		DeviceName:     "TianYi",
+	// 配置工作区全局工具守卫为 strict，再单独开启两台设备与两个 MCP 连接的开关
+	if _, err := dataStore.SaveToolGuardSettings(ctx, workspace.ID, store.ToolGuardSettingsInput{
 		Mode:           "strict",
 		ModelRouteID:   &routeID,
 		TimeoutSeconds: 5,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	settings, err = dataStore.GetAgentSettings(ctx, workspace.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspace.ID, store.DeviceToolGuardInput{
-		DeviceNodeID:   "node-rn",
-		DeviceName:     "RN Server",
-		Mode:           "strict",
-		ModelRouteID:   &routeID,
-		TimeoutSeconds: 5,
+		DeviceNodeID: "node-tianyi",
+		DeviceName:   "TianYi",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspace.ID, store.DeviceToolGuardInput{
+		DeviceNodeID: "node-rn",
+		DeviceName:   "RN Server",
+		Enabled:      true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// 配置两个 MCP 连接的守卫（均启用拦截）
 	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
-		Name:                    "github",
-		URL:                     "https://mcp.example.com/github",
-		Enabled:                 true,
-		TimeoutMS:               5000,
-		ToolGuardMode:           "strict",
-		ToolGuardModelRouteID:   &routeID,
-		ToolGuardTimeoutSeconds: 5,
+		Name:             "github",
+		URL:              "https://mcp.example.com/github",
+		Enabled:          true,
+		TimeoutMS:        5000,
+		ToolGuardEnabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
-		Name:                    "dida365",
-		URL:                     "https://mcp.example.com/dida365",
-		Enabled:                 true,
-		TimeoutMS:               5000,
-		ToolGuardMode:           "strict",
-		ToolGuardModelRouteID:   &routeID,
-		ToolGuardTimeoutSeconds: 5,
+		Name:             "dida365",
+		URL:              "https://mcp.example.com/dida365",
+		Enabled:          true,
+		TimeoutMS:        5000,
+		ToolGuardEnabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

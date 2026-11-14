@@ -13,6 +13,7 @@ export const keys = {
     ["project-activity", id, sourceID] as const,
   activityAgents: (id: string) => ["activity-agents", id] as const,
   agent: ["agent-settings"] as const,
+  toolGuard: ["tool-guard"] as const,
   agentStatus: ["agent-status"] as const,
   auth: ["model-auth"] as const,
   authorizedAIClients: ["authorized-ai-clients"] as const,

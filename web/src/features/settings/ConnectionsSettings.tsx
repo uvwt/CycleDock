@@ -3,9 +3,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { mcpFormSchema, type MCPFormValues } from "./mcp-form";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Plus, Trash2, TestTube2 } from "lucide-react";
-import { ShieldAlert } from "lucide-react";
+import { Plus, Trash2, TestTube2, ShieldAlert, ExternalLink } from "lucide-react";
 import { api } from "../../shared/api/client";
 import type { MCPConnection, MCPInput } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
@@ -17,10 +17,8 @@ import {
   Field,
   Modal,
   Section,
-  Select,
   Spinner,
   Switch,
-  TextArea,
   TextInput,
 } from "../../shared/ui/components";
 
@@ -30,6 +28,7 @@ const blank: MCPInput = {
   enabled: true,
   bearer_token: "",
   timeout_ms: 30000,
+  tool_guard_enabled: false,
 };
 export function MCPSettings() {
   const list = useQuery({ queryKey: keys.mcp, queryFn: api.mcp });
@@ -86,10 +85,7 @@ export function MCPSettings() {
         timeout_ms: connection.timeout_ms,
         bearer_token: "",
         clear_bearer_token: false,
-        tool_guard_mode: connection.tool_guard_mode,
-        tool_guard_model_route_id: connection.tool_guard_model_route_id,
-        tool_guard_timeout_seconds: connection.tool_guard_timeout_seconds,
-        tool_guard_custom_rules: connection.tool_guard_custom_rules,
+        tool_guard_enabled: Boolean(connection.tool_guard_enabled),
       }),
     onSuccess: (updated, variables) => {
       queryClient.setQueryData<MCPConnection[]>(keys.mcp, (old) =>
@@ -143,7 +139,15 @@ export function MCPSettings() {
                 }}
                 className="flex-1 min-w-0 text-left cursor-pointer outline-none"
               >
-                <p className="font-semibold text-foreground">{c.name}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-semibold text-foreground">{c.name}</p>
+                  {c.tool_guard_enabled && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                      <ShieldAlert className="size-3" />
+                      守卫已开启
+                    </span>
+                  )}
+                </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {c.url}
                 </p>
@@ -191,10 +195,6 @@ function MCPForm({
   busy: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const agentSettings = useQuery({
-    queryKey: keys.agent,
-    queryFn: api.agentSettings,
-  });
   // 编辑连接只展示是否已配置，绝不向浏览器回传已保存的 Token。
   const {
     register,
@@ -211,13 +211,11 @@ function MCPForm({
       timeout_ms: initial.timeout_ms,
       bearer_token: "",
       clear_bearer_token: false,
-      tool_guard_mode: initial.tool_guard_mode || "disabled",
-      tool_guard_model_route_id: initial.tool_guard_model_route_id || "",
-      tool_guard_timeout_seconds: initial.tool_guard_timeout_seconds || 10,
-      tool_guard_custom_rules: initial.tool_guard_custom_rules || "",
+      tool_guard_enabled: Boolean(initial.tool_guard_enabled),
     },
   });
   const clearBearerToken = useWatch({ control, name: "clear_bearer_token" });
+  const toolGuardEnabled = useWatch({ control, name: "tool_guard_enabled" });
   const configured = "token_configured" in initial && initial.token_configured;
   return (
     <>
@@ -280,47 +278,30 @@ function MCPForm({
             />
           </Field>
 
-          <div className="rounded-xl border border-line/80 bg-muted/20 p-3.5 space-y-3">
-            <div className="flex items-center gap-1.5 font-medium text-xs text-foreground">
-              <ShieldAlert className="size-3.5 text-primary shrink-0" />
-              <span>此 MCP 连接独立安全守卫（Tool Guard）</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line/80 bg-muted/20 p-3.5">
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <ShieldAlert className="size-3.5 shrink-0 text-primary" />
+                <span>启用工具安全守卫</span>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                开启后，调用此 MCP 工具时将按工作区全局工具守卫策略执行风险评估。
+                <Link
+                  to="/settings/tool-guard"
+                  className="ml-1.5 inline-flex items-center gap-0.5 font-medium text-primary hover:underline"
+                >
+                  全局规则设置
+                  <ExternalLink className="size-3" />
+                </Link>
+              </p>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Field label="拦截模式" error={errors.tool_guard_mode?.message}>
-                <Select {...register("tool_guard_mode")}>
-                  <option value="disabled">关闭安全拦截</option>
-                  <option value="block_high_risk">仅拦截高危不可逆操作（推荐）</option>
-                  <option value="strict">严格模式（拦截所有写操作）</option>
-                </Select>
-              </Field>
-              <Field label="风险评估小模型" error={errors.tool_guard_model_route_id?.message}>
-                <Select {...register("tool_guard_model_route_id")}>
-                  <option value="">默认使用首个可用路由</option>
-                  {(agentSettings.data?.routes || [])
-                    .filter((r) => r.enabled && r.id)
-                    .map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.model}
-                      </option>
-                    ))}
-                </Select>
-              </Field>
-              <Field label="守卫评估超时（秒）" error={errors.tool_guard_timeout_seconds?.message}>
-                <TextInput
-                  type="number"
-                  min={2}
-                  max={60}
-                  {...register("tool_guard_timeout_seconds", { valueAsNumber: true })}
-                />
-              </Field>
-            </div>
-            <Field label="针对此 MCP 的自定义守卫规则">
-              <TextArea
-                rows={2}
-                placeholder="例如：允许读取但禁止修改表结构或删除记录..."
-                {...register("tool_guard_custom_rules")}
-              />
-            </Field>
+            <Switch
+              checked={Boolean(toolGuardEnabled)}
+              onCheckedChange={(checked) =>
+                setValue("tool_guard_enabled", Boolean(checked))
+              }
+              aria-label="启用工具安全守卫"
+            />
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div className="flex flex-wrap gap-2">

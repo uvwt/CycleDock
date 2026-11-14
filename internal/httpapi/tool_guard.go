@@ -250,33 +250,123 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type toolGuardSettingsResponse struct {
+	Mode           string     `json:"mode"`
+	ModelRouteID   string     `json:"model_route_id,omitempty"`
+	TimeoutSeconds int32      `json:"timeout_seconds"`
+	CustomRules    string     `json:"custom_rules"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+}
+
+func toolGuardSettingsToResponse(s store.ToolGuardSettings) toolGuardSettingsResponse {
+	routeID := ""
+	if s.ModelRouteID != nil {
+		routeID = s.ModelRouteID.String()
+	}
+	return toolGuardSettingsResponse{
+		Mode:           s.Mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: s.TimeoutSeconds,
+		CustomRules:    s.CustomRules,
+		UpdatedAt:      s.UpdatedAt,
+	}
+}
+
+// getToolGuardSettings 读取工作区全局统一工具守卫配置（所有工作区成员可读，用于设备页展示当前全局档位）。
+func (api *API) getToolGuardSettings(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	settings, err := api.store.GetToolGuardSettings(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toolGuardSettingsToResponse(settings))
+}
+
+// saveToolGuardSettings 独立保存工作区全局统一工具守卫配置（仅 Owner 可操作，不触碰模型路由与全局指令）。
+func (api *API) saveToolGuardSettings(w http.ResponseWriter, r *http.Request) {
+	identity := identityFromRequest(r)
+	if !requireWorkspaceOwner(w, identity.Role) {
+		return
+	}
+	var request struct {
+		Mode           *string `json:"mode"`
+		ModelRouteID   *string `json:"model_route_id"`
+		TimeoutSeconds *int32  `json:"timeout_seconds"`
+		CustomRules    *string `json:"custom_rules"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+
+	mode := "block_high_risk"
+	if request.Mode != nil && strings.TrimSpace(*request.Mode) != "" {
+		mode = strings.TrimSpace(*request.Mode)
+	}
+	switch mode {
+	case "block_high_risk", "strict":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_mode", "mode must be block_high_risk or strict")
+		return
+	}
+
+	var routeID *uuid.UUID
+	if request.ModelRouteID != nil {
+		raw := strings.TrimSpace(*request.ModelRouteID)
+		if raw != "" {
+			parsed, err := uuid.Parse(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_model_route_id", "model_route_id must be a valid UUID")
+				return
+			}
+			routeID = &parsed
+		}
+	}
+
+	timeoutSeconds := int32(10)
+	if request.TimeoutSeconds != nil {
+		timeoutSeconds = *request.TimeoutSeconds
+	}
+	if timeoutSeconds < 2 || timeoutSeconds > 60 {
+		writeError(w, http.StatusBadRequest, "invalid_timeout", "timeout_seconds must be between 2 and 60")
+		return
+	}
+
+	customRules := ""
+	if request.CustomRules != nil {
+		customRules = *request.CustomRules
+	}
+
+	saved, err := api.store.SaveToolGuardSettings(r.Context(), identity.WorkspaceID, store.ToolGuardSettingsInput{
+		Mode:           mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: timeoutSeconds,
+		CustomRules:    customRules,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toolGuardSettingsToResponse(saved))
+}
+
 type deviceToolGuardResponse struct {
-	ID             string    `json:"id"`
-	DeviceNodeID   string    `json:"device_node_id"`
-	DeviceName     string    `json:"device_name"`
-	Mode           string    `json:"mode"`
-	ModelRouteID   string    `json:"model_route_id,omitempty"`
-	TimeoutSeconds int32     `json:"timeout_seconds"`
-	CustomRules    string    `json:"custom_rules"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	DeviceNodeID string    `json:"device_node_id"`
+	DeviceName   string    `json:"device_name"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func deviceToolGuardFromDB(row db.WorkspaceDeviceToolGuard) deviceToolGuardResponse {
-	routeID := ""
-	if row.ModelRouteID.Valid {
-		routeID = row.ModelRouteID.UUID.String()
-	}
 	return deviceToolGuardResponse{
-		ID:             row.ID.String(),
-		DeviceNodeID:   row.DeviceNodeID,
-		DeviceName:     row.DeviceName,
-		Mode:           row.Mode,
-		ModelRouteID:   routeID,
-		TimeoutSeconds: row.TimeoutSeconds,
-		CustomRules:    row.CustomRules,
-		CreatedAt:      row.CreatedAt.Time,
-		UpdatedAt:      row.UpdatedAt.Time,
+		ID:           row.ID.String(),
+		DeviceNodeID: row.DeviceNodeID,
+		DeviceName:   row.DeviceName,
+		Enabled:      row.Enabled,
+		CreatedAt:    row.CreatedAt.Time,
+		UpdatedAt:    row.UpdatedAt.Time,
 	}
 }
 
@@ -304,9 +394,8 @@ func (api *API) getDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
 	guard, err := api.store.GetDeviceToolGuard(r.Context(), identity.WorkspaceID, nodeID)
 	if errors.Is(err, domain.ErrNotFound) {
 		writeJSON(w, http.StatusOK, deviceToolGuardResponse{
-			DeviceNodeID:   nodeID,
-			Mode:           "block_high_risk",
-			TimeoutSeconds: 10,
+			DeviceNodeID: nodeID,
+			Enabled:      false,
 		})
 		return
 	}
@@ -328,12 +417,9 @@ func (api *API) saveDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		DeviceNodeID   *string `json:"device_node_id"`
-		DeviceName     *string `json:"device_name"`
-		Mode           *string `json:"mode"`
-		ModelRouteID   *string `json:"model_route_id"`
-		TimeoutSeconds *int32  `json:"timeout_seconds"`
-		CustomRules    *string `json:"custom_rules"`
+		DeviceNodeID *string `json:"device_node_id"`
+		DeviceName   *string `json:"device_name"`
+		Enabled      *bool   `json:"enabled"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -351,43 +437,14 @@ func (api *API) saveDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
 	if request.DeviceName != nil {
 		deviceName = strings.TrimSpace(*request.DeviceName)
 	}
-	mode := "disabled"
-	if request.Mode != nil && strings.TrimSpace(*request.Mode) != "" {
-		mode = strings.TrimSpace(*request.Mode)
-	}
-	switch mode {
-	case "disabled", "block_high_risk", "strict":
-	default:
-		writeError(w, http.StatusBadRequest, "invalid_mode", "mode must be disabled, block_high_risk, or strict")
-		return
-	}
-	var routeID *uuid.UUID
-	if request.ModelRouteID != nil {
-		rawRouteID := strings.TrimSpace(*request.ModelRouteID)
-		if rawRouteID != "" {
-			id, err := uuid.Parse(rawRouteID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid_model_route_id", "model_route_id must be a valid UUID")
-				return
-			}
-			routeID = &id
-		}
-	}
-	var timeoutSeconds int32
-	if request.TimeoutSeconds != nil {
-		timeoutSeconds = *request.TimeoutSeconds
-	}
-	customRules := ""
-	if request.CustomRules != nil {
-		customRules = *request.CustomRules
+	enabled := false
+	if request.Enabled != nil {
+		enabled = *request.Enabled
 	}
 	guard, err := api.store.SaveDeviceToolGuard(r.Context(), identity.WorkspaceID, store.DeviceToolGuardInput{
-		DeviceNodeID:   nodeID,
-		DeviceName:     deviceName,
-		Mode:           mode,
-		ModelRouteID:   routeID,
-		TimeoutSeconds: timeoutSeconds,
-		CustomRules:    customRules,
+		DeviceNodeID: nodeID,
+		DeviceName:   deviceName,
+		Enabled:      enabled,
 	})
 	if err != nil {
 		api.handleError(w, err)

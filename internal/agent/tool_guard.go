@@ -765,11 +765,12 @@ type ToolGuardScope struct {
 	ScopeLabel  string // 用于前端展示的设备名 / MCP 连接名 / 工具名
 }
 
-// ScopedGuardPolicy 描述具体执行目标（设备或具体 MCP 连接）的独立守卫策略
+// ScopedGuardPolicy 描述具体执行目标（设备或具体 MCP 连接）的开关状态与工作区全局统一守卫参数
 type ScopedGuardPolicy struct {
 	ScopeType      string // "device" | "mcp"
 	ScopeTarget    string // device_node_id 或 connection_name
-	Mode           string // "disabled" | "block_high_risk" | "strict"
+	Enabled        bool
+	Mode           string // "block_high_risk" | "strict"
 	ModelRouteID   uuid.NullUUID
 	TimeoutSeconds int32
 	CustomRules    string
@@ -856,15 +857,25 @@ func resolveToolGuardScope(
 	}
 }
 
-// resolveScopedGuardPolicyFromScope 根据已解析的作用域查找对应的设备或 MCP 守卫策略
+// resolveScopedGuardPolicyFromScope 结合设备/MCP 布尔开关与工作区全局配置生成运行时守卫策略
 func resolveScopedGuardPolicyFromScope(
 	ctx context.Context,
 	storeInstance *store.Store,
 	workspaceID uuid.UUID,
+	settings store.AgentSettings,
 	scope ToolGuardScope,
 ) (ScopedGuardPolicy, bool) {
 	if storeInstance == nil {
 		return ScopedGuardPolicy{}, false
+	}
+
+	globalMode := strings.TrimSpace(settings.ToolGuardMode)
+	if globalMode != "strict" {
+		globalMode = "block_high_risk"
+	}
+	globalTimeout := settings.ToolGuardTimeoutSeconds
+	if globalTimeout < 2 || globalTimeout > 60 {
+		globalTimeout = 10
 	}
 
 	switch scope.ScopeType {
@@ -876,10 +887,11 @@ func resolveScopedGuardPolicyFromScope(
 					return ScopedGuardPolicy{
 						ScopeType:      "mcp",
 						ScopeTarget:    c.Name,
-						Mode:           c.ToolGuardMode,
-						ModelRouteID:   c.ToolGuardModelRouteID,
-						TimeoutSeconds: c.ToolGuardTimeoutSeconds,
-						CustomRules:    c.ToolGuardCustomRules,
+						Enabled:        c.ToolGuardEnabled,
+						Mode:           globalMode,
+						ModelRouteID:   settings.ToolGuardModelRouteID,
+						TimeoutSeconds: globalTimeout,
+						CustomRules:    settings.ToolGuardCustomRules,
 					}, true
 				}
 			}
@@ -891,34 +903,40 @@ func resolveScopedGuardPolicyFromScope(
 			return ScopedGuardPolicy{
 				ScopeType:      "device",
 				ScopeTarget:    scope.ScopeTarget,
-				Mode:           guard.Mode,
-				ModelRouteID:   guard.ModelRouteID,
-				TimeoutSeconds: guard.TimeoutSeconds,
-				CustomRules:    guard.CustomRules,
+				Enabled:        guard.Enabled,
+				Mode:           globalMode,
+				ModelRouteID:   settings.ToolGuardModelRouteID,
+				TimeoutSeconds: globalTimeout,
+				CustomRules:    settings.ToolGuardCustomRules,
 			}, true
 		}
+		// 未落库设备记录默认视为未启用工具守卫
 		return ScopedGuardPolicy{
 			ScopeType:      "device",
 			ScopeTarget:    scope.ScopeTarget,
-			Mode:           "disabled",
-			TimeoutSeconds: 10,
+			Enabled:        false,
+			Mode:           globalMode,
+			ModelRouteID:   settings.ToolGuardModelRouteID,
+			TimeoutSeconds: globalTimeout,
+			CustomRules:    settings.ToolGuardCustomRules,
 		}, true
 	default:
 		return ScopedGuardPolicy{}, false
 	}
 }
 
-// resolveScopedGuardPolicy 根据即将调用的工具类型与入参，精准解析对应的设备级或 MCP 级策略
+// resolveScopedGuardPolicy 根据即将调用的工具类型与入参，结合工作区全局守卫参数解析最终生效策略
 func resolveScopedGuardPolicy(
 	ctx context.Context,
 	storeInstance *store.Store,
+	settings store.AgentSettings,
 	workspaceID uuid.UUID,
 	cardDeviceNodeID string,
 	toolName string,
 	args map[string]any,
 ) (ScopedGuardPolicy, bool) {
 	scope := resolveToolGuardScope(ctx, storeInstance, workspaceID, cardDeviceNodeID, nil, toolName, args)
-	return resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, scope)
+	return resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, settings, scope)
 }
 
 // EvaluateToolGuard 执行三层守卫流水线评估（基于设备与 MCP 连接精准独立判定）
@@ -993,9 +1011,9 @@ func EvaluateToolGuard(
 		}
 	}
 
-	// 4. 解析对应的具体设备或 MCP 连接级独立安全策略
-	policy, ok := resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, scope)
-	if !ok || policy.Mode == "disabled" {
+	// 4. 检查设备或 MCP 连接布尔开关，开启时统一应用工作区全局守卫参数
+	policy, ok := resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, settings, scope)
+	if !ok || !policy.Enabled {
 		return ToolGuardDecision{
 			Reversible:            true,
 			RiskLevel:             "low",
@@ -1190,7 +1208,7 @@ func evaluateDynamicModel(
 3. decision（字符串）：决策结果，必须是 "allow"（放行）或 "ask_human"（拦截等待人工确认）。
 4. reason（字符串）：简明扼要的一两句中文解释，说明为什么做出该决策与潜在风险点。
 
-【该目标独立自定义守卫规则】
+【工作区全局自定义守卫规则】
 %s
 
 【输出规范】

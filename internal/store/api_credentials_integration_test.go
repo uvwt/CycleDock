@@ -165,20 +165,27 @@ func TestSaveAgentSettings_PreservesRetainedRouteForeignKeysAndSharesCredentials
 		t.Fatalf("submit turn with preferred route: %v", err)
 	}
 	mcpConn, err := s.SaveMCPConnection(ctx, f.WorkspaceID, MCPConnectionInput{
-		Name:                  "ops-mcp",
-		URL:                   "https://mcp.example.com/sse",
-		Enabled:               true,
-		TimeoutMS:             5000,
-		ToolGuardMode:         "strict",
-		ToolGuardModelRouteID: &route1ID,
+		Name:             "ops-mcp",
+		URL:              "https://mcp.example.com/sse",
+		Enabled:          true,
+		TimeoutMS:        5000,
+		ToolGuardEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("save MCP connection with tool guard route: %v", err)
 	}
+	if _, err := s.SaveToolGuardSettings(ctx, f.WorkspaceID, ToolGuardSettingsInput{
+		Mode:           "strict",
+		ModelRouteID:   &route1ID,
+		TimeoutSeconds: 15,
+		CustomRules:    "protect prod",
+	}); err != nil {
+		t.Fatalf("save global tool guard settings: %v", err)
+	}
 
 	// 新增第二个模型（api_key 为空）并把顺序调整到 route1 之前：
 	// 1. 新路由必须自动共享同一凭据；
-	// 2. 保留的 route1 不得因保存触发 ON DELETE SET NULL 清空卡片、Turn 与 MCP 守卫引用。
+	// 2. 保留的 route1 不得因保存触发 ON DELETE SET NULL 清空卡片、Turn 与全局守卫引用，且模型保存不能冲掉全局守卫配置。
 	route2ID := uuid.New()
 	updated, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
 		Routes: []ModelRouteInput{
@@ -232,8 +239,15 @@ func TestSaveAgentSettings_PreservesRetainedRouteForeignKeysAndSharesCredentials
 	if err != nil {
 		t.Fatalf("get MCP connection after route save: %v", err)
 	}
-	if !reloadedMCP.ToolGuardModelRouteID.Valid || reloadedMCP.ToolGuardModelRouteID.UUID != route1ID {
-		t.Fatalf("MCP tool_guard_model_route_id was wiped on route save: %+v", reloadedMCP.ToolGuardModelRouteID)
+	if !reloadedMCP.ToolGuardEnabled {
+		t.Fatalf("MCP tool_guard_enabled should remain true after route save")
+	}
+	reloadedGuard, err := s.GetToolGuardSettings(ctx, f.WorkspaceID)
+	if err != nil {
+		t.Fatalf("get global tool guard settings after route save: %v", err)
+	}
+	if reloadedGuard.Mode != "strict" || reloadedGuard.ModelRouteID == nil || *reloadedGuard.ModelRouteID != route1ID || reloadedGuard.TimeoutSeconds != 15 || reloadedGuard.CustomRules != "protect prod" {
+		t.Fatalf("global tool guard settings were wiped or altered on route save: %+v", reloadedGuard)
 	}
 
 	// 在服务商凭据级轮换密钥后，两条路由同步生效；随后删除 route1 时，route2 的凭据不受影响，而原外键被安全置空。

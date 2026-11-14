@@ -810,16 +810,33 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_mcp_validation_token_retention_and_delete_cancel(self):
         self.page.goto(BASE + "/settings/mcp")
+        self.page.get_by_text("守卫已开启").wait_for()
         self.page.get_by_role("button", name=re.compile("示例 MCP")).click()
         form = self.page.get_by_role("dialog", name="编辑 MCP 服务")
+        # MCP 表单仅保留布尔开关，不再展示独立的模式/小模型/超时/自定义规则输入
+        self.assertEqual(form.get_by_label("守卫评估模式").count(), 0)
+        guard_switch = form.get_by_role("switch", name="启用工具安全守卫")
+        expect(guard_switch).to_be_checked()
+        guard_switch.click()
+        expect(guard_switch).not_to_be_checked()
         form.get_by_label("请求超时（毫秒）").fill("999")
         form.get_by_role("button", name="测试", exact=True).click()
         form.get_by_role("alert").filter(has_text="1000").wait_for()
         form.get_by_label("请求超时（毫秒）").fill("30000")
         form.get_by_label("Bearer Token（可选）").fill("fixture-token")
-        with self.page.expect_request(lambda request: request.method == "PUT" and "/mcp-connections/" in request.url):
+        with self.page.expect_request(lambda request: request.method == "PUT" and "/mcp-connections/" in request.url) as save_req:
             form.get_by_role("button", name="保存连接").click()
+        self.assertFalse(save_req.value.post_data_json["tool_guard_enabled"])
+        self.assertNotIn("tool_guard_mode", save_req.value.post_data_json)
         form.wait_for(state="hidden")
+        self.assertEqual(self.page.get_by_text("守卫已开启").count(), 0)
+        self.page.get_by_role("button", name=re.compile("示例 MCP")).click()
+        form.get_by_role("switch", name="启用工具安全守卫").click()
+        with self.page.expect_request(lambda request: request.method == "PUT" and "/mcp-connections/" in request.url) as reenable_req:
+            form.get_by_role("button", name="保存连接").click()
+        self.assertTrue(reenable_req.value.post_data_json["tool_guard_enabled"])
+        form.wait_for(state="hidden")
+        self.page.get_by_text("守卫已开启").wait_for()
         self.page.get_by_role("button", name=re.compile("示例 MCP")).click()
         self.assertEqual(form.get_by_label("Bearer Token（可选）").input_value(), "")
         form.get_by_label("清除已保存的 Token（改为匿名连接）").check()
@@ -1516,38 +1533,39 @@ class CycleDockSmoke(unittest.TestCase):
 
     def test_device_guard_moved_from_settings_to_nexusdock_page(self):
         # 1. 设置页面不再展示「设备守卫」入口，且旧路由自动兼容重定向至 /nexusdock
+        #    并新增「工具守卫」全局统一配置标签页 (/settings/tool-guard)
         self.page.goto(BASE + "/settings/general")
         self.page.get_by_role("heading", name="设置", exact=True).wait_for()
         settings_nav = self.page.get_by_role("navigation", name="设置")
         self.assertEqual(
             settings_nav.get_by_role("link", name="设备守卫").count(), 0
         )
+        settings_nav.get_by_role("link", name="工具守卫").click()
+        self.page.wait_for_url("**/settings/tool-guard")
+        self.page.get_by_role("heading", name="工作区全局工具守卫").wait_for()
+        self.page.get_by_role("combobox", name="全局拦截档位").select_option("strict")
+        self.page.get_by_role("textbox", name="全局自定义守卫规则").fill(
+            "允许本地构建，禁止修改系统钥匙串"
+        )
+        self.page.get_by_role("button", name="保存全局守卫配置").click()
+        self.page.get_by_text("全局工具守卫配置已保存").wait_for()
 
         self.page.goto(BASE + "/settings/device-guards")
         self.page.wait_for_url("**/nexusdock")
         self.page.get_by_role("heading", name="远程设备", exact=True).wait_for()
 
-        # 2. 远程设备详情面板直接承载所选设备的安全守卫独立配置与重置闭环
+        # 2. 远程设备详情面板承载所选设备的布尔开关，并与全局配置档位联动展示
         self.page.get_by_role("button", name=re.compile("MacBook Pro")).click()
         guard_panel = self.page.locator('[data-device-guard-row="node-mac"]')
         guard_panel.wait_for()
         expect(guard_panel.get_by_text("守卫已关闭")).to_be_visible()
 
-        guard_panel.get_by_role("button", name="独立配置").click()
-        guard_panel.get_by_role("combobox", name="拦截模式").select_option(
-            "block_high_risk"
-        )
-        guard_panel.get_by_role(
-            "textbox", name="此设备专属自定义守卫规则"
-        ).fill("允许本地构建，禁止修改系统钥匙串")
-        guard_panel.get_by_role("button", name="保存设备守卫规则").click()
+        guard_switch = guard_panel.get_by_role("switch", name="切换设备安全守卫")
+        guard_switch.click()
+        expect(guard_panel.get_by_text("已开启")).to_be_visible()
+        expect(guard_panel.get_by_text("严格模式")).to_be_visible()
 
-        expect(guard_panel.get_by_text("仅拦截高危")).to_be_visible()
-        expect(
-            guard_panel.get_by_text("允许本地构建，禁止修改系统钥匙串")
-        ).to_be_visible()
-
-        guard_panel.get_by_role("button", name="重置为默认").click()
+        guard_switch.click()
         expect(guard_panel.get_by_text("守卫已关闭")).to_be_visible()
 
     def test_tool_approval_resolves_into_compact_pill_without_fake_user_comment(self):
@@ -1834,10 +1852,7 @@ class CycleDockSmoke(unittest.TestCase):
                                     "id": "g1",
                                     "device_node_id": "node-long-1",
                                     "device_name": "Very-Long-Device-Hostname-Without-Spaces.corp.internal.example.com",
-                                    "mode": "block_high_risk",
-                                    "model_route_id": "r-1",
-                                    "timeout_seconds": 10,
-                                    "custom_rules": "https://example.com/very/long/unbroken/rule/path/without/spaces/to/verify/wrapping",
+                                    "enabled": True,
                                 }
                             ]
                         ),
@@ -1859,12 +1874,15 @@ class CycleDockSmoke(unittest.TestCase):
                 dlg.wait_for(state="hidden")
 
                 page.goto(BASE + "/nexusdock")
-                page.get_by_role("button", name="独立配置").wait_for()
-                page.get_by_role("button", name="独立配置").click()
+                page.locator('[data-device-guard-row="node-long-1"]').wait_for()
                 page.get_by_role("button", name="Skill 技能清单").click()
                 page.get_by_role("button", name="动态 MCP 服务").click()
                 page.get_by_role("button", name="内置底层能力").click()
                 assert_no_overflow(page, f"nexusdock {width}x{height}")
+
+                page.goto(BASE + "/settings/tool-guard")
+                page.get_by_role("heading", name="工作区全局工具守卫").wait_for()
+                assert_no_overflow(page, f"settings/tool-guard {width}x{height}")
             finally:
                 ctx.close()
 

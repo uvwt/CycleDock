@@ -75,6 +75,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/agent/status", api.getAgentStatus)
 	r.Get("/agent/settings", api.getAgentSettings)
 	r.Put("/agent/settings", api.saveAgentSettings)
+	r.Get("/agent/tool-guard", api.getToolGuardSettings)
+	r.Put("/agent/tool-guard", api.saveToolGuardSettings)
 	r.Get("/agent/api-credentials", api.listAgentAPICredentials)
 	r.Post("/agent/api-credentials", api.createAgentAPICredential)
 	r.Put("/agent/api-credentials/{credentialID}", api.updateAgentAPICredential)

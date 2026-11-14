@@ -1116,19 +1116,22 @@ test("设置页移除设备守卫入口，远程设备页按当前选中设备�
         id: "guard-rn",
         device_node_id: "node-rn",
         device_name: "RN Server",
-        mode: "block_high_risk",
-        timeout_seconds: 10,
-        custom_rules: "严禁直接执行 docker rm",
+        enabled: true,
       },
     ]);
-    queryClient.setQueryData(["agent-settings"], { configured: true, routes: [] });
+    queryClient.setQueryData(["tool-guard"], {
+      mode: "block_high_risk",
+      model_route_id: "",
+      timeout_seconds: 10,
+      custom_rules: "严禁直接执行 docker rm",
+    });
 
     const ownerNexusHtml = renderToStaticMarkup(createElement(NexusDockPage));
     assert.match(ownerNexusHtml, /data-device-guard-row="node-rn"/);
     assert.match(ownerNexusHtml, /设备安全守卫/);
+    assert.match(ownerNexusHtml, /已开启/);
     assert.match(ownerNexusHtml, /仅拦截高危/);
-    assert.match(ownerNexusHtml, /严禁直接执行 docker rm/);
-    assert.match(ownerNexusHtml, /独立配置/);
+    assert.match(ownerNexusHtml, /全局规则设置/);
 
     queryClient.setQueryData(["me"], {
       email: "member@example.com",
@@ -1139,12 +1142,12 @@ test("设置页移除设备守卫入口，远程设备页按当前选中设备�
     assert.match(memberNexusHtml, /设备安全守卫/);
     assert.match(memberNexusHtml, /仅拦截高危/);
     assert.match(memberNexusHtml, /仅所有者可修改/);
-    assert.doesNotMatch(memberNexusHtml, /独立配置/);
+    assert.doesNotMatch(memberNexusHtml, /全局规则设置/);
   } finally {
     queryClient.removeQueries({ queryKey: ["me"] });
     queryClient.removeQueries({ queryKey: ["nexus"] });
     queryClient.removeQueries({ queryKey: ["device-tool-guards"] });
-    queryClient.removeQueries({ queryKey: ["agent-settings"] });
+    queryClient.removeQueries({ queryKey: ["tool-guard"] });
   }
 });
 
@@ -1274,7 +1277,7 @@ test("工具安全守卫卡片待确认时保留三按钮并默认折叠参数�
   assert.doesNotMatch(rejectedHtml, /重启容器具有短暂中断风险/);
 });
 
-test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范化可选字段", async (t) => {
+test("设备守卫开关接口发送与后端一致的布尔 JSON 请求体", async (t) => {
   let captured;
   t.mock.method(globalThis, "fetch", async (url, init) => {
     captured = { url, init };
@@ -1283,9 +1286,7 @@ test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范�
         id: "guard-1",
         device_node_id: "node_tianyi",
         device_name: "TianYi",
-        mode: "block_high_risk",
-        timeout_seconds: 15,
-        custom_rules: "allow /workspace",
+        enabled: true,
       }),
       { status: 200 },
     );
@@ -1294,10 +1295,7 @@ test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范�
   const saved = await apiClient.saveDeviceToolGuard("node_tianyi", {
     device_node_id: "node_tianyi",
     device_name: "TianYi",
-    mode: "block_high_risk",
-    model_route_id: undefined,
-    timeout_seconds: 15,
-    custom_rules: "allow /workspace",
+    enabled: true,
   });
 
   assert.equal(captured.url, "/api/v1/agent/device-tool-guards/node_tianyi");
@@ -1306,11 +1304,9 @@ test("设备守卫保存接口发送与后端一致的 JSON 请求体且规范�
   assert.deepEqual(JSON.parse(captured.init.body), {
     device_node_id: "node_tianyi",
     device_name: "TianYi",
-    mode: "block_high_risk",
-    timeout_seconds: 15,
-    custom_rules: "allow /workspace",
+    enabled: true,
   });
-  assert.equal(saved.mode, "block_high_risk");
+  assert.equal(saved.enabled, true);
 });
 
 test("旧的系统触发失败记录按发生时间穿插在历史位置，不被后续正常对话压在最底部", () => {

@@ -286,6 +286,13 @@ export type GrokStart = {
   expires_at: string;
   interval_seconds: number;
 };
+export type ToolGuardMode = "block_high_risk" | "strict";
+export type ToolGuardSettings = {
+  mode: ToolGuardMode;
+  model_route_id?: string;
+  timeout_seconds: number;
+  custom_rules: string;
+};
 export type MCPConnection = {
   id: string;
   name: string;
@@ -293,19 +300,13 @@ export type MCPConnection = {
   token_configured: boolean;
   enabled: boolean;
   timeout_ms: number;
-  tool_guard_mode?: "disabled" | "block_high_risk" | "strict";
-  tool_guard_model_route_id?: string;
-  tool_guard_timeout_seconds?: number;
-  tool_guard_custom_rules?: string;
+  tool_guard_enabled?: boolean;
 };
 export type DeviceToolGuard = {
   id?: string;
   device_node_id: string;
   device_name?: string;
-  mode: "disabled" | "block_high_risk" | "strict";
-  model_route_id?: string;
-  timeout_seconds: number;
-  custom_rules: string;
+  enabled: boolean;
   created_at?: string;
   updated_at?: string;
 };

@@ -412,6 +412,36 @@ const en = {
   收起配置: "Collapse",
   重置为默认: "Reset to default",
   仅所有者可修改: "Owner only",
+  全局规则设置: "Global guard settings",
+  切换设备安全守卫: "Toggle device tool guard",
+  "已为该设备开启工具安全守卫": "Device tool guard enabled",
+  "已关闭该设备工具安全守卫": "Device tool guard disabled",
+  "已启用工作区全局安全守卫策略，调用高危或敏感工具前自动拦截评估。":
+    "Protected by the workspace global tool guard policy before high-risk or sensitive calls.",
+  "未开启安全守卫，该设备工具调用将按默认放行策略执行。":
+    "Tool guard is disabled for this device; tool calls follow default execution.",
+  工具守卫: "Tool Guard",
+  工作区全局工具守卫: "Workspace Global Tool Guard",
+  "统一配置所有受保护远程设备与 MCP 服务的风险评估档位、评估小模型、超时时间与全局规则。":
+    "Configure unified guard mode, risk evaluation model, timeout, and custom rules shared across all guarded remote devices and MCP services.",
+  "各远程设备与 MCP 服务是否开启守卫可在对应页面单独开关；开启后将统一按此处配置执行评估。":
+    "Enable or disable tool guard per remote device or MCP service on their respective pages; enabled targets share this workspace policy.",
+  管理设备开关: "Manage device switches",
+  "管理 MCP 开关": "Manage MCP switches",
+  全局拦截档位: "Global guard mode",
+  风险评估小模型: "Risk evaluation model",
+  已失效或停用的路由: "Disabled or removed route",
+  "当前绑定的评估模型路由已被停用或删除，运行时会自动回退到首个可用模型路由；建议重新选择并保存。":
+    "The bound evaluation model route is disabled or removed. Runtime falls back to the first enabled route; consider selecting a new route.",
+  "允许范围 2~60 秒，超时后安全兜底挂起确认":
+    "Allowed range 2–60s; falls back to human confirmation on timeout",
+  全局自定义守卫规则: "Global custom guard rules",
+  "这些规则会作为最高优先级补充约束传入风险评估小模型，同时适用于所有开启守卫的远程设备与 MCP 服务。":
+    "Passed to the risk evaluation model as top-priority rules for all guarded remote devices and MCP services.",
+  "例如：允许在独立 Git worktree 中自由修改测试代码；涉及重启生产容器、删除日志或修改线上配置必须触发人工确认。":
+    "Example: Allow modifying test files in an isolated Git worktree; require human approval for restarting production containers, deleting logs, or editing production configs.",
+  保存全局守卫配置: "Save global guard settings",
+  全局工具守卫配置已保存: "Global tool guard settings saved",
   "针对此设备节点独立配置工具调用安全拦截策略、评估模型与自定义规则。":
     "Configure tool safety policy, evaluation model, and custom rules for this device.",
   拦截模式: "Guard mode",

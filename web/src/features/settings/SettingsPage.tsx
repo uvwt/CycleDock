@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, useLocation } from "react-router-dom";
-import { Bot, BrainCircuit, LogOut, Plug, Settings } from "lucide-react";
+import { Bot, BrainCircuit, LogOut, Plug, Settings, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -22,6 +22,7 @@ import {
 import { clearPushSubscription } from "../../shared/realtime/notifications";
 import { NotificationSettings } from "./NotificationSettings";
 import { ModelsSettings } from "./ModelsSettings";
+import { ToolGuardSettings } from "./ToolGuardSettings";
 import { MCPSettings } from "./ConnectionsSettings";
 import { AuthorizedClientsSettings } from "./AuthorizedClientsSettings";
 
@@ -32,7 +33,10 @@ const menus = [
   },
   {
     group: "AI 配置",
-    items: [{ id: "models", title: "模型服务", icon: BrainCircuit }],
+    items: [
+      { id: "models", title: "模型服务", icon: BrainCircuit },
+      { id: "tool-guard", title: "工具守卫", icon: ShieldAlert },
+    ],
   },
   {
     group: "外部连接",
@@ -91,10 +95,10 @@ export default function SettingsPage({ role }: { role: string }) {
       <div className="min-w-0 space-y-4 md:space-y-6">
         <nav
           aria-label={t("设置")}
-          className="scrollbar-none flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-line bg-muted/50 p-1 md:w-fit"
+          className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-line bg-muted/50 p-1 md:w-fit md:flex-nowrap"
         >
           {menus.map((group) => (
-            <div key={group.group} className="flex flex-1 shrink-0 gap-1 md:flex-initial">
+            <div key={group.group} className="contents md:flex md:gap-1">
               <p className="sr-only">{t(group.group)}</p>
               {group.items.map((item) => (
                 <NavLink
@@ -185,7 +189,7 @@ export default function SettingsPage({ role }: { role: string }) {
             </>
           )}
 
-          {["models", "mcp"].includes(tab) && !isOwner && (
+          {["models", "tool-guard", "mcp"].includes(tab) && !isOwner && (
             <Section title={t("需要所有者权限")}>
               <p className="text-sm text-muted-foreground">
                 {t("这些设置只允许 Workspace owner 修改。")}
@@ -193,6 +197,7 @@ export default function SettingsPage({ role }: { role: string }) {
             </Section>
           )}
           {tab === "models" && isOwner && <ModelsSettings />}
+          {tab === "tool-guard" && isOwner && <ToolGuardSettings />}
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "clients" && <AuthorizedClientsSettings />}
 

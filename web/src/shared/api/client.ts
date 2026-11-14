@@ -34,6 +34,7 @@ import type {
   TraceEventsResponse,
   ToolApproval,
   DeviceToolGuard,
+  ToolGuardSettings,
 } from "./types";
 
 export class APIError extends Error {
@@ -279,6 +280,9 @@ export const api = {
   saveAgent: (
     x: Omit<AgentSettings, "configured" | "source_id" | "api_credentials">,
   ) => request<AgentSettings>("/agent/settings", "PUT", x),
+  toolGuard: () => request<ToolGuardSettings>("/agent/tool-guard"),
+  saveToolGuard: (value: ToolGuardSettings) =>
+    request<ToolGuardSettings>("/agent/tool-guard", "PUT", value),
   apiCredentials: () => request<APICredential[]>("/agent/api-credentials"),
   createAPICredential: (value: APICredentialInput) =>
     request<APICredential>("/agent/api-credentials", "POST", value),
