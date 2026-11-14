@@ -147,11 +147,11 @@ Card 当前 Health = 最新 Check-in，不单独维护可写的 `card.health`。
 
 ## 10. 删除 Schedule
 
-已经产生 Turn 历史的 Schedule 不能硬删除，因为 Schedule Turn 是审计事实；应将 Schedule 设为 disabled。
+未产生 Turn 历史的 Schedule 可以直接物理删除。
 
-尚无 Turn 历史的 Schedule 可以删除。
+已经产生 Turn 历史的 Schedule 不能物理删除，因为 Schedule Turn 是审计事实；删除请求会自动执行软归档（将 `enabled` 设为 `false` 并记录 `archived_at`），使规则从活跃列表隐藏且不再被编辑或触发，同时完整保留数据库 `ON DELETE RESTRICT` 外键与 Turn/Attempt 审计链。
 
-数据库使用 RESTRICT 保护 Schedule → Turn 历史关系，应用层也在删除前检查历史。
+重复删除已归档的 Schedule 或对已归档 Schedule 执行更新/触发会统一返回 `NotFound`。
 
 ## 11. 外部 Scheduler / Agent
 

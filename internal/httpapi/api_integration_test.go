@@ -404,13 +404,59 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	if badActivityLimit.Code != http.StatusBadRequest {
 		t.Fatalf("invalid activity limit accepted: %d %s", badActivityLimit.Code, badActivityLimit.Body.String())
 	}
+	// 删除已有执行历史的定时日程应软归档成功（204），并从卡详情和项目日程列表消失，同时保留历史 Turn。
 	deleteWithHistory := doJSON(
 		t, handler, http.MethodDelete,
 		"/api/v1/cards/"+ongoing.ID.String()+"/schedules/"+scheduleData.ID,
 		nil, cookie, nil,
 	)
-	if deleteWithHistory.Code != http.StatusConflict {
-		t.Fatalf("schedule with trigger history was deletable: %d %s", deleteWithHistory.Code, deleteWithHistory.Body.String())
+	if deleteWithHistory.Code != http.StatusNoContent {
+		t.Fatalf("soft-archive schedule with trigger history: %d %s", deleteWithHistory.Code, deleteWithHistory.Body.String())
+	}
+	redeleteArchived := doJSON(
+		t, handler, http.MethodDelete,
+		"/api/v1/cards/"+ongoing.ID.String()+"/schedules/"+scheduleData.ID,
+		nil, cookie, nil,
+	)
+	if redeleteArchived.Code != http.StatusNotFound {
+		t.Fatalf("re-delete soft-archived schedule: got %d, want 404 (%s)", redeleteArchived.Code, redeleteArchived.Body.String())
+	}
+	cardSchedulesAfterDelete := doJSON(
+		t, handler, http.MethodGet,
+		"/api/v1/cards/"+ongoing.ID.String()+"/schedules",
+		nil, cookie, nil,
+	)
+	if cardSchedulesAfterDelete.Code != http.StatusOK {
+		t.Fatalf("list card schedules after soft-archive: %d %s", cardSchedulesAfterDelete.Code, cardSchedulesAfterDelete.Body.String())
+	}
+	var remainingCardSchedules []scheduleResponse
+	decodeRecorder(t, cardSchedulesAfterDelete, &remainingCardSchedules)
+	if len(remainingCardSchedules) != 1 || remainingCardSchedules[0].ID != intervalScheduleData.ID {
+		t.Fatalf("expected only interval schedule remaining after soft-archive, got %+v", remainingCardSchedules)
+	}
+	projectSchedulesAfterDelete := doJSON(
+		t, handler, http.MethodGet,
+		"/api/v1/projects/"+project.ID+"/schedules",
+		nil, cookie, nil,
+	)
+	if projectSchedulesAfterDelete.Code != http.StatusOK {
+		t.Fatalf("list project schedules after soft-archive: %d %s", projectSchedulesAfterDelete.Code, projectSchedulesAfterDelete.Body.String())
+	}
+	var remainingProjectSchedules []projectScheduleResponse
+	decodeRecorder(t, projectSchedulesAfterDelete, &remainingProjectSchedules)
+	for _, item := range remainingProjectSchedules {
+		if item.ID == scheduleData.ID {
+			t.Fatalf("archived schedule %s still present in project schedules", scheduleData.ID)
+		}
+	}
+	var preservedTurns int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM card_turns WHERE schedule_id = $1
+	`, scheduleData.ID).Scan(&preservedTurns); err != nil {
+		t.Fatal(err)
+	}
+	if preservedTurns == 0 {
+		t.Fatal("expected historical turns for soft-archived schedule to be preserved")
 	}
 
 	otherWorkspace, err := dataStore.CreateWorkspace(context.Background(), "Other Workspace")

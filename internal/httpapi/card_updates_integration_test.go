@@ -192,6 +192,44 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 			t.Fatalf("%s notification preview=%q want=%q", message.Type, target.MessagePreview, want)
 		}
 	}
+
+	ongoingCard, err := dataStore.CreateOngoingCard(ctx, workspaceID, project.ID, sourceID, "Soft Archive SSE", "", uuid.NullUUID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ongoingRev := func() string {
+		t.Helper()
+		updates, err := api.cardUpdates(ctx, workspaceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range updates {
+			if candidate.ID == ongoingCard.ID.String() {
+				return candidate.Revision
+			}
+		}
+		t.Fatalf("ongoing card %s missing from updates", ongoingCard.ID)
+		return ""
+	}
+	sched, err := dataStore.CreateSchedule(ctx, workspaceID, ongoingCard.ID, domain.ScheduleRule{
+		Frequency: domain.ScheduleDaily,
+		Hour:      9,
+		Minute:    0,
+		Timezone:  "Asia/Shanghai",
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.CreateScheduleTurn(ctx, workspaceID, sched.ID, time.Now().UTC(), "scheduled run"); err != nil {
+		t.Fatal(err)
+	}
+	beforeArchiveRev := ongoingRev()
+	if err := dataStore.DeleteSchedule(ctx, workspaceID, ongoingCard.ID, sched.ID); err != nil {
+		t.Fatalf("soft-archive schedule: %v", err)
+	}
+	if afterArchiveRev := ongoingRev(); afterArchiveRev == beforeArchiveRev {
+		t.Fatal("soft-archiving schedule did not change card update revision")
+	}
 }
 
 func TestWorkspaceCardStreamDeliversUpdates(t *testing.T) {

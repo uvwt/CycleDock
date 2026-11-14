@@ -57,7 +57,7 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
    SELECT MAX(sequence) AS sequence, MAX(cancelled_at) AS cancelled_at FROM card_turns WHERE workspace_id=c.workspace_id AND card_id=c.id
  ) t ON true
  LEFT JOIN LATERAL (
-   SELECT MAX(updated_at) AS updated_at, COUNT(*) AS count FROM card_schedules WHERE workspace_id=c.workspace_id AND card_id=c.id
+   SELECT MAX(updated_at) AS updated_at, COUNT(*) FILTER (WHERE archived_at IS NULL) AS count FROM card_schedules WHERE workspace_id=c.workspace_id AND card_id=c.id
  ) s ON true
  -- 待人工确认数量决定焦点列表，审批挂起与处理完成都要让其他页面刷新卡片列表。
  LEFT JOIN LATERAL (

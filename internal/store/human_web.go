@@ -409,6 +409,16 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 		return err
 	}
 	q := db.New(tx)
+	if _, err := q.GetCardSchedule(ctx, db.GetCardScheduleParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		ID:          scheduleID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
 	hasHistory, err := q.ScheduleHasTurns(ctx, db.ScheduleHasTurnsParams{
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
@@ -417,16 +427,22 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 	if err != nil {
 		return err
 	}
+	var affected int64
 	if hasHistory {
-		// Scheduled Turn 是长期任务事实。已有历史后不允许级联删除 Schedule，
-		// 否则会破坏 Turn/Attempt 审计链；此时应把 Schedule disabled。
-		return fmt.Errorf("%w: schedule has turn history; disable it instead", domain.ErrConflict)
+		// 已有 Turn 历史的 Schedule 不能物理删除，否则会破坏 Turn/Attempt 审计链；
+		// 软归档同时停用并隐藏规则，使历史关联完整保留且后续不再触发。
+		affected, err = q.ArchiveCardSchedule(ctx, db.ArchiveCardScheduleParams{
+			WorkspaceID: workspaceID,
+			CardID:      cardID,
+			ID:          scheduleID,
+		})
+	} else {
+		affected, err = q.DeleteCardSchedule(ctx, db.DeleteCardScheduleParams{
+			WorkspaceID: workspaceID,
+			CardID:      cardID,
+			ID:          scheduleID,
+		})
 	}
-	affected, err := q.DeleteCardSchedule(ctx, db.DeleteCardScheduleParams{
-		WorkspaceID: workspaceID,
-		CardID:      cardID,
-		ID:          scheduleID,
-	})
 	if err != nil {
 		return err
 	}

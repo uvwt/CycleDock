@@ -23,7 +23,7 @@ Creates an enabled schedule with card_id and rule (frequency daily/weekly/monthl
 Pass card_id, schedule_id, the full rule, and enabled; set enabled=false to pause without deleting history. Read the rule from list_schedules before changing it.
 
 ### delete_schedule
-Deletes only before there is any Schedule Turn history; otherwise use update_schedule to disable.
+Removes a schedule from an Ongoing Card: deletes permanently when there is no Schedule Turn history, or soft-archives (disables and hides while preserving historical Turns) when Turn history exists.
 
 ## Card writes
 

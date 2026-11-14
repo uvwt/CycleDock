@@ -225,22 +225,114 @@ func TestSchedulerDuplicateOccurrenceCreatesOneTurnAndPausedSkips(t *testing.T) 
 	`, f.WorkspaceID, f.CardID, schedule.ID); err == nil {
 		t.Fatal("database cascade-deleted schedule turn history")
 	}
-	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, schedule.ID); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("delete schedule with turn history error=%v, want ErrConflict", err)
+	// 删除未触发过的日程应直接物理移除；删除已产生 Turn 历史的日程应执行软归档并保留审计链。
+	unusedSchedule, err := s.CreateSchedule(ctx, f.WorkspaceID, f.CardID, domain.ScheduleRule{
+		Frequency: domain.ScheduleDaily,
+		Hour:      10,
+		Minute:    0,
+		Timezone:  "Asia/Shanghai",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, unusedSchedule.ID); err != nil {
+		t.Fatalf("delete unused schedule: %v", err)
+	}
+	var unusedRowCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM card_schedules WHERE id = $1
+	`, unusedSchedule.ID).Scan(&unusedRowCount); err != nil {
+		t.Fatal(err)
+	}
+	if unusedRowCount != 0 {
+		t.Fatalf("unused schedule row count=%d, want 0 (physical delete)", unusedRowCount)
+	}
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, unusedSchedule.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("re-delete physically deleted schedule error=%v, want ErrNotFound", err)
+	}
+
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, schedule.ID); err != nil {
+		t.Fatalf("soft-archive schedule with turn history: %v", err)
+	}
+	var archivedEnabled bool
+	var archivedAt *time.Time
+	if err := s.pool.QueryRow(ctx, `
+		SELECT enabled, archived_at FROM card_schedules WHERE id = $1
+	`, schedule.ID).Scan(&archivedEnabled, &archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if archivedEnabled || archivedAt == nil {
+		t.Fatalf("expected soft-archived schedule disabled with archived_at, got enabled=%v archived_at=%v", archivedEnabled, archivedAt)
+	}
+	var preservedTurnCount int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM card_turns WHERE schedule_id = $1 AND scheduled_for = $2
+	`, schedule.ID, due).Scan(&preservedTurnCount); err != nil {
+		t.Fatal(err)
+	}
+	if preservedTurnCount != 1 {
+		t.Fatalf("preserved turn count=%d, want 1", preservedTurnCount)
+	}
+	activeAfterArchive, err := s.ListSchedules(ctx, f.WorkspaceID, f.CardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range activeAfterArchive {
+		if item.ID == schedule.ID {
+			t.Fatalf("soft-archived schedule %s still visible in ListSchedules", schedule.ID)
+		}
+	}
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, schedule.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("re-delete soft-archived schedule error=%v, want ErrNotFound", err)
+	}
+	if _, err := s.UpdateSchedule(ctx, UpdateScheduleParams{
+		WorkspaceID: f.WorkspaceID,
+		CardID:      f.CardID,
+		ScheduleID:  schedule.ID,
+		Rule:        rule,
+		Enabled:     true,
+		After:       now,
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("update soft-archived schedule error=%v, want ErrNotFound", err)
+	}
+	if _, _, err := s.ProcessDueScheduleTurn(ctx, f.WorkspaceID, schedule.ID, now); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("process soft-archived schedule turn error=%v, want ErrNotFound", err)
+	}
+	if _, err := s.CreateScheduleTurn(ctx, f.WorkspaceID, schedule.ID, now.Add(time.Hour), "should fail"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("create turn for soft-archived schedule error=%v, want ErrNotFound", err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE card_schedules SET next_trigger_at = $2 WHERE id = $1
+	`, schedule.ID, due); err != nil {
+		t.Fatal(err)
+	}
+	processedAfterArchive, err := s.ProcessDueScheduleTurns(ctx, f.WorkspaceID, now, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processedAfterArchive) != 0 {
+		t.Fatalf("archived schedule unexpectedly processed due turns: %+v", processedAfterArchive)
 	}
 
 	if err := s.SetOngoingState(ctx, f.WorkspaceID, f.CardID, f.HumanID, domain.OngoingStatePaused, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE card_schedules SET next_trigger_at = $2 WHERE id = $1`, schedule.ID, due); err != nil {
+	pausedRuleSchedule, err := s.CreateSchedule(ctx, f.WorkspaceID, f.CardID, rule, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, created, err := s.ProcessDueScheduleTurn(ctx, f.WorkspaceID, schedule.ID, now)
+	if _, err := s.pool.Exec(ctx, `UPDATE card_schedules SET next_trigger_at = $2 WHERE id = $1`, pausedRuleSchedule.ID, due); err != nil {
+		t.Fatal(err)
+	}
+	_, created, err := s.ProcessDueScheduleTurn(ctx, f.WorkspaceID, pausedRuleSchedule.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created {
 		t.Fatal("paused ongoing card created a scheduled turn")
+	}
+	if err := s.DeleteSchedule(ctx, f.WorkspaceID, f.CardID, pausedRuleSchedule.ID); err != nil {
+		t.Fatalf("clean up paused test schedule: %v", err)
 	}
 
 	if err := s.SetOngoingState(ctx, f.WorkspaceID, f.CardID, f.HumanID, domain.OngoingStateActive, now); err != nil {

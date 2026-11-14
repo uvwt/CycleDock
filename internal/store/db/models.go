@@ -125,6 +125,7 @@ type CardSchedule struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	IntervalMinutes pgtype.Int4        `json:"interval_minutes"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
 }
 
 type CardToolApproval struct {

@@ -187,7 +187,7 @@ func (r attemptToolRuntime) deleteScheduleTool(ctx adkagent.Context, args map[st
 	if err != nil {
 		return nil, err
 	}
-	// 有 Turn 历史的 Schedule 不可删除，只能更新为 disabled。
+	// 未产生 Turn 历史的 Schedule 直接物理删除；已有历史的则软归档以保留 Turn 审计链。
 	if err := r.store.DeleteSchedule(ctx, r.context.WorkspaceID, cardID, scheduleID); err != nil {
 		return nil, err
 	}

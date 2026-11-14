@@ -309,6 +309,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) latest_attempt ON true
 WHERE cs.workspace_id = sqlc.arg(workspace_id)
+  AND cs.archived_at IS NULL
   AND c.project_id = sqlc.arg(project_id)
   AND c.kind = 'ongoing'
 ORDER BY cs.enabled DESC, cs.next_trigger_at, cs.id;
@@ -423,6 +424,7 @@ SELECT *
 FROM card_schedules
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND card_id = sqlc.arg(card_id)
+  AND archived_at IS NULL
 ORDER BY created_at, id;
 
 -- name: GetCardSchedule :one
@@ -430,7 +432,8 @@ SELECT *
 FROM card_schedules
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND card_id = sqlc.arg(card_id)
-  AND id = sqlc.arg(id);
+  AND id = sqlc.arg(id)
+  AND archived_at IS NULL;
 
 -- name: LatestCheckinForCard :one
 SELECT *
@@ -523,13 +526,25 @@ SET enabled = sqlc.arg(enabled),
     updated_at = now()
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND card_id = sqlc.arg(card_id)
-  AND id = sqlc.arg(id);
+  AND id = sqlc.arg(id)
+  AND archived_at IS NULL;
+
+-- name: ArchiveCardSchedule :execrows
+UPDATE card_schedules
+SET enabled = false,
+    archived_at = COALESCE(archived_at, now()),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id)
+  AND archived_at IS NULL;
 
 -- name: DeleteCardSchedule :execrows
 DELETE FROM card_schedules
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND card_id = sqlc.arg(card_id)
-  AND id = sqlc.arg(id);
+  AND id = sqlc.arg(id)
+  AND archived_at IS NULL;
 
 -- name: ScheduleHasTurns :one
 SELECT EXISTS (

@@ -329,13 +329,25 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create audited Schedule Turn: %v", err)
 	}
-	rejectedDelete, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+	deletedAudited := callMCPTool[mcpserver.DeleteScheduleOutput](t, ctx, clientSession, "delete_schedule", map[string]any{
+		"card_id": ongoing.Card.ID, "schedule_id": auditedSchedule.Schedule.ID,
+	})
+	if !deletedAudited.Deleted {
+		t.Fatalf("soft-archiving audited schedule failed: %+v", deletedAudited)
+	}
+	afterAuditedDelete := callMCPTool[mcpserver.ListSchedulesOutput](t, ctx, clientSession, "list_schedules", map[string]any{
+		"card_id": ongoing.Card.ID,
+	})
+	if len(afterAuditedDelete.Schedules) != 0 {
+		t.Fatalf("soft-archived schedule still visible in list_schedules: %+v", afterAuditedDelete)
+	}
+	redeleteAudited, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "delete_schedule", Arguments: map[string]any{
 			"card_id": ongoing.Card.ID, "schedule_id": auditedSchedule.Schedule.ID,
 		},
 	})
-	if err != nil || !rejectedDelete.IsError {
-		t.Fatalf("deleting audited schedule should be refused: result=%+v err=%v", rejectedDelete, err)
+	if err != nil || !redeleteAudited.IsError {
+		t.Fatalf("re-deleting soft-archived schedule should fail with not_found: result=%+v err=%v", redeleteAudited, err)
 	}
 	rejectedWrongKind, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "create_schedule", Arguments: map[string]any{"card_id": created.Card.ID, "rule": rule},
