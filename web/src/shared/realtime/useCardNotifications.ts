@@ -131,6 +131,11 @@ export function useCardNotifications(workspaceID: string) {
             void query.invalidateQueries({
               queryKey: keys.cards(card.project_id),
             });
+            if (card.kind === "discussion") {
+              void query.invalidateQueries({
+                queryKey: keys.mainDiscussion(card.project_id),
+              });
+            }
             void query.invalidateQueries({
               queryKey: keys.activity(card.project_id),
             });
@@ -138,7 +143,7 @@ export function useCardNotifications(workspaceID: string) {
               queryKey: keys.schedules(card.project_id),
             });
             const body = cardNotificationBody(card, previous);
-            if (!body) continue;
+            if (!body || card.notifications_muted) continue;
             const detail: CardMessageDetail = {
               ...card,
               body,

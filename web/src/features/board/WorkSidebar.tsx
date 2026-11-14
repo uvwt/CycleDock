@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Bell,
+  BellOff,
   ChevronDown,
   ChevronRight,
   Pencil,
@@ -16,6 +18,7 @@ import {
   patchCachedCard,
   removeCachedCard,
 } from "../../shared/lib/card-cache";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -136,6 +139,8 @@ export function WorkSidebar({
     },
   });
 
+  const muteMutation = useCardNotificationMute();
+
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
     onSuccess: (_, deletedCard) => {
@@ -209,8 +214,26 @@ export function WorkSidebar({
                   {groupCards.length ? (
                     groupCards.map((card) => {
                       const active = card.id === activeCardID;
+                      const isMuted = Boolean(card.notifications_muted);
                       const summary = stripMarkdownSummary(card.description);
                       const swipeActions = [
+                        {
+                          key: "mute",
+                          label: isMuted ? t("取消静音") : t("静音通知"),
+                          icon: isMuted ? (
+                            <Bell className="size-4" />
+                          ) : (
+                            <BellOff className="size-4" />
+                          ),
+                          variant: "secondary" as const,
+                          onClick: () => {
+                            muteMutation.mutate({
+                              id: card.id,
+                              muted: !isMuted,
+                              projectID: card.project_id,
+                            });
+                          },
+                        },
                         {
                           key: "pin",
                           label: card.pinned_at ? t("取消置顶") : t("置顶"),
@@ -252,6 +275,7 @@ export function WorkSidebar({
                           key={card.id}
                           active={active}
                           pinned={Boolean(card.pinned_at)}
+                          muted={isMuted}
                           onClick={() => onSelect(card)}
                           swipeActions={swipeActions}
                           icon={

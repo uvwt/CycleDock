@@ -14,7 +14,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { ListPlus, Pin } from "lucide-react";
+import { BellOff, ListPlus, Pin } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -198,6 +198,9 @@ function TaskCard({
                 {card.pinned_at && (
                   <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
                 )}
+                {card.notifications_muted && (
+                  <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                )}
               </div>
               {updatedTime && (
                 <span className="shrink-0 text-[11px] font-normal tabular-nums text-faint/70">
@@ -239,6 +242,9 @@ function TaskCard({
               </h3>
               {card.pinned_at && (
                 <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+              )}
+              {card.notifications_muted && (
+                <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
               )}
             </div>
             {updatedTime && (

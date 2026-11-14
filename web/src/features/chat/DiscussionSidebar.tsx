@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { MessageSquareText, Pencil, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
+import {
+  Bell,
+  BellOff,
+  MessageSquareText,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -10,6 +20,7 @@ import {
   patchCachedCard,
   removeCachedCard,
 } from "../../shared/lib/card-cache";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import { CardActions } from "../cards/CardActions";
 import type { Card } from "../../shared/api/types";
 import {
@@ -104,6 +115,8 @@ export function DiscussionSidebar({
       toast.error("操作失败：" + String(err));
     },
   });
+
+  const muteMutation = useCardNotificationMute();
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
@@ -214,7 +227,25 @@ export function DiscussionSidebar({
           {filtered.map((card) => {
             const isMain = card.id === mainDiscussionID;
             const isPinned = isMain || Boolean(card.pinned_at);
+            const isMuted = Boolean(card.notifications_muted);
             const swipeActions = [
+              {
+                key: "mute",
+                label: isMuted ? t("取消静音") : t("静音通知"),
+                icon: isMuted ? (
+                  <Bell className="size-4" />
+                ) : (
+                  <BellOff className="size-4" />
+                ),
+                variant: "secondary" as const,
+                onClick: () => {
+                  muteMutation.mutate({
+                    id: card.id,
+                    muted: !isMuted,
+                    projectID: card.project_id,
+                  });
+                },
+              },
               ...(!isMain
                 ? [
                     {
@@ -260,6 +291,7 @@ export function DiscussionSidebar({
                 key={card.id}
                 active={card.id === activeCardID}
                 pinned={isPinned}
+                muted={isMuted}
                 onClick={() => handleSelect(card)}
                 swipeActions={swipeActions.length ? swipeActions : undefined}
                 icon={

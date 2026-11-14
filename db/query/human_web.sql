@@ -555,3 +555,11 @@ SET preferred_model_route_id = sqlc.arg(preferred_model_route_id),
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND id = sqlc.arg(id)
 RETURNING *;
+
+-- name: SetCardNotificationsMuted :one
+UPDATE cards
+SET notifications_muted = sqlc.arg(notifications_muted),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND id = sqlc.arg(id)
+RETURNING *;

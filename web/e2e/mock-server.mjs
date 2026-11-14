@@ -719,6 +719,18 @@ http
             Object.assign(card, await body(req));
             return data(res, card);
           }
+          if (rest === "pin" && req.method === "POST") {
+            const input = await body(req);
+            card.pinned_at = input.pinned ? now() : undefined;
+            card.updated_at = now();
+            return data(res, card);
+          }
+          if (rest === "notifications" && req.method === "POST") {
+            const input = await body(req);
+            card.notifications_muted = Boolean(input.muted);
+            card.updated_at = now();
+            return data(res, card);
+          }
           if (!rest && req.method === "DELETE") {
             cards.splice(cards.indexOf(card), 1);
             return data(res, null, 204);

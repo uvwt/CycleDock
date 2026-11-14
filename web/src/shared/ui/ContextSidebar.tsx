@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  BellOff,
   BriefcaseBusiness,
   CalendarClock,
   Cpu,
@@ -307,6 +308,7 @@ export function ContextSidebarSkeleton({
 export function ContextSidebarItem({
   active,
   pinned = false,
+  muted = false,
   icon,
   title,
   description,
@@ -318,6 +320,7 @@ export function ContextSidebarItem({
 }: {
   active: boolean;
   pinned?: boolean;
+  muted?: boolean;
   icon?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
@@ -327,6 +330,7 @@ export function ContextSidebarItem({
   swipeActions?: SwipeActionItem[];
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   const content = (
     <div
       className={`group relative flex w-full items-center rounded-xl transition-all duration-150 ${
@@ -361,6 +365,11 @@ export function ContextSidebarItem({
                 </p>
                 {pinned ? (
                   <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                ) : null}
+                {muted ? (
+                  <span title={t("通知已静音")} aria-label={t("通知已静音")}>
+                    <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                  </span>
                 ) : null}
               </div>
               {meta && !description ? (

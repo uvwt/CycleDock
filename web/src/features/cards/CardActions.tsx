@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
+  Bell,
+  BellOff,
   FileText,
   MoreHorizontal,
   Pencil,
@@ -17,6 +19,7 @@ import {
   patchCachedCard,
   removeCachedCard,
 } from "../../shared/lib/card-cache";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import {
   Button,
   ConfirmDialog,
@@ -121,6 +124,8 @@ export function CardActions({
     },
   });
 
+  const toggleMute = useCardNotificationMute(card);
+
   const remove = useMutation({
     mutationFn: () => api.deleteCard(card.id),
     onSuccess: () => {
@@ -144,11 +149,6 @@ export function CardActions({
     setTitle(card.title);
     setDescription(card.description);
     setEditOpen(true);
-  }
-
-  // 主讨论不允许编辑信息、置顶切换、归档或删除，无需渲染空操作菜单
-  if (preserve && card.kind === "discussion") {
-    return null;
   }
 
   const triggerButton =
@@ -258,6 +258,32 @@ export function CardActions({
                   </button>
                 )}
 
+                <button
+                  type="button"
+                  disabled={toggleMute.isPending}
+                  onClick={() => {
+                    setDrawerOpen(false);
+                    toggleMute.mutate({
+                      id: card.id,
+                      muted: !card.notifications_muted,
+                      projectID: card.project_id,
+                    });
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80 disabled:opacity-50"
+                >
+                  {card.notifications_muted ? (
+                    <>
+                      <Bell className="size-4 text-muted-foreground" />
+                      <span>{t("取消静音")}</span>
+                    </>
+                  ) : (
+                    <>
+                      <BellOff className="size-4 text-muted-foreground" />
+                      <span>{t("静音通知")}</span>
+                    </>
+                  )}
+                </button>
+
                 {!preserve && (
                   <>
                     <div className="my-1 h-px bg-line/60" />
@@ -327,6 +353,29 @@ export function CardActions({
               )}
             </MenuItem>
           )}
+
+          <MenuItem
+            disabled={toggleMute.isPending}
+            onSelect={() =>
+              toggleMute.mutate({
+                id: card.id,
+                muted: !card.notifications_muted,
+                projectID: card.project_id,
+              })
+            }
+          >
+            {card.notifications_muted ? (
+              <>
+                <Bell className="size-4" />
+                {t("取消静音")}
+              </>
+            ) : (
+              <>
+                <BellOff className="size-4" />
+                {t("静音通知")}
+              </>
+            )}
+          </MenuItem>
 
           {!preserve && (
             <>

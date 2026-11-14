@@ -48,7 +48,7 @@ VALUES (
     $11, $12,
     $13, $14
 )
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 `
 
 type CreateAgentCardParams struct {
@@ -106,6 +106,7 @@ func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams
 		&i.PinnedAt,
 		&i.ConfirmationRound,
 		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
 	)
 	return i, err
 }
@@ -218,7 +219,7 @@ func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventReq
 }
 
 const getCreatedCardRequest = `-- name: GetCreatedCardRequest :one
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 FROM cards
 WHERE workspace_id = $1
   AND created_by_source_id = $2
@@ -254,6 +255,7 @@ func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardR
 		&i.PinnedAt,
 		&i.ConfirmationRound,
 		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
 	)
 	return i, err
 }
@@ -345,7 +347,7 @@ func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCard
 
 const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id, c.notifications_muted,
     p.name AS project_name,
     COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
@@ -421,6 +423,7 @@ type ListWorkspaceCardSummariesRow struct {
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound     int64              `json:"confirmation_round"`
 	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted    bool               `json:"notifications_muted"`
 	ProjectName           string             `json:"project_name"`
 	Health                string             `json:"health"`
 	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
@@ -457,6 +460,7 @@ func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uu
 			&i.PinnedAt,
 			&i.ConfirmationRound,
 			&i.PreferredModelRouteID,
+			&i.NotificationsMuted,
 			&i.ProjectName,
 			&i.Health,
 			&i.CurrentAttemptStatus,

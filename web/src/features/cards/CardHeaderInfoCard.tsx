@@ -1,6 +1,6 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Link2, ListChecks, Calendar, Activity, Check, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Link2, ListChecks, Calendar, Activity, Bell, BellOff, Check, CheckCircle2, Clock, AlertCircle, X, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +8,7 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import type { Card, CardDetail } from "../../shared/api/types";
 import { patchCachedCard } from "../../shared/lib/card-cache";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import type { TaskProgress } from "../../shared/realtime/cardStreamState";
 import { Badge } from "../../shared/ui/badge";
 import { Spinner } from "../../shared/ui/components";
@@ -141,6 +142,9 @@ export function CardHeaderInfoCard({
     normalizedCurrentStep &&
       task?.steps?.some((step) => step.title.trim() === normalizedCurrentStep),
   );
+  const toggleMute = useCardNotificationMute(card);
+  const isMuted = Boolean(card.notifications_muted);
+
   const showDistinctTaskTitle = Boolean(
     task?.title?.trim() && task.title.trim() !== card.title.trim(),
   );
@@ -189,6 +193,50 @@ export function CardHeaderInfoCard({
       {card.description?.trim() ? (
         <CardDescriptionCollapsible description={card.description.trim()} />
       ) : null}
+
+      {/* 推送通知开关：所有卡片（含主聊天、讨论、Todo、Ongoing）统一提供 */}
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-line/50 bg-canvas/50 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {isMuted ? (
+            <BellOff className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <Bell className="size-3.5 shrink-0 text-foreground/80" />
+          )}
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-foreground">
+              {t("推送通知")}
+            </div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {isMuted ? t("通知已静音") : t("接收新消息推送")}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!isMuted}
+          aria-label={isMuted ? t("取消静音") : t("静音通知")}
+          disabled={toggleMute.isPending}
+          onClick={() =>
+            toggleMute.mutate({
+              id: card.id,
+              muted: !isMuted,
+              projectID: card.project_id,
+            })
+          }
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 ${
+            !isMuted
+              ? "border-primary/80 bg-primary"
+              : "border-line bg-muted"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block size-3.5 rounded-full bg-white shadow-xs transition-transform ${
+              !isMuted ? "translate-x-4.5" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
 
       {card.kind === "ongoing" && detail?.last_checkin && (
         <div className="space-y-1.5 rounded-lg border border-line/50 bg-canvas/50 p-2.5 text-xs">

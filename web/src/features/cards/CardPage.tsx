@@ -12,7 +12,7 @@ import {
 import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Check, Info, PanelLeft } from "lucide-react";
+import { BellOff, Check, Info, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -811,6 +811,12 @@ function CardPageContent({
                       ? t("未命名定时任务")
                       : t("未命名卡片"))}
               </span>
+              {card.notifications_muted && (
+                <BellOff
+                  aria-label={t("通知已静音")}
+                  className="size-3 shrink-0 text-muted-foreground/75"
+                />
+              )}
               {liveTaskTotal > 0 && (
                 <span className="shrink-0 tabular-nums text-[11px] opacity-80">
                   {liveTaskCompleted}/{liveTaskTotal}
@@ -940,6 +946,12 @@ function CardPageContent({
                       ? t("未命名定时任务")
                       : t("未命名卡片"))}
               </span>
+              {card.notifications_muted && (
+                <BellOff
+                  aria-label={t("通知已静音")}
+                  className="size-3 shrink-0 text-muted-foreground/75"
+                />
+              )}
             </button>
             {isOngoing && (
               <OngoingHealthBadge

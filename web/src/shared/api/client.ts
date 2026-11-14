@@ -175,6 +175,8 @@ export const api = {
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
   pinCard: (id: string, pinned: boolean) =>
     request<Card>(`/cards/${id}/pin`, "POST", { pinned }),
+  toggleCardNotifications: (id: string, muted: boolean) =>
+    request<Card>(`/cards/${id}/notifications`, "POST", { muted }),
   moveTodo: (id: string, state: TodoState) =>
     request<Card>(`/cards/${id}/move`, "POST", { state }),
   archiveDiscussion: (id: string) =>
