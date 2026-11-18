@@ -1512,3 +1512,22 @@ test("只有系统触发失败记录且无历史消息时正常展示，不显�
   assert.match(html, /定时检查执行异常/);
   assert.doesNotMatch(html, /从第一句话开始|开始协作/);
 });
+
+test("正式 end_turn 回复已落库或 live.replied=true 时，即使 currentAttempt 仍为 running 也不渲染三个点加载气泡", () => {
+  const runningAttempt = { ...attempt, status: "running", finished_at: undefined };
+  const finalMsg = {
+    ...result,
+    type: "message",
+    message: { type: "text", content: result.content, end_turn: true },
+  };
+  const htmlWithFinalMsg = render([comment, finalMsg], runningAttempt);
+  assert.match(htmlWithFinalMsg, /已生成卡片/);
+  assert.doesNotMatch(htmlWithFinalMsg, /aria-label="正在思考并生成回复"/);
+  const htmlWithLiveReplied = render([comment], runningAttempt, {
+    attemptID: runningAttempt.id,
+    stage: "正在执行",
+    replied: true,
+    replies: [],
+  });
+  assert.doesNotMatch(htmlWithLiveReplied, /aria-label="正在思考并生成回复"/);
+});

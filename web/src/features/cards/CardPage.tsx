@@ -254,6 +254,8 @@ function CardPageContent({
     queryKey: keys.card(cardID),
     queryFn: () => api.card(cardID),
     enabled: Boolean(cardID),
+    // 切回卡片时缓存里的 running 只是离开前的快照，先刷新再决定是否显示执行中占位。
+    refetchOnMount: "always",
   });
   const card = detail.data?.card;
   const actualProjectID = card?.project_id || projectID;
@@ -266,7 +268,7 @@ function CardPageContent({
   }, [card?.project_id, activeProjectID, setProjectID]);
 
   const activeAttemptStatus = stream.live
-    ? stream.live.finished
+    ? stream.live.finished || stream.live.replied
       ? "completed"
       : "running"
     : detail.data?.current_attempt?.status;

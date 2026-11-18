@@ -1164,8 +1164,13 @@ export function ConversationView({
   }
   const displayEvents = rows.map((row) => row.event);
   const displayLive = live ? { ...live, replies: pendingReplies } : null;
+  // 实时层已确认本轮结束回复落库时，先按已回复处理，避免数据库 running 再渲染执行中占位。
+  const effectiveAttempt =
+    live?.replied && currentAttempt?.status === "running"
+      ? null
+      : currentAttempt;
   const { byEvent, standalone, statusByReply, running } =
-    groupExecutionAttempts(orderedEvents, currentAttempt, attemptHistory);
+    groupExecutionAttempts(orderedEvents, effectiveAttempt, attemptHistory);
   const timelineItems = buildTimelineItems(rows, standalone, executions);
 
   const groupStarts = new Set<string>();

@@ -225,6 +225,13 @@ func (r attemptToolRuntime) internalHandler(
 				r.replies.ended = true
 				// 先保存 ADK FunctionResponse，然后停止循环；Runner 负责正常结算。
 				ctx.Actions().SkipSummarization = true
+				if r.live != nil && !r.context.IsBuiltInProactive && !reused {
+					// 正式结束回复已落库，但 ADK 还要写 FunctionResponse 并完成 Session 收尾。
+					// Attempt 继续保持 running，这里只通知浏览器先收起执行中占位。
+					r.live.Publish(r.context.CardID, realtime.Event{
+						Type: "attempt.replied", AttemptID: r.context.AttemptID.String(),
+					})
+				}
 			}
 			return map[string]any{
 				"ok": true, "event_id": eventID.String(), "reused": reused,

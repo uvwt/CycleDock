@@ -23,6 +23,9 @@ type Event struct {
 	ReplyID    string         `json:"reply_id,omitempty"`
 	EventID    string         `json:"event_id,omitempty"`
 	Replies    []ReplyPreview `json:"replies,omitempty"`
+	// Replied 表示本次 Attempt 的 end_turn 正式回复已经落库，只剩 ADK Session 收尾。
+	// 浏览器据此收起执行中占位，Attempt 终态仍以数据库结算为准。
+	Replied bool `json:"replied,omitempty"`
 }
 
 type Subscriber struct {
@@ -63,6 +66,7 @@ type liveState struct {
 	deviceName string
 	task       *TaskProgress
 	startedAt  string
+	replied    bool
 }
 
 type Hub struct {
@@ -100,6 +104,7 @@ func (h *Hub) Subscribe(cardID uuid.UUID) (Subscriber, *Event) {
 			DeviceName: st.deviceName,
 			Task:       cloneTaskProgress(st.task),
 			StartedAt:  st.startedAt,
+			Replied:    st.replied,
 		}
 	}
 	return Subscriber{
@@ -219,6 +224,15 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 		}
 		st.task = cloneTaskProgress(event.Task)
 		h.live[cardID] = st
+	case "attempt.replied":
+		// 最终回复已发出：保留快照直到 attempt.finished，重连的浏览器也能立即收起占位。
+		st, active := h.live[cardID]
+		if !active || st.attemptID != event.AttemptID {
+			return
+		}
+		st.replied = true
+		h.live[cardID] = st
+		event.Replied = true
 	case "attempt.finished", "attempt.failed":
 		// A stale Attempt terminal event cannot delete or clear a newer Attempt.
 		if st, ok := h.live[cardID]; ok {

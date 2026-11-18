@@ -28,6 +28,8 @@ export type LiveAttempt = {
   task?: TaskProgress;
   startedAt?: string;
   finished?: boolean;
+  // replied 表示本轮 end_turn 正式回复已经落库，Attempt 可能仍在做 Session 收尾。
+  replied?: boolean;
   previous?: { attemptID: string; replies: LiveReply[]; startedAt?: string }[];
 };
 
@@ -41,6 +43,7 @@ export type CardStreamEvent = {
   device_name?: string;
   task?: TaskProgress;
   started_at?: string;
+  replied?: boolean;
   replies?: {
     id: string;
     order: number;
@@ -84,11 +87,14 @@ export function applyCardStreamEvent(
       deviceName: event.device_name || "",
       task: event.task,
       startedAt: event.started_at,
+      replied: event.replied,
     };
   }
   if (!live || live.attemptID !== event.attempt_id || live.finished)
     return live;
   switch (type) {
+    case "attempt.replied":
+      return { ...live, replied: true };
     case "attempt.stage":
       return { ...live, stage: event.stage || live.stage };
     case "attempt.device":
