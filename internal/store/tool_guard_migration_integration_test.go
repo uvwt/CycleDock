@@ -12,7 +12,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
-func TestGlobalToolGuardMigration000035_BackfillsSwitchesAndGlobalPolicy(t *testing.T) {
+func TestGlobalToolGuardMigration000037_BackfillsSwitchesAndGlobalPolicy(t *testing.T) {
 	s := requireIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
@@ -26,8 +26,8 @@ func TestGlobalToolGuardMigration000035_BackfillsSwitchesAndGlobalPolicy(t *test
 		}
 	}()
 
-	if err := goose.DownTo(database, migrations, 34); err != nil {
-		t.Fatalf("downgrade to migration 34: %v", err)
+	if err := goose.DownTo(database, migrations, 36); err != nil {
+		t.Fatalf("downgrade to migration 36: %v", err)
 	}
 
 	route1ID := uuid.New()
@@ -38,7 +38,7 @@ func TestGlobalToolGuardMigration000035_BackfillsSwitchesAndGlobalPolicy(t *test
 		INSERT INTO workspace_agent_settings (workspace_id, source_id, system_instructions)
 		VALUES ($1, $2, '')
 	`, f.WorkspaceID, f.AgentID); err != nil {
-		t.Fatalf("insert pre-000035 agent settings: %v", err)
+		t.Fatalf("insert pre-000037 agent settings: %v", err)
 	}
 	if _, err := database.Exec(`
 		INSERT INTO workspace_api_credentials (
@@ -85,7 +85,7 @@ func TestGlobalToolGuardMigration000035_BackfillsSwitchesAndGlobalPolicy(t *test
 	}
 
 	if err := goose.Up(database, migrations); err != nil {
-		t.Fatalf("apply migration 000035: %v", err)
+		t.Fatalf("apply migration 000037: %v", err)
 	}
 
 	// 验证工作区全局工具守卫择优回填结果：模式 strict、超时取非默认优先值、非空规则带目标名称前缀合并保留（避免丢失已有规则）。

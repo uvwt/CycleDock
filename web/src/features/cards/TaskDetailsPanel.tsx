@@ -168,6 +168,9 @@ export function ScheduleEditor({
         ...(schedule.day_of_month !== undefined
           ? { day_of_month: schedule.day_of_month }
           : {}),
+        ...(schedule.interval_minutes !== undefined
+          ? { interval_minutes: schedule.interval_minutes }
+          : {}),
       }),
     onSuccess: onChange,
     onError: showError,
