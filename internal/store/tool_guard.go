@@ -200,12 +200,9 @@ func (s *Store) IsCardScopeWhitelisted(ctx context.Context, workspaceID, cardID 
 }
 
 type DeviceToolGuardInput struct {
-	DeviceNodeID   string
-	DeviceName     string
-	Mode           string
-	ModelRouteID   *uuid.UUID
-	TimeoutSeconds int32
-	CustomRules    string
+	DeviceNodeID string
+	DeviceName   string
+	Enabled      bool
 }
 
 func toNullableUUID(u *uuid.UUID) uuid.NullUUID {
@@ -232,38 +229,19 @@ func (s *Store) ListDeviceToolGuards(ctx context.Context, workspaceID uuid.UUID)
 	return s.queries.ListWorkspaceDeviceToolGuards(ctx, workspaceID)
 }
 
-// SaveDeviceToolGuard 保存或更新指定设备的 Tool Guard 配置
+// SaveDeviceToolGuard 保存或更新指定设备的 Tool Guard 布尔开关状态
 func (s *Store) SaveDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, input DeviceToolGuardInput) (db.WorkspaceDeviceToolGuard, error) {
 	nodeID := strings.TrimSpace(input.DeviceNodeID)
 	if nodeID == "" {
 		return db.WorkspaceDeviceToolGuard{}, fmt.Errorf("%w: device_node_id is required", domain.ErrConflict)
 	}
-	mode := strings.TrimSpace(input.Mode)
-	if mode == "" {
-		mode = "disabled"
-	}
-	switch mode {
-	case "disabled", "block_high_risk", "strict":
-	default:
-		return db.WorkspaceDeviceToolGuard{}, fmt.Errorf("%w: invalid mode %q", domain.ErrConflict, mode)
-	}
-	timeout := input.TimeoutSeconds
-	if timeout <= 0 {
-		timeout = 10
-	} else if timeout > 60 {
-		timeout = 60
-	}
-	routeID := toNullableUUID(input.ModelRouteID)
 
 	guard, err := s.queries.UpsertWorkspaceDeviceToolGuard(ctx, db.UpsertWorkspaceDeviceToolGuardParams{
-		ID:             uuid.New(),
-		WorkspaceID:    workspaceID,
-		DeviceNodeID:   nodeID,
-		DeviceName:     strings.TrimSpace(input.DeviceName),
-		Mode:           mode,
-		ModelRouteID:   routeID,
-		TimeoutSeconds: timeout,
-		CustomRules:    strings.TrimSpace(input.CustomRules),
+		ID:           uuid.New(),
+		WorkspaceID:  workspaceID,
+		DeviceNodeID: nodeID,
+		DeviceName:   strings.TrimSpace(input.DeviceName),
+		Enabled:      input.Enabled,
 	})
 	if err != nil {
 		return db.WorkspaceDeviceToolGuard{}, mapConstraintError(err)
