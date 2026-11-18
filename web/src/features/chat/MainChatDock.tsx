@@ -1,13 +1,14 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Expand, X } from "lucide-react";
+import { Bell, BellOff, Expand, X } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import type {
   Attempt,
   CardDetail,
@@ -314,6 +315,10 @@ export function MainChatDock() {
   }, [olderEvents, detail.data?.timeline]);
 
   const card = detail.data?.card;
+  const toggleMute = useCardNotificationMute(card ?? main.data);
+  const isMainMuted = Boolean(
+    card?.notifications_muted ?? main.data?.notifications_muted,
+  );
   const current = detail.data?.current_attempt;
   const hasCurrent =
     Boolean(current) &&
@@ -448,12 +453,14 @@ export function MainChatDock() {
       void queryClient.invalidateQueries({
         queryKey: keys.mainDiscussion(projectID),
       });
-      if (open) return;
+      if (open || detail.notifications_muted || isMainMuted) {
+        return;
+      }
       setPeek(detail.body);
     };
     window.addEventListener(cardMessageEvent, onMessage);
     return () => window.removeEventListener(cardMessageEvent, onMessage);
-  }, [cardID, open, projectID]);
+  }, [cardID, isMainMuted, open, projectID]);
 
   function show() {
     setOpen(true);
@@ -724,7 +731,7 @@ export function MainChatDock() {
             }}
             className="absolute top-0 inset-x-0 z-20 flex cursor-move items-center justify-between gap-2 bg-gradient-to-b from-canvas/95 via-canvas/70 to-transparent px-3 pt-2.5 pb-3 select-none"
           >
-            <div className="pointer-events-none inline-flex h-7 min-w-0 max-w-[68%] items-center gap-1.5 rounded-lg border border-line/75 bg-surface/85 px-2.5 shadow-2xs backdrop-blur-md">
+            <div className="pointer-events-none inline-flex h-7 min-w-0 max-w-[62%] items-center gap-1.5 rounded-lg border border-line/75 bg-surface/85 px-2.5 shadow-2xs backdrop-blur-md">
               <img
                 src="/cycledock-logo.png"
                 alt=""
@@ -734,9 +741,40 @@ export function MainChatDock() {
               <h2 className="truncate text-xs font-semibold text-foreground">
                 {card?.title || t("主聊天")}
               </h2>
+              {isMainMuted && (
+                <BellOff
+                  aria-label={t("通知已静音")}
+                  className="size-3 shrink-0 text-muted-foreground/80"
+                />
+              )}
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                title={isMainMuted ? t("取消静音") : t("静音通知")}
+                aria-label={isMainMuted ? t("取消静音") : t("静音通知")}
+                disabled={!cardID || toggleMute.isPending}
+                onClick={() =>
+                  cardID &&
+                  toggleMute.mutate({
+                    id: cardID,
+                    muted: !isMainMuted,
+                    projectID,
+                  })
+                }
+                className={`grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 shadow-2xs backdrop-blur-md transition hover:bg-muted disabled:opacity-40 ${
+                  isMainMuted
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {isMainMuted ? (
+                  <BellOff className="size-3.5" />
+                ) : (
+                  <Bell className="size-3.5" />
+                )}
+              </button>
               <button
                 type="button"
                 title={t("在完整页面打开")}

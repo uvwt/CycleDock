@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  Bell,
+  BellOff,
   Layers,
   ListTodo,
   MessageSquare,
@@ -34,6 +36,7 @@ import {
 } from "./CardStatusDot";
 import { buildFocusSummary, getCardFocusReason } from "../lib/card-focus";
 import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
+import { useCardNotificationMute } from "../lib/useCardNotificationMute";
 import { ConfirmDialog } from "./components";
 import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
@@ -306,6 +309,8 @@ export function QuickCardSwitcherModal({
       });
     },
   });
+
+  const muteMutation = useCardNotificationMute();
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
@@ -659,6 +664,7 @@ export function QuickCardSwitcherModal({
                 const isActive = card.id === activeCardID;
                 const isMain = card.id === mainDiscussionID;
                 const isPinned = isMain || Boolean(card.pinned_at);
+                const isMuted = Boolean(card.notifications_muted);
                 const visualStatus = getCardVisualStatus(
                   card,
                   isActive,
@@ -677,6 +683,23 @@ export function QuickCardSwitcherModal({
                       : t("任务");
 
                 const swipeActions = [
+                  {
+                    key: "mute",
+                    label: isMuted ? t("取消静音") : t("静音通知"),
+                    icon: isMuted ? (
+                      <Bell className="size-4" />
+                    ) : (
+                      <BellOff className="size-4" />
+                    ),
+                    variant: "secondary" as const,
+                    onClick: () => {
+                      muteMutation.mutate({
+                        id: card.id,
+                        muted: !isMuted,
+                        projectID: card.project_id,
+                      });
+                    },
+                  },
                   ...(!isMain
                     ? [
                         {
@@ -787,6 +810,14 @@ export function QuickCardSwitcherModal({
                             </h4>
                             {isPinned && (
                               <Pin className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                            )}
+                            {isMuted && (
+                              <span
+                                title={t("通知已静音")}
+                                aria-label={t("通知已静音")}
+                              >
+                                <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                              </span>
                             )}
                           </div>
                           {card.description && (

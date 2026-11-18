@@ -481,7 +481,7 @@ func (q *Queries) ListCardTimelineBefore(ctx context.Context, arg ListCardTimeli
 
 const listProjectActiveCardSummaries = `-- name: ListProjectActiveCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id, c.notifications_muted,
     COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
@@ -575,6 +575,7 @@ type ListProjectActiveCardSummariesRow struct {
 	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound        int64              `json:"confirmation_round"`
 	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted       bool               `json:"notifications_muted"`
 	Health                   string             `json:"health"`
 	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
@@ -614,6 +615,7 @@ func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListPr
 			&i.PinnedAt,
 			&i.ConfirmationRound,
 			&i.PreferredModelRouteID,
+			&i.NotificationsMuted,
 			&i.Health,
 			&i.CurrentAttemptStatus,
 			&i.LatestAttemptStatus,
@@ -782,7 +784,7 @@ func (q *Queries) ListProjectActivity(ctx context.Context, arg ListProjectActivi
 
 const listProjectCardSummaries = `-- name: ListProjectCardSummaries :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id, c.notifications_muted,
     COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
@@ -875,6 +877,7 @@ type ListProjectCardSummariesRow struct {
 	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound        int64              `json:"confirmation_round"`
 	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted       bool               `json:"notifications_muted"`
 	Health                   string             `json:"health"`
 	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
@@ -914,6 +917,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.PinnedAt,
 			&i.ConfirmationRound,
 			&i.PreferredModelRouteID,
+			&i.NotificationsMuted,
 			&i.Health,
 			&i.CurrentAttemptStatus,
 			&i.LatestAttemptStatus,
@@ -933,7 +937,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 }
 
 const listProjectCards = `-- name: ListProjectCards :many
-SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+SELECT id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 FROM cards
 WHERE workspace_id = $1
   AND project_id = $2
@@ -974,6 +978,7 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 			&i.PinnedAt,
 			&i.ConfirmationRound,
 			&i.PreferredModelRouteID,
+			&i.NotificationsMuted,
 		); err != nil {
 			return nil, err
 		}
@@ -987,7 +992,7 @@ func (q *Queries) ListProjectCards(ctx context.Context, arg ListProjectCardsPara
 
 const listProjectDoneCardsPaged = `-- name: ListProjectDoneCardsPaged :many
 SELECT
-    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id,
+    c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id, c.notifications_muted,
     COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
@@ -1085,6 +1090,7 @@ type ListProjectDoneCardsPagedRow struct {
 	PinnedAt                 pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound        int64              `json:"confirmation_round"`
 	PreferredModelRouteID    uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted       bool               `json:"notifications_muted"`
 	Health                   string             `json:"health"`
 	CurrentAttemptStatus     pgtype.Text        `json:"current_attempt_status"`
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
@@ -1130,6 +1136,7 @@ func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProject
 			&i.PinnedAt,
 			&i.ConfirmationRound,
 			&i.PreferredModelRouteID,
+			&i.NotificationsMuted,
 			&i.Health,
 			&i.CurrentAttemptStatus,
 			&i.LatestAttemptStatus,
@@ -1350,13 +1357,56 @@ func (q *Queries) ScheduleHasTurns(ctx context.Context, arg ScheduleHasTurnsPara
 	return exists, err
 }
 
+const setCardNotificationsMuted = `-- name: SetCardNotificationsMuted :one
+UPDATE cards
+SET notifications_muted = $1,
+    updated_at = now()
+WHERE workspace_id = $2
+  AND id = $3
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
+`
+
+type SetCardNotificationsMutedParams struct {
+	NotificationsMuted bool      `json:"notifications_muted"`
+	WorkspaceID        uuid.UUID `json:"workspace_id"`
+	ID                 uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetCardNotificationsMuted(ctx context.Context, arg SetCardNotificationsMutedParams) (Card, error) {
+	row := q.db.QueryRow(ctx, setCardNotificationsMuted, arg.NotificationsMuted, arg.WorkspaceID, arg.ID)
+	var i Card
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Description,
+		&i.DiscussionState,
+		&i.TodoState,
+		&i.OngoingState,
+		&i.SourceDiscussionID,
+		&i.RequiredConfirmations,
+		&i.CreatedBySourceID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CreateIdempotencyKey,
+		&i.CreateRequestHash,
+		&i.PinnedAt,
+		&i.ConfirmationRound,
+		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
+	)
+	return i, err
+}
+
 const setCardPinned = `-- name: SetCardPinned :one
 UPDATE cards
 SET pinned_at = $1,
     updated_at = now()
 WHERE workspace_id = $2
   AND id = $3
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 `
 
 type SetCardPinnedParams struct {
@@ -1388,6 +1438,7 @@ func (q *Queries) SetCardPinned(ctx context.Context, arg SetCardPinnedParams) (C
 		&i.PinnedAt,
 		&i.ConfirmationRound,
 		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
 	)
 	return i, err
 }
@@ -1398,7 +1449,7 @@ SET preferred_model_route_id = $1,
     updated_at = now()
 WHERE workspace_id = $2
   AND id = $3
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 `
 
 type SetCardPreferredModelRouteParams struct {
@@ -1430,6 +1481,7 @@ func (q *Queries) SetCardPreferredModelRoute(ctx context.Context, arg SetCardPre
 		&i.PinnedAt,
 		&i.ConfirmationRound,
 		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
 	)
 	return i, err
 }
@@ -1492,7 +1544,7 @@ SET title = $1,
     updated_at = now()
 WHERE workspace_id = $3
   AND id = $4
-RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id
+RETURNING id, workspace_id, project_id, kind, title, description, discussion_state, todo_state, ongoing_state, source_discussion_id, required_confirmations, created_by_source_id, created_at, updated_at, create_idempotency_key, create_request_hash, pinned_at, confirmation_round, preferred_model_route_id, notifications_muted
 `
 
 type UpdateCardTextParams struct {
@@ -1530,6 +1582,7 @@ func (q *Queries) UpdateCardText(ctx context.Context, arg UpdateCardTextParams) 
 		&i.PinnedAt,
 		&i.ConfirmationRound,
 		&i.PreferredModelRouteID,
+		&i.NotificationsMuted,
 	)
 	return i, err
 }

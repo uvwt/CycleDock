@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CalendarClock, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Bell, BellOff, CalendarClock, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Card } from "../../shared/api/types";
@@ -9,6 +9,7 @@ import {
   patchCachedCard,
   removeCachedCard,
 } from "../../shared/lib/card-cache";
+import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -67,6 +68,8 @@ export function PlanSidebar({
     },
   });
 
+  const muteMutation = useCardNotificationMute();
+
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
     onSuccess: (_, deletedCard) => {
@@ -117,7 +120,25 @@ export function PlanSidebar({
               card.health === "critical" ||
               card.health === "acknowledged";
 
+            const isMuted = Boolean(card.notifications_muted);
             const swipeActions = [
+              {
+                key: "mute",
+                label: isMuted ? t("取消静音") : t("静音通知"),
+                icon: isMuted ? (
+                  <Bell className="size-4" />
+                ) : (
+                  <BellOff className="size-4" />
+                ),
+                variant: "secondary" as const,
+                onClick: () => {
+                  muteMutation.mutate({
+                    id: card.id,
+                    muted: !isMuted,
+                    projectID: card.project_id,
+                  });
+                },
+              },
               {
                 key: "pin",
                 label: card.pinned_at ? t("取消置顶") : t("置顶"),
@@ -165,6 +186,7 @@ export function PlanSidebar({
                 key={card.id}
                 active={card.id === activeCardID}
                 pinned={Boolean(card.pinned_at)}
+                muted={isMuted}
                 onClick={() => onSelect(card)}
                 swipeActions={swipeActions}
                 icon={

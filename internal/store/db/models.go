@@ -100,6 +100,7 @@ type Card struct {
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound     int64              `json:"confirmation_round"`
 	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted    bool               `json:"notifications_muted"`
 }
 
 type CardReadCursor struct {

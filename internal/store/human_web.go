@@ -265,6 +265,23 @@ func (s *Store) SetCardPinned(
 	return card, err
 }
 
+func (s *Store) SetCardNotificationsMuted(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	muted bool,
+) (db.Card, error) {
+	// 卡片级消息推送开关适用于主讨论、普通讨论、Todo 与 Ongoing 在内的所有卡片。
+	card, err := s.queries.SetCardNotificationsMuted(ctx, db.SetCardNotificationsMutedParams{
+		NotificationsMuted: muted,
+		WorkspaceID:        workspaceID,
+		ID:                 cardID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, domain.ErrNotFound
+	}
+	return card, err
+}
+
 func (s *Store) ListSchedules(ctx context.Context, workspaceID, cardID uuid.UUID) ([]db.CardSchedule, error) {
 	if _, err := s.GetCard(ctx, workspaceID, cardID); err != nil {
 		return nil, err

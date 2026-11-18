@@ -499,6 +499,15 @@ const en = {
   "本卡片允许 {{target}}": "Allow {{target}} on card",
   "设备 · {{target}}": "Device · {{target}}",
   "MCP · {{target}}": "MCP · {{target}}",
+  静音通知: "Mute notifications",
+  取消静音: "Unmute notifications",
+  已静音通知: "Notifications muted",
+  已恢复通知: "Notifications unmuted",
+  通知已静音: "Notifications muted",
+  通知已开启: "Notifications enabled",
+  推送通知: "Notifications",
+  接收新消息推送: "Push notifications on",
+  静音设置失败: "Failed to update notification mute",
 } as const;
 
 void i18n.use(initReactI18next).init({

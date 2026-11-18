@@ -14,7 +14,7 @@ function isLiveCardDetail(value: CachedCardDetail | undefined): value is CardDet
   return Boolean(value && value.card);
 }
 
-// 同步更新单卡详情缓存（CardDetail.card）与项目卡片列表缓存（Card[]），消除不同缓存结构导致的状态滞后。
+// 同步更新单卡详情缓存（CardDetail.card）、项目卡片列表缓存（Card[]）以及主聊天独立缓存，消除不同缓存结构导致的状态滞后。
 export function patchCachedCard(
   queryClient: QueryClient,
   cardID: string,
@@ -37,10 +37,21 @@ export function patchCachedCard(
       ? list.map((item) => (item.id === cardID ? { ...item, ...patch } : item))
       : list;
 
+  const updateMain = (main: Card | null | undefined) =>
+    main && main.id === cardID ? { ...main, ...patch } : main;
+
   if (projectID) {
     queryClient.setQueryData<Card[]>(keys.cards(projectID), updateList);
+    queryClient.setQueryData<Card | null>(
+      keys.mainDiscussion(projectID),
+      updateMain,
+    );
   } else {
     queryClient.setQueriesData<Card[]>({ queryKey: ["cards"] }, updateList);
+    queryClient.setQueriesData<Card | null>(
+      { queryKey: ["main-discussion"] },
+      updateMain,
+    );
   }
 }
 

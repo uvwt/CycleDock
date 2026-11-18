@@ -12,21 +12,22 @@ import (
 )
 
 type cardUpdate struct {
-	ID             string `json:"id"`
-	ProjectID      string `json:"project_id"`
-	Kind           string `json:"kind"`
-	Title          string `json:"title"`
-	Revision       string `json:"revision"`
-	EventSequence  string `json:"event_sequence"`
-	MessagePreview string `json:"message_preview"`
-	AttemptStatus  string `json:"attempt_status"`
+	ID                 string `json:"id"`
+	ProjectID          string `json:"project_id"`
+	Kind               string `json:"kind"`
+	Title              string `json:"title"`
+	NotificationsMuted bool   `json:"notifications_muted"`
+	Revision           string `json:"revision"`
+	EventSequence      string `json:"event_sequence"`
+	MessagePreview     string `json:"message_preview"`
+	AttemptStatus      string `json:"attempt_status"`
 }
 
 // 只比较持久业务变化，排除 token、阶段文案和 heartbeat，避免流式输出造成通知轰炸。
 func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardUpdate, error) {
 	rows, err := api.pool.Query(ctx, `
- SELECT c.id::text, c.project_id::text, c.kind, c.title,
- md5(concat_ws('|', c.updated_at::text, e.sequence::text, a.id::text, a.status,
+ SELECT c.id::text, c.project_id::text, c.kind, c.title, c.notifications_muted,
+ md5(concat_ws('|', c.updated_at::text, c.notifications_muted::text, e.sequence::text, a.id::text, a.status,
    t.sequence::text, t.cancelled_at::text, s.updated_at::text, s.count::text, ap.pending::text)),
  COALESCE(m.sequence::text, '0'), COALESCE(m.preview, ''), COALESCE(a.status, '')
  FROM cards c
@@ -72,7 +73,7 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 	updates := make([]cardUpdate, 0)
 	for rows.Next() {
 		var update cardUpdate
-		if err := rows.Scan(&update.ID, &update.ProjectID, &update.Kind, &update.Title, &update.Revision, &update.EventSequence, &update.MessagePreview, &update.AttemptStatus); err != nil {
+		if err := rows.Scan(&update.ID, &update.ProjectID, &update.Kind, &update.Title, &update.NotificationsMuted, &update.Revision, &update.EventSequence, &update.MessagePreview, &update.AttemptStatus); err != nil {
 			return nil, err
 		}
 		// 通知只取产品时间线中的消息摘要，不读取模型内部思考或原始工具上下文。

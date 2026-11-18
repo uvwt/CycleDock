@@ -45,6 +45,7 @@ export type Card = {
   /** 被安全守卫挂起、等待人工确认的工具调用数量；仅列表摘要返回。 */
   pending_tool_approval_count?: number;
   pinned_at?: string;
+  notifications_muted?: boolean;
   preferred_model_route_id?: string | null;
   created_at: string;
   updated_at: string;
