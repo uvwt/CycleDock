@@ -42,9 +42,11 @@ const { api: apiClient } = await server.ssrLoadModule("/src/shared/api/client.ts
 const { default: SettingsPage } = await server.ssrLoadModule(
   "/src/features/settings/SettingsPage.tsx",
 );
-const { default: NexusDockPage } = await server.ssrLoadModule(
-  "/src/features/nexusdock/NexusDockPage.tsx",
-);
+const {
+  default: NexusDockPage,
+  groupDeviceSkills,
+  groupDeviceDynamicMcp,
+} = await server.ssrLoadModule("/src/features/nexusdock/NexusDockPage.tsx");
 const { ToolApprovalCard } = await server.ssrLoadModule(
   "/src/features/timeline/ToolApprovalCard.tsx",
 );
@@ -1511,4 +1513,136 @@ test("只有系统触发失败记录且无历史消息时正常展示，不显�
   assert.match(html, /系统触发 \/ 未关联历史/);
   assert.match(html, /定时检查执行异常/);
   assert.doesNotMatch(html, /从第一句话开始|开始协作/);
+});
+
+test("NexusDockPage 按插件与来源分组整理 Skill 和动态 MCP", () => {
+  const pluginMap = new Map([
+    [
+      "cloudflare",
+      {
+        name: "cloudflare",
+        version: "1.2.0",
+        enabled: true,
+        description: "Cloudflare Workers 与 API 管理插件",
+      },
+    ],
+    [
+      "context7",
+      {
+        name: "context7",
+        version: "0.9.1",
+        enabled: false,
+        description: "文档查询插件",
+      },
+    ],
+  ]);
+
+  const skillResult = groupDeviceSkills(
+    [
+      { name: "cloudflare", source_type: "plugin", plugin_name: "cloudflare" },
+      { name: "durable-objects", source_type: "plugin", plugin_name: "cloudflare" },
+      { name: "legacy-plugin-skill", source_type: "plugin" },
+      { name: "personal-dev-guard", source_type: "managed" },
+      { name: "team-shared", source_type: "shared" },
+    ],
+    pluginMap,
+  );
+
+  assert.equal(skillResult.pluginItemsCount, 3);
+  assert.equal(skillResult.pluginGroups.length, 2);
+  assert.equal(skillResult.pluginGroups[0].pluginName, "cloudflare");
+  assert.equal(skillResult.pluginGroups[0].pluginMeta?.version, "1.2.0");
+  assert.deepEqual(
+    skillResult.pluginGroups[0].items.map((item) => item.name),
+    ["cloudflare", "durable-objects"],
+  );
+  assert.equal(skillResult.pluginGroups[1].pluginName, "");
+  assert.equal(skillResult.managedItems.length, 1);
+  assert.equal(skillResult.sharedItems.length, 1);
+
+  const mcpResult = groupDeviceDynamicMcp(
+    [
+      {
+        name: "plugin.cloudflare.cloudflare-api",
+        display_name: "cloudflare-api",
+        source_type: "plugin",
+        plugin_name: "cloudflare",
+        status: "active",
+      },
+      {
+        name: "plugin.context7.context7",
+        display_name: "context7",
+        source_type: "plugin",
+        plugin_name: "context7",
+        status: "active",
+      },
+      {
+        name: "bitwarden",
+        display_name: "Bitwarden",
+        source_type: "managed",
+        status: "active",
+      },
+    ],
+    pluginMap,
+  );
+
+  assert.equal(mcpResult.pluginItemsCount, 2);
+  assert.deepEqual(
+    mcpResult.pluginGroups.map((group) => group.pluginName),
+    ["cloudflare", "context7"],
+  );
+  assert.equal(mcpResult.pluginGroups[1].pluginMeta?.enabled, false);
+  assert.deepEqual(
+    mcpResult.standaloneItems.map((item) => item.name),
+    ["bitwarden"],
+  );
+
+  queryClient.setQueryData(["me"], {
+    email: "owner@example.com",
+    role: "owner",
+    workspace: { id: "ws-1", name: "Demo" },
+  });
+  queryClient.setQueryData(["nexus"], { available: true, connected: true });
+  queryClient.setQueryData(["nexus", "fleet", "ws-1"], {
+    available: true,
+    connected: true,
+    devices: [
+      {
+        id: "node-plugin",
+        name: "TianYi",
+        online: true,
+        os: "windows",
+        arch: "amd64",
+        plugins: [
+          { name: "cloudflare", version: "1.2.0", enabled: true },
+          { name: "context7", version: "0.9.1", enabled: true },
+        ],
+        skills: [
+          { name: "cloudflare", source_type: "plugin", plugin_name: "cloudflare" },
+        ],
+        dynamic_mcp: [
+          {
+            name: "plugin.context7.context7",
+            display_name: "context7",
+            source_type: "plugin",
+            plugin_name: "context7",
+          },
+        ],
+      },
+    ],
+  });
+  queryClient.setQueryData(["device-tool-guards", "ws-1"], []);
+  queryClient.setQueryData(["agent-settings"], { configured: true, routes: [] });
+
+  try {
+    const html = renderToStaticMarkup(createElement(NexusDockPage));
+    assert.match(html, /2 插件/);
+    assert.match(html, /已装插件.*2/);
+    assert.match(html, /1 个插件/);
+  } finally {
+    queryClient.removeQueries({ queryKey: ["me"] });
+    queryClient.removeQueries({ queryKey: ["nexus"] });
+    queryClient.removeQueries({ queryKey: ["device-tool-guards"] });
+    queryClient.removeQueries({ queryKey: ["agent-settings"] });
+  }
 });
