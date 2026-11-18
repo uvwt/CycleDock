@@ -61,7 +61,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_delete_schedule",
-				Description: "Delete a schedule only before it produces any Turn; if there is history, pause with cycledock_update_schedule instead.",
+				Description: "Remove a schedule from an Ongoing Card. Schedules without Turn history are deleted permanently; schedules with execution history are archived (disabled and hidden) while preserving historical Turns.",
 				Parameters: object(map[string]any{
 					"card_id":     stringField("Ongoing Card UUID."),
 					"schedule_id": stringField("Schedule UUID."),

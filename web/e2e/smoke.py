@@ -807,6 +807,10 @@ class CycleDockSmoke(unittest.TestCase):
             details.get_by_role("button", name="保存", exact=True).click()
         self.assertNotIn("day_of_month", sent.value.post_data_json)
         self.assertNotIn("day_of_week", sent.value.post_data_json)
+        details.get_by_text("每天 09:00", exact=True).first.wait_for()
+        with self.page.expect_request(lambda request: request.method == "DELETE" and "/schedules/" in request.url):
+            details.get_by_role("button", name="删除日程").first.click()
+        self.page.get_by_text("日程已移除，历史执行记录保留在时间线中").wait_for()
 
     def test_mcp_validation_token_retention_and_delete_cancel(self):
         self.page.goto(BASE + "/settings/mcp")

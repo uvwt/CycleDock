@@ -178,6 +178,7 @@ export function ScheduleEditor({
     onSuccess: async () => {
       await onChange();
       setEditingID(null);
+      toast.success("日程已移除，历史执行记录保留在时间线中");
     },
     onError: showError,
   });
@@ -185,7 +186,7 @@ export function ScheduleEditor({
   return (
     <Section
       title="定时触发"
-      description="日程只负责创建新的 Turn，不会绕过当前执行和排队规则。"
+      description="日程只负责创建新的 Turn，不会绕过当前执行和排队规则；移除已有执行记录的日程仅停止后续触发并隐藏规则，历史记录仍保留在时间线中。"
     >
       <div className="space-y-2">
         {schedules.length ? (

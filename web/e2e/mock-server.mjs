@@ -325,6 +325,22 @@ async function body(req) {
   for await (const part of req) raw += part;
   return raw ? JSON.parse(raw) : {};
 }
+function createInitialCardSchedules() {
+  return {
+    "ongoing-1": [
+      {
+        id: "schedule-demo",
+        enabled: true,
+        frequency: "daily",
+        hour: 9,
+        minute: 0,
+        timezone: "Asia/Shanghai",
+        next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
+      },
+    ],
+  };
+}
+let cardSchedules = createInitialCardSchedules();
 function details(id) {
   const card = cards.find((x) => x.id === id);
   if (!card) return null;
@@ -401,20 +417,7 @@ function details(id) {
             },
           ]
         : [],
-    schedules:
-      card.kind === "ongoing"
-        ? [
-            {
-              id: "schedule-demo",
-              enabled: true,
-              frequency: "daily",
-              hour: 9,
-              minute: 0,
-              timezone: "Asia/Shanghai",
-              next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
-            },
-          ]
-        : [],
+    schedules: card.kind === "ongoing" ? cardSchedules[id] || [] : [],
     health: card.health || "unknown",
     last_checkin: id === "ongoing-1" ? events[id][0] : null,
     has_more_before: (events[id] || []).length > 50,
@@ -816,22 +819,37 @@ http
               turn_id: "turn-demo",
             });
           }
-          if (rest === "schedules" && req.method === "POST")
-            return data(
-              res,
-              {
-                id: "schedule-new",
+          if (rest === "schedules" && req.method === "POST") {
+            const created = {
+              id: "schedule-" + Date.now(),
+              ...(await body(req)),
+              enabled: true,
+              next_trigger_at: now(),
+            };
+            cardSchedules[id] = [...(cardSchedules[id] || []), created];
+            return data(res, created, 201);
+          }
+          if (rest?.startsWith("schedules/")) {
+            const scheduleID = rest.slice("schedules/".length);
+            const list = cardSchedules[id] || [];
+            const index = list.findIndex((item) => item.id === scheduleID);
+            if (index === -1) return failure(res);
+            if (req.method === "DELETE") {
+              cardSchedules[id] = list.filter((item) => item.id !== scheduleID);
+              res.writeHead(204, { "Cache-Control": "no-store" });
+              res.end();
+              return;
+            }
+            if (req.method === "PUT") {
+              const updated = {
+                ...list[index],
                 ...(await body(req)),
-                next_trigger_at: now(),
-              },
-              201,
-            );
-          if (rest?.startsWith("schedules/"))
-            return data(
-              res,
-              req.method === "DELETE" ? undefined : await body(req),
-              req.method === "DELETE" ? 204 : 200,
-            );
+                id: scheduleID,
+              };
+              list[index] = updated;
+              return data(res, updated, 200);
+            }
+          }
           if (rest?.includes("/cancel")) return data(res, {});
           if (rest?.includes("/retry"))
             return data(res, { attempt_id: "attempt-retry-demo" });

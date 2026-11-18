@@ -239,7 +239,7 @@ func (s *Store) CreateScheduleTurn(
 	err = tx.QueryRow(ctx, `
 		SELECT card_id
 		FROM card_schedules
-		WHERE workspace_id=$1 AND id=$2
+		WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 	`, workspaceID, scheduleID).Scan(&cardID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CreateTurnResult{}, domain.ErrNotFound

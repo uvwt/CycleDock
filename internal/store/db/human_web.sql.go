@@ -12,6 +12,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const archiveCardSchedule = `-- name: ArchiveCardSchedule :execrows
+UPDATE card_schedules
+SET enabled = false,
+    archived_at = COALESCE(archived_at, now()),
+    updated_at = now()
+WHERE workspace_id = $1
+  AND card_id = $2
+  AND id = $3
+  AND archived_at IS NULL
+`
+
+type ArchiveCardScheduleParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) ArchiveCardSchedule(ctx context.Context, arg ArchiveCardScheduleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveCardSchedule, arg.WorkspaceID, arg.CardID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countProjectDoneCards = `-- name: CountProjectDoneCards :one
 SELECT COUNT(*)::bigint
 FROM cards
@@ -37,6 +62,7 @@ DELETE FROM card_schedules
 WHERE workspace_id = $1
   AND card_id = $2
   AND id = $3
+  AND archived_at IS NULL
 `
 
 type DeleteCardScheduleParams struct {
@@ -54,11 +80,12 @@ func (q *Queries) DeleteCardSchedule(ctx context.Context, arg DeleteCardSchedule
 }
 
 const getCardSchedule = `-- name: GetCardSchedule :one
-SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at, interval_minutes
+SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at, interval_minutes, archived_at
 FROM card_schedules
 WHERE workspace_id = $1
   AND card_id = $2
   AND id = $3
+  AND archived_at IS NULL
 `
 
 type GetCardScheduleParams struct {
@@ -85,6 +112,7 @@ func (q *Queries) GetCardSchedule(ctx context.Context, arg GetCardScheduleParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IntervalMinutes,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -190,10 +218,11 @@ func (q *Queries) ListActivityAgents(ctx context.Context, workspaceID uuid.UUID)
 }
 
 const listCardSchedules = `-- name: ListCardSchedules :many
-SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at, interval_minutes
+SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at, interval_minutes, archived_at
 FROM card_schedules
 WHERE workspace_id = $1
   AND card_id = $2
+  AND archived_at IS NULL
 ORDER BY created_at, id
 `
 
@@ -226,6 +255,7 @@ func (q *Queries) ListCardSchedules(ctx context.Context, arg ListCardSchedulesPa
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.IntervalMinutes,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1152,6 +1182,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) latest_attempt ON true
 WHERE cs.workspace_id = $1
+  AND cs.archived_at IS NULL
   AND c.project_id = $2
   AND c.kind = 'ongoing'
 ORDER BY cs.enabled DESC, cs.next_trigger_at, cs.id
@@ -1417,6 +1448,7 @@ SET enabled = $1,
 WHERE workspace_id = $9
   AND card_id = $10
   AND id = $11
+  AND archived_at IS NULL
 `
 
 type UpdateCardScheduleParams struct {
