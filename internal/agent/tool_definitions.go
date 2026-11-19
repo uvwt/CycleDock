@@ -148,6 +148,44 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_update_card",
+				Description: "Update editable information on a Card in the current Workspace (Todo, Ongoing, or non-main Discussion). Omit card_id to update the current Card, or supply a target Card UUID. Supports updating title, description, pinned, required_confirmations (Todo only), and allowed lifecycle state (Todo: todo/working; Ongoing: active/paused/archived; Discussion: active/archived). Moving a Todo to review requires cycledock_confirm_card, and moving to done requires a human. The project main Discussion cannot be modified.",
+				Parameters: object(map[string]any{
+					"card_id": stringField("Target Card UUID in the current Workspace. Omit to update the current Card."),
+					"title":   stringField("Updated non-empty Card title."),
+					"description": stringField(
+						"Updated Card description (scope, notes, or expected outcome). Pass an empty string to clear.",
+					),
+					"pinned": map[string]any{
+						"type":        "boolean",
+						"description": "Pin or unpin the Card in its Project.",
+					},
+					"todo_state": map[string]any{
+						"type":        "string",
+						"enum":        []string{"todo", "working"},
+						"description": "Allowed only for Todo cards: 'todo' or 'working'. Use cycledock_confirm_card for 'review'; 'done' is human-only.",
+					},
+					"ongoing_state": map[string]any{
+						"type":        "string",
+						"enum":        []string{"active", "paused", "archived"},
+						"description": "Allowed only for Ongoing cards: 'active', 'paused', or 'archived'.",
+					},
+					"discussion_state": map[string]any{
+						"type":        "string",
+						"enum":        []string{"active", "archived"},
+						"description": "Allowed only for non-main Discussion cards: 'active' or 'archived'.",
+					},
+					"required_confirmations": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"description": "Allowed only for Todo cards not yet in review/done: confirmation threshold (>= 1) required to enter review.",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_inspect_card_session",
 				Description: "Inspect the conversation history/session of a non-discussion Card (todo or ongoing) within the current Workspace. Exclusively available to Discussion cards. Supports 'simple' mode (visible user messages and reply bubbles, matching what users see) and 'full' mode (detailed turns including thinking/reasoning and tool calls/results).",
 				Parameters: object(map[string]any{

@@ -85,6 +85,7 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 			"cycledock_update_schedule",
 			"cycledock_delete_schedule",
 			"cycledock_confirm_card",
+			"cycledock_update_card",
 		} {
 			if requestIncludesTool(body, forbidden) {
 				t.Errorf("built-in proactive turn must not expose mutating tool %s", forbidden)

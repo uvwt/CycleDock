@@ -180,6 +180,8 @@ func (r attemptToolRuntime) internalHandler(
 		return r.updateScheduleTool, nil
 	case "cycledock_delete_schedule":
 		return r.deleteScheduleTool, nil
+	case "cycledock_update_card":
+		return r.updateCardTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。
