@@ -100,6 +100,19 @@ func TestUpdateCardFromAgentAttempt_RespectsDomainAndScopeBoundaries(t *testing.
 	}
 
 	// 3. 修改同工作区内的长期 Ongoing 卡片（标题、描述、暂停与重新激活）
+	ongoingApproval, err := s.CreateToolApproval(ctx, CreateToolApprovalParams{
+		WorkspaceID: f.WorkspaceID,
+		CardID:      ongoingCard.ID,
+		ToolCallID:  "call-ongoing-" + uuid.NewString(),
+		ToolName:    "exec_command",
+		Arguments:   map[string]any{"cmd": "systemctl restart demo"},
+		RiskLevel:   "high",
+		Reversible:  true,
+		Reason:      "重启服务需确认",
+	})
+	if err != nil {
+		t.Fatalf("create ongoing pending approval: %v", err)
+	}
 	ongoingTitle := "长期监控（已更新）"
 	ongoingDesc := "每小时检查队列堆积"
 	pausedState := domain.OngoingStatePaused
@@ -122,6 +135,13 @@ func TestUpdateCardFromAgentAttempt_RespectsDomainAndScopeBoundaries(t *testing.
 		ongoingRes.Card.OngoingState.String != string(domain.OngoingStatePaused) {
 		t.Fatalf("unexpected ongoing card result: %+v", ongoingRes)
 	}
+	gotOngoingApproval, err := s.GetToolApproval(ctx, f.WorkspaceID, ongoingCard.ID, ongoingApproval.ID)
+	if err != nil {
+		t.Fatalf("get ongoing approval: %v", err)
+	}
+	if gotOngoingApproval.Status != string(domain.ToolApprovalStatusSuperseded) {
+		t.Fatalf("ongoing approval status=%q want superseded", gotOngoingApproval.Status)
+	}
 
 	activeState := domain.OngoingStateActive
 	reactivated, err := s.UpdateCardFromAgentAttempt(ctx, UpdateCardFromAttemptParams{
@@ -138,6 +158,19 @@ func TestUpdateCardFromAgentAttempt_RespectsDomainAndScopeBoundaries(t *testing.
 	}
 
 	// 4. 修改普通 Discussion（允许更新标题和归档），但严禁修改项目主讨论
+	discApproval, err := s.CreateToolApproval(ctx, CreateToolApprovalParams{
+		WorkspaceID: f.WorkspaceID,
+		CardID:      subDiscussion.ID,
+		ToolCallID:  "call-disc-" + uuid.NewString(),
+		ToolName:    "exec_command",
+		Arguments:   map[string]any{"cmd": "rm -rf /tmp/disc"},
+		RiskLevel:   "high",
+		Reversible:  false,
+		Reason:      "清理目录需确认",
+	})
+	if err != nil {
+		t.Fatalf("create discussion pending approval: %v", err)
+	}
 	discTitle := "归档前的专题讨论"
 	archivedDisc := domain.DiscussionStateArchived
 	discRes, err := s.UpdateCardFromAgentAttempt(ctx, UpdateCardFromAttemptParams{
@@ -155,6 +188,13 @@ func TestUpdateCardFromAgentAttempt_RespectsDomainAndScopeBoundaries(t *testing.
 	}
 	if discRes.Card.Title != discTitle || discRes.Card.DiscussionState.String != string(domain.DiscussionStateArchived) {
 		t.Fatalf("unexpected discussion card result: %+v", discRes.Card)
+	}
+	gotDiscApproval, err := s.GetToolApproval(ctx, f.WorkspaceID, subDiscussion.ID, discApproval.ID)
+	if err != nil {
+		t.Fatalf("get discussion approval: %v", err)
+	}
+	if gotDiscApproval.Status != string(domain.ToolApprovalStatusSuperseded) {
+		t.Fatalf("discussion approval status=%q want superseded", gotDiscApproval.Status)
 	}
 
 	if _, err := s.UpdateCardFromAgentAttempt(ctx, UpdateCardFromAttemptParams{

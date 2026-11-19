@@ -256,6 +256,14 @@ func (s *Store) UpdateCardFromAgentAttempt(
 				if err := recalculateCardSchedulesTx(ctx, tx, p.WorkspaceID, p.TargetCardID, now); err != nil {
 					return UpdateCardFromAttemptResult{}, err
 				}
+			} else {
+				reason := "定时任务已暂停，未处理审批已自动失效"
+				if to == domain.OngoingStateArchived {
+					reason = "定时任务已归档，未处理审批已自动失效"
+				}
+				if err := supersedePendingToolApprovalsTx(ctx, tx, p.WorkspaceID, p.TargetCardID, reason); err != nil {
+					return UpdateCardFromAttemptResult{}, err
+				}
 			}
 			statusChanged = true
 			statusTransitionContent = fmt.Sprintf("%s -> %s", from, to)
@@ -300,6 +308,11 @@ func (s *Store) UpdateCardFromAgentAttempt(
 						  AND existing.turn_id = pending.id
 					  )
 				`, p.WorkspaceID, p.TargetCardID, p.RunnerSourceID); err != nil {
+					return UpdateCardFromAttemptResult{}, err
+				}
+				if err := supersedePendingToolApprovalsTx(
+					ctx, tx, p.WorkspaceID, p.TargetCardID, "讨论已归档，未处理审批已自动失效",
+				); err != nil {
 					return UpdateCardFromAttemptResult{}, err
 				}
 			}
