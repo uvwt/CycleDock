@@ -3,6 +3,7 @@ package mcpclient
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,21 @@ const (
 	maxMCPResponseBytes     int64 = 4 << 20
 	maxModelToolResultBytes       = 256 << 10
 )
+
+// ImageContent 描述 MCP 工具结果中提取出的单张图片二进制载荷。
+// 独立于纯文本 JSON 返回，避免图片 base64 被 boundedModelResult 的 256KB 文本上限截断或当成普通字符串塞进模型上下文。
+type ImageContent struct {
+	MIMEType string
+	Data     []byte
+}
+
+// CallResult 保存单次 MCP 工具调用的结构化结果：
+// Payload 为剥离原始大图片数据后的紧凑 JSON（用于元数据/结构化文本展示与外置判定），
+// Images 为按原始顺序提取的图片列表。
+type CallResult struct {
+	Payload string
+	Images  []ImageContent
+}
 
 type Connection struct {
 	Name              string
@@ -387,24 +403,29 @@ func (s *SessionSet) HasTool(modelName string) bool {
 }
 
 func (s *SessionSet) Call(ctx context.Context, modelName string, arguments map[string]any) (string, error) {
+	res, err := s.CallStructured(ctx, modelName, arguments)
+	if err != nil {
+		return "", err
+	}
+	return res.Payload, nil
+}
+
+// CallStructured 调用工具并返回已分离图片块的 CallResult。
+func (s *SessionSet) CallStructured(ctx context.Context, modelName string, arguments map[string]any) (CallResult, error) {
 	s.mu.Lock()
 	tool, ok := s.tools[modelName]
 	s.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("unknown MCP tool %q", modelName)
+		return CallResult{}, fmt.Errorf("unknown MCP tool %q", modelName)
 	}
 	if tool.Hidden {
-		return "", fmt.Errorf("MCP tool %q is runtime-only", modelName)
+		return CallResult{}, fmt.Errorf("MCP tool %q is runtime-only", modelName)
 	}
 	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
 	if err != nil {
-		return "", err
+		return CallResult{}, err
 	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("encode MCP result %s/%s: %w", tool.ServerName, tool.RemoteName, err)
-	}
-	return boundedModelResult(raw), nil
+	return formatCallResult(tool.ServerName, tool.RemoteName, result)
 }
 
 // CallExternal invokes an external MCP tool by its server and remote name.
@@ -413,19 +434,146 @@ func (s *SessionSet) CallExternal(
 	serverName, remoteName string,
 	arguments map[string]any,
 ) (string, error) {
-	tool, found := s.GetExternalTool(serverName, remoteName)
-	if !found {
-		return "", fmt.Errorf("external MCP tool %s/%s not found", serverName, remoteName)
-	}
-	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
+	res, err := s.CallExternalStructured(ctx, serverName, remoteName, arguments)
 	if err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("encode MCP result %s/%s: %w", tool.ServerName, tool.RemoteName, err)
+	return res.Payload, nil
+}
+
+// CallExternalStructured 调用外部 MCP 工具并返回已分离图片块的 CallResult。
+func (s *SessionSet) CallExternalStructured(
+	ctx context.Context,
+	serverName, remoteName string,
+	arguments map[string]any,
+) (CallResult, error) {
+	tool, found := s.GetExternalTool(serverName, remoteName)
+	if !found {
+		return CallResult{}, fmt.Errorf("external MCP tool %s/%s not found", serverName, remoteName)
 	}
-	return boundedModelResult(raw), nil
+	result, err := s.callRemote(ctx, tool.ServerName, tool.RemoteName, arguments)
+	if err != nil {
+		return CallResult{}, err
+	}
+	return formatCallResult(tool.ServerName, tool.RemoteName, result)
+}
+
+func formatCallResult(serverName, remoteName string, result *mcp.CallToolResult) (CallResult, error) {
+	if result == nil {
+		return CallResult{Payload: "{}"}, nil
+	}
+	images := extractResultImages(result)
+	if len(images) == 0 {
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return CallResult{}, fmt.Errorf("encode MCP result %s/%s: %w", serverName, remoteName, err)
+		}
+		return CallResult{Payload: boundedModelResult(raw)}, nil
+	}
+
+	sanitized := *result
+	sanitized.Content = make([]mcp.Content, 0, len(result.Content))
+	imageIndex := 0
+	for _, block := range result.Content {
+		if img, ok := block.(*mcp.ImageContent); ok && img != nil && len(img.Data) > 0 {
+			imageIndex++
+			mimeType := normalizeMCPImageMIMEType(img.MIMEType)
+			sanitized.Content = append(sanitized.Content, &mcp.TextContent{
+				Text: fmt.Sprintf("[image #%d: mimeType=%s, bytes=%d]", imageIndex, mimeType, len(img.Data)),
+			})
+			continue
+		}
+		sanitized.Content = append(sanitized.Content, block)
+	}
+	raw, err := json.Marshal(&sanitized)
+	if err != nil {
+		return CallResult{}, fmt.Errorf("encode MCP result %s/%s: %w", serverName, remoteName, err)
+	}
+	return CallResult{
+		Payload: boundedModelResult(raw),
+		Images:  images,
+	}, nil
+}
+
+func extractResultImages(result *mcp.CallToolResult) []ImageContent {
+	if result == nil {
+		return nil
+	}
+	var images []ImageContent
+	for _, block := range result.Content {
+		img, ok := block.(*mcp.ImageContent)
+		if !ok || img == nil || len(img.Data) == 0 {
+			continue
+		}
+		data := decodeMCPImageBytes(img.Data)
+		if len(data) == 0 {
+			continue
+		}
+		images = append(images, ImageContent{
+			MIMEType: normalizeMCPImageMIMEType(img.MIMEType),
+			Data:     data,
+		})
+	}
+	return images
+}
+
+// decodeMCPImageBytes 兼容 mcp.ImageContent.Data 已由 go-sdk 解码为原始二进制或部分实现直接塞入 base64 ASCII 字节的情况。
+func decodeMCPImageBytes(raw []byte) []byte {
+	if len(raw) == 0 {
+		return nil
+	}
+	if looksLikeImageMagic(raw) {
+		out := make([]byte, len(raw))
+		copy(out, raw)
+		return out
+	}
+	if trimmed := strings.TrimSpace(string(raw)); len(trimmed) >= 16 && len(trimmed)%4 == 0 {
+		if decoded, err := base64.StdEncoding.DecodeString(trimmed); err == nil && looksLikeImageMagic(decoded) {
+			return decoded
+		}
+	}
+	out := make([]byte, len(raw))
+	copy(out, raw)
+	return out
+}
+
+func looksLikeImageMagic(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	// PNG
+	if len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n" {
+		return true
+	}
+	// JPEG
+	if data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return true
+	}
+	// GIF
+	if string(data[:4]) == "GIF8" {
+		return true
+	}
+	// WebP (RIFF....WEBP)
+	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return true
+	}
+	// BMP
+	if data[0] == 'B' && data[1] == 'M' {
+		return true
+	}
+	return false
+}
+
+func normalizeMCPImageMIMEType(mimeType string) string {
+	trimmed := strings.TrimSpace(mimeType)
+	if semi := strings.IndexByte(trimmed, ';'); semi >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:semi])
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "image/") && len(lower) > len("image/") {
+		return lower
+	}
+	return "image/png"
 }
 
 // CallInternal invokes a discovered tool without exposing it to the model.

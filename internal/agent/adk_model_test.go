@@ -13,9 +13,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
+	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -650,4 +652,145 @@ func TestADKRouteModelCapacityInterception_SystemToolsAndChinese(t *testing.T) {
 			t.Fatalf("answer=%q", answer)
 		}
 	})
+}
+
+func TestADKRequestToModelClientHydratesRecentToolImagesAndPreservesToolPairing(t *testing.T) {
+	ctx := context.Background()
+	artifactService := artifact.InMemoryService()
+	workspaceID := uuid.New()
+	cardID := uuid.New()
+	appName, userID, sessionID := agentsession.Identity(workspaceID, cardID)
+
+	saveImage := func(name, mimeType string, data []byte) int64 {
+		resp, err := artifactService.Save(ctx, &artifact.SaveRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
+			FileName:  name,
+			Part:      genai.NewPartFromBytes(data, mimeType),
+		})
+		if err != nil {
+			t.Fatalf("save image artifact %s: %v", name, err)
+		}
+		return resp.Version
+	}
+
+	var contents []*genai.Content
+	// 构造 4 轮工具图片（超过 maxPromptToolImageCount=3），验证最早一张会被自动跳过水合，仅保留最近 3 张，
+	// 且平行工具调用批次中的所有 role="tool" 响应会完整配对后才插入 user 多模态图片消息。
+	for round := 1; round <= 4; round++ {
+		callID := fmt.Sprintf("call-img-%d", round)
+		imgName := fmt.Sprintf("tool-image-%d.png", round)
+		ver := saveImage(imgName, "image/png", []byte{0x89, 0x50, 0x4e, 0x47, byte(round)})
+		fc := genai.NewPartFromFunctionCall("view_image", map[string]any{"round": round})
+		fc.FunctionCall.ID = callID
+
+		var modelParts []*genai.Part
+		modelParts = append(modelParts, fc)
+		var respParts []*genai.Part
+		respParts = append(respParts, &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				ID:   callID,
+				Name: "view_image",
+				Response: map[string]any{
+					"status": "ok",
+					imageArtifactsFieldKey: []map[string]any{{
+						imageArtifactRefKey:     imgName,
+						imageArtifactVersionKey: ver,
+						imageArtifactMIMEKey:    "image/png",
+						imageArtifactBytesKey:   5,
+					}},
+				},
+			},
+		})
+		if round == 4 {
+			// 在第 4 轮加入第二个并行普通工具调用，验证同一批次的两个 tool 响应必须连续相邻，
+			// 多模态图片 user 消息只能跟在整批 tool 响应之后。
+			fc2 := genai.NewPartFromFunctionCall("phone_device_status", map[string]any{})
+			fc2.FunctionCall.ID = "call-status-4"
+			modelParts = append(modelParts, fc2)
+			respParts = append(respParts, &genai.Part{
+				FunctionResponse: &genai.FunctionResponse{
+					ID:       "call-status-4",
+					Name:     "phone_device_status",
+					Response: map[string]any{"battery": 95},
+				},
+			})
+		}
+		contents = append(contents,
+			&genai.Content{Role: genai.RoleModel, Parts: modelParts},
+			&genai.Content{Role: genai.RoleUser, Parts: respParts},
+		)
+	}
+
+	req := &model.LLMRequest{Contents: contents}
+	messages, _, err := adkRequestToModelClientWithArtifacts(ctx, req, artifactService, workspaceID, cardID)
+	if err != nil {
+		t.Fatalf("adkRequestToModelClientWithArtifacts failed: %v", err)
+	}
+
+	var imageUserMsgs int
+	for i, msg := range messages {
+		if msg.HasImageParts() {
+			imageUserMsgs++
+			if msg.Role != "user" {
+				t.Fatalf("message[%d] role=%q, want user", i, msg.Role)
+			}
+			if i == 0 || messages[i-1].Role != "tool" {
+				t.Fatalf("message[%d] multimodal user message must immediately follow tool responses, prev=%+v", i, messages[i-1])
+			}
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 2 {
+			if i+2 >= len(messages) || messages[i+1].Role != "tool" || messages[i+2].Role != "tool" {
+				t.Fatalf("parallel tool responses broken around index %d: %+v", i, messages[i:])
+			}
+			if messages[i+1].ToolCallID != "call-img-4" || messages[i+2].ToolCallID != "call-status-4" {
+				t.Fatalf("unexpected tool response order: %s, %s", messages[i+1].ToolCallID, messages[i+2].ToolCallID)
+			}
+			if i+3 >= len(messages) || !messages[i+3].HasImageParts() {
+				t.Fatalf("expected multimodal user image message right after parallel tool batch at %d", i+3)
+			}
+		}
+	}
+	if imageUserMsgs != 3 {
+		t.Fatalf("hydrated image user messages=%d, want 3 (capped by maxPromptToolImageCount)", imageUserMsgs)
+	}
+
+	// 验证估算 Token：应计入保留的 3 张图片估算开销（约 3 * 1100 = 3300），而非原始二进制字节。
+	tokens := estimateADKRequestTokens(req)
+	if tokens < 3300 || tokens > 5000 {
+		t.Fatalf("estimateADKRequestTokens=%d, want around 3300..5000 for 3 images + metadata", tokens)
+	}
+
+	if repeatedToolLoop(messages) {
+		t.Fatalf("distinct tool arguments should not trigger repeatedToolLoop")
+	}
+}
+
+func TestADKRequestToModelClientSupportsDirectImagePartsAndGracefulFallback(t *testing.T) {
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					genai.NewPartFromText("Look at this:"),
+					genai.NewPartFromBytes([]byte{0x89, 0x50, 0x4e, 0x47}, "image/png"),
+					genai.NewPartFromBytes([]byte("audio-bytes"), "audio/mp3"),
+				},
+			},
+		},
+	}
+	messages, _, err := adkRequestToModelClient(req)
+	if err != nil {
+		t.Fatalf("adkRequestToModelClient failed: %v", err)
+	}
+	if len(messages) != 1 || !messages[0].HasImageParts() {
+		t.Fatalf("messages=%+v", messages)
+	}
+	if len(messages[0].Parts) != 3 {
+		t.Fatalf("parts len=%d, want 3 (text + image + placeholder)", len(messages[0].Parts))
+	}
+	if !strings.Contains(messages[0].Parts[2].Text, "non-image inline media") {
+		t.Fatalf("unexpected fallback placeholder: %q", messages[0].Parts[2].Text)
+	}
 }

@@ -39,6 +39,13 @@ type responsesItem struct {
 	Output    string `json:"output,omitempty"`
 }
 
+type responsesContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
 type responseOutputItem struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
@@ -77,7 +84,10 @@ func (c *Client) completeResponses(
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	instructions, input := buildResponsesInput(messages)
+	instructions, input, err := buildResponsesInput(messages)
+	if err != nil {
+		return Completion{}, fmt.Errorf("encode Responses request: %w", err)
+	}
 	responseTools := make([]responsesTool, 0, len(tools))
 	for _, tool := range tools {
 		// 工具沿用 ADK/MCP 的可选参数语义；省略 strict 会让 Responses
@@ -150,21 +160,31 @@ func (c *Client) completeResponses(
 	return completion, nil
 }
 
-func buildResponsesInput(messages []Message) (string, []responsesItem) {
+func buildResponsesInput(messages []Message) (string, []responsesItem, error) {
 	var instructions []string
 	input := make([]responsesItem, 0, len(messages))
 	for _, message := range messages {
 		switch message.Role {
 		case "system":
-			if content := strings.TrimSpace(message.Content); content != "" {
+			if content := strings.TrimSpace(message.PlainText()); content != "" {
 				instructions = append(instructions, content)
 			}
 		case "tool":
 			input = append(input, responsesItem{
-				Type: "function_call_output", CallID: message.ToolCallID, Output: message.Content,
+				Type: "function_call_output", CallID: message.ToolCallID, Output: message.PlainText(),
 			})
 		default:
-			if content := strings.TrimSpace(message.Content); content != "" {
+			if message.HasImageParts() {
+				contentParts, err := buildResponsesContentParts(message)
+				if err != nil {
+					return "", nil, err
+				}
+				if len(contentParts) > 0 {
+					input = append(input, responsesItem{
+						Type: "message", Role: message.Role, Content: contentParts,
+					})
+				}
+			} else if content := strings.TrimSpace(message.PlainText()); content != "" {
 				input = append(input, responsesItem{
 					Type: "message", Role: message.Role, Content: content,
 				})
@@ -177,7 +197,41 @@ func buildResponsesInput(messages []Message) (string, []responsesItem) {
 			}
 		}
 	}
-	return strings.Join(instructions, "\n\n"), input
+	return strings.Join(instructions, "\n\n"), input, nil
+}
+
+func buildResponsesContentParts(message Message) ([]responsesContentPart, error) {
+	textType := "input_text"
+	if message.Role == "assistant" {
+		textType = "output_text"
+	}
+	parts := message.normalizedParts()
+	out := make([]responsesContentPart, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case ContentPartText:
+			if part.Text == "" {
+				continue
+			}
+			out = append(out, responsesContentPart{
+				Type: textType,
+				Text: part.Text,
+			})
+		case ContentPartImage:
+			dataURL, err := part.ImageDataURL()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, responsesContentPart{
+				Type:     "input_image",
+				ImageURL: dataURL,
+				Detail:   "auto",
+			})
+		default:
+			return nil, fmt.Errorf("unsupported message content part type %q", part.Type)
+		}
+	}
+	return out, nil
 }
 
 func readResponsesStream(response *http.Response, onDelta func(string), onToolCall func(ToolCall)) (Completion, error) {

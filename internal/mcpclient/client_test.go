@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -324,5 +325,56 @@ func TestAddConnectionListToolsFailureLeavesNoSessionOrTools(t *testing.T) {
 	}
 	if len(sessions.sessions) != 0 || len(sessions.ToolDefinitions()) != 0 {
 		t.Fatal("failed list left partial session or tools")
+	}
+}
+
+func TestCallStructuredExtractsLargeImageWithoutTruncatingJSON(t *testing.T) {
+	// 构造超过 maxModelToolResultBytes (256KB) 的 PNG 载荷，验证图像不会触发纯文本截断。
+	largePNG := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x42}, 300*1024)...)
+
+	server := mcp.NewServer(&mcp.Implementation{
+		Name: "vision-mcp", Version: "1.0.0",
+	}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "capture", Description: "Capture image"},
+		func(ctx context.Context, request *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: "capture ok"},
+					&mcp.ImageContent{MIMEType: "image/png; charset=binary", Data: largePNG},
+				},
+				StructuredContent: map[string]any{"width": 1280, "height": 720},
+			}, nil, nil
+		},
+	)
+
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+	defer httpServer.Close()
+
+	set, err := Connect(context.Background(), []Connection{{
+		Name: "vision", URL: httpServer.URL, Timeout: 2 * time.Second,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+
+	res, err := set.CallExternalStructured(context.Background(), "vision", "capture", nil)
+	if err != nil {
+		t.Fatalf("CallExternalStructured failed: %v", err)
+	}
+	if len(res.Images) != 1 {
+		t.Fatalf("images len=%d, want 1", len(res.Images))
+	}
+	if res.Images[0].MIMEType != "image/png" {
+		t.Fatalf("mimeType=%q, want image/png", res.Images[0].MIMEType)
+	}
+	if !bytes.Equal(res.Images[0].Data, largePNG) {
+		t.Fatalf("extracted image bytes len=%d, want %d", len(res.Images[0].Data), len(largePNG))
+	}
+	if strings.Contains(res.Payload, `"truncated":true`) {
+		t.Fatalf("payload should not be truncated when image is extracted: %s", res.Payload)
+	}
+	if !strings.Contains(res.Payload, "capture ok") || !strings.Contains(res.Payload, "[image #1: mimeType=image/png") {
+		t.Fatalf("payload missing text or image summary placeholder: %s", res.Payload)
 	}
 }
