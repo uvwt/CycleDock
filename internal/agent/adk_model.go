@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +14,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
+	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -40,6 +43,12 @@ const (
 	estimatedTokenScale     = 4
 	asciiCharTokenWeight    = 1
 	nonASCIICharTokenWeight = 6
+
+	// 视觉模型单张图片的默认保守 Token 估算（近似 OpenAI high-detail 2x2 tile ≈ 765~1100 tokens）。
+	// 不按 base64 字符数估算（否则一张 1MB PNG 会被误算为 330k tokens 触发误拦截），也不计为 0。
+	estimatedImageTokens = 1100
+	// 每次模型请求最多随历史恢复的最近工具图片数量，避免多轮截图在历史中无限堆积撑爆上下文。
+	maxPromptToolImageCount = 3
 )
 
 // RouteCallObservation 记录最近一次成功命中的模型路由及本次调用的 Token 统计与来源。
@@ -104,6 +113,7 @@ type adkRouteModel struct {
 	client             *modelclient.Client
 	modelAuth          *modelauth.Service
 	store              *store.Store
+	artifactService    artifact.Service
 	workspaceID        uuid.UUID
 	cardID             uuid.UUID
 	turnID             uuid.UUID
@@ -244,6 +254,14 @@ func (m *adkRouteModel) withTraceContext(cardID, turnID, attemptID uuid.UUID, pu
 	return m
 }
 
+func (m *adkRouteModel) withArtifactService(service artifact.Service) *adkRouteModel {
+	if m == nil {
+		return nil
+	}
+	m.artifactService = service
+	return m
+}
+
 func (m *adkRouteModel) Name() string {
 	return "cycledock-route"
 }
@@ -282,7 +300,13 @@ func (m *adkRouteModel) GenerateContent(
 	stream bool,
 ) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, tools, err := adkRequestToModelClient(req)
+		messages, tools, err := adkRequestToModelClientWithArtifacts(
+			ctx,
+			req,
+			m.artifactService,
+			m.workspaceID,
+			m.cardID,
+		)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -562,9 +586,29 @@ func (m *adkRouteModel) routeConfig(
 func adkRequestToModelClient(
 	req *model.LLMRequest,
 ) ([]modelclient.Message, []modelclient.ToolDefinition, error) {
+	return adkRequestToModelClientWithArtifacts(context.Background(), req, nil, uuid.Nil, uuid.Nil)
+}
+
+type resolvedToolImage struct {
+	toolName string
+	mimeType string
+	data     []byte
+	dataURL  string
+}
+
+func adkRequestToModelClientWithArtifacts(
+	ctx context.Context,
+	req *model.LLMRequest,
+	artifactService artifact.Service,
+	workspaceID, cardID uuid.UUID,
+) ([]modelclient.Message, []modelclient.ToolDefinition, error) {
 	if req == nil {
 		return nil, nil, errors.New("ADK model request is nil")
 	}
+
+	// 预先计算历史中哪些工具结果需要水合图片，仅保留最近 maxPromptToolImageCount 张有效图片，
+	// 避免长会话多轮截图/拍照无限堆积导致视觉上下文溢出。
+	allowedToolImages := selectRecentToolImageTargets(req.Contents, maxPromptToolImageCount)
 
 	messages := make([]modelclient.Message, 0, len(req.Contents)+1)
 	if req.Config != nil && req.Config.SystemInstruction != nil {
@@ -577,20 +621,28 @@ func adkRequestToModelClient(
 		}
 	}
 
-	for _, content := range req.Contents {
+	for contentIdx, content := range req.Contents {
 		if content == nil {
 			continue
 		}
-		var textParts []string
+		var parts []modelclient.ContentPart
+		var hasImages bool
 		var calls []modelclient.ToolCall
 		var toolResponses []modelclient.Message
-		for _, part := range content.Parts {
+		var batchImages []resolvedToolImage
+		for partIdx, part := range content.Parts {
 			if part == nil || part.Thought {
 				continue
 			}
 			switch {
 			case part.Text != "":
-				textParts = append(textParts, part.Text)
+				parts = append(parts, modelclient.NewTextPart(part.Text))
+			case part.InlineData != nil && isImagePartBlob(part.InlineData):
+				parts = append(parts, modelclient.NewImagePartFromBytes(part.InlineData.MIMEType, part.InlineData.Data))
+				hasImages = true
+			case part.FileData != nil && isImageFileData(part.FileData):
+				parts = append(parts, modelclient.NewImagePartFromDataURL(part.FileData.FileURI))
+				hasImages = true
 			case part.FunctionCall != nil:
 				rawArgs, err := json.Marshal(part.FunctionCall.Args)
 				if err != nil {
@@ -605,7 +657,15 @@ func adkRequestToModelClient(
 					},
 				})
 			case part.FunctionResponse != nil:
-				rawResponse, err := json.Marshal(part.FunctionResponse.Response)
+				sanitizedResponse, extractedImages := splitFunctionResponseImages(
+					ctx,
+					part.FunctionResponse,
+					allowedToolImages[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}],
+					artifactService,
+					workspaceID,
+					cardID,
+				)
+				rawResponse, err := json.Marshal(sanitizedResponse)
 				if err != nil {
 					return nil, nil, fmt.Errorf("encode function response %q: %w", part.FunctionResponse.Name, err)
 				}
@@ -615,16 +675,25 @@ func adkRequestToModelClient(
 					Name:       part.FunctionResponse.Name,
 					Content:    string(rawResponse),
 				})
+				batchImages = append(batchImages, extractedImages...)
+			case part.InlineData != nil || part.FileData != nil:
+				// 非图片二进制媒体保持优雅降级占位文本，避免历史中混入音频/未知附件时阻塞整个对话。
+				parts = append(parts, modelclient.NewTextPart(formatUnsupportedMediaPlaceholder(part)))
 			default:
 				return nil, nil, errors.New("CycleDock ADK model adapter does not yet support non-text media parts")
 			}
 		}
 
 		if len(toolResponses) > 0 {
-			if len(textParts) > 0 || len(calls) > 0 {
+			if len(parts) > 0 || len(calls) > 0 {
 				return nil, nil, errors.New("mixed function responses and ordinary content are unsupported")
 			}
 			messages = append(messages, toolResponses...)
+			// OpenAI Chat Completions 兼容接口与多数中转均不允许在 role="tool" 内放置 image_url，
+			// 因此在整批 tool 响应完整配对结束之后，再紧跟追加一条合成 user 多模态消息，确保 tool_call_id 序列合法。
+			if len(batchImages) > 0 {
+				messages = append(messages, buildToolImagesUserMessage(batchImages))
+			}
 			continue
 		}
 
@@ -632,11 +701,20 @@ func adkRequestToModelClient(
 		if content.Role == string(genai.RoleModel) {
 			role = "assistant"
 		}
-		messages = append(messages, modelclient.Message{
+		msg := modelclient.Message{
 			Role:      role,
-			Content:   strings.Join(textParts, ""),
 			ToolCalls: calls,
-		})
+		}
+		if hasImages {
+			msg.Parts = parts
+		} else {
+			var textBuilder strings.Builder
+			for _, p := range parts {
+				textBuilder.WriteString(p.Text)
+			}
+			msg.Content = textBuilder.String()
+		}
+		messages = append(messages, msg)
 	}
 
 	tools, err := adkToolsToModelClient(req.Config)
@@ -644,6 +722,306 @@ func adkRequestToModelClient(
 		return nil, nil, err
 	}
 	return messages, tools, nil
+}
+
+type toolPartKey struct {
+	contentIdx int
+	partIdx    int
+}
+
+func selectRecentToolImageTargets(contents []*genai.Content, maxImages int) map[toolPartKey]bool {
+	selected := make(map[toolPartKey]bool)
+	if maxImages <= 0 {
+		return selected
+	}
+	remaining := maxImages
+	for cIdx := len(contents) - 1; cIdx >= 0 && remaining > 0; cIdx-- {
+		content := contents[cIdx]
+		if content == nil {
+			continue
+		}
+		for pIdx := len(content.Parts) - 1; pIdx >= 0 && remaining > 0; pIdx-- {
+			part := content.Parts[pIdx]
+			if part == nil || part.Thought || part.FunctionResponse == nil {
+				continue
+			}
+			count := countFunctionResponseImages(part.FunctionResponse)
+			if count == 0 {
+				continue
+			}
+			selected[toolPartKey{contentIdx: cIdx, partIdx: pIdx}] = true
+			remaining -= count
+		}
+	}
+	return selected
+}
+
+func countFunctionResponseImages(fr *genai.FunctionResponse) int {
+	if fr == nil {
+		return 0
+	}
+	count := 0
+	for _, fp := range fr.Parts {
+		if fp != nil && ((fp.InlineData != nil && len(fp.InlineData.Data) > 0 && isImageMIMEType(fp.InlineData.MIMEType)) ||
+			(fp.FileData != nil && isImageURI(fp.FileData.MIMEType, fp.FileData.FileURI))) {
+			count++
+		}
+	}
+	if fr.Response != nil {
+		if refs, ok := fr.Response[imageArtifactsFieldKey]; ok {
+			count += sliceLen(refs)
+		}
+		if inline, ok := fr.Response[imageInlineFieldKey]; ok {
+			count += sliceLen(inline)
+		}
+	}
+	return count
+}
+
+func sliceLen(v any) int {
+	switch items := v.(type) {
+	case []map[string]any:
+		return len(items)
+	case []any:
+		return len(items)
+	default:
+		return 0
+	}
+}
+
+func splitFunctionResponseImages(
+	ctx context.Context,
+	fr *genai.FunctionResponse,
+	hydrateImages bool,
+	artifactService artifact.Service,
+	workspaceID, cardID uuid.UUID,
+) (map[string]any, []resolvedToolImage) {
+	if fr == nil {
+		return nil, nil
+	}
+	var images []resolvedToolImage
+	if hydrateImages {
+		for _, fp := range fr.Parts {
+			if fp == nil {
+				continue
+			}
+			if fp.InlineData != nil && len(fp.InlineData.Data) > 0 && isImageMIMEType(fp.InlineData.MIMEType) {
+				images = append(images, resolvedToolImage{
+					toolName: fr.Name,
+					mimeType: fp.InlineData.MIMEType,
+					data:     fp.InlineData.Data,
+				})
+			} else if fp.FileData != nil && isImageURI(fp.FileData.MIMEType, fp.FileData.FileURI) {
+				images = append(images, resolvedToolImage{
+					toolName: fr.Name,
+					mimeType: fp.FileData.MIMEType,
+					dataURL:  fp.FileData.FileURI,
+				})
+			}
+		}
+	}
+
+	if fr.Response == nil {
+		return nil, images
+	}
+	// 若 Response 中存在内联图片字段（无 ArtifactService 时的兜底载体），绝不能将原始二进制/base64 塞进 tool 文本响应中，
+	// 而是剥离为结构化元信息并将图片附到后置多模态消息中。
+	_, hasInline := fr.Response[imageInlineFieldKey]
+	_, hasArtifactRefs := fr.Response[imageArtifactsFieldKey]
+	if !hasInline && !hasArtifactRefs {
+		return fr.Response, images
+	}
+
+	clean := make(map[string]any, len(fr.Response))
+	for k, v := range fr.Response {
+		if k == imageInlineFieldKey {
+			continue
+		}
+		clean[k] = v
+	}
+
+	if hydrateImages {
+		if hasInline {
+			images = append(images, decodeInlineImagesField(fr.Name, fr.Response[imageInlineFieldKey])...)
+		}
+		if hasArtifactRefs && artifactService != nil && workspaceID != uuid.Nil && cardID != uuid.Nil {
+			appName, userID, sessionID := agentsession.Identity(workspaceID, cardID)
+			for _, ref := range parseImageArtifactRefs(fr.Response[imageArtifactsFieldKey]) {
+				if ref.ArtifactRef == "" {
+					continue
+				}
+				loaded, err := artifactService.Load(ctx, &artifact.LoadRequest{
+					AppName:   appName,
+					UserID:    userID,
+					SessionID: sessionID,
+					FileName:  ref.ArtifactRef,
+					Version:   ref.ArtifactVersion,
+				})
+				if err != nil || loaded == nil || loaded.Part == nil || loaded.Part.InlineData == nil || len(loaded.Part.InlineData.Data) == 0 {
+					continue
+				}
+				mimeType := loaded.Part.InlineData.MIMEType
+				if mimeType == "" {
+					mimeType = ref.MIMEType
+				}
+				images = append(images, resolvedToolImage{
+					toolName: fr.Name,
+					mimeType: mimeType,
+					data:     loaded.Part.InlineData.Data,
+				})
+			}
+		}
+	}
+	return clean, images
+}
+
+func parseImageArtifactRefs(raw any) []imageArtifactRef {
+	var out []imageArtifactRef
+	switch items := raw.(type) {
+	case []map[string]any:
+		for _, item := range items {
+			if ref, ok := parseOneImageArtifactRef(item); ok {
+				out = append(out, ref)
+			}
+		}
+	case []any:
+		for _, rawItem := range items {
+			item, ok := rawItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if ref, ok := parseOneImageArtifactRef(item); ok {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+func parseOneImageArtifactRef(item map[string]any) (imageArtifactRef, bool) {
+	if item == nil {
+		return imageArtifactRef{}, false
+	}
+	fileName, _ := item[imageArtifactRefKey].(string)
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return imageArtifactRef{}, false
+	}
+	mimeType, _ := item[imageArtifactMIMEKey].(string)
+	return imageArtifactRef{
+		ArtifactRef:     fileName,
+		ArtifactVersion: int64FromAny(item[imageArtifactVersionKey]),
+		MIMEType:        strings.TrimSpace(mimeType),
+		SizeBytes:       int(int64FromAny(item[imageArtifactBytesKey])),
+	}, true
+}
+
+func int64FromAny(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case int32:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case json.Number:
+		parsed, _ := n.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func decodeInlineImagesField(toolName string, raw any) []resolvedToolImage {
+	var out []resolvedToolImage
+	appendItem := func(item map[string]any) {
+		if item == nil {
+			return
+		}
+		mimeType, _ := item[imageArtifactMIMEKey].(string)
+		switch dataVal := item["data"].(type) {
+		case []byte:
+			if len(dataVal) > 0 {
+				out = append(out, resolvedToolImage{toolName: toolName, mimeType: mimeType, data: dataVal})
+			}
+		case string:
+			if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataVal)); err == nil && len(decoded) > 0 {
+				out = append(out, resolvedToolImage{toolName: toolName, mimeType: mimeType, data: decoded})
+			}
+		}
+	}
+	switch items := raw.(type) {
+	case []map[string]any:
+		for _, item := range items {
+			appendItem(item)
+		}
+	case []any:
+		for _, rawItem := range items {
+			if item, ok := rawItem.(map[string]any); ok {
+				appendItem(item)
+			}
+		}
+	}
+	return out
+}
+
+func buildToolImagesUserMessage(images []resolvedToolImage) modelclient.Message {
+	parts := make([]modelclient.ContentPart, 0, len(images)*2)
+	for i, img := range images {
+		label := fmt.Sprintf("Image #%d returned by tool %s:", i+1, img.toolName)
+		if strings.TrimSpace(img.toolName) == "" {
+			label = fmt.Sprintf("Image #%d returned by tool:", i+1)
+		}
+		parts = append(parts, modelclient.NewTextPart(label))
+		if img.dataURL != "" {
+			parts = append(parts, modelclient.NewImagePartFromDataURL(img.dataURL))
+		} else {
+			parts = append(parts, modelclient.NewImagePartFromBytes(img.mimeType, img.data))
+		}
+	}
+	return modelclient.Message{
+		Role:  "user",
+		Parts: parts,
+	}
+}
+
+func isImagePartBlob(blob *genai.Blob) bool {
+	if blob == nil || len(blob.Data) == 0 {
+		return false
+	}
+	return isImageMIMEType(blob.MIMEType)
+}
+
+func isImageFileData(fileData *genai.FileData) bool {
+	if fileData == nil {
+		return false
+	}
+	return isImageURI(fileData.MIMEType, fileData.FileURI)
+}
+
+func isImageURI(mimeType, uri string) bool {
+	if strings.TrimSpace(uri) == "" {
+		return false
+	}
+	if isImageMIMEType(mimeType) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(uri)), "data:image/")
+}
+
+func formatUnsupportedMediaPlaceholder(part *genai.Part) string {
+	if part == nil {
+		return "[media]"
+	}
+	if part.InlineData != nil {
+		return fmt.Sprintf("[non-image inline media: mimeType=%s, bytes=%d]", part.InlineData.MIMEType, len(part.InlineData.Data))
+	}
+	if part.FileData != nil {
+		return fmt.Sprintf("[non-image file media: mimeType=%s, uri=%s]", part.FileData.MIMEType, part.FileData.FileURI)
+	}
+	return "[unsupported media]"
 }
 
 func adkOutputSchema(config *genai.GenerateContentConfig) (*modelclient.OutputSchema, error) {
@@ -846,13 +1224,31 @@ func estimateADKRequestTokens(req *model.LLMRequest) int {
 		units += estimateToolsTokenUnits(req.Config)
 		units += estimateJSONValueTokenUnits(req.Config.ResponseJsonSchema)
 	}
-	for _, content := range req.Contents {
-		units += estimateContentTokenUnits(content)
+	allowedToolImages := selectRecentToolImageTargets(req.Contents, maxPromptToolImageCount)
+	for contentIdx, content := range req.Contents {
+		if content == nil {
+			continue
+		}
+		units += estimateContentTokenUnitsWithImages(content, false)
+		for partIdx, part := range content.Parts {
+			if part == nil || part.Thought || part.FunctionResponse == nil {
+				continue
+			}
+			if allowedToolImages[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}] {
+				if imgCount := countFunctionResponseImages(part.FunctionResponse); imgCount > 0 {
+					units += imgCount * estimatedImageTokens * estimatedTokenScale
+				}
+			}
+		}
 	}
 	return unitsToEstimatedTokens(units)
 }
 
 func estimateContentTokenUnits(content *genai.Content) int {
+	return estimateContentTokenUnitsWithImages(content, true)
+}
+
+func estimateContentTokenUnitsWithImages(content *genai.Content, includeToolImages bool) int {
 	if content == nil {
 		return 0
 	}
@@ -862,11 +1258,34 @@ func estimateContentTokenUnits(content *genai.Content) int {
 			continue
 		}
 		units += estimateTextTokenUnits(part.Text)
+		if part.InlineData != nil && isImagePartBlob(part.InlineData) {
+			units += estimatedImageTokens * estimatedTokenScale
+		}
+		if part.FileData != nil && isImageFileData(part.FileData) {
+			units += estimatedImageTokens * estimatedTokenScale
+		}
 		if fc := part.FunctionCall; fc != nil {
 			units += estimateTextTokenUnits(fc.Name) + estimateJSONValueTokenUnits(fc.Args)
 		}
 		if fr := part.FunctionResponse; fr != nil {
-			units += estimateTextTokenUnits(fr.Name) + estimateJSONValueTokenUnits(fr.Response)
+			respForEstimate := fr.Response
+			if respForEstimate != nil {
+				if _, hasInline := respForEstimate[imageInlineFieldKey]; hasInline {
+					stripped := make(map[string]any, len(respForEstimate))
+					for k, v := range respForEstimate {
+						if k != imageInlineFieldKey {
+							stripped[k] = v
+						}
+					}
+					respForEstimate = stripped
+				}
+			}
+			units += estimateTextTokenUnits(fr.Name) + estimateJSONValueTokenUnits(respForEstimate)
+			if includeToolImages {
+				if imgCount := countFunctionResponseImages(fr); imgCount > 0 {
+					units += imgCount * estimatedImageTokens * estimatedTokenScale
+				}
+			}
 		}
 	}
 	return units

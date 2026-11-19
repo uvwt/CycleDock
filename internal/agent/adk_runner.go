@@ -146,6 +146,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 	llm.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "agent")
+	llm.withArtifactService(r.artifactService)
 	llm.budgetPolicy = r.compactionBudgetPolicy.withDefaults()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
 )
@@ -22,6 +23,11 @@ func repeatedToolLoop(messages []modelclient.Message) bool {
 	var previous [sha256.Size]byte
 	end := len(messages)
 	for round := 0; round < maxRepeatedToolRounds; round++ {
+		// 若工具批次后面紧跟着系统为携带工具图片而注入的合成 user 多模态消息，
+		// 跳过该合成消息再回溯对齐上一轮的 tool 响应批次，避免误伤死循环熔断检测。
+		if end > 0 && isSyntheticToolImageUserMessage(messages[end-1]) {
+			end--
+		}
 		start := end
 		for start > 0 && messages[start-1].Role == "tool" {
 			start--
@@ -57,4 +63,16 @@ func repeatedToolLoop(messages []modelclient.Message) bool {
 		end = start - 1
 	}
 	return true
+}
+
+func isSyntheticToolImageUserMessage(msg modelclient.Message) bool {
+	if msg.Role != "user" || !msg.HasImageParts() {
+		return false
+	}
+	for _, part := range msg.Parts {
+		if part.Type == modelclient.ContentPartText && strings.HasPrefix(part.Text, "Image #") && strings.Contains(part.Text, "returned by tool") {
+			return true
+		}
+	}
+	return false
 }

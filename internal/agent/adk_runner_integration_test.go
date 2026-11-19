@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -1395,5 +1396,157 @@ func TestADKTailCompactionStructuredSummaryAdvancesFromAnalysisToImplementation(
 	}
 	if gotEdits != 1 {
 		t.Fatalf("apply_patch 调用次数=%d，期望压缩恢复后直接进入实现阶段执行 1 次修改", gotEdits)
+	}
+}
+
+func TestADKRunnerExternalizesMCPImageAndDeliversMultimodalToModel(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	// 构造超过 12000 字符 base64 阈值的 PNG 图片（24KB 原始二进制 -> ~32KB base64）。
+	fakePNG := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x5a}, 24*1024)...)
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "vision-test", Version: "1.0.0"}, nil)
+	mcp.AddTool(
+		mcpServer,
+		&mcp.Tool{Name: "phone_screenshot", Description: "Capture current screen"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: "screen captured"},
+					&mcp.ImageContent{MIMEType: "image/png", Data: fakePNG},
+				},
+			}, nil, nil
+		},
+	)
+	mcpHTTP := httptest.NewServer(
+		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil),
+	)
+	defer mcpHTTP.Close()
+
+	var modelMu sync.Mutex
+	regularCalls := 0
+	var sawToolResponseWithoutRawBase64 bool
+	var sawMultimodalImageMessage bool
+	var sawValidToolAdjacency bool
+
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body modelRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode model request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		modelMu.Lock()
+		regularCalls++
+		current := regularCalls
+		modelMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch current {
+		case 1:
+			writeModelResponse(t, w, "", []modelclient.ToolCall{{
+				ID:   "call-shot-1",
+				Type: "function",
+				Function: modelclient.ToolFunction{
+					Name:      "call_mcp_tool",
+					Arguments: `{"tool_id":"lab:phone_screenshot","arguments":{}}`,
+				},
+			}})
+		case 2:
+			for i, msg := range body.Messages {
+				if msg.Role == "tool" && msg.ToolCallID == "call-shot-1" {
+					raw := msg.PlainText()
+					// 工具响应中必须包含 image_artifacts 引用，且不能包含截断残余或原始巨型 base64。
+					if strings.Contains(raw, `"image_artifacts"`) && !strings.Contains(raw, `"truncated":true`) && len(raw) < 2000 {
+						sawToolResponseWithoutRawBase64 = true
+					}
+					if i > 0 && body.Messages[i-1].Role == "assistant" &&
+						i+1 < len(body.Messages) && body.Messages[i+1].Role == "user" && body.Messages[i+1].HasImageParts() {
+						sawValidToolAdjacency = true
+					}
+				}
+				if msg.HasImageParts() {
+					for _, part := range msg.Parts {
+						if part.Type == modelclient.ContentPartImage {
+							url, err := part.ImageDataURL()
+							if err == nil && strings.HasPrefix(url, "data:image/png;base64,") && len(url) > 30000 {
+								sawMultimodalImageMessage = true
+							}
+						}
+					}
+				}
+			}
+			writeModelResponse(t, w, "I see the captured PNG screen clearly.", nil)
+		default:
+			t.Errorf("unexpected model call %d", current)
+			writeModelResponse(t, w, "unexpected", nil)
+		}
+	}))
+	defer modelHTTP.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Vision MCP integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Runtime", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(
+		ctx, workspace.ID, project.ID, human.ID, "Inspect screenshot", "", uuid.NullUUID{}, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(
+		ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "vision-model"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
+		Name: "lab", URL: mcpHTTP.URL, Enabled: true, TimeoutMS: 5000, ToolGuardEnabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
+		SessionService:    agentsession.NewPostgresService(pool),
+		ArtifactService:   agentartifact.NewPostgresService(pool),
+		HeartbeatInterval: 50 * time.Millisecond,
+		LeaseDuration:     time.Minute,
+	})
+
+	created, err := dataStore.CreateHumanTurn(
+		ctx, workspace.ID, card.ID, human.ID, "Take a screenshot and describe it.", "vision-turn-1", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextTurnAttempt(
+		ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim.Turn.ID != created.Turn.ID {
+		t.Fatalf("claimed turn=%s want=%s", claim.Turn.ID, created.Turn.ID)
+	}
+	if err := runner.RunAttempt(ctx, *claim); err != nil {
+		t.Fatalf("RunAttempt failed: %v", err)
+	}
+
+	if !sawToolResponseWithoutRawBase64 {
+		t.Fatal("tool response either kept raw base64, got truncated, or missed image_artifacts")
+	}
+	if !sawValidToolAdjacency {
+		t.Fatal("tool response and multimodal user message did not follow valid assistant->tool->user order")
+	}
+	if !sawMultimodalImageMessage {
+		t.Fatal("model did not receive full multimodal image_url data URL")
 	}
 }

@@ -2,6 +2,7 @@ package modelclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -173,5 +174,89 @@ func TestCompleteStreamingFallsBackWhenStreamOptionsUnsupported(t *testing.T) {
 	}
 	if len(sawStreamOptions) != 3 || !sawStreamOptions[0] || sawStreamOptions[1] || sawStreamOptions[2] {
 		t.Fatalf("sawStreamOptions=%v, want [true false false]", sawStreamOptions)
+	}
+}
+
+func TestChatCompletionsSerializesMultimodalAndPreservesStringContentWhenTextOnly(t *testing.T) {
+	var capturedRaw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRaw, _ = readBounded(r.Body, r.ContentLength, maxResponseBytes)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"saw screenshot"}}]}`))
+	}))
+	defer server.Close()
+
+	messages := []Message{
+		{
+			Role: "user",
+			Parts: []ContentPart{
+				NewTextPart("plain text via parts"),
+			},
+		},
+		{
+			Role: "user",
+			Parts: []ContentPart{
+				NewTextPart("inspect this tool image:"),
+				NewImagePartFromBytes("image/png", []byte{0x89, 0x50, 0x4e, 0x47}),
+			},
+		},
+	}
+
+	result, err := New().Complete(context.Background(), Config{
+		BaseURL: server.URL,
+		Model:   "vision-model",
+	}, messages, nil)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+	if result.Content != "saw screenshot" {
+		t.Fatalf("result.Content=%q, want saw screenshot", result.Content)
+	}
+
+	var wireReq struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedRaw, &wireReq); err != nil {
+		t.Fatalf("decode wire request: %v", err)
+	}
+	if len(wireReq.Messages) != 2 {
+		t.Fatalf("wire message count=%d, want 2", len(wireReq.Messages))
+	}
+	// 无图像时必须保持纯字符串序列化以完全向后兼容。
+	if string(wireReq.Messages[0].Content) != `"plain text via parts"` {
+		t.Fatalf("text-only message content=%s, want string literal", string(wireReq.Messages[0].Content))
+	}
+
+	var multimodalParts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(wireReq.Messages[1].Content, &multimodalParts); err != nil {
+		t.Fatalf("decode multimodal content array: %v (raw=%s)", err, string(wireReq.Messages[1].Content))
+	}
+	if len(multimodalParts) != 2 {
+		t.Fatalf("multimodalParts len=%d, want 2", len(multimodalParts))
+	}
+	if multimodalParts[0].Type != "text" || multimodalParts[0].Text != "inspect this tool image:" {
+		t.Fatalf("part[0]=%+v", multimodalParts[0])
+	}
+	if multimodalParts[1].Type != "image_url" || multimodalParts[1].ImageURL.URL != "data:image/png;base64,iVBORw==" {
+		t.Fatalf("part[1]=%+v", multimodalParts[1])
+	}
+
+	var roundTrip struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedRaw, &roundTrip); err != nil {
+		t.Fatalf("unmarshal into []Message failed: %v", err)
+	}
+	if !roundTrip.Messages[1].HasImageParts() || roundTrip.Messages[1].PlainText() != "inspect this tool image:" {
+		t.Fatalf("roundTrip message[1]=%+v", roundTrip.Messages[1])
 	}
 }

@@ -146,6 +146,90 @@ func TestResponsesTransportRejectsMalformedSSE(t *testing.T) {
 	}
 }
 
+func TestResponsesTransportSerializesMultimodalInputImageAndPreservesStringWithoutImages(t *testing.T) {
+	var capturedRaw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRaw, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintln(w, `data: {"type":"response.output_text.delta","delta":"image parsed"}`)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[]}}`)
+		fmt.Fprintln(w)
+	}))
+	defer server.Close()
+
+	completion, err := New().Complete(context.Background(), Config{
+		BaseURL:   server.URL + "/v1",
+		Model:     "gpt-vision",
+		Transport: TransportResponses,
+	}, []Message{
+		{Role: "user", Content: "check screenshot"},
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{{
+				ID:       "call_img",
+				Type:     "function",
+				Function: ToolFunction{Name: "view_image", Arguments: `{}`},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_img", Content: `{"mime_type":"image/jpeg"}`},
+		{
+			Role: "user",
+			Parts: []ContentPart{
+				NewTextPart("Tool image from view_image:"),
+				NewImagePartFromBase64("image/jpeg", "/9j/4AAQ"),
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+	if completion.Content != "image parsed" {
+		t.Fatalf("completion.Content=%q, want image parsed", completion.Content)
+	}
+
+	var wireReq struct {
+		Input []struct {
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			CallID  string          `json:"call_id"`
+			Output  string          `json:"output"`
+			Content json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(capturedRaw, &wireReq); err != nil {
+		t.Fatalf("decode wire request: %v", err)
+	}
+	if len(wireReq.Input) != 4 {
+		t.Fatalf("input len=%d, want 4", len(wireReq.Input))
+	}
+	if string(wireReq.Input[0].Content) != `"check screenshot"` {
+		t.Fatalf("input[0].Content=%s, want plain JSON string", string(wireReq.Input[0].Content))
+	}
+	if wireReq.Input[1].Type != "function_call" || wireReq.Input[2].Type != "function_call_output" {
+		t.Fatalf("unexpected tool items: %+v / %+v", wireReq.Input[1], wireReq.Input[2])
+	}
+
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+		Detail   string `json:"detail"`
+	}
+	if err := json.Unmarshal(wireReq.Input[3].Content, &parts); err != nil {
+		t.Fatalf("decode multimodal input[3].Content: %v (raw=%s)", err, string(wireReq.Input[3].Content))
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts len=%d, want 2", len(parts))
+	}
+	if parts[0].Type != "input_text" || parts[0].Text != "Tool image from view_image:" {
+		t.Fatalf("parts[0]=%+v", parts[0])
+	}
+	if parts[1].Type != "input_image" || parts[1].ImageURL != "data:image/jpeg;base64,/9j/4AAQ" || parts[1].Detail != "auto" {
+		t.Fatalf("parts[1]=%+v", parts[1])
+	}
+}
+
 func TestListModelsSupportsSubscriptionCatalogShapes(t *testing.T) {
 	tests := []struct {
 		name string

@@ -845,3 +845,98 @@ func TestEmergencyFallbackCompactsLargeBacklogWithoutBreakingToolCallPairing(t *
 		t.Fatalf("unmatched FunctionCalls left in compacted prompt: %+v", openCalls)
 	}
 }
+
+func TestChunkedSummarizer_HandlesMultimodalImageAndToolArtifactEventsSafely(t *testing.T) {
+	ctx := context.Background()
+	summaryLLM := &recordingChunkSummarizerLLM{}
+	summarizer, err := newADKCompactionSummarizer(summaryLLM)
+	if err != nil {
+		t.Fatalf("newADKCompactionSummarizer failed: %v", err)
+	}
+
+	base := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	largeImageBytes := make([]byte, 200*1024)
+	copy(largeImageBytes, []byte{0x89, 0x50, 0x4e, 0x47})
+
+	events := []*session.Event{
+		{
+			ID:           "ev-user-1",
+			InvocationID: "inv-1",
+			Author:       "user",
+			Timestamp:    base,
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Role: genai.RoleUser,
+					Parts: []*genai.Part{
+						genai.NewPartFromText("请查看截图"),
+						genai.NewPartFromBytes(largeImageBytes, "image/png"),
+					},
+				},
+			},
+		},
+		{
+			ID:           "ev-tool-call",
+			InvocationID: "inv-1",
+			Author:       "cycle_agent",
+			Timestamp:    base.Add(time.Second),
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Role: genai.RoleModel,
+					Parts: []*genai.Part{
+						func() *genai.Part {
+							p := genai.NewPartFromFunctionCall("view_image", map[string]any{"path": "shot.png"})
+							p.FunctionCall.ID = "call-view-1"
+							return p
+						}(),
+					},
+				},
+			},
+		},
+		{
+			ID:           "ev-tool-resp",
+			InvocationID: "inv-1",
+			Author:       "user",
+			Timestamp:    base.Add(2 * time.Second),
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Role: genai.RoleUser,
+					Parts: []*genai.Part{
+						{
+							FunctionResponse: &genai.FunctionResponse{
+								ID:   "call-view-1",
+								Name: "view_image",
+								Response: map[string]any{
+									"status": "ok",
+									imageArtifactsFieldKey: []map[string]any{{
+										imageArtifactRefKey:     "tool-image-1.png",
+										imageArtifactVersionKey: int64(1),
+										imageArtifactMIMEKey:    "image/png",
+										imageArtifactBytesKey:   len(largeImageBytes),
+									}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res, err := summarizer.SummarizeEvents(ctx, events)
+	if err != nil {
+		t.Fatalf("SummarizeEvents failed on multimodal image events: %v", err)
+	}
+	if res.Content == nil || len(res.Content.Parts) == 0 {
+		t.Fatalf("expected non-empty summary content, got %+v", res)
+	}
+	if len(summaryLLM.prompts) != 1 {
+		t.Fatalf("summaryLLM calls=%d, want 1", len(summaryLLM.prompts))
+	}
+	prompt := summaryLLM.prompts[0]
+	if !strings.Contains(prompt, "tool-image-1.png") {
+		t.Fatalf("summary prompt should preserve image artifact_ref metadata: %s", prompt)
+	}
+	if len(prompt) > 20000 {
+		t.Fatalf("summary prompt unexpectedly bloated by raw image bytes: len=%d", len(prompt))
+	}
+}
