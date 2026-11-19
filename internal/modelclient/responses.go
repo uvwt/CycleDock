@@ -43,6 +43,7 @@ type responsesContentPart struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type responseOutputItem struct {
@@ -224,6 +225,7 @@ func buildResponsesContentParts(message Message) ([]responsesContentPart, error)
 			out = append(out, responsesContentPart{
 				Type:     "input_image",
 				ImageURL: dataURL,
+				Detail:   "auto",
 			})
 		default:
 			return nil, fmt.Errorf("unsupported message content part type %q", part.Type)

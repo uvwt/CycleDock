@@ -214,6 +214,7 @@ func TestResponsesTransportSerializesMultimodalInputImageAndPreservesStringWitho
 		Type     string `json:"type"`
 		Text     string `json:"text"`
 		ImageURL string `json:"image_url"`
+		Detail   string `json:"detail"`
 	}
 	if err := json.Unmarshal(wireReq.Input[3].Content, &parts); err != nil {
 		t.Fatalf("decode multimodal input[3].Content: %v (raw=%s)", err, string(wireReq.Input[3].Content))
@@ -224,7 +225,7 @@ func TestResponsesTransportSerializesMultimodalInputImageAndPreservesStringWitho
 	if parts[0].Type != "input_text" || parts[0].Text != "Tool image from view_image:" {
 		t.Fatalf("parts[0]=%+v", parts[0])
 	}
-	if parts[1].Type != "input_image" || parts[1].ImageURL != "data:image/jpeg;base64,/9j/4AAQ" {
+	if parts[1].Type != "input_image" || parts[1].ImageURL != "data:image/jpeg;base64,/9j/4AAQ" || parts[1].Detail != "auto" {
 		t.Fatalf("parts[1]=%+v", parts[1])
 	}
 }
