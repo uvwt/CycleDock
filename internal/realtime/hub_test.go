@@ -167,4 +167,3 @@ func TestHubAttemptRepliedSurvivesSnapshotUntilAttemptFinished(t *testing.T) {
 		t.Fatalf("finished snapshot retained: %+v", afterSnap)
 	}
 }
-

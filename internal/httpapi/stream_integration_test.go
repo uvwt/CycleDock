@@ -176,4 +176,3 @@ func TestCardSSEConnectDeliversCompletedAttemptWithoutWaitingTicker(t *testing.T
 		}
 	}
 }
-
