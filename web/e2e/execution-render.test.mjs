@@ -1543,3 +1543,22 @@ test("已失效的工具审批默认收起为灰色轻量状态条且隐藏操�
   assert.match(pendingHtml, /data-action="approve-once"/);
   assert.match(pendingHtml, /允许本次执行/);
 });
+
+test("正式 end_turn 回复已落库或 live.replied=true 时，即使 currentAttempt 仍为 running 也不渲染三个点加载气泡", () => {
+  const runningAttempt = { ...attempt, status: "running", finished_at: undefined };
+  const finalMsg = {
+    ...result,
+    type: "message",
+    message: { type: "text", content: result.content, end_turn: true },
+  };
+  const htmlWithFinalMsg = render([comment, finalMsg], runningAttempt);
+  assert.match(htmlWithFinalMsg, /已生成卡片/);
+  assert.doesNotMatch(htmlWithFinalMsg, /aria-label="正在思考并生成回复"/);
+  const htmlWithLiveReplied = render([comment], runningAttempt, {
+    attemptID: runningAttempt.id,
+    stage: "正在执行",
+    replied: true,
+    replies: [],
+  });
+  assert.doesNotMatch(htmlWithLiveReplied, /aria-label="正在思考并生成回复"/);
+});

@@ -68,6 +68,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
           "attempt.started",
           // 跨实例轮询通过 stage 通知执行开始或阶段变化，REST 须同步移除已领取输入。
           "attempt.stage",
+          "attempt.replied",
           "attempt.finished",
           "attempt.failed",
           "reply.committed",
@@ -82,6 +83,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       "attempt.stage",
       "attempt.device",
       "attempt.task",
+      "attempt.replied",
       "reply.preview",
       "reply.committed",
       "reply.discarded",

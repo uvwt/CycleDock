@@ -370,3 +370,19 @@ test("连续系统触发两小时内合并，超过两小时拆分以保留时�
     ["q1", "a1", "standalone:sys-same,sys-near", "standalone:sys-far", "preview-1"],
   );
 });
+
+test("本轮 end_turn 正式回复已落库但 Attempt 仍在收尾 running 时，不再生成底部 running 占位", () => {
+  const finalMsg = {
+    id: "final-msg",
+    sequence: 2,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: attempt.id,
+    content: "这是最终正式回复",
+    message: { type: "text", content: "这是最终正式回复", end_turn: true },
+  };
+  const runningAttempt = { ...attempt, status: "running" };
+  const grouped = groupExecutionAttempts([comment, finalMsg], runningAttempt, []);
+  assert.equal(grouped.running, null);
+  assert.equal(grouped.statusByReply.get(finalMsg.id), runningAttempt);
+});
