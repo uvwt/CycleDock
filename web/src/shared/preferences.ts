@@ -460,6 +460,9 @@ const en = {
   已重置为默认策略: "Reset to default guard policy",
   已允许执行: "Approved",
   已拒绝执行: "Rejected",
+  "已失效（已有后续推进）": "Superseded (newer activity)",
+  "工具调用安全守卫 · 已失效（已有后续推进）":
+    "Tool guard · Superseded (newer activity)",
   收起详情: "Collapse details",
   模型提供商: "Model provider",
   "内置 Agent": "Built-in Agent",

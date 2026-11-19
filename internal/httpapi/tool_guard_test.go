@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 func TestSaveDeviceToolGuard_RequestValidationWithoutDB(t *testing.T) {
@@ -137,8 +138,8 @@ func TestGlobalAndDeviceToolGuardHTTPIntegration(t *testing.T) {
 			"model":             "guard-mini",
 			"api_key":           "sk-test-guard-key",
 		}},
-		"system_instructions":     "always verify",
-		"default_model_route_id":  routeID,
+		"system_instructions":    "always verify",
+		"default_model_route_id": routeID,
 	}, cookie, nil)
 	if settingsResp.Code != http.StatusOK {
 		t.Fatalf("save settings status=%d body=%s", settingsResp.Code, settingsResp.Body.String())
@@ -273,5 +274,89 @@ func TestGlobalAndDeviceToolGuardHTTPIntegration(t *testing.T) {
 	decodeRecorder(t, clearGlobalRoute, &clearedGlobal)
 	if clearedGlobal.Mode != "block_high_risk" || clearedGlobal.ModelRouteID != "" || clearedGlobal.TimeoutSeconds != 10 || clearedGlobal.CustomRules != "" {
 		t.Fatalf("unexpected cleared global guard: %+v", clearedGlobal)
+	}
+}
+
+func TestResolveSupersededToolApprovalReturnsConflictHTTPIntegration(t *testing.T) {
+	handler, _, st := newHTTPIntegration(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+
+	ctx := context.Background()
+	meResp := doJSON(t, handler, http.MethodGet, "/api/v1/me", nil, cookie, nil)
+	if meResp.Code != http.StatusOK {
+		t.Fatalf("get me status=%d body=%s", meResp.Code, meResp.Body.String())
+	}
+	var identity identityResponse
+	decodeRecorder(t, meResp, &identity)
+	workspaceID, err := uuid.Parse(identity.Workspace.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectsResp := doJSON(t, handler, http.MethodGet, "/api/v1/projects", nil, cookie, nil)
+	if projectsResp.Code != http.StatusOK {
+		t.Fatalf("list projects status=%d body=%s", projectsResp.Code, projectsResp.Body.String())
+	}
+	var projects []struct {
+		ID string `json:"id"`
+	}
+	decodeRecorder(t, projectsResp, &projects)
+	if len(projects) == 0 {
+		t.Fatal("expected at least one default project")
+	}
+	projectID := projects[0].ID
+
+	// 通过 HTTP 创建 Todo 卡片并创建一条挂起审批
+	createCard := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":       "审批失效 HTTP 校验",
+		"description": "test",
+	}, cookie, nil)
+	if createCard.Code != http.StatusCreated {
+		t.Fatalf("create card status=%d body=%s", createCard.Code, createCard.Body.String())
+	}
+	var createdCard struct {
+		ID string `json:"id"`
+	}
+	decodeRecorder(t, createCard, &createdCard)
+	cardID, err := uuid.Parse(createdCard.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := st.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		ToolCallID:  "call-http-supersede",
+		ToolName:    "exec_command",
+		Arguments:   map[string]any{"cmd": "echo hi"},
+		RiskLevel:   "high",
+		Reversible:  false,
+		Reason:      "需确认",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 发送新对话使待确认审批自动失效
+	commentResp := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+cardID.String()+"/comments", map[string]any{
+		"content":       "取消刚才的操作，直接总结",
+		"dispatch_mode": "enqueue",
+	}, cookie, map[string]string{"Idempotency-Key": "http-supersede-" + uuid.NewString()})
+	if commentResp.Code != http.StatusCreated {
+		t.Fatalf("submit comment status=%d body=%s", commentResp.Code, commentResp.Body.String())
+	}
+
+	resolveResp := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+cardID.String()+"/tool-approvals/"+approval.ID.String()+"/resolve", map[string]any{
+		"action": "approve_once",
+	}, cookie, nil)
+	if resolveResp.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict resolving superseded approval, got %d body=%s", resolveResp.Code, resolveResp.Body.String())
+	}
+	if !strings.Contains(resolveResp.Body.String(), "superseded") {
+		t.Fatalf("expected superseded message in 409 body, got %s", resolveResp.Body.String())
 	}
 }
