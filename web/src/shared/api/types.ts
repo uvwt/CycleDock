@@ -324,10 +324,20 @@ export type NexusDevice = {
   arch: string;
   agent_version: string;
 };
+export type DevicePlugin = {
+  name: string;
+  version?: string;
+  enabled: boolean;
+  description?: string;
+  skills_count?: number;
+  mcp_count?: number;
+  format?: string;
+};
 export type DeviceSkill = {
   name: string;
   description: string;
   source_type?: string;
+  plugin_name?: string;
 };
 export type DeviceDynamicMCP = {
   name: string;
@@ -336,6 +346,7 @@ export type DeviceDynamicMCP = {
   status?: string;
   tool_count?: number;
   source_type?: string;
+  plugin_name?: string;
 };
 export type NexusFleetDevice = {
   id: string;
@@ -345,6 +356,7 @@ export type NexusFleetDevice = {
   arch?: string;
   agent_version?: string;
   capabilities?: string[];
+  plugins?: DevicePlugin[];
   skills: DeviceSkill[];
   dynamic_mcp: DeviceDynamicMCP[];
   error?: string;

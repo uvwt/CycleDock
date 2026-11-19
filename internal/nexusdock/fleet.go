@@ -18,6 +18,7 @@ type DeviceSkill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	SourceType  string `json:"source_type,omitempty"`
+	PluginName  string `json:"plugin_name,omitempty"`
 }
 
 // DeviceDynamicMCP 表示设备上运行的动态 MCP 服务。
@@ -28,6 +29,18 @@ type DeviceDynamicMCP struct {
 	Status      string `json:"status,omitempty"`
 	ToolCount   int    `json:"tool_count,omitempty"`
 	SourceType  string `json:"source_type,omitempty"`
+	PluginName  string `json:"plugin_name,omitempty"`
+}
+
+// DevicePlugin 表示设备上安装的 Plugin 概览。
+type DevicePlugin struct {
+	Name        string `json:"name"`
+	Version     string `json:"version,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description,omitempty"`
+	SkillsCount int    `json:"skills_count,omitempty"`
+	MCPCount    int    `json:"mcp_count,omitempty"`
+	Format      string `json:"format,omitempty"`
 }
 
 // FleetDevice 包含 NexusDock 单台设备的完整运行能力快照。
@@ -39,6 +52,7 @@ type FleetDevice struct {
 	Arch         string             `json:"arch,omitempty"`
 	AgentVersion string             `json:"agent_version,omitempty"`
 	Capabilities []string           `json:"capabilities,omitempty"`
+	Plugins      []DevicePlugin     `json:"plugins,omitempty"`
 	Skills       []DeviceSkill      `json:"skills"`
 	DynamicMCP   []DeviceDynamicMCP `json:"dynamic_mcp"`
 	Error        string             `json:"error,omitempty"`
@@ -84,6 +98,7 @@ type rawFleetNode struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
 			SourceType  string `json:"source_type"`
+			PluginName  string `json:"plugin_name"`
 		} `json:"skills"`
 		CommonSkills struct {
 			Items []struct {
@@ -92,6 +107,15 @@ type rawFleetNode struct {
 				SourceType  string `json:"source_type"`
 			} `json:"items"`
 		} `json:"common_skills"`
+		Plugins []struct {
+			Name        string `json:"name"`
+			Version     string `json:"version"`
+			Enabled     bool   `json:"enabled"`
+			Description string `json:"description"`
+			SkillsCount int    `json:"skills_count"`
+			MCPCount    int    `json:"mcp_count"`
+			Format      string `json:"format"`
+		} `json:"plugins"`
 		DynamicMCP []struct {
 			Name        string `json:"name"`
 			DisplayName string `json:"display_name"`
@@ -99,6 +123,7 @@ type rawFleetNode struct {
 			Status      string `json:"status"`
 			ToolCount   int    `json:"tool_count"`
 			SourceType  string `json:"source_type"`
+			PluginName  string `json:"plugin_name"`
 		} `json:"dynamic_mcp"`
 	} `json:"context"`
 }
@@ -211,45 +236,100 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 			name = id
 		}
 
-		// 解析与去重 Skill
-		skillMap := make(map[string]bool)
-		skills := make([]DeviceSkill, 0, len(node.Context.Skills)+len(node.Context.CommonSkills.Items))
-		for _, s := range node.Context.Skills {
-			sName := strings.TrimSpace(s.Name)
-			if sName != "" && !skillMap[sName] {
-				skillMap[sName] = true
-				skills = append(skills, DeviceSkill{
-					Name:        sName,
-					Description: strings.TrimSpace(s.Description),
-					SourceType:  strings.TrimSpace(s.SourceType),
+		// 解析 Plugin 概览（旧版节点无此字段时保持为空，序列化时自动省略）
+		var plugins []DevicePlugin
+		if len(node.Context.Plugins) > 0 {
+			seenPlugins := make(map[string]bool, len(node.Context.Plugins))
+			plugins = make([]DevicePlugin, 0, len(node.Context.Plugins))
+			for _, p := range node.Context.Plugins {
+				pName := strings.TrimSpace(p.Name)
+				if pName == "" || seenPlugins[pName] {
+					continue
+				}
+				seenPlugins[pName] = true
+				plugins = append(plugins, DevicePlugin{
+					Name:        pName,
+					Version:     strings.TrimSpace(p.Version),
+					Enabled:     p.Enabled,
+					Description: strings.TrimSpace(p.Description),
+					SkillsCount: p.SkillsCount,
+					MCPCount:    p.MCPCount,
+					Format:      strings.TrimSpace(p.Format),
 				})
 			}
+			sort.Slice(plugins, func(i, j int) bool {
+				return plugins[i].Name < plugins[j].Name
+			})
+		}
+
+		// AgentDock 允许不同来源（managed、shared 或不同 plugin）同时存在同名 Skill 候选，
+		// 按 (source_type, plugin_name, name) 复合键去重，避免跨来源或跨插件静默覆盖丢失字段。
+		type skillKey struct {
+			sourceType string
+			pluginName string
+			name       string
+		}
+		seenSkills := make(map[skillKey]bool, len(node.Context.Skills)+len(node.Context.CommonSkills.Items))
+		skills := make([]DeviceSkill, 0, len(node.Context.Skills)+len(node.Context.CommonSkills.Items))
+		appendSkill := func(rawName, rawDesc, rawSource, rawPlugin string) {
+			sName := strings.TrimSpace(rawName)
+			if sName == "" {
+				return
+			}
+			sSource := strings.TrimSpace(rawSource)
+			sPlugin := strings.TrimSpace(rawPlugin)
+			if sPlugin != "" && sSource == "" {
+				sSource = "plugin"
+			} else if sSource != "plugin" {
+				sPlugin = ""
+			}
+			key := skillKey{sourceType: sSource, pluginName: sPlugin, name: sName}
+			if seenSkills[key] {
+				return
+			}
+			seenSkills[key] = true
+			skills = append(skills, DeviceSkill{
+				Name:        sName,
+				Description: strings.TrimSpace(rawDesc),
+				SourceType:  sSource,
+				PluginName:  sPlugin,
+			})
+		}
+		for _, s := range node.Context.Skills {
+			appendSkill(s.Name, s.Description, s.SourceType, s.PluginName)
 		}
 		for _, s := range node.Context.CommonSkills.Items {
-			sName := strings.TrimSpace(s.Name)
-			if sName != "" && !skillMap[sName] {
-				skillMap[sName] = true
-				skills = append(skills, DeviceSkill{
-					Name:        sName,
-					Description: strings.TrimSpace(s.Description),
-					SourceType:  strings.TrimSpace(s.SourceType),
-				})
-			}
+			appendSkill(s.Name, s.Description, s.SourceType, "")
 		}
 		sort.Slice(skills, func(i, j int) bool {
-			return skills[i].Name < skills[j].Name
+			if skills[i].Name != skills[j].Name {
+				return skills[i].Name < skills[j].Name
+			}
+			if skills[i].SourceType != skills[j].SourceType {
+				return skills[i].SourceType < skills[j].SourceType
+			}
+			return skills[i].PluginName < skills[j].PluginName
 		})
 
 		// 解析动态 MCP
+		seenMCP := make(map[string]bool, len(node.Context.DynamicMCP))
 		dynamicMCP := make([]DeviceDynamicMCP, 0, len(node.Context.DynamicMCP))
 		for _, m := range node.Context.DynamicMCP {
 			mName := strings.TrimSpace(m.Name)
-			if mName == "" {
+			if mName == "" || seenMCP[mName] {
 				continue
 			}
+			seenMCP[mName] = true
 			displayName := strings.TrimSpace(m.DisplayName)
 			if displayName == "" {
 				displayName = mName
+			}
+			mSource := strings.TrimSpace(m.SourceType)
+			mPlugin := strings.TrimSpace(m.PluginName)
+			if mPlugin != "" && mSource == "" {
+				mSource = "plugin"
+			} else if mSource != "plugin" {
+				mPlugin = ""
 			}
 			dynamicMCP = append(dynamicMCP, DeviceDynamicMCP{
 				Name:        mName,
@@ -257,11 +337,18 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 				Description: strings.TrimSpace(m.Description),
 				Status:      strings.TrimSpace(m.Status),
 				ToolCount:   m.ToolCount,
-				SourceType:  strings.TrimSpace(m.SourceType),
+				SourceType:  mSource,
+				PluginName:  mPlugin,
 			})
 		}
 		sort.Slice(dynamicMCP, func(i, j int) bool {
-			return dynamicMCP[i].DisplayName < dynamicMCP[j].DisplayName
+			if dynamicMCP[i].DisplayName != dynamicMCP[j].DisplayName {
+				return dynamicMCP[i].DisplayName < dynamicMCP[j].DisplayName
+			}
+			if dynamicMCP[i].PluginName != dynamicMCP[j].PluginName {
+				return dynamicMCP[i].PluginName < dynamicMCP[j].PluginName
+			}
+			return dynamicMCP[i].Name < dynamicMCP[j].Name
 		})
 
 		devices = append(devices, FleetDevice{
@@ -272,6 +359,7 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 			Arch:         strings.TrimSpace(node.Arch),
 			AgentVersion: strings.TrimSpace(node.Version),
 			Capabilities: node.Capabilities,
+			Plugins:      plugins,
 			Skills:       skills,
 			DynamicMCP:   dynamicMCP,
 			Error:        strings.TrimSpace(node.Error),
