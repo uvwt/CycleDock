@@ -69,12 +69,12 @@ type TokenUsage struct {
 }
 
 type wireTokenUsage struct {
-	PromptTokens            int `json:"prompt_tokens"`
-	CompletionTokens        int `json:"completion_tokens"`
-	InputTokens             int `json:"input_tokens"`
-	OutputTokens            int `json:"output_tokens"`
-	CacheReadInputTokens    int `json:"cache_read_input_tokens"`
-	PromptTokensDetails     struct {
+	PromptTokens         int `json:"prompt_tokens"`
+	CompletionTokens     int `json:"completion_tokens"`
+	InputTokens          int `json:"input_tokens"`
+	OutputTokens         int `json:"output_tokens"`
+	CacheReadInputTokens int `json:"cache_read_input_tokens"`
+	PromptTokensDetails  struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
 	InputTokensDetails struct {

@@ -5,11 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
@@ -20,6 +25,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/store"
 )
 
 type recordingChunkSummarizerLLM struct {
@@ -514,5 +520,328 @@ func TestChunkedSummarizer_ADKRunnerHeals820BacklogEvents(t *testing.T) {
 	}
 	if compactionEvents != 1 {
 		t.Fatalf("compactionEvents=%d, want 1 persisted EventCompaction", compactionEvents)
+	}
+}
+
+func TestCompactionSummarizerFailsOverOnPrimaryTimeoutAndSharesActiveRoute(t *testing.T) {
+	ctx := context.Background()
+
+	var primaryCalls atomic.Int32
+	primarySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryCalls.Add(1)
+		// 模拟首条路由连接挂起直至单路由请求超时。
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(2 * time.Second):
+			http.Error(w, "slow upstream", http.StatusGatewayTimeout)
+		}
+	}))
+	defer primarySrv.Close()
+
+	var backupCalls atomic.Int32
+	backupSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callNum := backupCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if callNum == 1 {
+			writeModelResponse(t, w, "Conversation Language: 中文\n\n## Objective\n验证首路由超时后备用路由成功生成压缩摘要。\n\n## Next Move\n继续由备用路由回复。", nil)
+			return
+		}
+		writeModelResponse(t, w, "备用路由在共享 activeRoute 后直接完成主模型回复。", nil)
+	}))
+	defer backupSrv.Close()
+
+	routes := []store.ModelRoute{
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     primarySrv.URL,
+			Model:               "gpt-5.4-primary-hung",
+			ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     backupSrv.URL,
+			Model:               "grok-4.7-backup",
+			ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+	}
+
+	wsID := uuid.New()
+	mainLLM, err := newADKRouteModel(modelclient.New(), nil, nil, wsID, routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryLLM, err := newADKRouteModel(modelclient.New(), nil, nil, wsID, routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 共享同一 Attempt 的活跃路由游标，并将单次路由请求超时缩短为 40ms 以快速触发真实 DeadlineExceeded。
+	summaryLLM.shareActiveRouteFrom(mainLLM)
+	mainLLM.requestTimeout = 40 * time.Millisecond
+	summaryLLM.requestTimeout = 40 * time.Millisecond
+
+	summarizer, err := newADKCompactionSummarizer(summaryLLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := []*session.Event{
+		{
+			ID:        "evt-u1",
+			Timestamp: time.Now().Add(-2 * time.Minute),
+			Author:    "user",
+			LLMResponse: model.LLMResponse{
+				Content: genai.NewContentFromText("请汇总线上压缩超时告警并切换路由。", genai.RoleUser),
+			},
+		},
+		{
+			ID:        "evt-m1",
+			Timestamp: time.Now().Add(-time.Minute),
+			Author:    "cycle_agent",
+			LLMResponse: model.LLMResponse{
+				Content: genai.NewContentFromText("已定位首路由 120s 超时阻断 failover。", genai.RoleModel),
+			},
+		},
+	}
+
+	res, err := summarizer.SummarizeEvents(ctx, events)
+	if err != nil {
+		t.Fatalf("SummarizeEvents failed instead of failing over on primary route timeout: %v", err)
+	}
+	if res.Content == nil {
+		t.Fatalf("expected non-nil compacted summary content, got %+v", res)
+	}
+	if got := textFromADKContent(res.Content); !strings.Contains(got, "验证首路由超时后备用路由成功生成压缩摘要") {
+		t.Fatalf("unexpected summary text: %q", got)
+	}
+	primaryAfterSummary := primaryCalls.Load()
+	if primaryAfterSummary == 0 {
+		t.Fatal("expected primary route to be attempted before timeout failover")
+	}
+	if backupCalls.Load() != 1 {
+		t.Fatalf("backupCalls=%d after summary, want 1", backupCalls.Load())
+	}
+	if mainLLM.loadActiveRouteIndex() != 1 || summaryLLM.loadActiveRouteIndex() != 1 {
+		t.Fatalf("shared activeRoute index mismatch: main=%d summary=%d, want both 1", mainLLM.loadActiveRouteIndex(), summaryLLM.loadActiveRouteIndex())
+	}
+
+	// 验证接下来主模型发起请求时直接命中已共享切换的备用路由，不再重新撞向超时的首路由。
+	var mainReply string
+	for resp, runErr := range mainLLM.GenerateContent(ctx, &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText("继续执行后续步骤", genai.RoleUser),
+		},
+	}, false) {
+		if runErr != nil {
+			t.Fatalf("mainLLM GenerateContent error: %v", runErr)
+		}
+		if resp != nil && !resp.Partial {
+			mainReply = textFromADKContent(resp.Content)
+		}
+	}
+	if primaryCalls.Load() != primaryAfterSummary {
+		t.Fatalf("mainLLM re-hit timed-out primary route! primaryCalls before=%d after=%d", primaryAfterSummary, primaryCalls.Load())
+	}
+	if backupCalls.Load() != 2 {
+		t.Fatalf("backupCalls=%d, want 2", backupCalls.Load())
+	}
+	if mainReply != "备用路由在共享 activeRoute 后直接完成主模型回复。" {
+		t.Fatalf("mainReply=%q", mainReply)
+	}
+}
+
+func TestEmergencyFallbackCompactsLargeBacklogWithoutBreakingToolCallPairing(t *testing.T) {
+	ctx := context.Background()
+
+	// 所有摘要路由均返回 HTTP 503，模拟极端全挂场景。
+	deadSummarySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "all summary upstreams unavailable", http.StatusServiceUnavailable)
+	}))
+	defer deadSummarySrv.Close()
+
+	routes := []store.ModelRoute{
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     deadSummarySrv.URL,
+			Model:               "dead-summary-primary",
+			ContextWindowTokens: pgtype.Int4{Int32: 200000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 200000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     deadSummarySrv.URL,
+			Model:               "dead-summary-backup",
+			ContextWindowTokens: pgtype.Int4{Int32: 200000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 200000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+	}
+
+	summaryLLM, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summarizer, err := newADKCompactionSummarizer(summaryLLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sessionSvc := session.InMemoryService()
+	const (
+		appName   = "cycledock_builtin_agent"
+		userID    = "workspace-emergency"
+		sessionID = "card-emergency-fallback"
+	)
+	created, err := sessionSvc.Create(ctx, &session.CreateRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseTime := time.Now().Add(-3 * time.Hour)
+	appendEvent := func(idx int, author string, content *genai.Content) {
+		ev := &session.Event{
+			ID:           fmt.Sprintf("evt-%03d", idx),
+			InvocationID: fmt.Sprintf("inv-%d", idx),
+			Timestamp:    baseTime.Add(time.Duration(idx) * time.Second),
+			Author:       author,
+			LLMResponse: model.LLMResponse{
+				Content: content,
+			},
+		}
+		if err := sessionSvc.AppendEvent(ctx, created.Session, ev); err != nil {
+			t.Fatalf("append event %d: %v", idx, err)
+		}
+	}
+
+	appendEvent(0, "user", genai.NewContentFromText(
+		"任务目标：修复上下文压缩超时死锁，分支名 fix/compaction-failover-and-overflow，禁止单开 PR。",
+		genai.RoleUser,
+	))
+
+	// 写入 40 轮大体积 FunctionCall + FunctionResponse（超过 40,000 字符），并在保留尾部附近包含成对工具调用，
+	// 验证全路由不可用时：1）触发确定性兜底摘要防雪崩；2）发送给主模型的 Contents 体积被成功截断；3）FunctionCall/FunctionResponse 配对 100% 完整。
+	seq := 1
+	for round := 0; round < 40; round++ {
+		callID := fmt.Sprintf("call-%03d", round)
+		fc := genai.NewPartFromFunctionCall("exec_command", map[string]any{
+			"cmd":     fmt.Sprintf("go test ./pkg/round_%03d", round),
+			"workdir": "C:\\Project\\CycleDock-worktrees\\fix-compaction-failover-and-overflow",
+		})
+		fc.FunctionCall.ID = callID
+		thought := genai.NewPartFromText("内部隐藏推理秘密标记 SECRET_THOUGHT_DO_NOT_PERSIST")
+		thought.Thought = true
+		appendEvent(seq, "cycle_agent", &genai.Content{
+			Role:  genai.RoleModel,
+			Parts: []*genai.Part{thought, fc},
+		})
+		seq++
+
+		fr := genai.NewPartFromFunctionResponse("exec_command", map[string]any{
+			"artifact_ref": fmt.Sprintf("tool-result-round-%03d.json", round),
+			"output":       fmt.Sprintf("round=%03d %s", round, strings.Repeat("日志载荷", 350)),
+		})
+		fr.FunctionResponse.ID = callID
+		appendEvent(seq, "cycle_agent", &genai.Content{
+			Role:  genai.RoleUser,
+			Parts: []*genai.Part{fr},
+		})
+		seq++
+	}
+
+	agentLLM := &captureAgentLLM{}
+	rootAgent, err := llmagent.New(llmagent.Config{
+		Name:        "cycle_agent",
+		Description: "test agent",
+		Model:       agentLLM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, err := adkrunner.New(adkrunner.Config{
+		AppName:        appName,
+		Agent:          rootAgent,
+		SessionService: sessionSvc,
+		Compaction: &compaction.Config{
+			TokenThreshold:     4000,
+			EventRetentionSize: 6,
+			Summarizer:         summarizer,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turnMsg := genai.NewContentFromText("汇报当前进度并继续验证。", genai.RoleUser)
+	for _, runErr := range runner.Run(ctx, userID, sessionID, turnMsg, agent.RunConfig{}) {
+		if runErr != nil {
+			t.Fatalf("runner failed under dead summary routes: %v", runErr)
+		}
+	}
+
+	if len(agentLLM.seenContents) != 1 {
+		t.Fatalf("agentLLM calls=%d, want 1", len(agentLLM.seenContents))
+	}
+	seen := agentLLM.seenContents[0]
+	// 原会话共 81 条历史事件 + 1 条新消息 = 82 条；兜底压缩后应缩减至 1 条兜底摘要 + 约 6 条保留事件 + 1 条新消息 <= 12 条。
+	if len(seen) > 12 {
+		t.Fatalf("expected emergency fallback to compact prompt, got %d contents (uncompacted avalanche!)", len(seen))
+	}
+
+	summaryText := textFromADKContent(seen[0])
+	if !strings.Contains(summaryText, "fix/compaction-failover-and-overflow") {
+		t.Fatalf("emergency fallback lost initial user objective: %q", summaryText)
+	}
+	if !strings.Contains(summaryText, "tool-result-round-") {
+		t.Fatalf("emergency fallback should preserve externalized artifact_ref pointers: %q", summaryText)
+	}
+	if strings.Contains(summaryText, "SECRET_THOUGHT_DO_NOT_PERSIST") {
+		t.Fatalf("emergency fallback must never persist Thought parts: %q", summaryText)
+	}
+
+	// 严格校验发送给主模型的全部 Contents 中每一对 FunctionCall 与 FunctionResponse 均完整成对、无孤立项。
+	openCalls := make(map[string]string)
+	for idx, content := range seen {
+		if content == nil {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part == nil {
+				continue
+			}
+			if part.FunctionCall != nil {
+				openCalls[part.FunctionCall.ID] = part.FunctionCall.Name
+			}
+			if part.FunctionResponse != nil {
+				wantName, exists := openCalls[part.FunctionResponse.ID]
+				if !exists {
+					t.Fatalf("content[%d] has orphan FunctionResponse id=%q name=%q without preceding FunctionCall", idx, part.FunctionResponse.ID, part.FunctionResponse.Name)
+				}
+				if wantName != part.FunctionResponse.Name {
+					t.Fatalf("FunctionResponse id=%q name=%q, want %q", part.FunctionResponse.ID, part.FunctionResponse.Name, wantName)
+				}
+				delete(openCalls, part.FunctionResponse.ID)
+			}
+		}
+	}
+	if len(openCalls) != 0 {
+		t.Fatalf("unmatched FunctionCalls left in compacted prompt: %+v", openCalls)
 	}
 }

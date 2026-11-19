@@ -165,8 +165,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 
-	// Compaction uses the same ordered model routes but never publishes its
-	// internal summarization text to the Card's live SSE stream.
+	// Compaction uses the same ordered model routes and shares the active route
+	// index with llm so a route failover on either side immediately steers both,
+	// while keeping summaryLLM silent on the Card's live SSE stream.
 	summaryLLM, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
@@ -178,6 +179,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 	summaryLLM.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "compaction")
+	summaryLLM.shareActiveRouteFrom(llm)
 	summarizer, err := newADKCompactionSummarizer(summaryLLM)
 	if err != nil {
 		return err
@@ -351,16 +353,43 @@ func (r *Runner) resolveAttemptCompactionThreshold(routes []store.ModelRoute) in
 		return r.compactionTokenThreshold
 	}
 	policy := r.compactionBudgetPolicy.withDefaults()
+
+	var enabled []store.ModelRoute
 	for _, route := range routes {
-		if !route.Enabled {
-			continue
+		if route.Enabled {
+			enabled = append(enabled, route)
 		}
-		limits := ResolveRouteModelLimits(route, r.model)
-		budget := ComputeRouteCompactionBudget(limits, policy)
-		if budget.CompactAtTokens > 0 {
-			return budget.CompactAtTokens
+	}
+	if len(enabled) > 0 {
+		primaryBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(enabled[0], r.model), policy)
+		threshold := primaryBudget.CompactAtTokens
+
+		// 当启用了备用路由时，兼顾备用路由中的最大已知输入上限：
+		// 1. 若首条主路由软上限（如 1M 模型的 256K）超过了所有已知容量备用路由的最大有效输入上限（如 239K），
+		//    将压缩阈值收敛到该备用路由的 CompactAtTokens，确保主路由故障时未压缩历史仍可平滑 failover 到备用路由；
+		// 2. 若至少存在一条更大窗口的备用路由能承接主路由软上限，或仅有 16K 等极小测试备用路由（阈值低于主路由一半），
+		//    则保持主路由预算不被极小备用路由异常拉低。
+		if threshold > 0 && len(enabled) > 1 {
+			maxBackupInputLimit := 0
+			maxBackupCompactAt := 0
+			for _, backup := range enabled[1:] {
+				backupBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(backup, r.model), policy)
+				if backupBudget.UnknownCapacity || backupBudget.EffectiveInputLimit <= 0 {
+					continue
+				}
+				if backupBudget.EffectiveInputLimit > maxBackupInputLimit {
+					maxBackupInputLimit = backupBudget.EffectiveInputLimit
+					maxBackupCompactAt = backupBudget.CompactAtTokens
+				}
+			}
+			if maxBackupInputLimit > 0 && threshold > maxBackupInputLimit && maxBackupCompactAt >= threshold/2 {
+				threshold = maxBackupCompactAt
+			}
 		}
-		break
+
+		if threshold > 0 {
+			return threshold
+		}
 	}
 	if r.compactionTokenThreshold > 0 {
 		return r.compactionTokenThreshold

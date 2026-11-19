@@ -242,8 +242,22 @@ func publicRunError(err error) string {
 	if err == nil {
 		return ""
 	}
+	var multiRouteErr *MultiRouteError
+	if errors.As(err, &multiRouteErr) && len(multiRouteErr.Entries) > 0 {
+		if summary := classifyPublicMultiRouteError(multiRouteErr); summary != "" {
+			return summary
+		}
+	}
+	return classifySingleRunError(err)
+}
+
+func classifySingleRunError(err error) string {
 	var apiErr *modelclient.APIError
 	switch {
+	case errors.Is(err, ErrRouteContextCapacityExceeded),
+		errors.Is(err, ErrRouteContextCapacityUnknown),
+		modelclient.IsContextTooLargeError(err):
+		return "Model context window is insufficient for the current session size."
 	case errors.As(err, &apiErr):
 		return fmt.Sprintf("Model provider request failed with HTTP %d.", apiErr.StatusCode)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -253,10 +267,6 @@ func publicRunError(err error) string {
 		return "Model provider returned an invalid response."
 	case errors.Is(err, modelclient.ErrResponseTooLarge):
 		return "Model provider response exceeded the safety limit."
-	case errors.Is(err, ErrRouteContextCapacityExceeded),
-		errors.Is(err, ErrRouteContextCapacityUnknown),
-		modelclient.IsContextTooLargeError(err):
-		return "Model context window is insufficient for the current session size."
 	case errors.Is(err, errRunawayToolLoop):
 		return "Built-in Agent stopped after 8 consecutive identical tool rounds with unchanged results."
 	case strings.Contains(err.Error(), "environment variable"):
@@ -274,4 +284,50 @@ func publicRunError(err error) string {
 	default:
 		return "Built-in Agent run failed before completion."
 	}
+}
+
+func isCapacityRunError(err error) bool {
+	return errors.Is(err, ErrRouteContextCapacityExceeded) ||
+		errors.Is(err, ErrRouteContextCapacityUnknown) ||
+		modelclient.IsContextTooLargeError(err)
+}
+
+// classifyPublicMultiRouteError 对多路由失败链生成不误导用户的公开提示：
+//   - 若全部路由都因上下文窗口不足失败，或仅剩多条小/未知容量备用路由均因窗口不足跳过，报上下文窗口不足；
+//   - 若主路由本身容量充足但因上游超时/HTTP 报错失败，而后续备用路由仅因自身窗口较小被预检跳过，
+//     在展示真实主路由失败原因的同时补充说明备用路由因上下文窗口无法接管，避免把上游故障伪装成会话超限。
+func classifyPublicMultiRouteError(multiErr *MultiRouteError) string {
+	if multiErr == nil || len(multiErr.Entries) == 0 {
+		return ""
+	}
+	var primaryNonCapacityErr error
+	capacitySkipCount := 0
+	for _, entry := range multiErr.Entries {
+		if entry.Err == nil {
+			continue
+		}
+		if isCapacityRunError(entry.Err) {
+			capacitySkipCount++
+			continue
+		}
+		if primaryNonCapacityErr == nil {
+			primaryNonCapacityErr = entry.Err
+		}
+	}
+	if primaryNonCapacityErr == nil && capacitySkipCount > 0 {
+		return "Model context window is insufficient for the current session size."
+	}
+	if primaryNonCapacityErr != nil && capacitySkipCount == 0 {
+		return classifySingleRunError(primaryNonCapacityErr)
+	}
+	if primaryNonCapacityErr != nil && capacitySkipCount > 0 {
+		if capacitySkipCount >= 2 {
+			return "Model context window is insufficient for the current session size."
+		}
+		return fmt.Sprintf(
+			"%s (backup route context window could not accommodate failover).",
+			strings.TrimSuffix(classifySingleRunError(primaryNonCapacityErr), "."),
+		)
+	}
+	return ""
 }

@@ -137,8 +137,8 @@ func TestGlobalAndDeviceToolGuardHTTPIntegration(t *testing.T) {
 			"model":             "guard-mini",
 			"api_key":           "sk-test-guard-key",
 		}},
-		"system_instructions":     "always verify",
-		"default_model_route_id":  routeID,
+		"system_instructions":    "always verify",
+		"default_model_route_id": routeID,
 	}, cookie, nil)
 	if settingsResp.Code != http.StatusOK {
 		t.Fatalf("save settings status=%d body=%s", settingsResp.Code, settingsResp.Body.String())

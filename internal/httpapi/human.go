@@ -167,20 +167,20 @@ type attemptResponse struct {
 }
 
 type eventResponse struct {
-	ID              string          `json:"id"`
-	Sequence        int64           `json:"sequence"`
-	Type            string          `json:"type"`
-	AttemptID       string          `json:"attempt_id,omitempty"`
-	SourceCardID    string          `json:"source_card_id,omitempty"`
-	SourceCardTitle string          `json:"source_card_title,omitempty"`
-	Content         string          `json:"content"`
-	CheckinStatus   string          `json:"checkin_status,omitempty"`
-	Message         json.RawMessage `json:"message,omitempty"`
+	ID              string                `json:"id"`
+	Sequence        int64                 `json:"sequence"`
+	Type            string                `json:"type"`
+	AttemptID       string                `json:"attempt_id,omitempty"`
+	SourceCardID    string                `json:"source_card_id,omitempty"`
+	SourceCardTitle string                `json:"source_card_title,omitempty"`
+	Content         string                `json:"content"`
+	CheckinStatus   string                `json:"checkin_status,omitempty"`
+	Message         json.RawMessage       `json:"message,omitempty"`
 	ToolApprovalID  string                `json:"tool_approval_id,omitempty"`
 	ToolApproval    *toolApprovalResponse `json:"tool_approval,omitempty"`
-	ActorName       string          `json:"actor_name"`
-	ActorKind       string          `json:"actor_kind"`
-	CreatedAt       time.Time       `json:"created_at"`
+	ActorName       string                `json:"actor_name"`
+	ActorKind       string                `json:"actor_kind"`
+	CreatedAt       time.Time             `json:"created_at"`
 }
 
 type pendingTurnResponse struct {
@@ -1607,7 +1607,7 @@ func cardToResponse(card db.Card) cardResponse {
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		NotificationsMuted: card.NotificationsMuted,
-		CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		CreatedAt:          card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String
@@ -1641,7 +1641,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		NotificationsMuted: card.NotificationsMuted,
-		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,
@@ -1685,7 +1685,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		NotificationsMuted: card.NotificationsMuted,
-		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,
@@ -1729,7 +1729,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
 		NotificationsMuted: card.NotificationsMuted,
-		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
+		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,

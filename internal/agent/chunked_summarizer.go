@@ -14,7 +14,7 @@ import (
 	"google.golang.org/adk/v2/session/compaction"
 	"google.golang.org/genai"
 
-	"github.com/uvwt/CycleDock/internal/agentconfig"
+	"github.com/uvwt/CycleDock/internal/modelclient"
 )
 
 const (
@@ -24,24 +24,37 @@ const (
 	defaultChunkedSummaryMaxEvents       = 120
 	defaultChunkedSummaryToolContentCaps = 4000
 	defaultLLMSummarizerMaxTranscript    = 120000
+
+	// 当所有摘要模型路由全部失败时，若待压缩历史已达到防膨胀水位或触发上下文容量超限，
+	// 启用确定性结构化纯文本兜底摘要，阻止 ADK 放行未压缩超大 Prompt 滚雪球爆窗。
+	defaultEmergencyFallbackMinChars     = 16000
+	defaultEmergencyFallbackMaxChars     = 16000
+	defaultEmergencyFallbackLineMaxRunes = 320
+	defaultEmergencyFallbackMaxItems     = 30
 )
 
 // ChunkedSummarizerConfig 配置分块滚动摘要器。
 type ChunkedSummarizerConfig struct {
-	Summarizer          compaction.Summarizer
-	MaxChunkChars       int
-	MaxChunkEvents      int
-	MaxToolContentChars int
+	Summarizer                compaction.Summarizer
+	MaxChunkChars             int
+	MaxChunkEvents            int
+	MaxToolContentChars       int
+	EnableEmergencyFallback   bool
+	EmergencyFallbackMinChars int
+	EmergencyFallbackMaxChars int
 }
 
 // ChunkedSummarizer 包装底层 compaction.Summarizer（生产中为 LLMSummarizer）。
 // 当待压缩事件窗口过大或事件条数过多时，按工具调用/响应配对边界分片滚动摘要：
 // 将前一片摘要包装为 seed 事件后与下一片事件合并再摘要，避免一次性渲染突破 MaxTranscriptChars 导致压缩死锁。
 type ChunkedSummarizer struct {
-	inner               compaction.Summarizer
-	maxChunkChars       int
-	maxChunkEvents      int
-	maxToolContentChars int
+	inner                     compaction.Summarizer
+	maxChunkChars             int
+	maxChunkEvents            int
+	maxToolContentChars       int
+	enableEmergencyFallback   bool
+	emergencyFallbackMinChars int
+	emergencyFallbackMaxChars int
 }
 
 var _ compaction.Summarizer = (*ChunkedSummarizer)(nil)
@@ -62,30 +75,48 @@ func NewChunkedSummarizer(cfg ChunkedSummarizerConfig) (*ChunkedSummarizer, erro
 	if maxToolContentChars == 0 {
 		maxToolContentChars = defaultChunkedSummaryToolContentCaps
 	}
+	fallbackMinChars := cfg.EmergencyFallbackMinChars
+	if fallbackMinChars <= 0 {
+		fallbackMinChars = defaultEmergencyFallbackMinChars
+	}
+	fallbackMaxChars := cfg.EmergencyFallbackMaxChars
+	if fallbackMaxChars <= 0 {
+		fallbackMaxChars = defaultEmergencyFallbackMaxChars
+	}
 	return &ChunkedSummarizer{
-		inner:               cfg.Summarizer,
-		maxChunkChars:       maxChunkChars,
-		maxChunkEvents:      maxChunkEvents,
-		maxToolContentChars: maxToolContentChars,
+		inner:                     cfg.Summarizer,
+		maxChunkChars:             maxChunkChars,
+		maxChunkEvents:            maxChunkEvents,
+		maxToolContentChars:       maxToolContentChars,
+		enableEmergencyFallback:   cfg.EnableEmergencyFallback,
+		emergencyFallbackMinChars: fallbackMinChars,
+		emergencyFallbackMaxChars: fallbackMaxChars,
 	}, nil
 }
 
 func newADKCompactionSummarizer(summaryLLM model.LLM) (compaction.Summarizer, error) {
+	// 注意：此处不设置 LLMSummarizerConfig.Timeout。
+	// ADK LLMSummarizer 会用 context.WithTimeout 包装传给 summaryLLM 的外层 ctx；
+	// 若外层 Timeout 与单条路由请求超时（DefaultModelRequestTimeout=120s）等长，
+	// 首条路由一旦超时就会令外层 ctx.Err() != nil，导致 adkRouteModel 无法继续 failover 到备用路由。
+	// 单次 HTTP 请求超时由 adkRouteModel.routeConfig 按路由独立控制，外层生命周期遵循 Attempt runCtx。
 	baseSummarizer, err := compaction.NewLLMSummarizer(compaction.LLMSummarizerConfig{
 		Model:               summaryLLM,
 		PromptTemplate:      compactionPromptTemplate,
 		MaxToolContentChars: defaultChunkedSummaryToolContentCaps,
 		MaxTranscriptChars:  defaultLLMSummarizerMaxTranscript,
-		Timeout:             agentconfig.DefaultModelRequestTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create ADK context summarizer: %w", err)
 	}
 	summarizer, err := NewChunkedSummarizer(ChunkedSummarizerConfig{
-		Summarizer:          baseSummarizer,
-		MaxChunkChars:       defaultChunkedSummaryMaxChars,
-		MaxChunkEvents:      defaultChunkedSummaryMaxEvents,
-		MaxToolContentChars: defaultChunkedSummaryToolContentCaps,
+		Summarizer:                baseSummarizer,
+		MaxChunkChars:             defaultChunkedSummaryMaxChars,
+		MaxChunkEvents:            defaultChunkedSummaryMaxEvents,
+		MaxToolContentChars:       defaultChunkedSummaryToolContentCaps,
+		EnableEmergencyFallback:   true,
+		EmergencyFallbackMinChars: defaultEmergencyFallbackMinChars,
+		EmergencyFallbackMaxChars: defaultEmergencyFallbackMaxChars,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create chunked ADK context summarizer: %w", err)
@@ -121,7 +152,16 @@ func (s *ChunkedSummarizer) SummarizeEvents(ctx context.Context, events []*sessi
 	}
 
 	if len(events) <= s.maxChunkEvents && totalChars <= s.maxChunkChars {
-		return s.inner.SummarizeEvents(ctx, events)
+		res, err := s.inner.SummarizeEvents(ctx, events)
+		if (err != nil || res.Content == nil) && ctx.Err() == nil && s.shouldUseEmergencyFallback(totalChars, err) {
+			if fallback := s.buildEmergencyFallbackSummary(nil, events); fallback != nil {
+				return compaction.SummarizeResult{
+					Content: fallback,
+					Usage:   res.Usage,
+				}, nil
+			}
+		}
+		return res, err
 	}
 
 	var (
@@ -148,11 +188,19 @@ func (s *ChunkedSummarizer) SummarizeEvents(ctx context.Context, events []*sessi
 
 		res, err := s.inner.SummarizeEvents(ctx, chunkEvents)
 		totalUsage = mergeUsageMetadata(totalUsage, res.Usage)
-		if err != nil {
-			return compaction.SummarizeResult{Usage: totalUsage}, err
-		}
-		// 若任意分片主动拒绝摘要（Content == nil），必须整体拒绝而不能丢弃前序分片。
-		if res.Content == nil {
+		if err != nil || res.Content == nil {
+			if ctx.Err() == nil && s.shouldUseEmergencyFallback(totalChars, err) {
+				if fallback := s.buildEmergencyFallbackSummary(seed, events[cursor:]); fallback != nil {
+					return compaction.SummarizeResult{
+						Content: fallback,
+						Usage:   totalUsage,
+					}, nil
+				}
+			}
+			if err != nil {
+				return compaction.SummarizeResult{Usage: totalUsage}, err
+			}
+			// 若任意分片主动拒绝摘要（Content == nil），必须整体拒绝而不能丢弃前序分片。
 			return compaction.SummarizeResult{Usage: totalUsage}, nil
 		}
 
@@ -455,4 +503,251 @@ func isLineBreakerRune(r rune) bool {
 	default:
 		return false
 	}
+}
+
+func (s *ChunkedSummarizer) shouldUseEmergencyFallback(totalChars int, err error) bool {
+	if s == nil || !s.enableEmergencyFallback {
+		return false
+	}
+	if err != nil && (errors.Is(err, ErrRouteContextCapacityExceeded) ||
+		errors.Is(err, ErrRouteContextCapacityUnknown) ||
+		modelclient.IsContextTooLargeError(err)) {
+		return true
+	}
+	return totalChars >= s.emergencyFallbackMinChars
+}
+
+// buildEmergencyFallbackSummary 在所有摘要模型路由均不可用或单分片异常时，
+// 构建确定性结构化纯文本（prose）兜底摘要。
+// ADK TailRetention 传入的 events 已经严格按工具调用/响应配对边界裁剪且保留了近期活跃尾部；
+// 此处只输出 RoleModel 纯文本 Part（不含任何 FunctionCall/FunctionResponse），
+// 既不破坏工具配对完整性，也能防止未压缩大历史持续滚雪球突破主模型上下文窗口。
+func (s *ChunkedSummarizer) buildEmergencyFallbackSummary(
+	seed *session.Event,
+	remaining []*session.Event,
+) *genai.Content {
+	maxChars := s.emergencyFallbackMaxChars
+	if maxChars <= 0 {
+		maxChars = defaultEmergencyFallbackMaxChars
+	}
+
+	var priorSummary string
+	rawEvents := remaining
+	if seed != nil {
+		priorSummary = extractCompactionSeedText(seed)
+	} else if len(rawEvents) > 0 && rawEvents[0] != nil && rawEvents[0].Actions.Compaction != nil {
+		priorSummary = extractCompactionSeedText(rawEvents[0])
+		rawEvents = rawEvents[1:]
+	}
+
+	var (
+		userSnippets  []string
+		modelSnippets []string
+		toolSnippets  []string
+		artifactRefs  []string
+		seenArtifacts = make(map[string]struct{})
+		hasNonASCII   bool
+	)
+
+	checkLang := func(text string) {
+		if hasNonASCII {
+			return
+		}
+		for _, r := range text {
+			if r >= utf8.RuneSelf {
+				hasNonASCII = true
+				return
+			}
+		}
+	}
+	checkLang(priorSummary)
+
+	for _, ev := range rawEvents {
+		if ev == nil || ev.LLMResponse.Content == nil {
+			continue
+		}
+		role := ev.LLMResponse.Content.Role
+		if role == "" {
+			role = ev.Author
+		}
+		for _, p := range ev.LLMResponse.Content.Parts {
+			if p == nil || p.Thought {
+				continue
+			}
+			if txt := strings.TrimSpace(p.Text); txt != "" {
+				checkLang(txt)
+				compact := compactSingleLine(txt, defaultEmergencyFallbackLineMaxRunes)
+				if role == genai.RoleUser || ev.Author == "user" {
+					userSnippets = append(userSnippets, compact)
+				} else {
+					modelSnippets = append(modelSnippets, compact)
+				}
+			}
+			if fc := p.FunctionCall; fc != nil {
+				argsPreview := compactMapPreview(fc.Args, 160)
+				toolSnippets = append(toolSnippets, fmt.Sprintf("call `%s`(%s)", fc.Name, argsPreview))
+			}
+			if fr := p.FunctionResponse; fr != nil {
+				for _, ref := range extractArtifactRefsFromMap(fr.Response) {
+					if _, exists := seenArtifacts[ref]; !exists {
+						seenArtifacts[ref] = struct{}{}
+						artifactRefs = append(artifactRefs, ref)
+					}
+				}
+				respPreview := compactMapPreview(fr.Response, 200)
+				toolSnippets = append(toolSnippets, fmt.Sprintf("result `%s`: %s", fr.Name, respPreview))
+			}
+		}
+	}
+
+	lang := "English"
+	if hasNonASCII {
+		lang = "中文"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Conversation Language: %s\n\n", lang)
+	b.WriteString("## Objective\n")
+	if len(userSnippets) > 0 {
+		fmt.Fprintf(&b, "- %s\n", userSnippets[0])
+		if len(userSnippets) > 1 {
+			fmt.Fprintf(&b, "- Latest user instruction: %s\n", userSnippets[len(userSnippets)-1])
+		}
+	} else {
+		b.WriteString("- Continue the active Card Session task from retained recent turns and prior context.\n")
+	}
+
+	if priorSummary != "" {
+		priorCap := max(maxChars/2, 2000)
+		b.WriteString("\n## Prior Compacted Checkpoint\n")
+		b.WriteString(truncateRunesWithEllipsis(priorSummary, priorCap))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n## Work State\n### Completed\n")
+	if len(toolSnippets) == 0 && len(modelSnippets) == 0 {
+		b.WriteString("- Deterministic emergency compaction condensed earlier raw events while all summarization model routes were unavailable.\n")
+	} else {
+		for _, item := range tailStrings(toolSnippets, defaultEmergencyFallbackMaxItems) {
+			fmt.Fprintf(&b, "- %s\n", item)
+		}
+		for _, item := range tailStrings(modelSnippets, 8) {
+			fmt.Fprintf(&b, "- Agent progress: %s\n", item)
+		}
+	}
+
+	b.WriteString("\n### Active\n- Resuming from the uncompacted recent event tail.\n")
+	b.WriteString("\n### Blocked\n- Summarizer model routes were unavailable during compaction; deterministic fallback summary applied to prevent context window overflow.\n")
+	b.WriteString("\n## Next Move\n- Continue from the retained recent turns; use `cycledock_search_session_history` or `cycledock_read_artifact` if exact older raw details are needed.\n")
+
+	if len(artifactRefs) > 0 {
+		b.WriteString("\n## Important Context\n")
+		for _, ref := range tailStrings(artifactRefs, 20) {
+			fmt.Fprintf(&b, "- artifact_ref: `%s`\n", ref)
+		}
+	}
+
+	out := strings.TrimSpace(truncateRunesWithEllipsis(b.String(), maxChars))
+	if out == "" {
+		return nil
+	}
+	return genai.NewContentFromText(out, genai.RoleModel)
+}
+
+func extractCompactionSeedText(ev *session.Event) string {
+	if ev == nil {
+		return ""
+	}
+	if ev.Actions.Compaction != nil && ev.Actions.Compaction.CompactedContent != nil {
+		if txt := textFromADKContent(ev.Actions.Compaction.CompactedContent); txt != "" {
+			return txt
+		}
+	}
+	return textFromADKContent(ev.LLMResponse.Content)
+}
+
+func extractArtifactRefsFromMap(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	var refs []string
+	if raw, ok := m["artifact_ref"]; ok {
+		if ref := strings.TrimSpace(fmt.Sprint(raw)); ref != "" && ref != "<nil>" {
+			refs = append(refs, ref)
+		}
+	}
+	for _, v := range m {
+		if nested, ok := v.(map[string]any); ok {
+			refs = append(refs, extractArtifactRefsFromMap(nested)...)
+		}
+	}
+	return refs
+}
+
+func compactMapPreview(m map[string]any, maxRunes int) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		valPreview := compactSingleLine(fmt.Sprint(m[k]), max(maxRunes/2, 48))
+		fmt.Fprintf(&b, "%s: %s", k, valPreview)
+		if utf8.RuneCountInString(b.String()) >= maxRunes {
+			break
+		}
+	}
+	b.WriteByte('}')
+	return truncateRunesWithEllipsis(b.String(), maxRunes)
+}
+
+func compactSingleLine(text string, maxRunes int) string {
+	fields := strings.Fields(text)
+	joined := strings.Join(fields, " ")
+	return truncateRunesWithEllipsis(joined, maxRunes)
+}
+
+func truncateRunesWithEllipsis(text string, maxRunes int) string {
+	if maxRunes <= 0 || utf8.RuneCountInString(text) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		var b strings.Builder
+		count := 0
+		for _, r := range text {
+			if count >= maxRunes {
+				break
+			}
+			b.WriteRune(r)
+			count++
+		}
+		return b.String()
+	}
+	var b strings.Builder
+	limit := maxRunes - 3
+	count := 0
+	for _, r := range text {
+		if count >= limit {
+			break
+		}
+		b.WriteRune(r)
+		count++
+	}
+	b.WriteString("...")
+	return b.String()
+}
+
+func tailStrings(items []string, limit int) []string {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[len(items)-limit:]
 }
