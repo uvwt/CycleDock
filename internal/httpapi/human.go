@@ -1033,6 +1033,9 @@ func (api *API) moveCard(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	if api.live != nil {
+		api.live.Publish(card.ID, realtime.Event{Type: "card.updated"})
+	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
 
@@ -1058,6 +1061,9 @@ func (api *API) setDiscussionState(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		api.handleError(w, err)
 		return
+	}
+	if api.live != nil {
+		api.live.Publish(card.ID, realtime.Event{Type: "card.updated"})
 	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
@@ -1096,6 +1102,9 @@ func (api *API) setOngoingState(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		api.handleError(w, err)
 		return
+	}
+	if api.live != nil {
+		api.live.Publish(card.ID, realtime.Event{Type: "card.updated"})
 	}
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
@@ -1226,6 +1235,9 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	if !result.Reused && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
 	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
 }
 
@@ -1333,6 +1345,9 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	if !result.Reused && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
 	writeJSON(w, http.StatusCreated, commentResultToResponse(result))
 }
 
@@ -1378,6 +1393,9 @@ func (api *API) steerPendingTurn(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1403,6 +1421,9 @@ func (api *API) cancelPendingTurn(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1427,6 +1448,9 @@ func (api *API) cancelAttempt(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		api.handleError(w, err)
 		return
+	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1456,6 +1480,9 @@ func (api *API) retryAttempt(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		api.handleError(w, err)
 		return
+	}
+	if !result.Reused && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
 	}
 	writeJSON(w, http.StatusCreated, retryResultResponse{
 		AttemptID: result.Attempt.ID.String(),

@@ -147,7 +147,11 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	if approval.Status != "pending" {
+	if approval.Status == string(domain.ToolApprovalStatusSuperseded) {
+		writeError(w, http.StatusConflict, "approval_superseded", "tool approval has been superseded by newer activity")
+		return
+	}
+	if approval.Status != string(domain.ToolApprovalStatusPending) {
 		writeError(w, http.StatusConflict, "already_resolved", "tool approval has already been resolved")
 		return
 	}

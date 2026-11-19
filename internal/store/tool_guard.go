@@ -127,7 +127,7 @@ type ResolveToolApprovalParams struct {
 
 // ResolveToolApproval 解决工具审批（允许或拒绝）
 func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalParams) (db.CardToolApproval, error) {
-	if p.Status != "approved" && p.Status != "rejected" {
+	if p.Status != string(domain.ToolApprovalStatusApproved) && p.Status != string(domain.ToolApprovalStatusRejected) {
 		return db.CardToolApproval{}, fmt.Errorf("%w: status must be approved or rejected", domain.ErrConflict)
 	}
 
@@ -145,9 +145,37 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 		ResolvedBySourceID: sourceID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return db.CardToolApproval{}, domain.ErrNotFound
+		// 区分“记录不存在”与“并发下已被处理或自动失效”，避免将状态冲突误报为 404
+		current, getErr := s.GetToolApproval(ctx, p.WorkspaceID, p.CardID, p.ApprovalID)
+		if getErr != nil {
+			return db.CardToolApproval{}, getErr
+		}
+		if current.Status == string(domain.ToolApprovalStatusSuperseded) {
+			return db.CardToolApproval{}, fmt.Errorf("%w: tool approval has been superseded by newer activity", domain.ErrConflict)
+		}
+		return db.CardToolApproval{}, fmt.Errorf("%w: tool approval has already been resolved", domain.ErrConflict)
 	}
 	return approval, err
+}
+
+// supersedePendingToolApprovalsTx 在同一业务事务内作废指定卡片下仍处于 pending 的工具审批，
+// 确保后续对话推进、打断或状态结束时不会留下僵尸待确认记录。
+func supersedePendingToolApprovalsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, cardID uuid.UUID,
+	reason string,
+) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "已有后续对话或状态推进，审批已自动失效"
+	}
+	_, err := db.New(tx).SupersedeCardPendingToolApprovals(ctx, db.SupersedeCardPendingToolApprovalsParams{
+		WorkspaceID:       workspaceID,
+		CardID:            cardID,
+		ResolutionComment: reason,
+	})
+	return err
 }
 
 // AddCardScopeWhitelist 为卡片添加按作用域（device / mcp / 兜底 tool）的临时放行白名单

@@ -79,6 +79,7 @@ const cards = [
     description: "重点检查最近24小时的 Docker 和系统错误日志",
     todo_state: "working",
     current_attempt_status: "running",
+    pending_tool_approval_count: 1,
     created_at: now(),
     updated_at: now(),
   },
@@ -782,6 +783,14 @@ http
                 503,
               );
             }
+            for (const item of events[id] || []) {
+              if (item.tool_approval?.status === "pending") {
+                item.tool_approval.status = "superseded";
+                item.tool_approval.resolution_comment = "已有后续新对话，旧审批已自动失效";
+                item.tool_approval.resolved_at = now();
+              }
+            }
+            card.pending_tool_approval_count = 0;
             events[id].push({
               id: "event-" + ++seq,
               sequence: seq,

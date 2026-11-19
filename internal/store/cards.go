@@ -106,7 +106,17 @@ func moveTodoTx(
 		)
 		VALUES ($1, $2, $3, 'status_change', $4, $5)
 	`, uuid.New(), workspaceID, cardID, actorSourceID, fmt.Sprintf("%s -> %s", from, to))
-	return err
+	if err != nil {
+		return err
+	}
+	if to == domain.TodoStateDone {
+		if err := supersedePendingToolApprovalsTx(
+			ctx, tx, workspaceID, cardID, "任务已完成，未处理审批已自动失效",
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) ArchiveDiscussion(
@@ -197,6 +207,11 @@ func (s *Store) ArchiveDiscussionWithCard(
 		INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content)
 		VALUES ($1, $2, $3, 'status_change', $4, 'active -> archived')
 	`, uuid.New(), workspaceID, cardID, actorSourceID); err != nil {
+		return db.Card{}, err
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "讨论已归档，未处理审批已自动失效",
+	); err != nil {
 		return db.Card{}, err
 	}
 	card, err := s.queries.WithTx(tx).GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
@@ -373,6 +388,14 @@ func (s *Store) SetOngoingStateWithCard(
 	// Paused/Archived 期间不补跑。重新 Active 时从“现在”重新计算所有 enabled schedule 的未来 occurrence。
 	if to == domain.OngoingStateActive {
 		if err := recalculateCardSchedulesTx(ctx, tx, workspaceID, cardID, now); err != nil {
+			return db.Card{}, err
+		}
+	} else {
+		reason := "定时任务已暂停，未处理审批已自动失效"
+		if to == domain.OngoingStateArchived {
+			reason = "定时任务已归档，未处理审批已自动失效"
+		}
+		if err := supersedePendingToolApprovalsTx(ctx, tx, workspaceID, cardID, reason); err != nil {
 			return db.Card{}, err
 		}
 	}

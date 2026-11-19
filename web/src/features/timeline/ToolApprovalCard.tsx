@@ -33,7 +33,7 @@ export function ToolApprovalCard({
   const [submitting, setSubmitting] = useState<string | null>(null);
   // 参数默认折叠，避免高危工具参数 JSON 在未点开时撑满半屏对话流
   const [expandedArgs, setExpandedArgs] = useState(false);
-  // 已审批（允许/拒绝）后默认收敛为单行轻量状态条，按需点击才展开历史参数与原因
+  // 已审批（允许/拒绝）或已随后续对话自动失效后，默认收敛为单行轻量状态条，按需点击才展开历史参数与原因
   const [expandedHistory, setExpandedHistory] = useState(false);
 
   if (!approval) {
@@ -50,6 +50,7 @@ export function ToolApprovalCard({
 
   const isPending = approval.status === "pending";
   const isApproved = approval.status === "approved";
+  const isSuperseded = approval.status === "superseded";
 
   const riskBadgeMap: Record<string, { label: string; className: string }> = {
     critical: {
@@ -161,6 +162,8 @@ export function ToolApprovalCard({
         >
           {isApproved ? (
             <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : isSuperseded ? (
+            <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground" />
           ) : (
             <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
           )}
@@ -168,7 +171,12 @@ export function ToolApprovalCard({
             {approval.tool_name}
           </span>
           <span className="shrink-0">
-            · {isApproved ? t("已允许执行") : t("已拒绝执行")}
+            ·{" "}
+            {isApproved
+              ? t("已允许执行")
+              : isSuperseded
+                ? t("已失效（已有后续推进）")
+                : t("已拒绝执行")}
           </span>
           {approval.resolution_comment && (
             <span className="truncate text-faint">
@@ -190,7 +198,9 @@ export function ToolApprovalCard({
           ? "border-amber-500/50 bg-amber-500/[0.04] dark:border-amber-500/40 dark:bg-amber-950/20"
           : isApproved
             ? "border-emerald-500/40 bg-emerald-500/[0.03] dark:border-emerald-500/30 dark:bg-emerald-950/15"
-            : "border-rose-500/40 bg-rose-500/[0.03] dark:border-rose-500/30 dark:bg-rose-950/15"
+            : isSuperseded
+              ? "border-line bg-muted/30"
+              : "border-rose-500/40 bg-rose-500/[0.03] dark:border-rose-500/30 dark:bg-rose-950/15"
       }`}
     >
       {/* Header */}
@@ -200,6 +210,8 @@ export function ToolApprovalCard({
             <ShieldAlert className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
           ) : isApproved ? (
             <ShieldCheck className="size-4.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : isSuperseded ? (
+            <ShieldAlert className="size-4.5 shrink-0 text-muted-foreground" />
           ) : (
             <ShieldX className="size-4.5 shrink-0 text-rose-600 dark:text-rose-400" />
           )}
@@ -208,7 +220,9 @@ export function ToolApprovalCard({
               ? t("工具调用安全守卫 · 等待人工确认")
               : isApproved
                 ? t("工具调用安全守卫 · 已允许执行")
-                : t("工具调用安全守卫 · 已拒绝执行")}
+                : isSuperseded
+                  ? t("工具调用安全守卫 · 已失效（已有后续推进）")
+                  : t("工具调用安全守卫 · 已拒绝执行")}
           </span>
         </div>
 

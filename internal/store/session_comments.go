@@ -166,6 +166,22 @@ func (s *Store) EditSessionCommentAndRerun(
 	}
 	rows.Close()
 
+	// 3) 截断后续轮次和业务记录（若当前编辑的消息关联了更晚创建的工具审批记录且其指向后续被删轮次，
+	//    先保留事件记录并作废 pending 审批；由于 events -> card_turns 存在 ON DELETE SET NULL 复合外键，
+	//    删除 events 时若先删 events 会触发对 card_turns(workspace_id, card_id) 的级联置空，因此先清理
+	//    card_turns 再由级联或前置过滤删除，避免复合外键 SET NULL 将保留轮次的 workspace_id/card_id 置空）。
+	//    实际上我们这里先解除被删轮次的 source_event_id 引用再删 events，即可彻底避免复合外键误伤保留行。
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns
+		SET source_event_id = NULL
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND sequence > $3
+		  AND source_event_id IS NOT NULL
+	`, p.WorkspaceID, p.CardID, turnSequence); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
 	// 先删除关联的业务 Events，避免先删 turn_attempts 触发 ON DELETE SET NULL (attempt_id)
 	// 从而违反 events_reply_preview_check（带 preview_id 的消息要求 attempt_id IS NOT NULL）。
 	if _, err := tx.Exec(ctx, `
@@ -319,6 +335,13 @@ func (s *Store) EditSessionCommentAndRerun(
 		`, p.WorkspaceID, p.CardID); err != nil {
 			return SubmitSessionCommentResult{}, err
 		}
+	}
+
+	// 编辑重跑会截断后续历史并重新唤醒 Agent，任何遗留的 pending 审批都必须同步失效，避免残留幽灵待确认焦点。
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, p.WorkspaceID, p.CardID, "消息已编辑并重新执行，旧审批已自动失效",
+	); err != nil {
+		return SubmitSessionCommentResult{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -513,6 +536,11 @@ func (s *Store) submitSessionComment(
 	}
 	if err := supersedeAttemptForHumanTurn(
 		ctx, tx, p.WorkspaceID, p.CardID, p.DispatchMode, turn.CreatedAt,
+	); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, p.WorkspaceID, p.CardID, "已有后续新对话，旧审批已自动失效",
 	); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}

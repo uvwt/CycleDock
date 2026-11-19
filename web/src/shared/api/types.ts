@@ -61,7 +61,7 @@ export type ToolApproval = {
   scope_target?: string;
   scope_label?: string;
   allow_session_whitelist?: boolean;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approved" | "rejected" | "superseded";
   resolution_comment?: string;
   resolved_at?: string;
   created_at: string;

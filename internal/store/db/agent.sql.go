@@ -904,6 +904,31 @@ func (q *Queries) ShiftWorkspaceModelRoutePositions(ctx context.Context, workspa
 	return err
 }
 
+const supersedeCardPendingToolApprovals = `-- name: SupersedeCardPendingToolApprovals :execrows
+UPDATE card_tool_approvals
+SET status = 'superseded',
+    resolution_comment = $1,
+    resolved_at = now(),
+    updated_at = now()
+WHERE workspace_id = $2
+  AND card_id = $3
+  AND status = 'pending'
+`
+
+type SupersedeCardPendingToolApprovalsParams struct {
+	ResolutionComment string    `json:"resolution_comment"`
+	WorkspaceID       uuid.UUID `json:"workspace_id"`
+	CardID            uuid.UUID `json:"card_id"`
+}
+
+func (q *Queries) SupersedeCardPendingToolApprovals(ctx context.Context, arg SupersedeCardPendingToolApprovalsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, supersedeCardPendingToolApprovals, arg.ResolutionComment, arg.WorkspaceID, arg.CardID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertCardToolWhitelist = `-- name: UpsertCardToolWhitelist :exec
 INSERT INTO card_tool_whitelists (
     id, workspace_id, card_id, tool_name, pattern,

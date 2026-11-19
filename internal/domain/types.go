@@ -65,6 +65,15 @@ const (
 	ToolGuardModeStrict        ToolGuardMode = "strict"
 )
 
+type ToolApprovalStatus string
+
+const (
+	ToolApprovalStatusPending    ToolApprovalStatus = "pending"
+	ToolApprovalStatusApproved   ToolApprovalStatus = "approved"
+	ToolApprovalStatusRejected   ToolApprovalStatus = "rejected"
+	ToolApprovalStatusSuperseded ToolApprovalStatus = "superseded"
+)
+
 type CheckinStatus string
 
 const (

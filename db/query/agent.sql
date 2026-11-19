@@ -256,6 +256,16 @@ SET status = $4,
 WHERE workspace_id = $1 AND card_id = $2 AND id = $3 AND status = 'pending'
 RETURNING *;
 
+-- name: SupersedeCardPendingToolApprovals :execrows
+UPDATE card_tool_approvals
+SET status = 'superseded',
+    resolution_comment = sqlc.arg(resolution_comment),
+    resolved_at = now(),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND status = 'pending';
+
 -- name: ListCardToolApprovals :many
 SELECT *
 FROM card_tool_approvals

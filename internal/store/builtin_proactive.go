@@ -253,6 +253,11 @@ func (s *Store) tryCreateBuiltInProactiveTurn(
 	if err != nil {
 		return uuid.Nil, false, err
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, mainCardID, "已有后续主动对话，旧审批已自动失效",
+	); err != nil {
+		return uuid.Nil, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, false, err
 	}

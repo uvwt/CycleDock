@@ -1508,3 +1508,38 @@ test("只有系统触发失败记录且无历史消息时正常展示，不显�
   assert.match(html, /定时检查执行异常/);
   assert.doesNotMatch(html, /从第一句话开始|开始协作/);
 });
+
+test("已失效的工具审批默认收起为灰色轻量状态条且隐藏操作按钮", () => {
+  const supersededApproval = {
+    id: "approval-superseded-1",
+    tool_name: "exec_command",
+    arguments: { command: "rm -rf /tmp/demo" },
+    risk_level: "high",
+    reversible: false,
+    reason: "包含危险清理命令",
+    status: "superseded",
+    resolution_comment: "已有后续新对话，旧审批已自动失效",
+    resolved_at: "2026-11-18T12:00:00Z",
+    created_at: "2026-11-18T11:55:00Z",
+  };
+  const html = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: supersededApproval,
+    }),
+  );
+  assert.match(html, /data-approval-status="superseded"/);
+  assert.match(html, /exec_command/);
+  assert.match(html, /已失效（已有后续推进）/);
+  assert.match(html, /已有后续新对话，旧审批已自动失效/);
+  assert.doesNotMatch(html, /允许本次执行|拒绝并补充说明|data-action="approve-once"/);
+
+  const pendingHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: { ...supersededApproval, status: "pending", resolution_comment: "" },
+    }),
+  );
+  assert.match(pendingHtml, /data-action="approve-once"/);
+  assert.match(pendingHtml, /允许本次执行/);
+});

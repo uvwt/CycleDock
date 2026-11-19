@@ -157,7 +157,12 @@ func enqueueSupervisorCallback(
 		IdempotencyKey:    key,
 		RequestHash:       requestHash,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, discussionID, "已有后续状态推进，旧审批已自动失效",
+	)
 }
 
 func supervisorDiscussionID(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUID, target supervisorTarget) (uuid.UUID, error) {
