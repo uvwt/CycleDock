@@ -9,6 +9,7 @@ import (
 	"iter"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -61,25 +62,70 @@ type RouteCallObservation struct {
 	UsageSource TokenUsageSource
 }
 
+// RouteFailureEntry 记录多路由调用全部失败时单条路由的失败明细。
+type RouteFailureEntry struct {
+	RouteIndex int
+	RouteID    uuid.UUID
+	Model      string
+	Provider   string
+	Err        error
+}
+
+// MultiRouteError 聚合一次模型调用在多条候选路由上的全部失败摘要，
+// 同时通过 Unwrap() []error 保持标准库 errors.Is / errors.As 按尝试顺序检索底层错误链。
+type MultiRouteError struct {
+	Entries []RouteFailureEntry
+}
+
+func (e *MultiRouteError) Error() string {
+	if e == nil || len(e.Entries) == 0 {
+		return "no model route was available"
+	}
+	parts := make([]string, 0, len(e.Entries))
+	for _, entry := range e.Entries {
+		modelName := strings.TrimSpace(entry.Model)
+		if modelName == "" {
+			modelName = entry.RouteID.String()
+		}
+		parts = append(parts, fmt.Sprintf("route#%d (%s, %s): %v", entry.RouteIndex, modelName, entry.Provider, entry.Err))
+	}
+	return "all configured model routes failed: " + strings.Join(parts, "; ")
+}
+
+func (e *MultiRouteError) Unwrap() []error {
+	if e == nil || len(e.Entries) == 0 {
+		return nil
+	}
+	errs := make([]error, 0, len(e.Entries))
+	for _, entry := range e.Entries {
+		if entry.Err != nil {
+			errs = append(errs, entry.Err)
+		}
+	}
+	return errs
+}
+
 // adkRouteModel adapts CycleDock's production model transports and ordered
 // credential routes to ADK's model.LLM interface. ADK owns the conversation and
 // tool loop; CycleDock keeps credential refresh, route failover and converts
 // provider argument deltas into ADK partial responses.
 type adkRouteModel struct {
-	client          *modelclient.Client
-	modelAuth       *modelauth.Service
-	store           *store.Store
-	artifactService artifact.Service
-	workspaceID     uuid.UUID
-	cardID          uuid.UUID
-	turnID          uuid.UUID
-	attemptID       uuid.UUID
-	purpose         string
-	routes          []store.ModelRoute
-	budgetPolicy    CompactionBudgetPolicy
+	client             *modelclient.Client
+	modelAuth          *modelauth.Service
+	store              *store.Store
+	artifactService    artifact.Service
+	workspaceID        uuid.UUID
+	cardID             uuid.UUID
+	turnID             uuid.UUID
+	attemptID          uuid.UUID
+	purpose            string
+	routes             []store.ModelRoute
+	budgetPolicy       CompactionBudgetPolicy
+	requestTimeout     time.Duration
+	sharedActiveIndex  *atomic.Int32
+	ownActiveIndexSlot atomic.Int32
 
 	mu              sync.Mutex
-	activeRoute     int
 	modelCalls      int
 	lastObservation RouteCallObservation
 	hasObservation  bool
@@ -140,7 +186,7 @@ func newADKRouteModel(
 	if len(enabled) == 0 {
 		return nil, errors.New("built-in agent has no enabled model route")
 	}
-	return &adkRouteModel{
+	m := &adkRouteModel{
 		client:       client,
 		modelAuth:    auth,
 		store:        dataStore,
@@ -148,7 +194,51 @@ func newADKRouteModel(
 		purpose:      "agent",
 		routes:       enabled,
 		budgetPolicy: DefaultCompactionBudgetPolicy(),
-	}, nil
+	}
+	m.sharedActiveIndex = &m.ownActiveIndexSlot
+	return m, nil
+}
+
+// shareActiveRouteFrom 让同一 Attempt 内的辅助模型实例（如上下文压缩 summaryLLM）与主模型共享活跃路由索引和预算策略。
+// 当主模型或摘要模型任一方发生故障切换（failover）并成功命中备用路由后，另一方后续请求直接从该健康路由起步，
+// 避免每次压缩都重新撞向已超时/故障的首条路由。
+func (m *adkRouteModel) shareActiveRouteFrom(peer *adkRouteModel) *adkRouteModel {
+	if m == nil || peer == nil {
+		return m
+	}
+	if peer.sharedActiveIndex != nil {
+		m.sharedActiveIndex = peer.sharedActiveIndex
+	} else {
+		m.sharedActiveIndex = &peer.ownActiveIndexSlot
+	}
+	m.budgetPolicy = peer.budgetPolicy
+	return m
+}
+
+func (m *adkRouteModel) loadActiveRouteIndex() int {
+	if m == nil {
+		return 0
+	}
+	slot := m.sharedActiveIndex
+	if slot == nil {
+		slot = &m.ownActiveIndexSlot
+	}
+	idx := int(slot.Load())
+	if idx < 0 || idx >= len(m.routes) {
+		return 0
+	}
+	return idx
+}
+
+func (m *adkRouteModel) storeActiveRouteIndex(idx int) {
+	if m == nil || idx < 0 || idx >= len(m.routes) {
+		return
+	}
+	slot := m.sharedActiveIndex
+	if slot == nil {
+		slot = &m.ownActiveIndexSlot
+	}
+	slot.Store(int32(idx))
 }
 
 func (m *adkRouteModel) withTraceContext(cardID, turnID, attemptID uuid.UUID, purpose string) *adkRouteModel {
@@ -185,18 +275,11 @@ func (m *adkRouteModel) ActiveModel() string {
 }
 
 func (m *adkRouteModel) ActiveRoute() (store.ModelRoute, bool) {
-	if m == nil {
+	if m == nil || len(m.routes) == 0 {
 		return store.ModelRoute{}, false
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.activeRoute >= 0 && m.activeRoute < len(m.routes) {
-		return m.routes[m.activeRoute], true
-	}
-	if len(m.routes) > 0 {
-		return m.routes[0], true
-	}
-	return store.ModelRoute{}, false
+	idx := m.loadActiveRouteIndex()
+	return m.routes[idx], true
 }
 
 func (m *adkRouteModel) LastObservation() (RouteCallObservation, bool) {
@@ -235,8 +318,8 @@ func (m *adkRouteModel) GenerateContent(
 			return
 		}
 
+		start := m.loadActiveRouteIndex()
 		m.mu.Lock()
-		start := m.activeRoute
 		m.modelCalls++
 		modelCall := m.modelCalls
 		m.mu.Unlock()
@@ -248,37 +331,57 @@ func (m *adkRouteModel) GenerateContent(
 		}
 
 		estimatedPromptTokens := estimateADKRequestTokens(req)
-		var lastErr error
+		routeOrder := make([]int, 0, len(m.routes))
 		for i := start; i < len(m.routes); i++ {
-			routeLimits := ResolveRouteModelLimits(m.routes[i], m.client)
+			routeOrder = append(routeOrder, i)
+		}
+		for i := 0; i < start; i++ {
+			routeOrder = append(routeOrder, i)
+		}
+
+		failures := make([]RouteFailureEntry, 0, len(routeOrder))
+		for step, i := range routeOrder {
+			matchedRoute := m.routes[i]
+			recordRouteFailure := func(routeErr error) {
+				failures = append(failures, RouteFailureEntry{
+					RouteIndex: i,
+					RouteID:    matchedRoute.ID,
+					Model:      strings.TrimSpace(matchedRoute.Model),
+					Provider:   normalizedProviderType(matchedRoute.ProviderType),
+					Err:        routeErr,
+				})
+			}
+
+			routeLimits := ResolveRouteModelLimits(matchedRoute, m.client)
 			routeBudget := ComputeRouteCompactionBudget(routeLimits, m.budgetPolicy)
 			if capErr := ValidateRoutePromptCapacity(
-				m.routes[i],
+				matchedRoute,
 				routeBudget,
 				estimatedPromptTokens,
-				i > start,
+				step > 0,
 				m.budgetPolicy,
 			); capErr != nil {
-				lastErr = capErr
-				if i+1 < len(m.routes) && stream && !yield(modelStageResponse("备用模型上下文窗口不足，正在尝试下一模型"), nil) {
+				recordRouteFailure(capErr)
+				if step+1 < len(routeOrder) && stream && !yield(modelStageResponse("备用模型上下文窗口不足，正在尝试下一模型"), nil) {
 					return
 				}
 				continue
 			}
 
-			config, err := m.routeConfig(ctx, m.routes[i])
+			config, err := m.routeConfig(ctx, matchedRoute)
 			if err != nil {
 				if !isRetryableModelRouteError(ctx, err) {
 					yield(nil, err)
 					return
 				}
-				lastErr = err
-				if i+1 < len(m.routes) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
+				recordRouteFailure(err)
+				if step+1 < len(routeOrder) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
 					return
 				}
 				continue
 			}
 
+			var routeErr error
 			for requestAttempt := 0; requestAttempt < 2; requestAttempt++ {
 				config.OutputSchema = outputSchema
 
@@ -319,15 +422,14 @@ func (m *adkRouteModel) GenerateContent(
 				if durationMS < 0 {
 					durationMS = 0
 				}
-				matchedRoute := m.routes[i]
 				if err == nil {
 					usage, usageSource, usageMetadata := resolveADKTokenUsage(req, completion)
 					response.UsageMetadata = usageMetadata
 					response.ModelVersion = strings.TrimSpace(matchedRoute.Model)
 					response.CustomMetadata = buildModelResponseMetadata(matchedRoute, usageSource)
 
+					m.storeActiveRouteIndex(i)
 					m.mu.Lock()
-					m.activeRoute = i
 					m.lastObservation = RouteCallObservation{
 						RouteIndex:  i,
 						RouteID:     matchedRoute.ID,
@@ -374,14 +476,14 @@ func (m *adkRouteModel) GenerateContent(
 					ErrorSummary: err.Error(),
 				})
 				if modelclient.IsContextTooLargeError(err) {
-					lastErr = fmt.Errorf("%w: %v", ErrRouteContextCapacityExceeded, err)
+					routeErr = fmt.Errorf("%w: %v", ErrRouteContextCapacityExceeded, err)
 					break
 				}
 				if !isRetryableModelRouteError(ctx, err) {
 					yield(nil, err)
 					return
 				}
-				lastErr = err
+				routeErr = err
 				if requestAttempt == 0 && isRetryableModelRequestError(ctx, err) {
 					if stream && !yield(modelStageResponse("模型请求暂时失败，正在重试当前模型"), nil) {
 						return
@@ -400,15 +502,19 @@ func (m *adkRouteModel) GenerateContent(
 				break
 			}
 
-			if i+1 < len(m.routes) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
+			if routeErr != nil {
+				recordRouteFailure(routeErr)
+			}
+			if step+1 < len(routeOrder) && stream && !yield(modelStageResponse("当前模型不可用，正在切换备用模型"), nil) {
 				return
 			}
 		}
 
-		if lastErr == nil {
-			lastErr = errors.New("no model route was available")
+		if len(failures) == 0 {
+			yield(nil, errors.New("all configured model routes failed: no model route was available"))
+			return
 		}
-		yield(nil, fmt.Errorf("all configured model routes failed: %w", lastErr))
+		yield(nil, &MultiRouteError{Entries: failures})
 	}
 }
 
@@ -430,6 +536,9 @@ func (m *adkRouteModel) routeConfig(
 	route store.ModelRoute,
 ) (modelclient.Config, error) {
 	timeout := agentconfig.DefaultModelRequestTimeout
+	if m != nil && m.requestTimeout > 0 {
+		timeout = m.requestTimeout
+	}
 	switch route.ProviderType {
 	case "", "openai_compatible":
 		var apiKey string

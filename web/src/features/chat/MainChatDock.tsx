@@ -218,6 +218,8 @@ export function MainChatDock() {
     queryKey: keys.card(cardID),
     queryFn: () => api.card(cardID),
     enabled: open && Boolean(cardID),
+    // 重新打开主聊天浮窗时同步刷新，避免先渲染离开前的旧 running 状态。
+    refetchOnMount: "always",
   });
   const stream = useCardStream(open ? cardID : "", projectID);
 

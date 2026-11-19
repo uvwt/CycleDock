@@ -79,6 +79,7 @@ const cards = [
     description: "重点检查最近24小时的 Docker 和系统错误日志",
     todo_state: "working",
     current_attempt_status: "running",
+    pending_tool_approval_count: 1,
     created_at: now(),
     updated_at: now(),
   },
@@ -782,6 +783,14 @@ http
                 503,
               );
             }
+            for (const item of events[id] || []) {
+              if (item.tool_approval?.status === "pending") {
+                item.tool_approval.status = "superseded";
+                item.tool_approval.resolution_comment = "已有后续新对话，旧审批已自动失效";
+                item.tool_approval.resolved_at = now();
+              }
+            }
+            card.pending_tool_approval_count = 0;
             events[id].push({
               id: "event-" + ++seq,
               sequence: seq,
@@ -1032,14 +1041,78 @@ http
                     arch: "amd64",
                     agent_version: "1.1.1",
                     capabilities: ["exec_command", "file_edit"],
+                    plugins: [
+                      {
+                        name: "cloudflare",
+                        version: "1.2.0",
+                        enabled: true,
+                        description: "Cloudflare Workers、Pages 与 MCP 管理套件",
+                        skills_count: 2,
+                        mcp_count: 1,
+                        format: "portable",
+                      },
+                      {
+                        name: "context7",
+                        version: "0.9.1",
+                        enabled: true,
+                        description: "实时文档检索与上下文增强插件",
+                        skills_count: 0,
+                        mcp_count: 1,
+                        format: "portable",
+                      },
+                    ],
                     skills: [
                       {
                         name: "docker-ops",
                         description: "巡检与管理容器运行状态",
                         source_type: "managed",
                       },
+                      {
+                        name: "cloudflare",
+                        description: "部署与诊断 Cloudflare Workers 与 KV/D1 资源",
+                        source_type: "plugin",
+                        plugin_name: "cloudflare",
+                      },
+                      {
+                        name: "durable-objects",
+                        description: "管理 Durable Objects 状态与迁移",
+                        source_type: "plugin",
+                        plugin_name: "cloudflare",
+                      },
+                      {
+                        name: "team-standards",
+                        description: "团队共享研发与发布检查清单",
+                        source_type: "shared",
+                      },
                     ],
-                    dynamic_mcp: [],
+                    dynamic_mcp: [
+                      {
+                        name: "plugin.cloudflare.cloudflare-api",
+                        display_name: "cloudflare-api",
+                        description: "Cloudflare API 管理接口",
+                        status: "active",
+                        tool_count: 14,
+                        source_type: "plugin",
+                        plugin_name: "cloudflare",
+                      },
+                      {
+                        name: "plugin.context7.context7",
+                        display_name: "context7",
+                        description: "第三方库官方文档检索服务",
+                        status: "active",
+                        tool_count: 2,
+                        source_type: "plugin",
+                        plugin_name: "context7",
+                      },
+                      {
+                        name: "bitwarden",
+                        display_name: "Bitwarden",
+                        description: "独立托管的凭据与密钥库 MCP 服务",
+                        status: "active",
+                        tool_count: 6,
+                        source_type: "managed",
+                      },
+                    ],
                   },
                   {
                     id: "node-mac",

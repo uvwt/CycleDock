@@ -167,9 +167,9 @@ type dummyToolContext struct {
 	ctx context.Context
 }
 
-func (d dummyToolContext) Deadline() (time.Time, bool)       { return d.ctx.Deadline() }
-func (d dummyToolContext) Done() <-chan struct{}             { return d.ctx.Done() }
-func (d dummyToolContext) Err() error                        { return d.ctx.Err() }
-func (d dummyToolContext) Value(key any) any                 { return d.ctx.Value(key) }
-func (d dummyToolContext) Actions() *session.EventActions    { return &session.EventActions{} }
-func (d dummyToolContext) FunctionCallID() string            { return "test-call" }
+func (d dummyToolContext) Deadline() (time.Time, bool)    { return d.ctx.Deadline() }
+func (d dummyToolContext) Done() <-chan struct{}          { return d.ctx.Done() }
+func (d dummyToolContext) Err() error                     { return d.ctx.Err() }
+func (d dummyToolContext) Value(key any) any              { return d.ctx.Value(key) }
+func (d dummyToolContext) Actions() *session.EventActions { return &session.EventActions{} }
+func (d dummyToolContext) FunctionCallID() string         { return "test-call" }

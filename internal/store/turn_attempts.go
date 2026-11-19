@@ -134,6 +134,11 @@ func (s *Store) CreateHumanTurn(
 	); err != nil {
 		return CreateTurnResult{}, err
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "已有后续新对话，旧审批已自动失效",
+	); err != nil {
+		return CreateTurnResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return CreateTurnResult{}, err
 	}
@@ -210,6 +215,11 @@ func (s *Store) CreateSystemTurn(
 	if err != nil {
 		return CreateTurnResult{}, err
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "已有后续系统推进，旧审批已自动失效",
+	); err != nil {
+		return CreateTurnResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return CreateTurnResult{}, err
 	}
@@ -281,6 +291,11 @@ func (s *Store) CreateScheduleTurn(
 		ScheduledFor: &scheduledFor,
 	})
 	if err != nil {
+		return CreateTurnResult{}, err
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "已有后续定时执行，旧审批已自动失效",
+	); err != nil {
 		return CreateTurnResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -544,6 +559,11 @@ func (s *Store) RetryAttempt(
 		RunnerSourceID:   runnerSourceID,
 		Status:           domain.AttemptStatusQueued,
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "已发起重新执行，旧审批已自动失效",
+	); err != nil {
+		return RetryAttemptResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return RetryAttemptResult{}, err
 	}
@@ -754,6 +774,11 @@ func (s *Store) SteerPendingTurn(
 	if err := supersedeAttemptForHumanTurn(ctx, tx, workspaceID, cardID, domain.DispatchModeInterrupt, now.UTC()); err != nil {
 		return err
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "执行已被打断并插入新对话，旧审批已自动失效",
+	); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -812,6 +837,11 @@ func (s *Store) CancelPendingTurn(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 	`, workspaceID, cardID, turnID, humanSourceID, strings.TrimSpace(reason))
 	if err != nil {
+		return err
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "轮次已取消，未处理审批已自动失效",
+	); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -875,6 +905,11 @@ func (s *Store) CancelAttempt(
 	}
 	if command.RowsAffected() != 1 {
 		return domain.ErrAttemptNotCurrent
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "执行已取消，未处理审批已自动失效",
+	); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err

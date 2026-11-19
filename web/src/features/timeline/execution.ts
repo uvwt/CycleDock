@@ -99,12 +99,21 @@ export function groupExecutionAttempts(
   const byEvent = new Map<string, ExecutionAttempt[]>();
   const standalone: ExecutionAttempt[] = [];
   // 正在执行的状态始终放在可见消息末尾，避免被迟到的上一轮回复压到上方。
+  // 本轮正式结束回复已落库时不再显示执行中占位：Attempt 还要完成 Session 收尾，
+  // 这段时间数据库状态仍是 running，但用户已经看到最终气泡。
+  const finalReply = events.findLast(
+    (event) =>
+      event.attempt_id === currentAttempt?.id &&
+      event.actor_kind !== "human" &&
+      event.type === "message" &&
+      Boolean(event.message?.end_turn),
+  );
   const runningReply = events.findLast(
     (event) =>
       event.attempt_id === currentAttempt?.id && event.message?.preview,
   );
   const running: ExecutionAttempt | null =
-    currentAttempt?.status === "running" && !runningReply
+    currentAttempt?.status === "running" && !finalReply && !runningReply
       ? { kind: "current", value: currentAttempt }
       : null;
   const attempts: ExecutionAttempt[] = [
@@ -127,7 +136,7 @@ export function groupExecutionAttempts(
         : ["cancelled", "superseded"].includes(execution.status)
           ? replyEventByAttempt.get(execution.id)
           : execution.status === "running"
-            ? runningReply?.id
+            ? runningReply?.id || finalReply?.id
             : undefined;
     if (resultID) {
       statusByReply.set(resultID, attempt.value);

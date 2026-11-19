@@ -42,9 +42,11 @@ const { api: apiClient } = await server.ssrLoadModule("/src/shared/api/client.ts
 const { default: SettingsPage } = await server.ssrLoadModule(
   "/src/features/settings/SettingsPage.tsx",
 );
-const { default: NexusDockPage } = await server.ssrLoadModule(
-  "/src/features/nexusdock/NexusDockPage.tsx",
-);
+const {
+  default: NexusDockPage,
+  groupDeviceSkills,
+  groupDeviceDynamicMcp,
+} = await server.ssrLoadModule("/src/features/nexusdock/NexusDockPage.tsx");
 const { ToolApprovalCard } = await server.ssrLoadModule(
   "/src/features/timeline/ToolApprovalCard.tsx",
 );
@@ -1507,4 +1509,197 @@ test("只有系统触发失败记录且无历史消息时正常展示，不显�
   assert.match(html, /系统触发 \/ 未关联历史/);
   assert.match(html, /定时检查执行异常/);
   assert.doesNotMatch(html, /从第一句话开始|开始协作/);
+});
+
+test("已失效的工具审批默认收起为灰色轻量状态条且隐藏操作按钮", () => {
+  const supersededApproval = {
+    id: "approval-superseded-1",
+    tool_name: "exec_command",
+    arguments: { command: "rm -rf /tmp/demo" },
+    risk_level: "high",
+    reversible: false,
+    reason: "包含危险清理命令",
+    status: "superseded",
+    resolution_comment: "已有后续新对话，旧审批已自动失效",
+    resolved_at: "2026-11-18T12:00:00Z",
+    created_at: "2026-11-18T11:55:00Z",
+  };
+  const html = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: supersededApproval,
+    }),
+  );
+  assert.match(html, /data-approval-status="superseded"/);
+  assert.match(html, /exec_command/);
+  assert.match(html, /已失效（已有后续推进）/);
+  assert.match(html, /已有后续新对话，旧审批已自动失效/);
+  assert.doesNotMatch(html, /允许本次执行|拒绝并补充说明|data-action="approve-once"/);
+
+  const pendingHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: { ...supersededApproval, status: "pending", resolution_comment: "" },
+    }),
+  );
+  assert.match(pendingHtml, /data-action="approve-once"/);
+  assert.match(pendingHtml, /允许本次执行/);
+});
+
+test("正式 end_turn 回复已落库或 live.replied=true 时，即使 currentAttempt 仍为 running 也不渲染三个点加载气泡", () => {
+  const runningAttempt = { ...attempt, status: "running", finished_at: undefined };
+  const finalMsg = {
+    ...result,
+    type: "message",
+    message: { type: "text", content: result.content, end_turn: true },
+  };
+  const htmlWithFinalMsg = render([comment, finalMsg], runningAttempt);
+  assert.match(htmlWithFinalMsg, /已生成卡片/);
+  assert.doesNotMatch(htmlWithFinalMsg, /aria-label="正在思考并生成回复"/);
+  const htmlWithLiveReplied = render([comment], runningAttempt, {
+    attemptID: runningAttempt.id,
+    stage: "正在执行",
+    replied: true,
+    replies: [],
+  });
+  assert.doesNotMatch(htmlWithLiveReplied, /aria-label="正在思考并生成回复"/);
+});
+
+test("NexusDockPage 按插件与来源分组整理 Skill 和动态 MCP", () => {
+  const pluginMap = new Map([
+    [
+      "cloudflare",
+      {
+        name: "cloudflare",
+        version: "1.2.0",
+        enabled: true,
+        description: "Cloudflare Workers 与 API 管理插件",
+      },
+    ],
+    [
+      "context7",
+      {
+        name: "context7",
+        version: "0.9.1",
+        enabled: false,
+        description: "文档查询插件",
+      },
+    ],
+  ]);
+
+  const skillResult = groupDeviceSkills(
+    [
+      { name: "cloudflare", source_type: "plugin", plugin_name: "cloudflare" },
+      { name: "durable-objects", source_type: "plugin", plugin_name: "cloudflare" },
+      { name: "legacy-plugin-skill", source_type: "plugin" },
+      { name: "personal-dev-guard", source_type: "managed" },
+      { name: "team-shared", source_type: "shared" },
+    ],
+    pluginMap,
+  );
+
+  assert.equal(skillResult.pluginItemsCount, 3);
+  assert.equal(skillResult.pluginGroups.length, 2);
+  assert.equal(skillResult.pluginGroups[0].pluginName, "cloudflare");
+  assert.equal(skillResult.pluginGroups[0].pluginMeta?.version, "1.2.0");
+  assert.deepEqual(
+    skillResult.pluginGroups[0].items.map((item) => item.name),
+    ["cloudflare", "durable-objects"],
+  );
+  assert.equal(skillResult.pluginGroups[1].pluginName, "");
+  assert.equal(skillResult.managedItems.length, 1);
+  assert.equal(skillResult.sharedItems.length, 1);
+
+  const mcpResult = groupDeviceDynamicMcp(
+    [
+      {
+        name: "plugin.cloudflare.cloudflare-api",
+        display_name: "cloudflare-api",
+        source_type: "plugin",
+        plugin_name: "cloudflare",
+        status: "active",
+      },
+      {
+        name: "plugin.context7.context7",
+        display_name: "context7",
+        source_type: "plugin",
+        plugin_name: "context7",
+        status: "active",
+      },
+      {
+        name: "bitwarden",
+        display_name: "Bitwarden",
+        source_type: "managed",
+        status: "active",
+      },
+    ],
+    pluginMap,
+  );
+
+  assert.equal(mcpResult.pluginItemsCount, 2);
+  assert.deepEqual(
+    mcpResult.pluginGroups.map((group) => group.pluginName),
+    ["cloudflare", "context7"],
+  );
+  assert.equal(mcpResult.pluginGroups[1].pluginMeta?.enabled, false);
+  assert.deepEqual(
+    mcpResult.standaloneItems.map((item) => item.name),
+    ["bitwarden"],
+  );
+
+  queryClient.setQueryData(["me"], {
+    email: "owner@example.com",
+    role: "owner",
+    workspace: { id: "ws-1", name: "Demo" },
+  });
+  queryClient.setQueryData(["nexus"], { available: true, connected: true });
+  queryClient.setQueryData(["nexus", "fleet", "ws-1"], {
+    available: true,
+    connected: true,
+    devices: [
+      {
+        id: "node-plugin",
+        name: "TianYi",
+        online: true,
+        os: "windows",
+        arch: "amd64",
+        plugins: [
+          { name: "cloudflare", version: "1.2.0", enabled: true },
+          { name: "context7", version: "0.9.1", enabled: true },
+        ],
+        skills: [
+          { name: "cloudflare", source_type: "plugin", plugin_name: "cloudflare" },
+        ],
+        dynamic_mcp: [
+          {
+            name: "plugin.context7.context7",
+            display_name: "context7",
+            source_type: "plugin",
+            plugin_name: "context7",
+          },
+        ],
+      },
+    ],
+  });
+  queryClient.setQueryData(["device-tool-guards", "ws-1"], []);
+  queryClient.setQueryData(["agent-settings"], { configured: true, routes: [] });
+  queryClient.setQueryData(["tool-guard"], {
+    mode: "block_high_risk",
+    model_route_id: "",
+    timeout_seconds: 10,
+    custom_rules: "",
+  });
+
+  try {
+    const html = renderToStaticMarkup(createElement(NexusDockPage));
+    assert.match(html, /2 插件/);
+    assert.match(html, /已装插件.*2/);
+    assert.match(html, /1 个插件/);
+  } finally {
+    queryClient.removeQueries({ queryKey: ["me"] });
+    queryClient.removeQueries({ queryKey: ["nexus"] });
+    queryClient.removeQueries({ queryKey: ["device-tool-guards"] });
+    queryClient.removeQueries({ queryKey: ["agent-settings"] });
+    queryClient.removeQueries({ queryKey: ["tool-guard"] });
+  }
 });

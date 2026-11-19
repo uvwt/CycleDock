@@ -85,6 +85,10 @@ func (api *API) streamCard(w http.ResponseWriter, r *http.Request) {
 		streamEvents = sub.Events
 	}
 	lastStage := ""
+	// 建连立刻对账一次。内存快照可能已被清理，不能干等轮询间隔才把已落库的新消息和终态发给浏览器。
+	if err := api.streamPoll(ctx, identity.WorkspaceID, cardID, &lastSequence, &lastStage, send); err != nil {
+		return
+	}
 	for {
 		select {
 		case <-ctx.Done():

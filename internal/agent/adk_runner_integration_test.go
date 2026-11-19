@@ -1550,4 +1550,3 @@ func TestADKRunnerExternalizesMCPImageAndDeliversMultimodalToModel(t *testing.T)
 		t.Fatal("model did not receive full multimodal image_url data URL")
 	}
 }
-

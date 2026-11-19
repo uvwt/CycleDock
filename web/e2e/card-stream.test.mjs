@@ -106,3 +106,16 @@ test("取消后开始新执行仍保留已显示的正文，迟到的旧事件�
     1,
   );
 });
+
+test("收到 attempt.replied 或带 replied=true 的重连快照时标记已回复", () => {
+  let live = apply(started(), "attempt.replied", event());
+  assert.equal(live.replied, true);
+  assert.equal(
+    apply(started(), "attempt.replied", event({ attempt_id: "stale" })).replied,
+    undefined,
+  );
+  live = apply(null, "attempt.snapshot", event({ replied: true }));
+  assert.equal(live.replied, true);
+  const next = apply(live, "attempt.started", event({ attempt_id: "next" }));
+  assert.equal(next.replied, undefined);
+});

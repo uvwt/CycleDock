@@ -622,4 +622,3 @@ func TestCustomAPICredentialLifecycleAndMultiRouteKeySharing(t *testing.T) {
 		t.Fatalf("unexpected state after deleting credential A: %+v", afterDeleteBody)
 	}
 }
-

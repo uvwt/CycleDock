@@ -166,8 +166,9 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 
-	// Compaction uses the same ordered model routes but never publishes its
-	// internal summarization text to the Card's live SSE stream.
+	// Compaction uses the same ordered model routes and shares the active route
+	// index with llm so a route failover on either side immediately steers both,
+	// while keeping summaryLLM silent on the Card's live SSE stream.
 	summaryLLM, err := newADKRouteModel(
 		r.model,
 		r.modelAuth,
@@ -179,6 +180,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		return err
 	}
 	summaryLLM.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "compaction")
+	summaryLLM.shareActiveRouteFrom(llm)
 	summarizer, err := newADKCompactionSummarizer(summaryLLM)
 	if err != nil {
 		return err
@@ -352,16 +354,43 @@ func (r *Runner) resolveAttemptCompactionThreshold(routes []store.ModelRoute) in
 		return r.compactionTokenThreshold
 	}
 	policy := r.compactionBudgetPolicy.withDefaults()
+
+	var enabled []store.ModelRoute
 	for _, route := range routes {
-		if !route.Enabled {
-			continue
+		if route.Enabled {
+			enabled = append(enabled, route)
 		}
-		limits := ResolveRouteModelLimits(route, r.model)
-		budget := ComputeRouteCompactionBudget(limits, policy)
-		if budget.CompactAtTokens > 0 {
-			return budget.CompactAtTokens
+	}
+	if len(enabled) > 0 {
+		primaryBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(enabled[0], r.model), policy)
+		threshold := primaryBudget.CompactAtTokens
+
+		// 当启用了备用路由时，兼顾备用路由中的最大已知输入上限：
+		// 1. 若首条主路由软上限（如 1M 模型的 256K）超过了所有已知容量备用路由的最大有效输入上限（如 239K），
+		//    将压缩阈值收敛到该备用路由的 CompactAtTokens，确保主路由故障时未压缩历史仍可平滑 failover 到备用路由；
+		// 2. 若至少存在一条更大窗口的备用路由能承接主路由软上限，或仅有 16K 等极小测试备用路由（阈值低于主路由一半），
+		//    则保持主路由预算不被极小备用路由异常拉低。
+		if threshold > 0 && len(enabled) > 1 {
+			maxBackupInputLimit := 0
+			maxBackupCompactAt := 0
+			for _, backup := range enabled[1:] {
+				backupBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(backup, r.model), policy)
+				if backupBudget.UnknownCapacity || backupBudget.EffectiveInputLimit <= 0 {
+					continue
+				}
+				if backupBudget.EffectiveInputLimit > maxBackupInputLimit {
+					maxBackupInputLimit = backupBudget.EffectiveInputLimit
+					maxBackupCompactAt = backupBudget.CompactAtTokens
+				}
+			}
+			if maxBackupInputLimit > 0 && threshold > maxBackupInputLimit && maxBackupCompactAt >= threshold/2 {
+				threshold = maxBackupCompactAt
+			}
 		}
-		break
+
+		if threshold > 0 {
+			return threshold
+		}
 	}
 	if r.compactionTokenThreshold > 0 {
 		return r.compactionTokenThreshold
@@ -570,6 +599,7 @@ const cycleAgentInstructions = `你是 CycleDock 的内置 Cycle Agent。
 - 在任何用户回复中提及、推荐或引导用户查看某个具体卡片时，统一使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)，使界面呈现独立卡片交互区域并支持点击跳转。
 - 在 Ongoing Card 上，确认到健康事实时调用 cycledock_check_in。
 - 需要设置、查看、暂停或调整计划的自动执行时间时，使用 cycledock_list_schedules / cycledock_create_schedule / cycledock_update_schedule / cycledock_delete_schedule；只在工具成功后说已设置，时间必须使用明确的 IANA 时区。刚从 Discussion 生成 Ongoing Card 时，可以使用生成结果中的 card_id 立即设置计划。
+- 需要修改当前卡片或同工作区内其他卡片（包括 Todo、Ongoing 和普通 Discussion）的标题、描述、置顶状态、Todo 确认阈值或合法生命周期状态（Todo 的 todo/working，Ongoing 的 active/paused/archived，普通 Discussion 的 active/archived）时，使用 cycledock_update_card；不传 card_id 默认修改当前卡片。项目主聊天（主讨论）受保护不可修改；Todo 进入 Review 仍必须通过 cycledock_confirm_card，从 Review 到 Done 只能由人操作。
 - 只有核实过的 Todo 任务才能调用 cycledock_confirm_card。卡片重新进入 Working 后须重新核实，并使用新的 idempotency_key 提交本轮确认；旧确认不计入本轮。从 Review 到 Done 只能由人来做。
 - 外部 MCP 工具按需发现与调用：
   1. search_mcp_tools 和 call_mcp_tool 专门用于外部第三方 MCP 工具；外部工具不再以独立函数逐个暴露在工具列表中。CycleDock 内置工具（reply_message、cycledock_*）及 NexusDock 远程设备/记忆工具保持原有直接调用方式。

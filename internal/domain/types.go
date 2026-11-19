@@ -65,11 +65,20 @@ const (
 	ToolGuardModeStrict        ToolGuardMode = "strict"
 )
 
+type ToolApprovalStatus string
+
+const (
+	ToolApprovalStatusPending    ToolApprovalStatus = "pending"
+	ToolApprovalStatusApproved   ToolApprovalStatus = "approved"
+	ToolApprovalStatusRejected   ToolApprovalStatus = "rejected"
+	ToolApprovalStatusSuperseded ToolApprovalStatus = "superseded"
+)
+
 type CheckinStatus string
 
 const (
-	CheckinHealthy  CheckinStatus = "healthy"
-	CheckinWarning  CheckinStatus = "warning"
+	CheckinHealthy      CheckinStatus = "healthy"
+	CheckinWarning      CheckinStatus = "warning"
 	CheckinCritical     CheckinStatus = "critical"
 	CheckinAcknowledged CheckinStatus = "acknowledged"
 	CheckinUnknown      CheckinStatus = "unknown"

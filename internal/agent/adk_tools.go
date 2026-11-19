@@ -196,6 +196,8 @@ func (r attemptToolRuntime) internalHandler(
 		return r.updateScheduleTool, nil
 	case "cycledock_delete_schedule":
 		return r.deleteScheduleTool, nil
+	case "cycledock_update_card":
+		return r.updateCardTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。
@@ -241,6 +243,13 @@ func (r attemptToolRuntime) internalHandler(
 				r.replies.ended = true
 				// 先保存 ADK FunctionResponse，然后停止循环；Runner 负责正常结算。
 				ctx.Actions().SkipSummarization = true
+				if r.live != nil && !r.context.IsBuiltInProactive && !reused {
+					// 正式结束回复已落库，但 ADK 还要写 FunctionResponse 并完成 Session 收尾。
+					// Attempt 继续保持 running，这里只通知浏览器先收起执行中占位。
+					r.live.Publish(r.context.CardID, realtime.Event{
+						Type: "attempt.replied", AttemptID: r.context.AttemptID.String(),
+					})
+				}
 			}
 			return map[string]any{
 				"ok": true, "event_id": eventID.String(), "reused": reused,
@@ -550,12 +559,12 @@ func (r attemptToolRuntime) internalHandler(
 					sizeBytes = len(loaded.Part.InlineData.Data)
 				}
 				return map[string]any{
-					"file_name":        fileName,
-					"version":          resolvedVersion,
-					"canonical_uri":    metadata.ArtifactVersion.CanonicalURI,
-					"mime_type":        mimeType,
-					"size_bytes":       sizeBytes,
-					"is_image":         true,
+					"file_name":     fileName,
+					"version":       resolvedVersion,
+					"canonical_uri": metadata.ArtifactVersion.CanonicalURI,
+					"mime_type":     mimeType,
+					"size_bytes":    sizeBytes,
+					"is_image":      true,
 					imageArtifactsFieldKey: []map[string]any{{
 						imageArtifactRefKey:     fileName,
 						imageArtifactVersionKey: resolvedVersion,

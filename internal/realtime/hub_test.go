@@ -131,3 +131,39 @@ func TestADKReplyDeltasPublishFullBrowserSnapshots(t *testing.T) {
 	default:
 	}
 }
+
+func TestHubAttemptRepliedSurvivesSnapshotUntilAttemptFinished(t *testing.T) {
+	hub := NewHub()
+	card := uuid.New()
+	hub.Publish(card, Event{Type: "attempt.started", AttemptID: "a"})
+	sub, _ := hub.Subscribe(card)
+	defer sub.Close()
+
+	// 旧 Attempt 的 attempt.replied 不得污染当前 Attempt。
+	hub.Publish(card, Event{Type: "attempt.replied", AttemptID: "old"})
+	select {
+	case ev := <-sub.Events:
+		t.Fatalf("stale attempt.replied leaked: %+v", ev)
+	default:
+	}
+
+	hub.Publish(card, Event{Type: "attempt.replied", AttemptID: "a"})
+	got := <-sub.Events
+	if got.Type != "attempt.replied" || !got.Replied || got.AttemptID != "a" {
+		t.Fatalf("got = %+v", got)
+	}
+
+	// 在 attempt.finished 之前重连，snapshot 应保留 replied=true，让切回卡片的前端立即收起三个点。
+	reconnected, snapshot := hub.Subscribe(card)
+	defer reconnected.Close()
+	if snapshot == nil || snapshot.Type != "attempt.snapshot" || !snapshot.Replied || snapshot.AttemptID != "a" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+
+	hub.Publish(card, Event{Type: "attempt.finished", AttemptID: "a"})
+	after, afterSnap := hub.Subscribe(card)
+	defer after.Close()
+	if afterSnap != nil {
+		t.Fatalf("finished snapshot retained: %+v", afterSnap)
+	}
+}

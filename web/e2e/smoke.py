@@ -313,6 +313,7 @@ class CycleDockSmoke(unittest.TestCase):
         original = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
         card = copy.deepcopy(original["card"])
         card.pop("current_attempt_status", None)
+        card.pop("pending_tool_approval_count", None)
         card.update(unread=True, latest_message_sequence=10,
                     last_read_message_sequence=0)
         detail = copy.deepcopy(original)

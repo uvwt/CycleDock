@@ -15,8 +15,8 @@ import (
 )
 
 type spyPushSender struct {
-	key      string
-	sent     []pushPayload
+	key       string
+	sent      []pushPayload
 	endpoints []string
 }
 

@@ -122,6 +122,11 @@ func (s *Store) SubmitAgentTurn(
 	); err != nil {
 		return SubmitAgentTurnResult{}, err
 	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "已有后续协作消息，旧审批已自动失效",
+	); err != nil {
+		return SubmitAgentTurnResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SubmitAgentTurnResult{}, err
 	}

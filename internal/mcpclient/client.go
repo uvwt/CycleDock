@@ -45,11 +45,11 @@ type CallResult struct {
 }
 
 type Connection struct {
-	Name              string
-	URL               string
-	BearerToken       string
+	Name        string
+	URL         string
+	BearerToken string
 	// BearerTokenFunc 在每次发出 MCP HTTP 请求前按需获取最新 Token（用于 OAuth 长会话自动续期）。
-	BearerTokenFunc   func(ctx context.Context) (string, error)
+	BearerTokenFunc func(ctx context.Context) (string, error)
 	// RefreshBearerFunc 在收到 HTTP 401 时强制刷新 Token 并重放一次请求。
 	RefreshBearerFunc func(ctx context.Context) (string, error)
 	Timeout           time.Duration
