@@ -651,3 +651,162 @@ func TestADKRouteModelCapacityInterception_SystemToolsAndChinese(t *testing.T) {
 		}
 	})
 }
+
+func TestADKRouteModelMultiRouteErrorPreservesPrimaryFailureOverSmallBackupCapacityError(t *testing.T) {
+	var primaryCalls atomic.Int32
+	primarySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
+		http.Error(w, "upstream gateway timeout", http.StatusBadGateway)
+	}))
+	defer primarySrv.Close()
+
+	var backupCalls atomic.Int32
+	backupSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		writeModelResponse(t, w, "unexpected backup call", nil)
+	}))
+	defer backupSrv.Close()
+
+	llm, err := newADKRouteModel(modelclient.New(), nil, nil, uuid.New(), []store.ModelRoute{
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     primarySrv.URL,
+			Model:               "gpt-5.4",
+			ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+		{
+			ID:                  uuid.New(),
+			Enabled:             true,
+			ProviderBaseUrl:     backupSrv.URL,
+			Model:               "grok-4.7-backup",
+			ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
+			MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
+			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			LimitsSource:        modelclient.LimitsSourceUser,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 构造约 245K tokens 的大 Prompt：主路由 400K 容量放行但返回 HTTP 502，备用路由 239K 预检跳过。
+	var gotErr error
+	for _, runErr := range llm.GenerateContent(context.Background(), &model.LLMRequest{
+		Contents: []*genai.Content{
+			genai.NewContentFromText(strings.Repeat("a", 245000*4), genai.RoleUser),
+		},
+	}, false) {
+		if runErr != nil {
+			gotErr = runErr
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected multi-route error, got nil")
+	}
+	if primaryCalls.Load() < 1 {
+		t.Fatalf("primaryCalls=%d, want >= 1", primaryCalls.Load())
+	}
+	if backupCalls.Load() != 0 {
+		t.Fatalf("backupCalls=%d, want 0 (oversized prompt must be rejected before HTTP)", backupCalls.Load())
+	}
+
+	// 错误文本应同时汇总主路由 HTTP 502 与备用路由容量跳过信息，供运维日志直接定位。
+	errText := gotErr.Error()
+	if !strings.Contains(errText, "route#0") || !strings.Contains(errText, "502") {
+		t.Fatalf("expected primary route HTTP 502 in aggregated error, got %q", errText)
+	}
+	if !strings.Contains(errText, "route#1") || !strings.Contains(errText, "grok-4.7-backup") {
+		t.Fatalf("expected backup route capacity skip in aggregated error, got %q", errText)
+	}
+
+	// Unwrap() []error 同时保留所有失败路由哨兵，供调用侧按需检索 APIError 与容量哨兵。
+	if !errors.Is(gotErr, ErrRouteContextCapacityExceeded) {
+		t.Fatalf("expected errors.Is(gotErr, ErrRouteContextCapacityExceeded)=true via MultiRouteError.Unwrap()")
+	}
+	var apiErr *modelclient.APIError
+	if !errors.As(gotErr, &apiErr) || apiErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected errors.As APIError status 502, got %+v", apiErr)
+	}
+	// 公开运行错误应同时反映主路由真实 HTTP 502 故障与备用路由窗口无法接管，而非吞掉主路由错误。
+	if gotPublic := publicRunError(gotErr); gotPublic != "Model provider request failed with HTTP 502 (backup route context window could not accommodate failover)." {
+		t.Fatalf("publicRunError=%q, want HTTP 502 with backup window note instead of misleading pure context window error", gotPublic)
+	}
+}
+
+func TestResolveAttemptCompactionThresholdCapsAtBackupRouteBudget(t *testing.T) {
+	policy := DefaultCompactionBudgetPolicy()
+	runner := &Runner{
+		model:                  modelclient.New(),
+		compactionBudgetPolicy: policy,
+	}
+
+	t.Run("caps primary 256K soft threshold to backup route 239K compaction budget", func(t *testing.T) {
+		routes := []store.ModelRoute{
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     "https://primary.example/v1",
+				Model:               "gpt-5.4-large",
+				ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     "https://backup.example/v1",
+				Model:               "grok-4.7",
+				ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+		}
+
+		got := runner.resolveAttemptCompactionThreshold(routes)
+		backupBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(routes[1], runner.model), policy)
+		if got != backupBudget.CompactAtTokens {
+			t.Fatalf("resolveAttemptCompactionThreshold=%d, want backup CompactAtTokens %d (< 239000)", got, backupBudget.CompactAtTokens)
+		}
+		if got >= 239000 {
+			t.Fatalf("threshold %d must stay strictly below backup 239K window", got)
+		}
+	})
+
+	t.Run("ignores tiny auxiliary backup route below half of primary threshold", func(t *testing.T) {
+		routes := []store.ModelRoute{
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     "https://primary.example/v1",
+				Model:               "gpt-5.4-large",
+				ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+			{
+				ID:                  uuid.New(),
+				Enabled:             true,
+				ProviderBaseUrl:     "https://tiny.example/v1",
+				Model:               "tiny-32k",
+				ContextWindowTokens: pgtype.Int4{Int32: 32000, Valid: true},
+				MaxInputTokens:      pgtype.Int4{Int32: 32000, Valid: true},
+				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				LimitsSource:        modelclient.LimitsSourceUser,
+			},
+		}
+
+		primaryBudget := ComputeRouteCompactionBudget(ResolveRouteModelLimits(routes[0], runner.model), policy)
+		got := runner.resolveAttemptCompactionThreshold(routes)
+		if got != primaryBudget.CompactAtTokens {
+			t.Fatalf("resolveAttemptCompactionThreshold=%d, want primary CompactAtTokens %d when backup route is tiny", got, primaryBudget.CompactAtTokens)
+		}
+	})
+}

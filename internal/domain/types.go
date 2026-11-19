@@ -68,8 +68,8 @@ const (
 type CheckinStatus string
 
 const (
-	CheckinHealthy  CheckinStatus = "healthy"
-	CheckinWarning  CheckinStatus = "warning"
+	CheckinHealthy      CheckinStatus = "healthy"
+	CheckinWarning      CheckinStatus = "warning"
 	CheckinCritical     CheckinStatus = "critical"
 	CheckinAcknowledged CheckinStatus = "acknowledged"
 	CheckinUnknown      CheckinStatus = "unknown"

@@ -53,11 +53,11 @@ type ModelRouteInput struct {
 }
 
 type AgentSettingsInput struct {
-	SystemInstructions      string
-	Routes                  []ModelRouteInput
-	DefaultModelRouteID     *uuid.UUID
-	DiscussionModelRouteID  *uuid.UUID
-	PlanModelRouteID        *uuid.UUID
+	SystemInstructions     string
+	Routes                 []ModelRouteInput
+	DefaultModelRouteID    *uuid.UUID
+	DiscussionModelRouteID *uuid.UUID
+	PlanModelRouteID       *uuid.UUID
 }
 
 // ToolGuardSettings 描述工作区全局工具安全守卫的统一评估配置。
@@ -871,14 +871,14 @@ func (s *Store) SaveToolGuardSettings(
 }
 
 type MCPConnectionInput struct {
-	ID                      uuid.UUID
-	Name                    string
-	URL                     string
-	BearerToken             string
-	ClearBearerToken        bool
-	Enabled                 bool
-	TimeoutMS               int32
-	ToolGuardEnabled        bool
+	ID               uuid.UUID
+	Name             string
+	URL              string
+	BearerToken      string
+	ClearBearerToken bool
+	Enabled          bool
+	TimeoutMS        int32
+	ToolGuardEnabled bool
 }
 
 func (s *Store) ListMCPConnections(ctx context.Context, workspaceID uuid.UUID) ([]db.WorkspaceMcpConnection, error) {

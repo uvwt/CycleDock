@@ -31,17 +31,17 @@ type modelCallResponse struct {
 }
 
 type traceOverviewResponse struct {
-	AttemptID     string              `json:"attempt_id"`
-	TurnID        string              `json:"turn_id"`
-	Status        string              `json:"status"`
-	StartedAt     *time.Time          `json:"started_at,omitempty"`
-	FinishedAt    *time.Time          `json:"finished_at,omitempty"`
-	ErrorSummary  string              `json:"error_summary,omitempty"`
-	ModelCalls    []modelCallResponse `json:"model_calls"`
-	ModelCallCount int                `json:"model_call_count"`
-	CompactionCount int               `json:"compaction_count"`
-	TotalInputTokens int              `json:"total_input_tokens"`
-	TotalOutputTokens int             `json:"total_output_tokens"`
+	AttemptID         string              `json:"attempt_id"`
+	TurnID            string              `json:"turn_id"`
+	Status            string              `json:"status"`
+	StartedAt         *time.Time          `json:"started_at,omitempty"`
+	FinishedAt        *time.Time          `json:"finished_at,omitempty"`
+	ErrorSummary      string              `json:"error_summary,omitempty"`
+	ModelCalls        []modelCallResponse `json:"model_calls"`
+	ModelCallCount    int                 `json:"model_call_count"`
+	CompactionCount   int                 `json:"compaction_count"`
+	TotalInputTokens  int                 `json:"total_input_tokens"`
+	TotalOutputTokens int                 `json:"total_output_tokens"`
 }
 
 func (api *API) getAttemptTrace(w http.ResponseWriter, r *http.Request) {

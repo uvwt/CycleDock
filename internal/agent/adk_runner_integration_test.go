@@ -1397,4 +1397,3 @@ func TestADKTailCompactionStructuredSummaryAdvancesFromAnalysisToImplementation(
 		t.Fatalf("apply_patch 调用次数=%d，期望压缩恢复后直接进入实现阶段执行 1 次修改", gotEdits)
 	}
 }
-
