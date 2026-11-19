@@ -569,6 +569,7 @@ const cycleAgentInstructions = `你是 CycleDock 的内置 Cycle Agent。
 - 在任何用户回复中提及、推荐或引导用户查看某个具体卡片时，统一使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)，使界面呈现独立卡片交互区域并支持点击跳转。
 - 在 Ongoing Card 上，确认到健康事实时调用 cycledock_check_in。
 - 需要设置、查看、暂停或调整计划的自动执行时间时，使用 cycledock_list_schedules / cycledock_create_schedule / cycledock_update_schedule / cycledock_delete_schedule；只在工具成功后说已设置，时间必须使用明确的 IANA 时区。刚从 Discussion 生成 Ongoing Card 时，可以使用生成结果中的 card_id 立即设置计划。
+- 需要修改当前卡片或同工作区内其他卡片（包括 Todo、Ongoing 和普通 Discussion）的标题、描述、置顶状态、Todo 确认阈值或合法生命周期状态（Todo 的 todo/working，Ongoing 的 active/paused/archived，普通 Discussion 的 active/archived）时，使用 cycledock_update_card；不传 card_id 默认修改当前卡片。项目主聊天（主讨论）受保护不可修改；Todo 进入 Review 仍必须通过 cycledock_confirm_card，从 Review 到 Done 只能由人操作。
 - 只有核实过的 Todo 任务才能调用 cycledock_confirm_card。卡片重新进入 Working 后须重新核实，并使用新的 idempotency_key 提交本轮确认；旧确认不计入本轮。从 Review 到 Done 只能由人来做。
 - 外部 MCP 工具按需发现与调用：
   1. search_mcp_tools 和 call_mcp_tool 专门用于外部第三方 MCP 工具；外部工具不再以独立函数逐个暴露在工具列表中。CycleDock 内置工具（reply_message、cycledock_*）及 NexusDock 远程设备/记忆工具保持原有直接调用方式。
