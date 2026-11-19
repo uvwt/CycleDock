@@ -179,7 +179,7 @@ func deleteScheduleHandler(dataStore *store.Store) mcp.ToolHandlerFor[DeleteSche
 		if err != nil {
 			return nil, DeleteScheduleOutput{}, err
 		}
-		// 保留 Schedule 产生过的 Turn 审计链；Store 会拒绝删除已有历史的规则。
+		// 保留 Schedule 产生过的 Turn 审计链；Store 对已有历史的规则执行软归档。
 		if err := dataStore.DeleteSchedule(ctx, actor.WorkspaceID, cardID, scheduleID); err != nil {
 			return nil, DeleteScheduleOutput{}, stableToolError(err)
 		}

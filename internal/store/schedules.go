@@ -115,7 +115,7 @@ func loadScheduleForUpdate(ctx context.Context, tx pgx.Tx, workspaceID, schedule
 		       c.kind, c.ongoing_state
 		FROM card_schedules cs
 		JOIN cards c ON c.workspace_id = cs.workspace_id AND c.id = cs.card_id
-		WHERE cs.workspace_id = $1 AND cs.id = $2
+		WHERE cs.workspace_id = $1 AND cs.id = $2 AND cs.archived_at IS NULL
 		FOR UPDATE OF cs
 	`, workspaceID, scheduleID).Scan(
 		&row.CardID, &row.Enabled, &row.Frequency, &row.DayOfWeek, &row.DayOfMonth,
@@ -164,7 +164,7 @@ func (s *Store) ProcessDueScheduleTurns(
 	rows, err := s.pool.Query(ctx, `
 		SELECT id
 		FROM card_schedules
-		WHERE workspace_id=$1 AND enabled AND next_trigger_at <= $2
+		WHERE workspace_id=$1 AND enabled AND archived_at IS NULL AND next_trigger_at <= $2
 		ORDER BY next_trigger_at, id
 		LIMIT $3
 	`, workspaceID, now, limit)
@@ -217,7 +217,7 @@ func (s *Store) ProcessDueScheduleTurn(
 	err = tx.QueryRow(ctx, `
 		SELECT card_id
 		FROM card_schedules
-		WHERE workspace_id=$1 AND id=$2
+		WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 	`, workspaceID, scheduleID).Scan(&cardID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, domain.ErrNotFound
@@ -308,7 +308,7 @@ func recalculateCardSchedulesTx(
 	rows, err := tx.Query(ctx, `
 		SELECT id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, interval_minutes
 		FROM card_schedules
-		WHERE workspace_id = $1 AND card_id = $2
+		WHERE workspace_id = $1 AND card_id = $2 AND archived_at IS NULL
 		FOR UPDATE
 	`, workspaceID, cardID)
 	if err != nil {

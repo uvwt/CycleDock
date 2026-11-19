@@ -49,6 +49,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/read", api.markCardRead)
 	r.Patch("/cards/{cardID}", api.updateCard)
 	r.Post("/cards/{cardID}/pin", api.togglePinCard)
+	r.Post("/cards/{cardID}/notifications", api.toggleCardNotifications)
 	r.Post("/cards/{cardID}/move", api.moveCard)
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteCard)
@@ -75,6 +76,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/agent/status", api.getAgentStatus)
 	r.Get("/agent/settings", api.getAgentSettings)
 	r.Put("/agent/settings", api.saveAgentSettings)
+	r.Get("/agent/tool-guard", api.getToolGuardSettings)
+	r.Put("/agent/tool-guard", api.saveToolGuardSettings)
 	r.Get("/agent/api-credentials", api.listAgentAPICredentials)
 	r.Post("/agent/api-credentials", api.createAgentAPICredential)
 	r.Put("/agent/api-credentials/{credentialID}", api.updateAgentAPICredential)
@@ -131,6 +134,7 @@ type cardResponse struct {
 	Unread                  *bool      `json:"unread,omitempty"`
 	PreferredModelRouteID   *string    `json:"preferred_model_route_id,omitempty"`
 	PinnedAt                *time.Time `json:"pinned_at,omitempty"`
+	NotificationsMuted      bool       `json:"notifications_muted"`
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 
@@ -983,6 +987,26 @@ func (api *API) togglePinCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
 
+func (api *API) toggleCardNotifications(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		Muted bool `json:"muted"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	identity := identityFromRequest(r)
+	card, err := api.store.SetCardNotificationsMuted(r.Context(), identity.WorkspaceID, cardID, request.Muted)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cardToResponse(card))
+}
+
 func (api *API) moveCard(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
@@ -1582,6 +1606,7 @@ func cardToResponse(card db.Card) cardResponse {
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
+		NotificationsMuted: card.NotificationsMuted,
 		CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 	}
 	if card.DiscussionState.Valid {
@@ -1615,6 +1640,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
+		NotificationsMuted: card.NotificationsMuted,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
@@ -1658,6 +1684,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
+		NotificationsMuted: card.NotificationsMuted,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
@@ -1701,6 +1728,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
+		NotificationsMuted: card.NotificationsMuted,
 		Health: card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,

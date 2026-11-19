@@ -33,9 +33,7 @@ let deviceToolGuards = [
     id: "guard-rn",
     device_node_id: "node-rn",
     device_name: "RN Server",
-    mode: "disabled",
-    timeout_seconds: 10,
-    custom_rules: "严禁直接执行 docker rm 或修改生产 nginx 配置文件",
+    enabled: false,
     created_at: now(),
     updated_at: now(),
   },
@@ -266,10 +264,12 @@ let settings = {
     },
   ],
   system_instructions: "先检查现场，再确认结果",
-  tool_guard_mode: "block_high_risk",
-  tool_guard_model_route_id: "00000000-0000-4000-8000-000000000101",
-  tool_guard_timeout_seconds: 10,
-  tool_guard_custom_rules: "允许在独立 Git worktree 中自由修改测试代码；涉及线上容器重启、删除日志或修改生产配置必须触发人工确认。",
+};
+let toolGuardSettings = {
+  mode: "block_high_risk",
+  model_route_id: "00000000-0000-4000-8000-000000000101",
+  timeout_seconds: 10,
+  custom_rules: "允许在独立 Git worktree 中自由修改测试代码；涉及线上容器重启、删除日志或修改生产配置必须触发人工确认。",
 };
 const session = {
   human_account_id: "demo-human",
@@ -301,10 +301,7 @@ let mcp = [
     enabled: true,
     token_configured: false,
     timeout_ms: 30000,
-    tool_guard_mode: "block_high_risk",
-    tool_guard_model_route_id: "00000000-0000-4000-8000-000000000101",
-    tool_guard_timeout_seconds: 10,
-    tool_guard_custom_rules: "允许读取但禁止修改表结构",
+    tool_guard_enabled: true,
   },
 ];
 const data = (response, body, status = 200) => {
@@ -325,6 +322,22 @@ async function body(req) {
   for await (const part of req) raw += part;
   return raw ? JSON.parse(raw) : {};
 }
+function createInitialCardSchedules() {
+  return {
+    "ongoing-1": [
+      {
+        id: "schedule-demo",
+        enabled: true,
+        frequency: "daily",
+        hour: 9,
+        minute: 0,
+        timezone: "Asia/Shanghai",
+        next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
+      },
+    ],
+  };
+}
+let cardSchedules = createInitialCardSchedules();
 function details(id) {
   const card = cards.find((x) => x.id === id);
   if (!card) return null;
@@ -401,20 +414,7 @@ function details(id) {
             },
           ]
         : [],
-    schedules:
-      card.kind === "ongoing"
-        ? [
-            {
-              id: "schedule-demo",
-              enabled: true,
-              frequency: "daily",
-              hour: 9,
-              minute: 0,
-              timezone: "Asia/Shanghai",
-              next_trigger_at: new Date(Date.now() + 86400000).toISOString(),
-            },
-          ]
-        : [],
+    schedules: card.kind === "ongoing" ? cardSchedules[id] || [] : [],
     health: card.health || "unknown",
     last_checkin: id === "ongoing-1" ? events[id][0] : null,
     has_more_before: (events[id] || []).length > 50,
@@ -719,6 +719,18 @@ http
             Object.assign(card, await body(req));
             return data(res, card);
           }
+          if (rest === "pin" && req.method === "POST") {
+            const input = await body(req);
+            card.pinned_at = input.pinned ? now() : undefined;
+            card.updated_at = now();
+            return data(res, card);
+          }
+          if (rest === "notifications" && req.method === "POST") {
+            const input = await body(req);
+            card.notifications_muted = Boolean(input.muted);
+            card.updated_at = now();
+            return data(res, card);
+          }
           if (!rest && req.method === "DELETE") {
             cards.splice(cards.indexOf(card), 1);
             return data(res, null, 204);
@@ -816,22 +828,37 @@ http
               turn_id: "turn-demo",
             });
           }
-          if (rest === "schedules" && req.method === "POST")
-            return data(
-              res,
-              {
-                id: "schedule-new",
+          if (rest === "schedules" && req.method === "POST") {
+            const created = {
+              id: "schedule-" + Date.now(),
+              ...(await body(req)),
+              enabled: true,
+              next_trigger_at: now(),
+            };
+            cardSchedules[id] = [...(cardSchedules[id] || []), created];
+            return data(res, created, 201);
+          }
+          if (rest?.startsWith("schedules/")) {
+            const scheduleID = rest.slice("schedules/".length);
+            const list = cardSchedules[id] || [];
+            const index = list.findIndex((item) => item.id === scheduleID);
+            if (index === -1) return failure(res);
+            if (req.method === "DELETE") {
+              cardSchedules[id] = list.filter((item) => item.id !== scheduleID);
+              res.writeHead(204, { "Cache-Control": "no-store" });
+              res.end();
+              return;
+            }
+            if (req.method === "PUT") {
+              const updated = {
+                ...list[index],
                 ...(await body(req)),
-                next_trigger_at: now(),
-              },
-              201,
-            );
-          if (rest?.startsWith("schedules/"))
-            return data(
-              res,
-              req.method === "DELETE" ? undefined : await body(req),
-              req.method === "DELETE" ? 204 : 200,
-            );
+                id: scheduleID,
+              };
+              list[index] = updated;
+              return data(res, updated, 200);
+            }
+          }
           if (rest?.includes("/cancel")) return data(res, {});
           if (rest?.includes("/retry"))
             return data(res, { attempt_id: "attempt-retry-demo" });
@@ -1046,22 +1073,65 @@ http
         if (route === "/agent/device-tool-guards") {
           return data(res, deviceToolGuards);
         }
+        if (route === "/agent/tool-guard") {
+          if (req.method === "GET") {
+            return data(res, toolGuardSettings);
+          }
+          if (req.method === "PUT") {
+            const input = await body(req);
+            const mode = String(input.mode || "").trim();
+            if (!["block_high_risk", "strict"].includes(mode)) {
+              return data(
+                res,
+                {
+                  error: {
+                    code: "invalid_mode",
+                    message: "mode must be block_high_risk or strict",
+                  },
+                },
+                400,
+              );
+            }
+            const timeout =
+              input.timeout_seconds === undefined || input.timeout_seconds === null
+                ? 10
+                : input.timeout_seconds;
+            if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 2 || timeout > 60) {
+              return data(
+                res,
+                {
+                  error: {
+                    code: "invalid_timeout",
+                    message: "timeout_seconds must be between 2 and 60",
+                  },
+                },
+                400,
+              );
+            }
+            toolGuardSettings = {
+              mode,
+              model_route_id:
+                typeof input.model_route_id === "string" ? input.model_route_id.trim() : "",
+              timeout_seconds: timeout,
+              custom_rules:
+                typeof input.custom_rules === "string" ? input.custom_rules : "",
+            };
+            return data(res, toolGuardSettings);
+          }
+        }
         if (route.startsWith("/agent/device-tool-guards/")) {
           const nodeID = decodeURIComponent(route.split("/").at(-1));
           const existing = deviceToolGuards.find((g) => g.device_node_id === nodeID);
           if (req.method === "GET") {
             if (existing) return data(res, existing);
-            return data(res, { device_node_id: nodeID, mode: "block_high_risk", timeout_seconds: 10 });
+            return data(res, { device_node_id: nodeID, enabled: false });
           }
           if (req.method === "PUT") {
             const input = await body(req);
             const allowedKeys = new Set([
               "device_node_id",
               "device_name",
-              "mode",
-              "model_route_id",
-              "timeout_seconds",
-              "custom_rules",
+              "enabled",
             ]);
             if (
               !input ||
@@ -1092,27 +1162,7 @@ http
                 400,
               );
             }
-            const mode =
-              input.mode === undefined || input.mode === null || String(input.mode).trim() === ""
-                ? "disabled"
-                : String(input.mode).trim();
-            if (!["disabled", "block_high_risk", "strict"].includes(mode)) {
-              return data(
-                res,
-                {
-                  error: {
-                    code: "invalid_mode",
-                    message: "mode must be disabled, block_high_risk, or strict",
-                  },
-                },
-                400,
-              );
-            }
-            const timeout =
-              input.timeout_seconds === undefined || input.timeout_seconds === null
-                ? 10
-                : input.timeout_seconds;
-            if (typeof timeout !== "number" || !Number.isInteger(timeout)) {
+            if (typeof input.enabled !== "boolean") {
               return data(
                 res,
                 { error: { code: "invalid_json", message: "invalid JSON request" } },
@@ -1123,14 +1173,7 @@ http
               device_node_id: nodeID,
               device_name:
                 typeof input.device_name === "string" ? input.device_name.trim() : "",
-              mode,
-              model_route_id:
-                typeof input.model_route_id === "string" && input.model_route_id.trim() !== ""
-                  ? input.model_route_id.trim()
-                  : undefined,
-              timeout_seconds: timeout <= 0 ? 10 : Math.min(60, timeout),
-              custom_rules:
-                typeof input.custom_rules === "string" ? input.custom_rules.trim() : "",
+              enabled: input.enabled,
             };
             if (existing) {
               Object.assign(existing, normalized, { updated_at: now() });

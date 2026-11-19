@@ -58,10 +58,23 @@ type AgentSettingsInput struct {
 	DefaultModelRouteID     *uuid.UUID
 	DiscussionModelRouteID  *uuid.UUID
 	PlanModelRouteID        *uuid.UUID
-	ToolGuardMode           string
-	ToolGuardModelRouteID   *uuid.UUID
-	ToolGuardTimeoutSeconds int32
-	ToolGuardCustomRules    string
+}
+
+// ToolGuardSettings 描述工作区全局工具安全守卫的统一评估配置。
+type ToolGuardSettings struct {
+	Mode           string
+	ModelRouteID   *uuid.UUID
+	TimeoutSeconds int32
+	CustomRules    string
+	UpdatedAt      *time.Time
+}
+
+// ToolGuardSettingsInput 用于单独更新工作区全局工具守卫配置，与模型路由/全局指令保存隔离。
+type ToolGuardSettingsInput struct {
+	Mode           string
+	ModelRouteID   *uuid.UUID
+	TimeoutSeconds int32
+	CustomRules    string
 }
 
 type AgentSettings struct {
@@ -700,6 +713,163 @@ func (s *Store) SaveAgentSettings(
 	}, nil
 }
 
+// GetToolGuardSettings 读取工作区全局工具安全守卫配置；未初始化记录时返回安全默认值。
+func (s *Store) GetToolGuardSettings(ctx context.Context, workspaceID uuid.UUID) (ToolGuardSettings, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1)", workspaceID).Scan(&exists); err != nil {
+		return ToolGuardSettings{}, err
+	}
+	if !exists {
+		return ToolGuardSettings{}, domain.ErrNotFound
+	}
+
+	settings, err := s.queries.GetWorkspaceAgentSettings(ctx, workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ToolGuardSettings{
+			Mode:           "block_high_risk",
+			TimeoutSeconds: 10,
+		}, nil
+	}
+	if err != nil {
+		return ToolGuardSettings{}, err
+	}
+	return toolGuardSettingsFromRow(settings), nil
+}
+
+func toolGuardSettingsFromRow(row db.WorkspaceAgentSetting) ToolGuardSettings {
+	mode := strings.TrimSpace(row.ToolGuardMode)
+	if mode != "strict" {
+		mode = "block_high_risk"
+	}
+	timeout := row.ToolGuardTimeoutSeconds
+	if timeout < 2 || timeout > 60 {
+		timeout = 10
+	}
+	var routeID *uuid.UUID
+	if row.ToolGuardModelRouteID.Valid {
+		id := row.ToolGuardModelRouteID.UUID
+		routeID = &id
+	}
+	var updatedAt *time.Time
+	if row.UpdatedAt.Valid {
+		ts := row.UpdatedAt.Time.UTC()
+		updatedAt = &ts
+	}
+	return ToolGuardSettings{
+		Mode:           mode,
+		ModelRouteID:   routeID,
+		TimeoutSeconds: timeout,
+		CustomRules:    row.ToolGuardCustomRules,
+		UpdatedAt:      updatedAt,
+	}
+}
+
+// SaveToolGuardSettings 独立保存工作区全局工具安全守卫配置，不会覆盖模型路由、默认模型或全局指令。
+func (s *Store) SaveToolGuardSettings(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	input ToolGuardSettingsInput,
+) (ToolGuardSettings, error) {
+	mode := strings.TrimSpace(input.Mode)
+	if mode == "" {
+		mode = "block_high_risk"
+	}
+	switch mode {
+	case "block_high_risk", "strict":
+	default:
+		return ToolGuardSettings{}, fmt.Errorf("%w: invalid tool_guard_mode %q", domain.ErrConflict, mode)
+	}
+
+	timeout := input.TimeoutSeconds
+	if timeout == 0 {
+		timeout = 10
+	}
+	if timeout < 2 || timeout > 60 {
+		return ToolGuardSettings{}, fmt.Errorf("%w: tool_guard_timeout_seconds must be between 2 and 60", domain.ErrConflict)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ToolGuardSettings{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var lockedWorkspace uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", workspaceID).Scan(&lockedWorkspace); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ToolGuardSettings{}, domain.ErrNotFound
+		}
+		return ToolGuardSettings{}, err
+	}
+
+	q := db.New(tx)
+	var sourceID uuid.UUID
+	existing, err := q.GetWorkspaceAgentSettings(ctx, workspaceID)
+	switch {
+	case err == nil:
+		sourceID = existing.SourceID
+	case errors.Is(err, pgx.ErrNoRows):
+		// 如果工作区尚未创建过 Cycle Agent Source，则一并创建，确保外键完整。
+		var existingSourceID uuid.UUID
+		findErr := tx.QueryRow(ctx,
+			"SELECT id FROM sources WHERE workspace_id=$1 AND kind=$2 ORDER BY created_at ASC LIMIT 1",
+			workspaceID, string(domain.SourceKindCycleAgent),
+		).Scan(&existingSourceID)
+		switch {
+		case findErr == nil:
+			sourceID = existingSourceID
+		case errors.Is(findErr, pgx.ErrNoRows):
+			source, createErr := q.CreateSource(ctx, db.CreateSourceParams{
+				ID: uuid.New(), WorkspaceID: workspaceID,
+				Kind: string(domain.SourceKindCycleAgent), Name: "Cycle Agent",
+			})
+			if createErr != nil {
+				return ToolGuardSettings{}, createErr
+			}
+			sourceID = source.ID
+		default:
+			return ToolGuardSettings{}, findErr
+		}
+	default:
+		return ToolGuardSettings{}, err
+	}
+
+	var routeID uuid.NullUUID
+	if input.ModelRouteID != nil && *input.ModelRouteID != uuid.Nil {
+		var routeEnabled bool
+		routeErr := tx.QueryRow(ctx,
+			"SELECT enabled FROM workspace_model_routes WHERE workspace_id=$1 AND id=$2",
+			workspaceID, *input.ModelRouteID,
+		).Scan(&routeEnabled)
+		if errors.Is(routeErr, pgx.ErrNoRows) {
+			return ToolGuardSettings{}, fmt.Errorf("%w: tool guard model route does not exist in workspace routes", domain.ErrConflict)
+		}
+		if routeErr != nil {
+			return ToolGuardSettings{}, routeErr
+		}
+		if !routeEnabled {
+			return ToolGuardSettings{}, fmt.Errorf("%w: tool guard model route is disabled", domain.ErrConflict)
+		}
+		routeID = uuid.NullUUID{UUID: *input.ModelRouteID, Valid: true}
+	}
+
+	saved, err := q.UpsertWorkspaceToolGuardSettings(ctx, db.UpsertWorkspaceToolGuardSettingsParams{
+		WorkspaceID:             workspaceID,
+		SourceID:                sourceID,
+		ToolGuardMode:           mode,
+		ToolGuardModelRouteID:   routeID,
+		ToolGuardTimeoutSeconds: timeout,
+		ToolGuardCustomRules:    strings.TrimSpace(input.CustomRules),
+	})
+	if err != nil {
+		return ToolGuardSettings{}, mapConstraintError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ToolGuardSettings{}, err
+	}
+	return toolGuardSettingsFromRow(saved), nil
+}
+
 type MCPConnectionInput struct {
 	ID                      uuid.UUID
 	Name                    string
@@ -708,10 +878,7 @@ type MCPConnectionInput struct {
 	ClearBearerToken        bool
 	Enabled                 bool
 	TimeoutMS               int32
-	ToolGuardMode           string
-	ToolGuardModelRouteID   *uuid.UUID
-	ToolGuardTimeoutSeconds int32
-	ToolGuardCustomRules    string
+	ToolGuardEnabled        bool
 }
 
 func (s *Store) ListMCPConnections(ctx context.Context, workspaceID uuid.UUID) ([]db.WorkspaceMcpConnection, error) {
@@ -792,31 +959,11 @@ func (s *Store) SaveMCPConnection(
 		}
 	}
 
-	guardMode := strings.TrimSpace(input.ToolGuardMode)
-	if guardMode == "" {
-		guardMode = "disabled"
-	}
-	switch guardMode {
-	case "disabled", "block_high_risk", "strict":
-	default:
-		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: invalid tool_guard_mode %q", domain.ErrConflict, guardMode)
-	}
-	guardTimeout := input.ToolGuardTimeoutSeconds
-	if guardTimeout <= 0 {
-		guardTimeout = 10
-	} else if guardTimeout > 60 {
-		guardTimeout = 60
-	}
-	guardRouteID := toNullableUUID(input.ToolGuardModelRouteID)
-
 	connection, err := s.queries.UpsertWorkspaceMCPConnection(ctx, db.UpsertWorkspaceMCPConnectionParams{
 		ID: input.ID, WorkspaceID: workspaceID, Name: input.Name, Url: input.URL,
 		BearerTokenCiphertext: ciphertext, ReplaceBearerToken: input.BearerToken != "" || input.ClearBearerToken,
 		Enabled: input.Enabled, TimeoutMs: input.TimeoutMS,
-		ToolGuardMode:           guardMode,
-		ToolGuardModelRouteID:   guardRouteID,
-		ToolGuardTimeoutSeconds: guardTimeout,
-		ToolGuardCustomRules:    strings.TrimSpace(input.ToolGuardCustomRules),
+		ToolGuardEnabled: input.ToolGuardEnabled,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: changing MCP URL requires replacing or clearing its bearer token", domain.ErrConflict)

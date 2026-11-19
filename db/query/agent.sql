@@ -20,6 +20,23 @@ SET system_instructions = EXCLUDED.system_instructions,
     updated_at = now()
 RETURNING *;
 
+-- name: UpsertWorkspaceToolGuardSettings :one
+INSERT INTO workspace_agent_settings (
+    workspace_id, source_id, system_instructions,
+    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
+)
+VALUES (
+    sqlc.arg(workspace_id), sqlc.arg(source_id), '',
+    sqlc.arg(tool_guard_mode), sqlc.narg(tool_guard_model_route_id), sqlc.arg(tool_guard_timeout_seconds), sqlc.arg(tool_guard_custom_rules)
+)
+ON CONFLICT (workspace_id) DO UPDATE
+SET tool_guard_mode = EXCLUDED.tool_guard_mode,
+    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
+    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
+    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
+    updated_at = now()
+RETURNING *;
+
 -- name: ListWorkspaceAPICredentials :many
 SELECT *
 FROM workspace_api_credentials
@@ -151,12 +168,12 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 -- name: UpsertWorkspaceMCPConnection :one
 INSERT INTO workspace_mcp_connections (
     id, workspace_id, name, url, bearer_token_ciphertext, enabled, timeout_ms,
-    tool_guard_mode, tool_guard_model_route_id, tool_guard_timeout_seconds, tool_guard_custom_rules
+    tool_guard_enabled
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(name), sqlc.arg(url),
     sqlc.arg(bearer_token_ciphertext), sqlc.arg(enabled), sqlc.arg(timeout_ms),
-    sqlc.arg(tool_guard_mode), sqlc.narg(tool_guard_model_route_id), sqlc.arg(tool_guard_timeout_seconds), sqlc.arg(tool_guard_custom_rules)
+    sqlc.arg(tool_guard_enabled)
 )
 ON CONFLICT (workspace_id, id) DO UPDATE
 SET name = EXCLUDED.name,
@@ -167,10 +184,7 @@ SET name = EXCLUDED.name,
     END,
     enabled = EXCLUDED.enabled,
     timeout_ms = EXCLUDED.timeout_ms,
-    tool_guard_mode = EXCLUDED.tool_guard_mode,
-    tool_guard_model_route_id = EXCLUDED.tool_guard_model_route_id,
-    tool_guard_timeout_seconds = EXCLUDED.tool_guard_timeout_seconds,
-    tool_guard_custom_rules = EXCLUDED.tool_guard_custom_rules,
+    tool_guard_enabled = EXCLUDED.tool_guard_enabled,
     updated_at = now()
 WHERE workspace_mcp_connections.url = EXCLUDED.url
    OR workspace_mcp_connections.bearer_token_ciphertext IS NULL
@@ -282,19 +296,14 @@ ORDER BY device_name, device_node_id;
 
 -- name: UpsertWorkspaceDeviceToolGuard :one
 INSERT INTO workspace_device_tool_guards (
-    id, workspace_id, device_node_id, device_name, mode,
-    model_route_id, timeout_seconds, custom_rules
+    id, workspace_id, device_node_id, device_name, enabled
 )
 VALUES (
-    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(device_node_id), sqlc.arg(device_name), sqlc.arg(mode),
-    sqlc.narg(model_route_id), sqlc.arg(timeout_seconds), sqlc.arg(custom_rules)
+    sqlc.arg(id), sqlc.arg(workspace_id), sqlc.arg(device_node_id), sqlc.arg(device_name), sqlc.arg(enabled)
 )
 ON CONFLICT (workspace_id, device_node_id) DO UPDATE
 SET device_name = EXCLUDED.device_name,
-    mode = EXCLUDED.mode,
-    model_route_id = EXCLUDED.model_route_id,
-    timeout_seconds = EXCLUDED.timeout_seconds,
-    custom_rules = EXCLUDED.custom_rules,
+    enabled = EXCLUDED.enabled,
     updated_at = now()
 RETURNING *;
 

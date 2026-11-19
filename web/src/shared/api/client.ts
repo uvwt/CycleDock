@@ -34,6 +34,7 @@ import type {
   TraceEventsResponse,
   ToolApproval,
   DeviceToolGuard,
+  ToolGuardSettings,
 } from "./types";
 
 export class APIError extends Error {
@@ -175,6 +176,8 @@ export const api = {
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
   pinCard: (id: string, pinned: boolean) =>
     request<Card>(`/cards/${id}/pin`, "POST", { pinned }),
+  toggleCardNotifications: (id: string, muted: boolean) =>
+    request<Card>(`/cards/${id}/notifications`, "POST", { muted }),
   moveTodo: (id: string, state: TodoState) =>
     request<Card>(`/cards/${id}/move`, "POST", { state }),
   archiveDiscussion: (id: string) =>
@@ -279,6 +282,9 @@ export const api = {
   saveAgent: (
     x: Omit<AgentSettings, "configured" | "source_id" | "api_credentials">,
   ) => request<AgentSettings>("/agent/settings", "PUT", x),
+  toolGuard: () => request<ToolGuardSettings>("/agent/tool-guard"),
+  saveToolGuard: (value: ToolGuardSettings) =>
+    request<ToolGuardSettings>("/agent/tool-guard", "PUT", value),
   apiCredentials: () => request<APICredential[]>("/agent/api-credentials"),
   createAPICredential: (value: APICredentialInput) =>
     request<APICredential>("/agent/api-credentials", "POST", value),

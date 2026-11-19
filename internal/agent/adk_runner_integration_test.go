@@ -1331,7 +1331,7 @@ func TestADKTailCompactionStructuredSummaryAdvancesFromAnalysisToImplementation(
 		t.Fatal(err)
 	}
 	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
-		Name: "lab", URL: mcpHTTP.URL, Enabled: true, TimeoutMS: 5000, ToolGuardMode: "disabled",
+		Name: "lab", URL: mcpHTTP.URL, Enabled: true, TimeoutMS: 5000, ToolGuardEnabled: false,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  BellOff,
   CalendarClock,
   ChevronRight,
   MessageSquare,
@@ -308,6 +309,12 @@ export default function ChatHome() {
                                       ? t("未命名定时任务")
                                       : t("未命名卡片"))}
                               </span>
+                              {card.notifications_muted && (
+                                <BellOff
+                                  aria-label={t("通知已静音")}
+                                  className="size-3 shrink-0 text-muted-foreground/75"
+                                />
+                              )}
                             </div>
 
                             <div className="flex shrink-0 items-center gap-1.5">

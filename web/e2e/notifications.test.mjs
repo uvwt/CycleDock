@@ -330,3 +330,47 @@ test("只有新消息才生成通知正文", async () => {
   assert.equal(w.shown.length, 1);
   assert.equal(w.shown[0].body, answered.message_preview);
 });
+
+test("静音卡片有新消息时不生成通知正文，恢复后仅对后续新消息生效", () => {
+  const previous = {
+    id: "card",
+    revision: "rev-1",
+    event_sequence: "1",
+    attempt_status: "completed",
+    message_preview: "旧消息",
+    title: "测试卡片",
+    notifications_muted: false,
+  };
+  const mutedToggled = {
+    ...previous,
+    revision: "rev-2",
+    notifications_muted: true,
+  };
+  assert.equal(cardNotificationBody(mutedToggled, previous), "");
+
+  const mutedReply = {
+    ...mutedToggled,
+    revision: "rev-3",
+    event_sequence: "2",
+    message_preview: "静音期间的新回复",
+  };
+  assert.equal(cardNotificationBody(mutedReply, mutedToggled), "");
+
+  const unmuted = {
+    ...mutedReply,
+    revision: "rev-4",
+    notifications_muted: false,
+  };
+  assert.equal(cardNotificationBody(unmuted, mutedReply), "");
+
+  const nextReply = {
+    ...unmuted,
+    revision: "rev-5",
+    event_sequence: "3",
+    message_preview: "恢复通知后的新回复",
+  };
+  assert.equal(
+    cardNotificationBody(nextReply, unmuted),
+    "恢复通知后的新回复",
+  );
+});

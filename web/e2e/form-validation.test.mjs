@@ -18,6 +18,7 @@ const mcp = {
   timeout_ms: 30000,
   bearer_token: "",
   clear_bearer_token: false,
+  tool_guard_enabled: false,
 };
 
 test("日程提交规范化时区，且只发送当前频率需要的日期字段", () => {

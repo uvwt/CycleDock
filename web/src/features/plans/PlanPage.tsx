@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarClock, CirclePause, Pin } from "lucide-react";
+import { BellOff, CalendarClock, CirclePause, Pin } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useProject } from "../../app/project-context";
@@ -201,6 +201,14 @@ export default function PlanPage() {
                       </span>
                       {card.pinned_at && (
                         <Pin className="size-3.5 shrink-0 text-amber-500 fill-amber-500 rotate-45" />
+                      )}
+                      {card.notifications_muted && (
+                        <span
+                          title={t("通知已静音")}
+                          aria-label={t("通知已静音")}
+                        >
+                          <BellOff className="size-3.5 shrink-0 text-muted-foreground/75" />
+                        </span>
                       )}
                       {visualStatus === "answering" && (
                         <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">

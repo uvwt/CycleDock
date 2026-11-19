@@ -100,6 +100,7 @@ type Card struct {
 	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
 	ConfirmationRound     int64              `json:"confirmation_round"`
 	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
+	NotificationsMuted    bool               `json:"notifications_muted"`
 }
 
 type CardReadCursor struct {
@@ -125,6 +126,7 @@ type CardSchedule struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	IntervalMinutes pgtype.Int4        `json:"interval_minutes"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
 }
 
 type CardToolApproval struct {
@@ -398,14 +400,18 @@ type Workspace struct {
 }
 
 type WorkspaceAgentSetting struct {
-	WorkspaceID            uuid.UUID          `json:"workspace_id"`
-	SourceID               uuid.UUID          `json:"source_id"`
-	SystemInstructions     string             `json:"system_instructions"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
-	DefaultModelRouteID    uuid.NullUUID      `json:"default_model_route_id"`
-	DiscussionModelRouteID uuid.NullUUID      `json:"discussion_model_route_id"`
-	PlanModelRouteID       uuid.NullUUID      `json:"plan_model_route_id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	SourceID                uuid.UUID          `json:"source_id"`
+	SystemInstructions      string             `json:"system_instructions"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	DefaultModelRouteID     uuid.NullUUID      `json:"default_model_route_id"`
+	DiscussionModelRouteID  uuid.NullUUID      `json:"discussion_model_route_id"`
+	PlanModelRouteID        uuid.NullUUID      `json:"plan_model_route_id"`
+	ToolGuardMode           string             `json:"tool_guard_mode"`
+	ToolGuardModelRouteID   uuid.NullUUID      `json:"tool_guard_model_route_id"`
+	ToolGuardTimeoutSeconds int32              `json:"tool_guard_timeout_seconds"`
+	ToolGuardCustomRules    string             `json:"tool_guard_custom_rules"`
 }
 
 type WorkspaceApiCredential struct {
@@ -420,32 +426,26 @@ type WorkspaceApiCredential struct {
 }
 
 type WorkspaceDeviceToolGuard struct {
-	ID             uuid.UUID          `json:"id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	DeviceNodeID   string             `json:"device_node_id"`
-	DeviceName     string             `json:"device_name"`
-	Mode           string             `json:"mode"`
-	ModelRouteID   uuid.NullUUID      `json:"model_route_id"`
-	TimeoutSeconds int32              `json:"timeout_seconds"`
-	CustomRules    string             `json:"custom_rules"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID           uuid.UUID          `json:"id"`
+	WorkspaceID  uuid.UUID          `json:"workspace_id"`
+	DeviceNodeID string             `json:"device_node_id"`
+	DeviceName   string             `json:"device_name"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Enabled      bool               `json:"enabled"`
 }
 
 type WorkspaceMcpConnection struct {
-	ID                      uuid.UUID          `json:"id"`
-	WorkspaceID             uuid.UUID          `json:"workspace_id"`
-	Name                    string             `json:"name"`
-	Url                     string             `json:"url"`
-	Enabled                 bool               `json:"enabled"`
-	TimeoutMs               int32              `json:"timeout_ms"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
-	BearerTokenCiphertext   []byte             `json:"bearer_token_ciphertext"`
-	ToolGuardMode           string             `json:"tool_guard_mode"`
-	ToolGuardModelRouteID   uuid.NullUUID      `json:"tool_guard_model_route_id"`
-	ToolGuardTimeoutSeconds int32              `json:"tool_guard_timeout_seconds"`
-	ToolGuardCustomRules    string             `json:"tool_guard_custom_rules"`
+	ID                    uuid.UUID          `json:"id"`
+	WorkspaceID           uuid.UUID          `json:"workspace_id"`
+	Name                  string             `json:"name"`
+	Url                   string             `json:"url"`
+	Enabled               bool               `json:"enabled"`
+	TimeoutMs             int32              `json:"timeout_ms"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	BearerTokenCiphertext []byte             `json:"bearer_token_ciphertext"`
+	ToolGuardEnabled      bool               `json:"tool_guard_enabled"`
 }
 
 type WorkspaceMembership struct {

@@ -96,17 +96,17 @@ export default function NexusDockPage() {
     staleTime: 20_000,
   });
 
-  // 3. 设备独立安全守卫与可选评估模型路由
+  // 3. 设备安全守卫开关与工作区全局守卫档位
   const guards = useQuery({
     queryKey: keys.deviceToolGuards(workspaceID),
     queryFn: api.listDeviceToolGuards,
     enabled: Boolean(workspaceID && connection.data?.connected),
   });
 
-  const agentSettings = useQuery({
-    queryKey: keys.agent,
-    queryFn: api.agentSettings,
-    enabled: Boolean(isOwner && connection.data?.connected),
+  const globalToolGuard = useQuery({
+    queryKey: keys.toolGuard,
+    queryFn: api.toolGuard,
+    enabled: Boolean(workspaceID && connection.data?.connected),
   });
 
   const guardMap = useMemo(() => {
@@ -402,7 +402,8 @@ export default function NexusDockPage() {
                     const isSelected = device.id === activeDeviceId;
                     const skillsCount = device.skills?.length || 0;
                     const mcpCount = device.dynamic_mcp?.length || 0;
-                    const guardMode = guardMap.get(device.id)?.mode || "disabled";
+                    const guardEnabled = Boolean(guardMap.get(device.id)?.enabled);
+                    const globalGuardMode = globalToolGuard.data?.mode || "block_high_risk";
 
                     return (
                       <button
@@ -451,16 +452,16 @@ export default function NexusDockPage() {
                               <span>{device.arch}</span>
                             </>
                           )}
-                          {guardMode !== "disabled" && (
+                          {guardEnabled && (
                             <span
                               className={`ml-auto inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
-                                guardMode === "strict"
+                                globalGuardMode === "strict"
                                   ? "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300"
                                   : "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-300"
                               }`}
                             >
                               <ShieldAlert className="size-2.5 shrink-0" />
-                              {guardMode === "strict"
+                              {globalGuardMode === "strict"
                                 ? t("严格模式")
                                 : t("仅拦截高危")}
                             </span>
@@ -562,7 +563,7 @@ export default function NexusDockPage() {
                     workspaceID={workspaceID}
                     device={selectedDevice}
                     guard={guardMap.get(selectedDevice.id)}
-                    routes={agentSettings.data?.routes || []}
+                    globalMode={globalToolGuard.data?.mode}
                     isOwner={isOwner}
                   />
 
