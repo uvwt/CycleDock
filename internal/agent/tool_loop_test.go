@@ -52,3 +52,36 @@ func TestRepeatedToolLoopRequiresCompleteUnchangedRounds(t *testing.T) {
 		})
 	}
 }
+
+func TestRepeatedToolLoopSkipsSyntheticToolImageUserMessages(t *testing.T) {
+	var messages []modelclient.Message
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("call-%d", i)
+		messages = append(messages,
+			modelclient.Message{
+				Role: "assistant",
+				ToolCalls: []modelclient.ToolCall{{
+					ID:       id,
+					Type:     "function",
+					Function: modelclient.ToolFunction{Name: "phone_screenshot", Arguments: `{}`},
+				}},
+			},
+			modelclient.Message{
+				Role:       "tool",
+				ToolCallID: id,
+				Name:       "phone_screenshot",
+				Content:    `{"image_artifacts":[{"artifact_ref":"shot.png","artifact_version":1}]}`,
+			},
+			modelclient.Message{
+				Role: "user",
+				Parts: []modelclient.ContentPart{
+					modelclient.NewTextPart("Image #1 returned by tool phone_screenshot:"),
+					modelclient.NewImagePartFromBytes("image/png", []byte{0x89, 0x50, 0x4e, 0x47}),
+				},
+			},
+		)
+	}
+	if !repeatedToolLoop(messages) {
+		t.Fatal("expected repeatedToolLoop=true when identical screenshot calls repeat 8 times even with synthetic image user messages")
+	}
+}

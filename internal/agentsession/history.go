@@ -180,11 +180,28 @@ func (s *PostgresService) InspectFullSession(
 					})
 				}
 				if part.FunctionResponse != nil {
+					resp := part.FunctionResponse.Response
+					if _, hasInline := resp["inline_images"]; hasInline {
+						sanitized := make(map[string]any, len(resp))
+						for k, v := range resp {
+							if k != "inline_images" {
+								sanitized[k] = v
+							}
+						}
+						sanitized["inline_images"] = "[image payload omitted in history]"
+						resp = sanitized
+					}
 					round.ToolResults = append(round.ToolResults, map[string]any{
 						"id":       part.FunctionResponse.ID,
 						"name":     part.FunctionResponse.Name,
-						"response": part.FunctionResponse.Response,
+						"response": resp,
 					})
+				}
+				if part.InlineData != nil {
+					texts = append(texts, fmt.Sprintf("[inline media: mimeType=%s, bytes=%d]", part.InlineData.MIMEType, len(part.InlineData.Data)))
+				}
+				if part.FileData != nil {
+					texts = append(texts, fmt.Sprintf("[file media: mimeType=%s]", part.FileData.MIMEType))
 				}
 			}
 			if len(texts) > 0 {
@@ -222,10 +239,27 @@ func renderHistoryEvent(event *session.Event) string {
 			))
 		}
 		if part.FunctionResponse != nil {
-			response, _ := json.Marshal(part.FunctionResponse.Response)
+			resp := part.FunctionResponse.Response
+			if _, hasInline := resp["inline_images"]; hasInline {
+				sanitized := make(map[string]any, len(resp))
+				for k, v := range resp {
+					if k != "inline_images" {
+						sanitized[k] = v
+					}
+				}
+				sanitized["inline_images"] = "[image payload omitted in history]"
+				resp = sanitized
+			}
+			response, _ := json.Marshal(resp)
 			lines = append(lines, fmt.Sprintf(
 				"tool response %s: %s", part.FunctionResponse.Name, response,
 			))
+		}
+		if part.InlineData != nil {
+			lines = append(lines, fmt.Sprintf("[inline media: mimeType=%s, bytes=%d]", part.InlineData.MIMEType, len(part.InlineData.Data)))
+		}
+		if part.FileData != nil {
+			lines = append(lines, fmt.Sprintf("[file media: mimeType=%s]", part.FileData.MIMEType))
 		}
 	}
 	rendered := strings.Join(lines, "\n")

@@ -35,6 +35,22 @@ const (
 	artifactReadMaxChars     = 20000
 )
 
+const (
+	imageArtifactRefKey     = "artifact_ref"
+	imageArtifactVersionKey = "artifact_version"
+	imageArtifactMIMEKey    = "mime_type"
+	imageArtifactBytesKey   = "size_bytes"
+	imageArtifactsFieldKey  = "image_artifacts"
+	imageInlineFieldKey     = "inline_images"
+)
+
+type imageArtifactRef struct {
+	ArtifactRef     string `json:"artifact_ref"`
+	ArtifactVersion int64  `json:"artifact_version"`
+	MIMEType        string `json:"mime_type"`
+	SizeBytes       int    `json:"size_bytes"`
+}
+
 type attemptToolRuntime struct {
 	store           *store.Store
 	context         store.AgentCardContext
@@ -109,16 +125,16 @@ func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 			converted, err := definitionToADKTool(
 				definition,
 				func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
-					raw, err := runtime.mcpSessions.Call(ctx, name, args)
+					callRes, err := runtime.mcpSessions.CallStructured(ctx, name, args)
 					if err != nil {
 						// 通道错误是这一次调用的结果，交回模型用白话说明。
 						// 标成整轮失败会停在上一条进度，用户看不到这次为什么没做成。
 						return map[string]any{"error": err.Error()}, nil
 					}
-					if decoded, err := decodeADKToolResult(raw); err == nil {
+					if decoded, err := decodeADKToolResult(callRes.Payload); err == nil {
 						runtime.publishNexusTask(name, decoded)
 					}
-					return runtime.prepareMCPResult(ctx, name, raw)
+					return runtime.prepareMCPStructuredResult(ctx, name, callRes)
 				},
 			)
 			if err != nil {
@@ -523,6 +539,31 @@ func (r attemptToolRuntime) internalHandler(
 			if err != nil {
 				return nil, err
 			}
+			if isImageMIMEType(metadata.ArtifactVersion.MimeType) ||
+				(loaded.Part != nil && loaded.Part.InlineData != nil && isImageMIMEType(loaded.Part.InlineData.MIMEType)) {
+				mimeType := metadata.ArtifactVersion.MimeType
+				sizeBytes := 0
+				if loaded.Part != nil && loaded.Part.InlineData != nil {
+					if mimeType == "" {
+						mimeType = loaded.Part.InlineData.MIMEType
+					}
+					sizeBytes = len(loaded.Part.InlineData.Data)
+				}
+				return map[string]any{
+					"file_name":        fileName,
+					"version":          resolvedVersion,
+					"canonical_uri":    metadata.ArtifactVersion.CanonicalURI,
+					"mime_type":        mimeType,
+					"size_bytes":       sizeBytes,
+					"is_image":         true,
+					imageArtifactsFieldKey: []map[string]any{{
+						imageArtifactRefKey:     fileName,
+						imageArtifactVersionKey: resolvedVersion,
+						imageArtifactMIMEKey:    mimeType,
+						imageArtifactBytesKey:   sizeBytes,
+					}},
+				}, nil
+			}
 			content, err := artifactPartText(loaded.Part)
 			if err != nil {
 				return nil, err
@@ -581,7 +622,7 @@ func artifactToolDefinition() modelclient.ToolDefinition {
 		Type: "function",
 		Function: modelclient.ToolDefinitionFunc{
 			Name:        "cycledock_read_artifact",
-			Description: "Read a chunk of a large prior tool result that CycleDock externalized from this Card Session. Use artifact_ref from an earlier FunctionResponse; do not re-run the real tool just to recover old evidence.",
+			Description: "Read a chunk of a large prior tool result or reload a prior image artifact that CycleDock externalized from this Card Session. Use artifact_ref from an earlier FunctionResponse; do not re-run the real tool just to recover old evidence.",
 			Parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -623,16 +664,95 @@ func (r attemptToolRuntime) prepareMCPResult(
 	ctx context.Context,
 	toolName, raw string,
 ) (map[string]any, error) {
+	return r.prepareMCPStructuredResult(ctx, toolName, mcpclient.CallResult{Payload: raw})
+}
+
+func (r attemptToolRuntime) prepareMCPStructuredResult(
+	ctx context.Context,
+	toolName string,
+	callRes mcpclient.CallResult,
+) (map[string]any, error) {
+	var imageRefs []imageArtifactRef
+	var inlineImages []map[string]any
+	if len(callRes.Images) > 0 {
+		if r.artifactService != nil {
+			appName, userID, sessionID := agentsession.Identity(
+				r.context.WorkspaceID, r.context.CardID,
+			)
+			for i, img := range callRes.Images {
+				if len(img.Data) == 0 {
+					continue
+				}
+				fileName := fmt.Sprintf(
+					"tool-image-%s-%s-%d%s",
+					r.context.AttemptID,
+					uuid.NewString(),
+					i+1,
+					imageExtensionForMIME(img.MIMEType),
+				)
+				saved, err := r.artifactService.Save(ctx, &artifact.SaveRequest{
+					AppName:   appName,
+					UserID:    userID,
+					SessionID: sessionID,
+					FileName:  fileName,
+					Part:      genai.NewPartFromBytes(img.Data, img.MIMEType),
+					CustomMetadata: map[string]any{
+						"tool_name":  toolName,
+						"attempt_id": r.context.AttemptID.String(),
+						"image_idx":  i + 1,
+					},
+				})
+				if err != nil {
+					return nil, fmt.Errorf("externalize MCP image artifact: %w", err)
+				}
+				imageRefs = append(imageRefs, imageArtifactRef{
+					ArtifactRef:     fileName,
+					ArtifactVersion: saved.Version,
+					MIMEType:        img.MIMEType,
+					SizeBytes:       len(img.Data),
+				})
+			}
+		} else {
+			// 测试或无 ArtifactService 场景下退回直接保留在内存引用中，由 adkRequestToModelClient 转为多模态消息。
+			for _, img := range callRes.Images {
+				if len(img.Data) == 0 {
+					continue
+				}
+				inlineImages = append(inlineImages, map[string]any{
+					imageArtifactMIMEKey: img.MIMEType,
+					"data":               img.Data,
+				})
+			}
+		}
+	}
+
+	raw := callRes.Payload
 	decoded, err := decodeADKToolResult(raw)
 	if err != nil {
 		return nil, err
 	}
 	safe := agentdata.Sanitize(decoded).(map[string]any)
+	if len(imageRefs) > 0 {
+		refsPayload := make([]map[string]any, 0, len(imageRefs))
+		for _, ref := range imageRefs {
+			refsPayload = append(refsPayload, map[string]any{
+				imageArtifactRefKey:     ref.ArtifactRef,
+				imageArtifactVersionKey: ref.ArtifactVersion,
+				imageArtifactMIMEKey:    ref.MIMEType,
+				imageArtifactBytesKey:   ref.SizeBytes,
+			})
+		}
+		safe[imageArtifactsFieldKey] = refsPayload
+	}
+	if len(inlineImages) > 0 {
+		safe[imageInlineFieldKey] = inlineImages
+	}
 	encoded, err := json.Marshal(safe)
 	if err != nil {
 		return nil, fmt.Errorf("encode MCP result: %w", err)
 	}
-	if r.artifactService == nil || len([]rune(string(encoded))) <= artifactExternalizeChars {
+	// 图片已被外置或标记；仅当剥离图片后纯文本 JSON 依然超过阈值时才外置 JSON 文本。
+	if r.artifactService == nil || len(inlineImages) > 0 || len([]rune(string(encoded))) <= artifactExternalizeChars {
 		return safe, nil
 	}
 
@@ -657,13 +777,39 @@ func (r attemptToolRuntime) prepareMCPResult(
 	}
 	runes := []rune(string(encoded))
 	previewEnd := min(artifactPreviewChars, len(runes))
-	return map[string]any{
+	out := map[string]any{
 		"artifact_ref":     fileName,
 		"artifact_version": saved.Version,
 		"preview":          string(runes[:previewEnd]),
 		"total_chars":      len(runes),
 		"truncated":        true,
-	}, nil
+	}
+	if len(imageRefs) > 0 {
+		out[imageArtifactsFieldKey] = safe[imageArtifactsFieldKey]
+	}
+	return out, nil
+}
+
+func isImageMIMEType(mimeType string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(mimeType))
+	return strings.HasPrefix(trimmed, "image/")
+}
+
+func imageExtensionForMIME(mimeType string) string {
+	lower := strings.ToLower(strings.TrimSpace(mimeType))
+	if semi := strings.IndexByte(lower, ';'); semi >= 0 {
+		lower = strings.TrimSpace(lower[:semi])
+	}
+	switch lower {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
 }
 
 func artifactPartText(part *genai.Part) (string, error) {
@@ -1000,7 +1146,7 @@ func (r attemptToolRuntime) callMCPToolTool(ctx adkagent.Context, args map[strin
 	}
 
 	// 4. 调用远程 MCP 服务
-	raw, err := r.mcpSessions.CallExternal(ctx, serverName, remoteName, toolArgs)
+	callRes, err := r.mcpSessions.CallExternalStructured(ctx, serverName, remoteName, toolArgs)
 	if err != nil {
 		// 通道与执行错误作为工具响应返回给模型，保留上下文与定位证据
 		return map[string]any{
@@ -1012,7 +1158,7 @@ func (r attemptToolRuntime) callMCPToolTool(ctx adkagent.Context, args map[strin
 	}
 
 	// 5. 结果处理：脱敏、Artifact 外置与 Session Event 证据保留
-	prepared, err := r.prepareMCPResult(ctx, tool.ToolID(), raw)
+	prepared, err := r.prepareMCPStructuredResult(ctx, tool.ToolID(), callRes)
 	if err != nil {
 		return nil, fmt.Errorf("prepare MCP result for %s: %w", tool.ToolID(), err)
 	}
