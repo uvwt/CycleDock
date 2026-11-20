@@ -6,6 +6,7 @@ import {
   type AnchorHTMLAttributes,
   type DetailedHTMLProps,
   type MouseEvent,
+  type TdHTMLAttributes,
 } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -240,6 +241,30 @@ export const RichText = memo(function RichText({
           </button>
           <pre>{children}</pre>
         </div>
+      ),
+      table: ({ children }: { children?: React.ReactNode }) => (
+        // 独立横向滚动容器：避免外层气泡折行压缩列宽，同时配合移动端手势避让
+        <div
+          data-chat-table-scroll="true"
+          className="prose-chat-table-wrap scrollbar-thin my-2 w-full max-w-full overflow-x-auto rounded-lg border border-border/60"
+        >
+          <table className="w-max min-w-full border-collapse text-left text-sm">
+            {children}
+          </table>
+        </div>
+      ),
+      td: ({
+        children,
+        style,
+        colSpan,
+        rowSpan,
+      }: DetailedHTMLProps<
+        TdHTMLAttributes<HTMLTableCellElement>,
+        HTMLTableCellElement
+      >) => (
+        <td style={style} colSpan={colSpan} rowSpan={rowSpan}>
+          <div className="prose-chat-table-cell">{children}</div>
+        </td>
       ),
     }),
     [handleLinkClick, projectID, t, copied],

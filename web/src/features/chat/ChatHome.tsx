@@ -226,6 +226,22 @@ export default function ChatHome() {
                             })}
                           </span>
                         )}
+                        {focusSummary.criticalCount > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/12 px-2 py-0.5 text-[11px] font-medium text-rose-700 dark:text-rose-300">
+                            <span className="size-1.5 rounded-full bg-rose-500" />
+                            {t("{{count}} 异常", {
+                              count: focusSummary.criticalCount,
+                            })}
+                          </span>
+                        )}
+                        {focusSummary.warningCount > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                            <span className="size-1.5 rounded-full bg-amber-500" />
+                            {t("{{count}} 需留意", {
+                              count: focusSummary.warningCount,
+                            })}
+                          </span>
+                        )}
                         {focusSummary.answeringCount > 0 && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/12 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                             <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -321,6 +337,16 @@ export default function ChatHome() {
                               {reason === "approval" && (
                                 <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-700 dark:text-orange-300">
                                   {t("待确认")}
+                                </span>
+                              )}
+                              {reason === "critical" && (
+                                <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-700 dark:text-rose-300">
+                                  {t("异常")}
+                                </span>
+                              )}
+                              {reason === "warning" && (
+                                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                  {t("需留意")}
                                 </span>
                               )}
                               {reason === "answering" && (

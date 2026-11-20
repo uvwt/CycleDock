@@ -18,6 +18,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/agentartifact"
 	"github.com/uvwt/CycleDock/internal/agentsession"
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
@@ -26,6 +27,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/retention"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
 )
@@ -40,6 +42,11 @@ func main() {
 	maxPerWorkspace, err := envPositiveInt("CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE", agent.DefaultMaxConcurrentPerWorkspace)
 	if err != nil {
 		logger.Error("configure workspace agent concurrency", "error", err)
+		os.Exit(1)
+	}
+	retentionCfg, err := loadRetentionConfigFromEnv()
+	if err != nil {
+		logger.Error("configure db retention cleaner", "error", err)
 		os.Exit(1)
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -97,6 +104,14 @@ func main() {
 		logger.Error("configure model API key encryption", "error", err)
 		os.Exit(1)
 	}
+	triggerKey := os.Getenv("CYCLEDOCK_TRIGGER_ENCRYPTION_KEY")
+	if triggerKey == "" {
+		triggerKey = modelKey
+	}
+	if err := dataStore.ConfigureTriggerEncryption(triggerKey); err != nil {
+		logger.Error("configure webhook trigger encryption", "error", err)
+		os.Exit(1)
+	}
 	nexusDockService, err := nexusdock.New(pool, nexusdock.Config{
 		MCPURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_MCP_URL"),
 		WebURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_WEB_URL"),
@@ -134,6 +149,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	uploadTTLHours, err := envPositiveInt("CYCLEDOCK_UPLOAD_TTL_HOURS", int(attachments.DefaultTTL/time.Hour))
+	if err != nil {
+		logger.Error("configure upload ttl", "error", err)
+		os.Exit(1)
+	}
+	uploadMaxMB, err := envPositiveInt("CYCLEDOCK_UPLOAD_MAX_MB", int(attachments.DefaultMaxTotalBytes>>20))
+	if err != nil {
+		logger.Error("configure upload max size", "error", err)
+		os.Exit(1)
+	}
+	attachmentsService, err := attachments.New(pool, attachments.Config{
+		Dir:           os.Getenv("CYCLEDOCK_UPLOAD_DIR"),
+		TTL:           time.Duration(uploadTTLHours) * time.Hour,
+		MaxTotalBytes: int64(uploadMaxMB) << 20,
+		Logger:        logger,
+	})
+	if err != nil {
+		logger.Error("configure attachment storage", "error", err)
+		os.Exit(1)
+	}
+
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
 	if publicURL != "" {
@@ -150,6 +186,7 @@ func main() {
 		Logger:       logger,
 		OAuth:        oauthService,
 		NexusDock:    nexusDockService,
+		Attachments:  attachmentsService,
 		MCP:          mcpHandlers.MCP,
 		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
 		ModelAuth:    modelAuthService,
@@ -166,6 +203,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go attachmentsService.RunBackgroundCleanup(ctx)
 	sessionService := agentsession.NewPostgresService(pool)
 	artifactService := agentartifact.NewPostgresService(pool)
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
@@ -173,11 +211,14 @@ func main() {
 		MaxConcurrentPerWorkspace: maxPerWorkspace,
 		SessionService:            sessionService,
 		ArtifactService:           artifactService,
+		Attachments:               attachmentsService,
 		ModelAuth:                 modelAuthService,
 		NexusDock:                 nexusDockService,
 		Live:                      live,
 	})
 	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
+	retentionCleaner := retention.NewCleaner(pool, retentionCfg, logger)
+	go retentionCleaner.Run(ctx)
 	if pushSender != nil {
 		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, logger)
 	}
@@ -232,4 +273,59 @@ func envPositiveInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return parsed, nil
+}
+
+func envPositiveDuration(key string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", key)
+	}
+	return parsed, nil
+}
+
+func loadRetentionConfigFromEnv() (retention.Config, error) {
+	enabled := true
+	if parsed, ok, err := envBool("CYCLEDOCK_DB_RETENTION_ENABLED"); err != nil {
+		return retention.Config{}, fmt.Errorf("invalid CYCLEDOCK_DB_RETENTION_ENABLED: %w", err)
+	} else if ok {
+		enabled = parsed
+	}
+
+	dryRun := false
+	if parsed, ok, err := envBool("CYCLEDOCK_DB_RETENTION_DRY_RUN"); err != nil {
+		return retention.Config{}, fmt.Errorf("invalid CYCLEDOCK_DB_RETENTION_DRY_RUN: %w", err)
+	} else if ok {
+		dryRun = parsed
+	}
+
+	retentionDays, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_DAYS", retention.DefaultRetentionDays)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	interval, err := envPositiveDuration("CYCLEDOCK_DB_RETENTION_INTERVAL", retention.DefaultInterval)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	batchSize, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_BATCH_SIZE", retention.DefaultBatchSize)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	maxBatches, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_MAX_BATCHES", retention.DefaultMaxBatchesPerRun)
+	if err != nil {
+		return retention.Config{}, err
+	}
+
+	return retention.Config{
+		Enabled:       enabled,
+		DryRun:        dryRun,
+		RetentionDays: retentionDays,
+		Interval:      interval,
+		BatchSize:     batchSize,
+		MaxBatches:    maxBatches,
+		StartupDelay:  2 * time.Minute,
+	}, nil
 }

@@ -138,6 +138,18 @@ ChatGPT / Grok OAuth credential 是加密后的业务配置；备份数据库时
 
 不要把临时测试数据库、raw model/tool trace 或日志当作业务备份。
 
+### 临时用户图片附件存储（不纳入云端/数据库备份）
+
+用户在对话中发送的图片默认经过服务端格式校验、长边缩放（1600px）与压缩后，仅存放在本地独立磁盘目录中，**不上传 R2、不写入 PostgreSQL、不纳入云端或数据库备份**：
+
+```env
+CYCLEDOCK_UPLOAD_DIR=/var/lib/cycledock/uploads
+CYCLEDOCK_UPLOAD_TTL_HOURS=720   # 默认保留 30 天
+CYCLEDOCK_UPLOAD_MAX_MB=1024     # 默认总容量上限 1 GB，超出按最早创建时间 LRU 淘汰
+```
+
+生产宿主机部署时，建议把独立宿主机目录（例如 `/var/lib/cycledock/uploads`）挂载到容器内对应路径，确保发版重建容器不会丢失近期图片；同时**请勿将该目录纳入 R2 或数据库定时备份任务**。过期被清理的图片会由接口返回 `410 Gone`，前端优雅渲染为过期占位提示，不会阻断历史对话阅读。
+
 ### Hosted NexusDock 远程设备连接
 
 Hosted 部署若要启用 Agent Connections 中的 NexusDock 第一方设备能力，额外配置：

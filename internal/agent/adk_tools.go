@@ -19,6 +19,7 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 
+	"github.com/uvwt/CycleDock/internal/agentartifact"
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
@@ -198,6 +199,14 @@ func (r attemptToolRuntime) internalHandler(
 		return r.deleteScheduleTool, nil
 	case "cycledock_update_card":
 		return r.updateCardTool, nil
+	case "cycledock_watch_event":
+		return r.watchEventTool, nil
+	case "cycledock_schedule_wakeup":
+		return r.scheduleWakeupTool, nil
+	case "cycledock_list_watchers":
+		return r.listWatchersTool, nil
+	case "cycledock_cancel_watcher":
+		return r.cancelWatcherTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。
@@ -411,14 +420,18 @@ func (r attemptToolRuntime) internalHandler(
 				if err != nil {
 					return nil, err
 				}
-				return map[string]any{
+				result := map[string]any{
 					"card_id":    targetCardID.String(),
 					"card_title": targetCard.Title,
 					"card_kind":  string(targetCard.Kind),
 					"mode":       "full",
 					"count":      len(rounds),
 					"rounds":     rounds,
-				}, nil
+				}
+				if len(rounds) == 0 {
+					result["note"] = "该卡片暂无保留的底层执行记录（可能尚未执行，或历史过程事件已超过保留期被自动清理）；如需查看历史对话结论，可改用 mode=simple。"
+				}
+				return result, nil
 			}
 
 			// Simple mode: extract user-visible bubbles from card timeline.
@@ -538,6 +551,9 @@ func (r attemptToolRuntime) internalHandler(
 				FileName: fileName, Version: version,
 			})
 			if err != nil {
+				if errors.Is(err, agentartifact.ErrNotFound) {
+					return expiredArtifactResponse(fileName), nil
+				}
 				return nil, err
 			}
 			resolvedVersion := metadata.ArtifactVersion.Version
@@ -546,6 +562,9 @@ func (r attemptToolRuntime) internalHandler(
 				FileName: fileName, Version: resolvedVersion,
 			})
 			if err != nil {
+				if errors.Is(err, agentartifact.ErrNotFound) {
+					return expiredArtifactResponse(fileName), nil
+				}
 				return nil, err
 			}
 			if isImageMIMEType(metadata.ArtifactVersion.MimeType) ||
@@ -619,10 +638,22 @@ func (r attemptToolRuntime) internalHandler(
 					"content":       hit.Content,
 				})
 			}
-			return map[string]any{"hits": items, "count": len(items)}, nil
+			result := map[string]any{"hits": items, "count": len(items)}
+			if len(items) == 0 {
+				result["note"] = "未命中历史过程事件；早期已被上下文压缩覆盖且超过保留期的明细记录可能已被自动清理。"
+			}
+			return result, nil
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported CycleDock ADK tool %q", name)
+	}
+}
+
+func expiredArtifactResponse(fileName string) map[string]any {
+	return map[string]any{
+		"file_name": fileName,
+		"expired":   true,
+		"error":     fmt.Sprintf("历史产物 %q 不存在或已超过保留期被自动清理；如需最新数据请重新执行对应只读查询。", fileName),
 	}
 }
 

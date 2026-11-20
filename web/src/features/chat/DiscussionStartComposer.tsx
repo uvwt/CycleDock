@@ -4,8 +4,8 @@ import { useDeviceSelection } from "../devices/device-selection";
 import type { DeviceTarget } from "../../shared/api/types";
 import { safeRandomUUID } from "../../shared/lib/utils";
 import { ChatInput } from "../../shared/ui/chat";
-import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUp, ImagePlus, LoaderCircle, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -13,11 +13,17 @@ import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { loadCardPage } from "../../app/route-preload";
 import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
+import { ComposerImageTray } from "../timeline/AttachmentGallery";
+import {
+  MAX_COMPOSER_IMAGES,
+  useComposerImages,
+} from "../cards/useComposerImages";
 
 const STORAGE_KEY = "cycledock.new-discussion.drafts.v2";
 
 type SavedDraft = {
   content: string;
+  attachmentIDs?: string[];
   deviceTarget?: DeviceTarget | null;
   preferredModelRouteID?: string;
   pendingCardID?: string;
@@ -64,6 +70,9 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
     initial.pendingCardID ? initial : null,
   );
   const [sending, setSending] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerImages = useComposerImages({ disabled: sending || Boolean(pending) });
 
   useEffect(() => {
     if (pending) return;
@@ -78,10 +87,12 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
       draft.idempotencyKey,
       draft.deviceTarget,
       draft.preferredModelRouteID,
+      draft.attachmentIDs,
     );
     writeDraft(projectID);
     setPending(null);
     setContent("");
+    composerImages.clear();
     void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
     navigate(
       `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
@@ -90,7 +101,14 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
 
   async function createAndSend() {
     const value = content.trim();
-    if (!value || sending || !modelConfigured) return;
+    const attachmentIDs = composerImages.readyAttachments.map((att) => att.id);
+    if (
+      (!value && attachmentIDs.length === 0) ||
+      sending ||
+      composerImages.uploading ||
+      !modelConfigured
+    )
+      return;
     setSending(true);
     void loadCardPage();
     // 发起发送时固定设备选择与模型选择；创建 Card 的网络等待期间切换不改变这条消息。
@@ -102,6 +120,7 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
       void queryClient.invalidateQueries({ queryKey: keys.cards(projectID) });
       const draft: SavedDraft = {
         content: value,
+        attachmentIDs: attachmentIDs.length > 0 ? attachmentIDs : undefined,
         deviceTarget,
         preferredModelRouteID,
         pendingCardID: card.id,
@@ -146,6 +165,9 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
 
   const value = pending?.content ?? content;
   const placeholder = t("发送消息，开始讨论…");
+  const hasReadyImages = composerImages.readyAttachments.length > 0;
+  const canAttach =
+    !sending && !pending && composerImages.items.length < MAX_COMPOSER_IMAGES;
 
   return (
     <form
@@ -153,9 +175,40 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
         event.preventDefault();
         void (pending ? retry() : createAndSend());
       }}
-      className="mx-auto flex flex-col rounded-2xl border border-line bg-surface p-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-primary/60"
+      onDragOver={(event) => {
+        if (!canAttach) return;
+        if (Array.from(event.dataTransfer.types).includes("Files")) {
+          event.preventDefault();
+          if (!dragOver) setDragOver(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDragOver(false);
+        }
+      }}
+      onDrop={(event) => {
+        setDragOver(false);
+        if (!canAttach) return;
+        const files = Array.from(event.dataTransfer.files).filter((file) =>
+          file.type.startsWith("image/"),
+        );
+        if (files.length > 0) {
+          event.preventDefault();
+          void composerImages.addFiles(files);
+        }
+      }}
+      className={`mx-auto flex flex-col rounded-2xl border bg-surface p-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-primary/60 ${
+        dragOver ? "border-primary ring-2 ring-primary/25" : "border-line"
+      }`}
     >
       <ModelSetupNotice />
+      {composerImages.items.length > 0 && (
+        <ComposerImageTray
+          items={composerImages.items}
+          onRemove={composerImages.removeItem}
+        />
+      )}
       {/* 文本输入区域：占满行宽自适应高度 */}
       <div className="min-w-0 flex-1 px-1">
         <ChatInput
@@ -164,10 +217,24 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
           placeholder={placeholder}
           readOnly={Boolean(pending)}
           disabled={sending}
+          onPaste={(event) => {
+            if (!canAttach) return;
+            const pastedFiles: File[] = [];
+            for (const item of Array.from(event.clipboardData.items)) {
+              if (item.kind === "file" && item.type.startsWith("image/")) {
+                const file = item.getAsFile();
+                if (file) pastedFiles.push(file);
+              }
+            }
+            if (pastedFiles.length > 0) {
+              event.preventDefault();
+              void composerImages.addFiles(pastedFiles);
+            }
+          }}
         />
       </div>
 
-      {/* 底部操作栏：左侧放置模型切换等控制，右侧放置发送/重试 */}
+      {/* 底部操作栏：左侧放置模型切换与选图按钮，右侧放置发送/重试 */}
       <div className="flex items-center justify-between gap-2 px-1 pt-1">
         <div className="flex items-center gap-1.5 min-w-0">
           <ModelMenu
@@ -175,6 +242,32 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
             selectedRouteId={draftRouteId}
             onSelectRouteId={setDraftRouteId}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            className="hidden"
+            data-testid="composer-image-input"
+            onChange={(event) => {
+              const files = event.target.files;
+              if (files && files.length > 0) {
+                void composerImages.addFiles(files);
+              }
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            disabled={!canAttach}
+            onClick={() => fileInputRef.current?.click()}
+            title={t("添加图片（支持粘贴或拖拽）")}
+            aria-label={t("添加图片")}
+            data-testid="composer-image-button"
+            className="inline-flex size-8 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ImagePlus className="size-4" />
+          </button>
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
@@ -197,11 +290,14 @@ export function DiscussionStartComposer({ projectID }: { projectID: string }) {
             title={pending ? t("重试发送") : t("发送")}
             aria-label={pending ? t("重试发送") : t("发送")}
             disabled={
-              sending || !modelConfigured || (!pending && !content.trim())
+              sending ||
+              composerImages.uploading ||
+              !modelConfigured ||
+              (!pending && !content.trim() && !hasReadyImages)
             }
             className="grid size-9 shrink-0 place-items-center rounded-full bg-action text-action-foreground shadow-sm transition hover:bg-action-hover active:scale-95 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            {sending ? (
+            {sending || composerImages.uploading ? (
               <LoaderCircle className="size-4 animate-spin" />
             ) : pending ? (
               <RotateCcw className="size-4" />

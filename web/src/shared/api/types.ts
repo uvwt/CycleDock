@@ -66,6 +66,19 @@ export type ToolApproval = {
   resolved_at?: string;
   created_at: string;
 };
+export type AttachmentMeta = {
+  id: string;
+  workspace_id?: string;
+  card_id?: string;
+  mime_type: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  url: string;
+  status?: "active" | "purged" | "expired" | string;
+  created_at?: string;
+  expires_at?: string;
+};
 export type TimelineEvent = {
   id: string;
   sequence: number;
@@ -90,13 +103,14 @@ export type TimelineEvent = {
   actor_name: string;
   content: string;
   message?: {
-    type: "text" | "attachment" | "choice";
+    type?: "text" | "attachment" | "choice";
     content?: string;
     url?: string;
     alt?: string;
     images?: string[];
+    attachments?: AttachmentMeta[];
     widget?: { question: string; options: { value: string; label: string }[] };
-    end_turn: boolean;
+    end_turn?: boolean;
     preview_id?: string;
     preview?: boolean;
     model?: string;
@@ -128,7 +142,7 @@ export type PendingTurn = {
   device_name?: string;
   id: string;
   sequence: number;
-  source: "human" | "schedule" | "system";
+  source: "human" | "schedule" | "system" | "trigger";
   dispatch_mode: string;
   source_event_id?: string;
   content: string;

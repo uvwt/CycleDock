@@ -109,6 +109,7 @@ func resetDatabase(t *testing.T) {
 	t.Helper()
 	_, err := integrationStore.pool.Exec(context.Background(), `
 		TRUNCATE TABLE
+			workspace_attachments,
 			agent_artifacts, agent_session_events, agent_sessions,
 			turn_attempts, card_turns, events, card_schedules,
 			cards, projects, sources, workspaces

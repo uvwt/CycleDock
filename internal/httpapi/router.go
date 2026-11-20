@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
@@ -33,6 +34,7 @@ type Config struct {
 	ModelAuth    *modelauth.Service
 	ModelClient  *modelclient.Client
 	NexusDock    *nexusdock.Service
+	Attachments  *attachments.Service
 	Live         *realtime.Hub
 	Push         pushSender
 }
@@ -45,6 +47,7 @@ type API struct {
 	modelAuth    *modelauth.Service
 	model        *modelclient.Client
 	nexusDock    *nexusdock.Service
+	attachments  *attachments.Service
 	live         *realtime.Hub
 	push         pushSender
 	secureCookie bool
@@ -63,6 +66,7 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
 		oauth: config.OAuth, modelAuth: config.ModelAuth, model: model, nexusDock: config.NexusDock,
+		attachments:  config.Attachments,
 		secureCookie: config.SecureCookie, logger: logger, live: config.Live, push: config.Push,
 	}
 
@@ -94,6 +98,9 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	if config.MCP != nil {
 		router.Handle("/mcp", config.MCP)
 	}
+
+	// 公开 Webhook 接收端点：走原始字节验签与工作区隔离，不走人类 Cookie 认证或跨站 JSON 写检查。
+	router.Post("/api/v1/triggers/{triggerID}/webhook", api.receiveTriggerWebhook)
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(requireJSONWrites)
@@ -134,7 +141,7 @@ func (api *API) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set(
 			"Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 		)
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		if strings.HasPrefix(r.URL.Path, "/api/") ||

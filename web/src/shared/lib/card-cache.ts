@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { keys } from "../../app/query";
 import type {
+  AttachmentMeta,
   Card,
   CardDetail,
   DeviceTarget,
@@ -102,6 +103,7 @@ export function applyOptimisticSentTurn(
     eventID: string;
     turnID: string;
     content: string;
+    attachments?: AttachmentMeta[];
     actorName?: string;
     deviceTarget?: DeviceTarget | null;
   },
@@ -132,7 +134,13 @@ export function applyOptimisticSentTurn(
         source: "human",
         dispatch_mode: "enqueue",
         source_event_id: params.eventID,
-        content: params.content,
+        content:
+          params.content ||
+          (params.attachments && params.attachments.length > 0
+            ? params.attachments.length === 1
+              ? "[图片]"
+              : `[图片 x${params.attachments.length}]`
+            : ""),
         device_node_id: params.deviceTarget?.node_id,
         device_name: params.deviceTarget?.name,
         created_at: now,
@@ -153,6 +161,10 @@ export function applyOptimisticSentTurn(
       actor_kind: "human",
       actor_name: params.actorName || "Human",
       content: params.content,
+      message:
+        params.attachments && params.attachments.length > 0
+          ? { attachments: params.attachments }
+          : undefined,
       created_at: now,
     };
     return {

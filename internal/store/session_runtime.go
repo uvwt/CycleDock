@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -48,6 +49,7 @@ type AgentCardContext struct {
 	TurnSequence       int64
 	TurnSource         domain.TurnSource
 	TurnContent        string
+	TurnAttachments    []CommentAttachmentRef
 	DispatchMode       domain.DispatchMode
 	TurnCreatedAt      time.Time
 	IsBuiltInProactive bool
@@ -76,6 +78,7 @@ func (s *Store) LoadAgentCardContext(
 	var discussionState, todoState, ongoingState pgtype.Text
 	var turnSource, dispatchMode, attemptReason, turnIdempotencyKey string
 	var createdAt pgtype.Timestamptz
+	var sourceEventMessage []byte
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT
@@ -85,6 +88,7 @@ func (s *Store) LoadAgentCardContext(
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
 			t.id, t.sequence, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
+			se.message,
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
 				SELECT count(*)
@@ -104,6 +108,10 @@ func (s *Store) LoadAgentCardContext(
 		  ON t.workspace_id=a.workspace_id
 		 AND t.card_id=a.card_id
 		 AND t.id=a.turn_id
+		LEFT JOIN events se
+		  ON se.workspace_id=t.workspace_id
+		 AND se.card_id=t.card_id
+		 AND se.id=t.source_event_id
 		JOIN cards c
 		  ON c.workspace_id=a.workspace_id
 		 AND c.id=a.card_id
@@ -121,6 +129,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription, &out.IsMainDiscussion,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
 		&out.TurnID, &out.TurnSequence, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
+		&sourceEventMessage,
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,
 	)
@@ -129,6 +138,12 @@ func (s *Store) LoadAgentCardContext(
 	}
 	if err != nil {
 		return AgentCardContext{}, err
+	}
+	if len(sourceEventMessage) > 0 {
+		var payload CommentMessagePayload
+		if err := json.Unmarshal(sourceEventMessage, &payload); err == nil && len(payload.Attachments) > 0 {
+			out.TurnAttachments = payload.Attachments
+		}
 	}
 	if discussionState.Valid {
 		out.DiscussionState = discussionState.String

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,52 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
+
+const MaxCommentAttachments = 8
+
+// CommentAttachmentRef 是写入 events.message 的轻量图片引用元数据，严禁包含图片二进制或 base64。
+type CommentAttachmentRef struct {
+	ID        uuid.UUID `json:"id"`
+	URL       string    `json:"url"`
+	MimeType  string    `json:"mime_type"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	SizeBytes int64     `json:"size_bytes"`
+}
+
+// CommentMessagePayload 是人类 comment 事件可选的轻量结构化载荷（仅存附件引用）。
+type CommentMessagePayload struct {
+	Attachments []CommentAttachmentRef `json:"attachments,omitempty"`
+}
+
+func formatImageOnlyTurnContent(count int) string {
+	if count <= 1 {
+		return "[图片]"
+	}
+	return fmt.Sprintf("[图片 x%d]", count)
+}
+
+func normalizeCommentAttachmentIDs(ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			return nil, fmt.Errorf("%w: invalid attachment id", domain.ErrConflict)
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) > MaxCommentAttachments {
+		return nil, fmt.Errorf("%w: at most %d image attachments are allowed per message", domain.ErrConflict, MaxCommentAttachments)
+	}
+	return out, nil
+}
 
 // DeviceTarget 是用户的执行偏好，不授予设备权限；实际调用始终由 MCP 校验授权。
 type DeviceTarget struct {
@@ -27,6 +74,7 @@ type SubmitSessionCommentParams struct {
 	CardID                uuid.UUID
 	AuthorSourceID        uuid.UUID
 	Content               string
+	AttachmentIDs         []uuid.UUID
 	IdempotencyKey        string
 	DispatchMode          domain.DispatchMode
 	// 回复绑定已完成的执行；选择回复还须绑定具体消息，防止旧页面误答。
@@ -369,8 +417,12 @@ func (s *Store) submitSessionComment(
 ) (SubmitSessionCommentResult, error) {
 	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
 	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
-	if p.Content == "" {
-		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content is required", domain.ErrConflict)
+	attachmentIDs, err := normalizeCommentAttachmentIDs(p.AttachmentIDs)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if p.Content == "" && len(attachmentIDs) == 0 {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content or image attachment is required", domain.ErrConflict)
 	}
 	if p.IdempotencyKey == "" {
 		return SubmitSessionCommentResult{}, fmt.Errorf("%w: idempotency key is required", domain.ErrConflict)
@@ -397,6 +449,15 @@ func (s *Store) submitSessionComment(
 		string(p.DispatchMode),
 		p.Content,
 	)
+
+	if len(attachmentIDs) > 0 {
+		attHashParts := make([]string, 0, len(attachmentIDs)+2)
+		attHashParts = append(attHashParts, requestHash, "attachments")
+		for _, id := range attachmentIDs {
+			attHashParts = append(attHashParts, id.String())
+		}
+		requestHash = stableRequestHash(attHashParts...)
+	}
 
 	if deviceNodeID != "" {
 		requestHash = stableRequestHash(requestHash, "device_target", deviceNodeID, deviceName)
@@ -500,15 +561,34 @@ func (s *Store) submitSessionComment(
 		}
 	}
 
+	var rawMessage []byte
+	var attachmentRefs []CommentAttachmentRef
+	if len(attachmentIDs) > 0 {
+		attachmentRefs, err = resolveAndBindCommentAttachmentsTx(
+			ctx, tx, p.WorkspaceID, p.CardID, attachmentIDs,
+		)
+		if err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+		rawMessage, err = json.Marshal(CommentMessagePayload{Attachments: attachmentRefs})
+		if err != nil {
+			return SubmitSessionCommentResult{}, fmt.Errorf("marshal comment attachments: %w", err)
+		}
+	}
+
 	eventID := uuid.New()
+	var messageArg any
+	if len(rawMessage) > 0 {
+		messageArg = rawMessage
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events (
 			id, workspace_id, card_id, event_type, actor_source_id,
-			content, idempotency_key, request_hash
+			content, message, idempotency_key, request_hash
 		)
-		VALUES ($1,$2,$3,'comment',$4,$5,$6,$7)
+		VALUES ($1,$2,$3,'comment',$4,$5,$6,$7,$8)
 	`, eventID, p.WorkspaceID, p.CardID, p.AuthorSourceID,
-		p.Content, p.IdempotencyKey, requestHash)
+		p.Content, messageArg, p.IdempotencyKey, requestHash)
 	if err != nil {
 		return SubmitSessionCommentResult{}, mapConstraintError(err)
 	}
@@ -518,13 +598,18 @@ func (s *Store) submitSessionComment(
 		preferredRouteID = uuid.NullUUID{UUID: *p.PreferredModelRouteID, Valid: true}
 	}
 
+	turnContent := p.Content
+	if turnContent == "" {
+		turnContent = formatImageOnlyTurnContent(len(attachmentRefs))
+	}
+
 	turn, err := insertTurn(ctx, tx, insertTurnParams{
 		DeviceNodeID: deviceNodeID, DeviceName: deviceName,
 		PreferredModelRouteID: preferredRouteID,
 		WorkspaceID:           p.WorkspaceID,
 		CardID:                p.CardID,
 		Source:                domain.TurnSourceHuman,
-		Content:               p.Content,
+		Content:               turnContent,
 		CreatedBySourceID:     uuid.NullUUID{UUID: p.AuthorSourceID, Valid: true},
 		SourceEventID:         uuid.NullUUID{UUID: eventID, Valid: true},
 		DispatchMode:          p.DispatchMode,
@@ -588,3 +673,78 @@ func findSessionComment(
 	}
 	return out, true, nil
 }
+
+func resolveAndBindCommentAttachmentsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, cardID uuid.UUID,
+	attachmentIDs []uuid.UUID,
+) ([]CommentAttachmentRef, error) {
+	now := time.Now().UTC()
+	rows, err := tx.Query(ctx, `
+		SELECT id, card_id, mime_type, size_bytes, width, height, expires_at, purged_at
+		FROM workspace_attachments
+		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		FOR UPDATE
+	`, workspaceID, attachmentIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load comment attachments: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[uuid.UUID]CommentAttachmentRef, len(attachmentIDs))
+	unbindableIDs := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		var boundCardID uuid.NullUUID
+		var mimeType string
+		var sizeBytes int64
+		var width, height int
+		var expiresAt time.Time
+		var purgedAt *time.Time
+		if err := rows.Scan(&id, &boundCardID, &mimeType, &sizeBytes, &width, &height, &expiresAt, &purgedAt); err != nil {
+			return nil, fmt.Errorf("scan comment attachment: %w", err)
+		}
+		if purgedAt != nil || !expiresAt.After(now) {
+			return nil, fmt.Errorf("%w: image attachment has expired", domain.ErrConflict)
+		}
+		if boundCardID.Valid && boundCardID.UUID != cardID {
+			return nil, fmt.Errorf("%w: image attachment belongs to another card", domain.ErrConflict)
+		}
+		if !boundCardID.Valid {
+			unbindableIDs = append(unbindableIDs, id)
+		}
+		byID[id] = CommentAttachmentRef{
+			ID:        id,
+			URL:       fmt.Sprintf("/api/v1/workspaces/%s/attachments/%s", workspaceID.String(), id.String()),
+			MimeType:  mimeType,
+			Width:     width,
+			Height:    height,
+			SizeBytes: sizeBytes,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(byID) != len(attachmentIDs) {
+		return nil, fmt.Errorf("%w: one or more image attachments were not found", domain.ErrConflict)
+	}
+
+	if len(unbindableIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE workspace_attachments
+			SET card_id = $3
+			WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND card_id IS NULL
+		`, workspaceID, unbindableIDs, cardID); err != nil {
+			return nil, fmt.Errorf("bind comment attachments to card: %w", err)
+		}
+	}
+
+	ordered := make([]CommentAttachmentRef, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		ordered = append(ordered, byID[id])
+	}
+	return ordered, nil
+}
+

@@ -52,6 +52,7 @@ import {
 } from "./ExecutionStatus";
 import { RichText } from "./RichText";
 import { ToolApprovalCard } from "./ToolApprovalCard";
+import { MessageAttachmentGrid } from "./AttachmentGallery";
 import { usePacedTimeline } from "./usePacedTimeline";
 import { cn } from "../../shared/lib/utils";
 import {
@@ -343,6 +344,8 @@ function EventRow({
   const human = event.actor_kind === "human";
   const isDelegate = !human && event.type === "comment";
   const message = event.type === "message" ? event.message : undefined;
+  const commentAttachments =
+    event.type === "comment" ? event.message?.attachments : undefined;
   if (event.type === "tool_approval") {
     return (
       <div id={"event-" + event.id} data-sequence={event.sequence}>
@@ -814,6 +817,9 @@ function EventRow({
               </p>
             )}
             {rawText && <RichText content={rawText} />}
+            {commentAttachments && commentAttachments.length > 0 && (
+              <MessageAttachmentGrid attachments={commentAttachments} />
+            )}
             {message?.type === "attachment" && message.url && (
               <a
                 href={message.url}
