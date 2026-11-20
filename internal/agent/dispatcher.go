@@ -170,6 +170,9 @@ func (d *Dispatcher) maintain(ctx context.Context) error {
 		if _, err := d.store.ProcessDueScheduleTurns(ctx, workspaceID, now, 100); err != nil {
 			return fmt.Errorf("process schedule turns for workspace %s: %w", workspaceID, err)
 		}
+		if _, err := d.store.ProcessDueCardWatchers(ctx, workspaceID, now, 100); err != nil {
+			return fmt.Errorf("process card watchers for workspace %s: %w", workspaceID, err)
+		}
 		if _, err := d.store.ProcessBuiltInProactiveTurns(ctx, workspaceID, now); err != nil {
 			return fmt.Errorf("process built-in proactive turns for workspace %s: %w", workspaceID, err)
 		}

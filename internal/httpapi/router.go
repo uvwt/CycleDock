@@ -99,6 +99,9 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 		router.Handle("/mcp", config.MCP)
 	}
 
+	// 公开 Webhook 接收端点：走原始字节验签与工作区隔离，不走人类 Cookie 认证或跨站 JSON 写检查。
+	router.Post("/api/v1/triggers/{triggerID}/webhook", api.receiveTriggerWebhook)
+
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(requireJSONWrites)
 		r.Get("/auth/methods", api.loginMethods)

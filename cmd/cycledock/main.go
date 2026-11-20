@@ -104,6 +104,14 @@ func main() {
 		logger.Error("configure model API key encryption", "error", err)
 		os.Exit(1)
 	}
+	triggerKey := os.Getenv("CYCLEDOCK_TRIGGER_ENCRYPTION_KEY")
+	if triggerKey == "" {
+		triggerKey = modelKey
+	}
+	if err := dataStore.ConfigureTriggerEncryption(triggerKey); err != nil {
+		logger.Error("configure webhook trigger encryption", "error", err)
+		os.Exit(1)
+	}
 	nexusDockService, err := nexusdock.New(pool, nexusdock.Config{
 		MCPURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_MCP_URL"),
 		WebURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_WEB_URL"),

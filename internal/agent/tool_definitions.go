@@ -207,6 +207,75 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_watch_event",
+				Description: "Register a one-shot external event watcher on the current Card (for example waiting for a GitHub PR CI completion or commit SHA CI completion via Webhook) so you can end this Turn and be automatically woken up when the matching event arrives. If no matching webhook arrives before timeout_minutes, CycleDock automatically wakes this Card once as a timeout fallback.",
+				Parameters: object(map[string]any{
+					"match_key": stringField("Normalized match key to watch, e.g. 'github:owner/repo:pr:78:ci_completed', 'github:owner/repo:sha:<commit_sha>:ci_completed', 'github:owner/repo:branch:<branch>:ci_completed', or 'circleci:org/repo:branch:<branch>:ci_completed'."),
+					"note":      stringField("Short context note reminding your future self what to verify or continue when woken up."),
+					"timeout_minutes": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     10080,
+						"description": "Timeout fallback duration in minutes (default 60, max 10080). If no webhook matches before timeout, the Card is woken up once to check status.",
+					},
+					"dispatch_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"enqueue", "interrupt"},
+						"description": "How to dispatch the wakeup Turn when triggered: 'enqueue' (default) or 'interrupt'.",
+					},
+					"idempotency_key": stringField("Stable unique key for this watcher registration so retries do not create duplicates."),
+				}, "match_key", "idempotency_key"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_schedule_wakeup",
+				Description: "Schedule a one-shot delayed self-wakeup on the current Card after after_minutes (for example to re-check a deployment, logs, or external status) and end this Turn instead of sleeping or busy-polling.",
+				Parameters: object(map[string]any{
+					"after_minutes": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     43200,
+						"description": "Delay in minutes before waking this Card (1 to 43200).",
+					},
+					"note": stringField("What to check or continue when this Card wakes up."),
+					"dispatch_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"enqueue", "interrupt"},
+						"description": "How to dispatch the wakeup Turn: 'enqueue' (default) or 'interrupt'.",
+					},
+					"idempotency_key": stringField("Stable unique key for this wakeup registration."),
+				}, "after_minutes", "note", "idempotency_key"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_list_watchers",
+				Description: "List one-shot event watchers and delayed self-wakeups on the current Card.",
+				Parameters: object(map[string]any{
+					"armed_only": map[string]any{
+						"type":        "boolean",
+						"description": "When true (default), return only currently armed watchers; when false, also include triggered, expired, and cancelled watchers.",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_cancel_watcher",
+				Description: "Cancel an armed event watcher or delayed self-wakeup on the current Card.",
+				Parameters: object(map[string]any{
+					"watcher_id": stringField("Watcher UUID returned by cycledock_watch_event, cycledock_schedule_wakeup, or cycledock_list_watchers."),
+					"reason":     stringField("Optional short cancellation reason."),
+				}, "watcher_id"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
 				Name:        "search_mcp_tools",
 				Description: "Search available external MCP tools by task description, keyword, or exact tool ID. Returns matching tools with their stable tool_id, connection name, tool name, description, and full input_schema. Call this before call_mcp_tool when you need external third-party tools not already in your context.",
 				Parameters: object(map[string]any{

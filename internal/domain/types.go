@@ -97,6 +97,58 @@ const (
 	TurnSourceHuman    TurnSource = "human"
 	TurnSourceSchedule TurnSource = "schedule"
 	TurnSourceSystem   TurnSource = "system"
+	TurnSourceTrigger  TurnSource = "trigger"
+)
+
+type TriggerProvider string
+
+const (
+	TriggerProviderGitHub   TriggerProvider = "github"
+	TriggerProviderCircleCI TriggerProvider = "circleci"
+	TriggerProviderGeneric  TriggerProvider = "generic"
+)
+
+type TriggerAuthMode string
+
+const (
+	TriggerAuthGitHubHMAC   TriggerAuthMode = "github_hmac_sha256"
+	TriggerAuthCircleCIHMAC TriggerAuthMode = "circleci_hmac_sha256"
+	TriggerAuthGenericHMAC  TriggerAuthMode = "generic_hmac_sha256"
+	TriggerAuthBearer       TriggerAuthMode = "bearer"
+)
+
+type TriggerRoutingMode string
+
+const (
+	TriggerRoutingFixedCard     TriggerRoutingMode = "fixed_card"
+	TriggerRoutingMatchWatchers TriggerRoutingMode = "match_watchers"
+	TriggerRoutingCreateTodo    TriggerRoutingMode = "create_todo"
+)
+
+type TriggerDeliveryStatus string
+
+const (
+	TriggerDeliveryTriggered TriggerDeliveryStatus = "triggered"
+	TriggerDeliveryFiltered  TriggerDeliveryStatus = "filtered"
+	TriggerDeliveryIgnored   TriggerDeliveryStatus = "ignored"
+	TriggerDeliveryCooldown  TriggerDeliveryStatus = "cooldown"
+	TriggerDeliveryRejected  TriggerDeliveryStatus = "rejected"
+)
+
+type WatcherKind string
+
+const (
+	WatcherKindEvent  WatcherKind = "event"
+	WatcherKindWakeup WatcherKind = "wakeup"
+)
+
+type WatcherStatus string
+
+const (
+	WatcherStatusArmed     WatcherStatus = "armed"
+	WatcherStatusTriggered WatcherStatus = "triggered"
+	WatcherStatusExpired   WatcherStatus = "expired"
+	WatcherStatusCancelled WatcherStatus = "cancelled"
 )
 
 type AttemptReason string
