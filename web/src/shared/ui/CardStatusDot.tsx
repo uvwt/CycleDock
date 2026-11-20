@@ -50,5 +50,29 @@ export function CardStatusDot({
     );
   }
 
+  if (status === "critical") {
+    return (
+      <span
+        className={`flex size-2.5 shrink-0 items-center justify-center ${className}`}
+        title="巡检异常"
+        aria-label="巡检异常"
+      >
+        <span className="inline-flex size-2 rounded-full bg-rose-500 shadow-[0_0_5px_rgba(244,63,94,0.5)]" />
+      </span>
+    );
+  }
+
+  if (status === "warning") {
+    return (
+      <span
+        className={`flex size-2.5 shrink-0 items-center justify-center ${className}`}
+        title="巡检需留意"
+        aria-label="巡检需留意"
+      >
+        <span className="inline-flex size-2 rounded-full bg-amber-500 shadow-[0_0_5px_rgba(245,158,11,0.5)]" />
+      </span>
+    );
+  }
+
   return <span className={`size-2.5 shrink-0 ${className}`} />;
 }

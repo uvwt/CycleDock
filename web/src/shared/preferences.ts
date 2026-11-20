@@ -516,6 +516,8 @@ const en = {
   当前焦点: "In focus",
   待确认: "Needs approval",
   "{{count}} 待确认": "{{count}} awaiting approval",
+  "{{count}} 异常": "{{count}} critical",
+  "{{count}} 需留意": "{{count}} needs attention",
   "{{count}} 运行中": "{{count}} running",
   "{{count}} 未读": "{{count}} unread",
   "{{count}} 待验收": "{{count}} in review",
