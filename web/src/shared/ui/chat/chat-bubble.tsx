@@ -75,7 +75,7 @@ export const ChatBubbleAvatar = React.forwardRef<
 ChatBubbleAvatar.displayName = "ChatBubbleAvatar";
 
 const chatBubbleMessageVariants = cva(
-  "relative max-w-full break-words text-[15px] shadow-xs",
+  "relative min-w-0 max-w-full break-words text-[15px] shadow-xs",
   {
     variants: {
       variant: {

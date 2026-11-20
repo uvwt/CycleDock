@@ -1703,3 +1703,39 @@ test("NexusDockPage 按插件与来源分组整理 Skill 和动态 MCP", () => {
     queryClient.removeQueries({ queryKey: ["tool-guard"] });
   }
 });
+
+test("chat bubble markdown table renders inside horizontal scroll wrapper with cell width guard", () => {
+  const markdownTable = [
+    "| 服务名 | 节点 | 分支 | 状态 | 耗时 | 说明 |",
+    "| --- | --- | --- | :---: | ---: | --- |",
+    "| cycledock-api | TianYi | `fix/chat-table-horizontal-scroll` | healthy | 18ms | 这是一段非常长的排障说明文字，用于在窄屏下验证超过最大列宽后自然折行而不是把表格无限拉宽。 |",
+  ].join("\n");
+
+  const html = render([
+    {
+      ...result,
+      content: markdownTable,
+    },
+  ]);
+
+  assert.match(
+    html,
+    /data-chat-table-scroll="true"/,
+    "Markdown 表格应标记独立横向滚动容器以配合移动端手势避让",
+  );
+  assert.match(
+    html,
+    /class="[^"]*prose-chat-table-wrap[^"]*overflow-x-auto[^"]*"/,
+    "Markdown 表格外层容器应启用横向滚动",
+  );
+  assert.match(
+    html,
+    /<table class="[^"]*w-max min-w-full border-collapse[^"]*">/,
+    "内部 table 应还原标准表格布局并保护最小自然宽度",
+  );
+  assert.match(
+    html,
+    /<td style="text-align:right"><div class="prose-chat-table-cell">18ms<\/div><\/td>/,
+    "单元格应保留列对齐并包裹列宽保护容器",
+  );
+});

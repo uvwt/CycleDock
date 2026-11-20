@@ -30,9 +30,13 @@ function hasActiveTextSelection(): boolean {
  * 检查触摸事件的起始目标是否处于不可被打断横向滚动的子元素内（如代码块、表格、横向滚动栏、输入框等）
  */
 function isInsideHorizontalScrollableOrInput(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
+  let current: HTMLElement | null =
+    target instanceof HTMLElement
+      ? target
+      : target instanceof Node
+        ? target.parentElement
+        : null;
 
-  let current: HTMLElement | null = target;
   while (current && current !== document.body) {
     // 1. 输入控件及可编辑内容
     const tagName = current.tagName.toLowerCase();
@@ -46,10 +50,15 @@ function isInsideHorizontalScrollableOrInput(target: EventTarget | null): boolea
       return true;
     }
 
-    // 2. 常见横向滚动容器：pre, code, table
-    // 仅在实际发生横向溢出滚动时才避让，避免普通的行内 code 或未溢出的 pre 导致误判
-    if (tagName === "pre" || tagName === "code" || tagName === "table") {
-      if (current.scrollWidth > current.clientWidth) {
+    // 2. 常见横向滚动容器：pre, code, table 及聊天表格滚动包裹容器
+    // 仅在实际发生横向溢出滚动时才避让（留 1px 容差避免亚像素误判）
+    if (
+      tagName === "pre" ||
+      tagName === "code" ||
+      tagName === "table" ||
+      current.dataset.chatTableScroll === "true"
+    ) {
+      if (current.scrollWidth > current.clientWidth + 1) {
         return true;
       }
     }
@@ -58,7 +67,7 @@ function isInsideHorizontalScrollableOrInput(target: EventTarget | null): boolea
     const style = window.getComputedStyle(current);
     const overflowX = style.overflowX;
     if (overflowX === "auto" || overflowX === "scroll") {
-      if (current.scrollWidth > current.clientWidth) {
+      if (current.scrollWidth > current.clientWidth + 1) {
         return true;
       }
     }
