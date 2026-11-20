@@ -20,6 +20,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/agentsession"
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -49,6 +50,10 @@ const (
 	estimatedImageTokens = 1100
 	// 每次模型请求最多随历史恢复的最近工具图片数量，避免多轮截图在历史中无限堆积撑爆上下文。
 	maxPromptToolImageCount = 3
+	// 每次模型请求最多随历史恢复的用户发送图片数量（按时间倒序优先覆盖当前轮次）。
+	maxPromptUserImageCount = 8
+	// 持久化进 agent_session_events 的轻量用户附件引用 URI 前缀；严禁把原图二进制/base64 写入 JSONB。
+	userAttachmentURIPrefix = "cycledock-attachment://"
 )
 
 // RouteCallObservation 记录最近一次成功命中的模型路由及本次调用的 Token 统计与来源。
@@ -114,6 +119,7 @@ type adkRouteModel struct {
 	modelAuth          *modelauth.Service
 	store              *store.Store
 	artifactService    artifact.Service
+	attachments        *attachments.Service
 	workspaceID        uuid.UUID
 	cardID             uuid.UUID
 	turnID             uuid.UUID
@@ -262,6 +268,14 @@ func (m *adkRouteModel) withArtifactService(service artifact.Service) *adkRouteM
 	return m
 }
 
+func (m *adkRouteModel) withAttachmentsService(service *attachments.Service) *adkRouteModel {
+	if m == nil {
+		return nil
+	}
+	m.attachments = service
+	return m
+}
+
 func (m *adkRouteModel) Name() string {
 	return "cycledock-route"
 }
@@ -300,10 +314,11 @@ func (m *adkRouteModel) GenerateContent(
 	stream bool,
 ) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		messages, tools, err := adkRequestToModelClientWithArtifacts(
+		messages, tools, err := adkRequestToModelClientWithMedia(
 			ctx,
 			req,
 			m.artifactService,
+			m.attachments,
 			m.workspaceID,
 			m.cardID,
 		)
@@ -409,6 +424,13 @@ func (m *adkRouteModel) GenerateContent(
 				}
 				callStarted := time.Now().UTC()
 				completion, err := m.client.Complete(requestCtx, config, messages, tools)
+				if err != nil && messagesContainImages(messages) && isUnsupportedImageModelError(err) {
+					// 当目标模型不支持视觉输入时，把图片优雅降级为文本占位后重试，避免中断对话。
+					if stream {
+						emit(modelStageResponse("当前模型不支持图片输入，已降级为文本上下文重试"))
+					}
+					completion, err = m.client.Complete(requestCtx, config, degradeMessagesImagesToText(messages), tools)
+				}
 				cancel()
 				if stopped {
 					return
@@ -586,7 +608,16 @@ func (m *adkRouteModel) routeConfig(
 func adkRequestToModelClient(
 	req *model.LLMRequest,
 ) ([]modelclient.Message, []modelclient.ToolDefinition, error) {
-	return adkRequestToModelClientWithArtifacts(context.Background(), req, nil, uuid.Nil, uuid.Nil)
+	return adkRequestToModelClientWithMedia(context.Background(), req, nil, nil, uuid.Nil, uuid.Nil)
+}
+
+func adkRequestToModelClientWithArtifacts(
+	ctx context.Context,
+	req *model.LLMRequest,
+	artifactService artifact.Service,
+	workspaceID, cardID uuid.UUID,
+) ([]modelclient.Message, []modelclient.ToolDefinition, error) {
+	return adkRequestToModelClientWithMedia(ctx, req, artifactService, nil, workspaceID, cardID)
 }
 
 type resolvedToolImage struct {
@@ -596,19 +627,23 @@ type resolvedToolImage struct {
 	dataURL  string
 }
 
-func adkRequestToModelClientWithArtifacts(
+func adkRequestToModelClientWithMedia(
 	ctx context.Context,
 	req *model.LLMRequest,
 	artifactService artifact.Service,
+	attachmentsService *attachments.Service,
 	workspaceID, cardID uuid.UUID,
 ) ([]modelclient.Message, []modelclient.ToolDefinition, error) {
 	if req == nil {
 		return nil, nil, errors.New("ADK model request is nil")
 	}
 
-	// 预先计算历史中哪些工具结果需要水合图片，仅保留最近 maxPromptToolImageCount 张有效图片，
-	// 避免长会话多轮截图/拍照无限堆积导致视觉上下文溢出。
+	// 预先计算历史中哪些工具结果和用户附件需要水合图片：
+	// - 工具截图仅保留最近 maxPromptToolImageCount 张；
+	// - 用户上传图片仅对最近 maxPromptUserImageCount 张从本地磁盘回填，旧轮次自动降级为文本占位，
+	//   保证 agent_session_events 永不落二进制且上下文不会无限膨胀。
 	allowedToolImages := selectRecentToolImageTargets(req.Contents, maxPromptToolImageCount)
+	allowedUserAttachments := selectRecentUserAttachmentTargets(req.Contents, maxPromptUserImageCount)
 
 	messages := make([]modelclient.Message, 0, len(req.Contents)+1)
 	if req.Config != nil && req.Config.SystemInstruction != nil {
@@ -640,6 +675,18 @@ func adkRequestToModelClientWithArtifacts(
 			case part.InlineData != nil && isImagePartBlob(part.InlineData):
 				parts = append(parts, modelclient.NewImagePartFromBytes(part.InlineData.MIMEType, part.InlineData.Data))
 				hasImages = true
+			case part.FileData != nil && isUserAttachmentURI(part.FileData.FileURI):
+				imgPart, ok := hydrateUserAttachmentPart(
+					ctx,
+					part.FileData,
+					allowedUserAttachments[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}],
+					attachmentsService,
+					workspaceID,
+				)
+				parts = append(parts, imgPart)
+				if ok {
+					hasImages = true
+				}
 			case part.FileData != nil && isImageFileData(part.FileData):
 				parts = append(parts, modelclient.NewImagePartFromDataURL(part.FileData.FileURI))
 				hasImages = true
@@ -754,6 +801,152 @@ func selectRecentToolImageTargets(contents []*genai.Content, maxImages int) map[
 		}
 	}
 	return selected
+}
+
+func selectRecentUserAttachmentTargets(contents []*genai.Content, maxImages int) map[toolPartKey]bool {
+	selected := make(map[toolPartKey]bool)
+	if maxImages <= 0 {
+		return selected
+	}
+	remaining := maxImages
+	for cIdx := len(contents) - 1; cIdx >= 0 && remaining > 0; cIdx-- {
+		content := contents[cIdx]
+		if content == nil {
+			continue
+		}
+		for pIdx := len(content.Parts) - 1; pIdx >= 0 && remaining > 0; pIdx-- {
+			part := content.Parts[pIdx]
+			if part == nil || part.Thought || part.FileData == nil {
+				continue
+			}
+			if !isUserAttachmentURI(part.FileData.FileURI) {
+				continue
+			}
+			selected[toolPartKey{contentIdx: cIdx, partIdx: pIdx}] = true
+			remaining--
+		}
+	}
+	return selected
+}
+
+func userAttachmentURI(id uuid.UUID) string {
+	return userAttachmentURIPrefix + id.String()
+}
+
+func isUserAttachmentURI(uri string) bool {
+	return strings.HasPrefix(strings.TrimSpace(uri), userAttachmentURIPrefix)
+}
+
+func parseUserAttachmentURI(uri string) (uuid.UUID, bool) {
+	trimmed := strings.TrimSpace(uri)
+	if !strings.HasPrefix(trimmed, userAttachmentURIPrefix) {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(strings.TrimPrefix(trimmed, userAttachmentURIPrefix))
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func hydrateUserAttachmentPart(
+	ctx context.Context,
+	fileData *genai.FileData,
+	allowHydrate bool,
+	service *attachments.Service,
+	workspaceID uuid.UUID,
+) (modelclient.ContentPart, bool) {
+	id, ok := parseUserAttachmentURI(fileData.FileURI)
+	if !ok {
+		return modelclient.NewTextPart("[用户附带的图片引用无效，已省略]"), false
+	}
+	if !allowHydrate {
+		return modelclient.NewTextPart(fmt.Sprintf("[历史轮次用户图片附件 %s 已折叠为文本占位以节省上下文]", id.String())), false
+	}
+	if service == nil || workspaceID == uuid.Nil {
+		return modelclient.NewTextPart(fmt.Sprintf("[用户图片附件 %s 暂时无法读取，请仅依据文字继续回复]", id.String())), false
+	}
+	att, data, err := service.ReadBytes(ctx, workspaceID, id)
+	if err != nil {
+		if errors.Is(err, attachments.ErrExpired) {
+			return modelclient.NewTextPart(fmt.Sprintf("[用户发送的图片附件 %s 已过期清理，无法查看原图]", id.String())), false
+		}
+		return modelclient.NewTextPart(fmt.Sprintf("[用户发送的图片附件 %s 暂时不可用，无法查看原图]", id.String())), false
+	}
+	mimeType := strings.TrimSpace(att.MimeType)
+	if mimeType == "" {
+		mimeType = strings.TrimSpace(fileData.MIMEType)
+	}
+	return modelclient.NewImagePartFromBytes(mimeType, data), true
+}
+
+func messagesContainImages(messages []modelclient.Message) bool {
+	for _, msg := range messages {
+		for _, part := range msg.Parts {
+			if part.Type == modelclient.ContentPartImage {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func degradeMessagesImagesToText(messages []modelclient.Message) []modelclient.Message {
+	out := make([]modelclient.Message, len(messages))
+	for i, msg := range messages {
+		if len(msg.Parts) == 0 {
+			out[i] = msg
+			continue
+		}
+		var b strings.Builder
+		for _, part := range msg.Parts {
+			if part.Type == modelclient.ContentPartImage {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString("[图片附件：当前模型不支持视觉输入，无法查看图片内容]")
+				continue
+			}
+			if part.Text != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(part.Text)
+			}
+		}
+		msg.Parts = nil
+		msg.Content = b.String()
+		out[i] = msg
+	}
+	return out
+}
+
+func isUnsupportedImageModelError(err error) bool {
+	var apiErr *modelclient.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode != 400 && apiErr.StatusCode != 422 {
+		return false
+	}
+	lower := strings.ToLower(apiErr.Error() + " " + apiErr.Body)
+	hints := []string{
+		"image_url",
+		"image input",
+		"vision",
+		"multimodal",
+		"does not support image",
+		"doesn't support image",
+		"images are not supported",
+		"unsupported image",
+		"cannot read image",
+	}
+	for _, hint := range hints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func countFunctionResponseImages(fr *genai.FunctionResponse) int {
@@ -1225,16 +1418,23 @@ func estimateADKRequestTokens(req *model.LLMRequest) int {
 		units += estimateJSONValueTokenUnits(req.Config.ResponseJsonSchema)
 	}
 	allowedToolImages := selectRecentToolImageTargets(req.Contents, maxPromptToolImageCount)
+	allowedUserAttachments := selectRecentUserAttachmentTargets(req.Contents, maxPromptUserImageCount)
 	for contentIdx, content := range req.Contents {
 		if content == nil {
 			continue
 		}
-		units += estimateContentTokenUnitsWithImages(content, false)
+		units += estimateContentTokenUnitsWithImages(content, false, false)
 		for partIdx, part := range content.Parts {
-			if part == nil || part.Thought || part.FunctionResponse == nil {
+			if part == nil || part.Thought {
 				continue
 			}
-			if allowedToolImages[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}] {
+			if part.FileData != nil && isUserAttachmentURI(part.FileData.FileURI) {
+				if allowedUserAttachments[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}] {
+					units += estimatedImageTokens * estimatedTokenScale
+				}
+				continue
+			}
+			if part.FunctionResponse != nil && allowedToolImages[toolPartKey{contentIdx: contentIdx, partIdx: partIdx}] {
 				if imgCount := countFunctionResponseImages(part.FunctionResponse); imgCount > 0 {
 					units += imgCount * estimatedImageTokens * estimatedTokenScale
 				}
@@ -1245,10 +1445,10 @@ func estimateADKRequestTokens(req *model.LLMRequest) int {
 }
 
 func estimateContentTokenUnits(content *genai.Content) int {
-	return estimateContentTokenUnitsWithImages(content, true)
+	return estimateContentTokenUnitsWithImages(content, true, true)
 }
 
-func estimateContentTokenUnitsWithImages(content *genai.Content, includeToolImages bool) int {
+func estimateContentTokenUnitsWithImages(content *genai.Content, includeToolImages, includeUserAttachments bool) int {
 	if content == nil {
 		return 0
 	}
@@ -1261,8 +1461,14 @@ func estimateContentTokenUnitsWithImages(content *genai.Content, includeToolImag
 		if part.InlineData != nil && isImagePartBlob(part.InlineData) {
 			units += estimatedImageTokens * estimatedTokenScale
 		}
-		if part.FileData != nil && isImageFileData(part.FileData) {
-			units += estimatedImageTokens * estimatedTokenScale
+		if part.FileData != nil {
+			if isUserAttachmentURI(part.FileData.FileURI) {
+				if includeUserAttachments {
+					units += estimatedImageTokens * estimatedTokenScale
+				}
+			} else if isImageFileData(part.FileData) {
+				units += estimatedImageTokens * estimatedTokenScale
+			}
 		}
 		if fc := part.FunctionCall; fc != nil {
 			units += estimateTextTokenUnits(fc.Name) + estimateJSONValueTokenUnits(fc.Args)

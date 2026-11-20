@@ -13,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
@@ -34,6 +35,7 @@ type DispatcherConfig struct {
 	LeaseDuration             time.Duration
 	SessionService            session.Service
 	ArtifactService           artifact.Service
+	Attachments               *attachments.Service
 	ModelAuth                 *modelauth.Service
 	NexusDock                 *nexusdock.Service
 	Live                      *realtime.Hub
@@ -83,6 +85,7 @@ func NewDispatcher(
 		LeaseDuration:     config.LeaseDuration,
 		SessionService:    config.SessionService,
 		ArtifactService:   config.ArtifactService,
+		Attachments:       config.Attachments,
 		ModelAuth:         config.ModelAuth,
 		NexusDock:         config.NexusDock,
 		Live:              config.Live,

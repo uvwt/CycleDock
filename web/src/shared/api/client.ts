@@ -3,6 +3,7 @@ import type {
   AgentSettings,
   APICredential,
   APICredentialInput,
+  AttachmentMeta,
   AuthorizedAIClient,
   DeviceTarget,
   Card,
@@ -197,6 +198,43 @@ export const api = {
     request<Card>(`/cards/${id}/ongoing-state`, "POST", { state }),
   acknowledgeCheckin: (id: string) =>
     request<Card>(`/cards/${id}/acknowledge-checkin`, "POST", {}),
+  uploadAttachment: async (
+    workspaceID: string,
+    file: File,
+    cardID?: string,
+  ): Promise<AttachmentMeta> => {
+    const form = new FormData();
+    form.append("file", file, file.name || "image");
+    if (cardID) form.append("card_id", cardID);
+    const signal = AbortSignal.timeout(45_000);
+    try {
+      const response = await fetch(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceID)}/attachments`,
+        {
+          signal,
+          method: "POST",
+          credentials: "same-origin",
+          body: form,
+        },
+      );
+      if (!response.ok) {
+        const error = (await response.json().catch(() => null)) as {
+          error?: { code?: string; message?: string };
+        } | null;
+        throw new APIError(
+          response.status,
+          error?.error?.code ?? "http_error",
+          error?.error?.message ?? `HTTP ${response.status}`,
+        );
+      }
+      return (await response.json()) as AttachmentMeta;
+    } catch (error) {
+      if (signal.aborted) {
+        throw new APIError(0, "request_timeout", "图片上传超时，请重试");
+      }
+      throw error;
+    }
+  },
   send: (
     id: string,
     content: string,
@@ -204,6 +242,7 @@ export const api = {
     idempotencyKey?: string,
     device_target?: DeviceTarget | null,
     preferred_model_route_id?: string | null,
+    attachment_ids?: string[],
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
@@ -213,6 +252,10 @@ export const api = {
         dispatch_mode,
         device_target: device_target ?? undefined,
         preferred_model_route_id: preferred_model_route_id ?? undefined,
+        attachment_ids:
+          attachment_ids && attachment_ids.length > 0
+            ? attachment_ids
+            : undefined,
       },
       idempotencyKey || true,
     ),
@@ -223,6 +266,7 @@ export const api = {
     messageID?: string,
     device_target?: DeviceTarget | null,
     preferred_model_route_id?: string | null,
+    attachment_ids?: string[],
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
@@ -233,6 +277,10 @@ export const api = {
         message_id: messageID,
         device_target: device_target ?? undefined,
         preferred_model_route_id: preferred_model_route_id ?? undefined,
+        attachment_ids:
+          attachment_ids && attachment_ids.length > 0
+            ? attachment_ids
+            : undefined,
       },
       true,
     ),

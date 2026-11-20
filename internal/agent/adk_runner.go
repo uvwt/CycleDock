@@ -147,6 +147,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	}
 	llm.withTraceContext(cardContext.CardID, cardContext.TurnID, cardContext.AttemptID, "agent")
 	llm.withArtifactService(r.artifactService)
+	llm.withAttachmentsService(r.attachments)
 	llm.budgetPolicy = r.compactionBudgetPolicy.withDefaults()
 
 	historyService, _ := r.sessionService.(*agentsession.PostgresService)
@@ -239,7 +240,7 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 		}
 	})
 	runCtx = agentsession.WithAttempt(runCtx, cardContext.AttemptID)
-	userMessage := genai.NewContentFromText(turnMessage(cardContext), genai.RoleUser)
+	userMessage := buildUserTurnContent(cardContext)
 	previews := replyEventPublisher{hub: liveForAttempt, cardID: cardContext.CardID, attemptID: cardContext.AttemptID,
 		store: r.store, context: cardContext, replies: replies,
 	}
@@ -725,6 +726,31 @@ func turnMessage(card store.AgentCardContext) string {
 	}
 
 	return strings.Join(sections, "\n\n")
+}
+
+// buildUserTurnContent 组装持久化到 ADK Session 的用户消息。
+// 关键约束：严禁将原图二进制/base64 写入 genai.Part.InlineData（否则会被持久化到 PostgreSQL 的 agent_session_events），
+// 仅保存指向本地临时存储的轻量 FileData URI（cycledock-attachment://<id>），发往模型前由 adk_model.go 按需回填。
+func buildUserTurnContent(card store.AgentCardContext) *genai.Content {
+	text := turnMessage(card)
+	parts := make([]*genai.Part, 0, 1+len(card.TurnAttachments))
+	if text != "" {
+		parts = append(parts, genai.NewPartFromText(text))
+	}
+	for _, att := range card.TurnAttachments {
+		if att.ID == uuid.Nil {
+			continue
+		}
+		mimeType := strings.TrimSpace(att.MimeType)
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+		parts = append(parts, genai.NewPartFromURI(userAttachmentURI(att.ID), mimeType))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, genai.NewPartFromText(card.TurnContent))
+	}
+	return genai.NewContentFromParts(parts, genai.RoleUser)
 }
 
 func textFromADKContent(content *genai.Content) string {

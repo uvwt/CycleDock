@@ -85,6 +85,13 @@ func requireJSONWrites(next http.Handler) http.Handler {
 				return
 			}
 			mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if isAttachmentUploadRoute(r) {
+				if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") {
+					writeError(w, http.StatusUnsupportedMediaType, "multipart_required", "Content-Type must be multipart/form-data")
+					return
+				}
+				break
+			}
 			if err != nil || !strings.EqualFold(mediaType, "application/json") {
 				writeError(w, http.StatusUnsupportedMediaType, "json_required", "Content-Type must be application/json")
 				return

@@ -42,6 +42,7 @@ import { CardStatusSwitch } from "./CardStatusSwitch";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { PendingTurnQueue } from "./PendingTurnQueue";
 import { ConversationComposer } from "./ConversationComposer";
+import { useComposerImages } from "./useComposerImages";
 import { DiscussionSidebar } from "../chat/DiscussionSidebar";
 import { PlanSidebar } from "../plans/PlanSidebar";
 import { WorkSidebar } from "../board/WorkSidebar";
@@ -287,6 +288,7 @@ function CardPageContent({
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [comment, setComment] = useState("");
+  const composerImages = useComposerImages({ cardID, disabled: blocked });
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
@@ -488,6 +490,7 @@ function CardPageContent({
   const send = useMutation({
     mutationFn: async () => {
       const text = comment.trim();
+      const attachments = composerImages.readyAttachments;
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
@@ -499,17 +502,20 @@ function CardPageContent({
         undefined,
         deviceTarget,
         card?.preferred_model_route_id || undefined,
+        attachments.map((att) => att.id),
       );
-      return { ...result, content, deviceTarget };
+      return { ...result, content, attachments, deviceTarget };
     },
     onSuccess: (result) => {
       setComment("");
       setReplyTo(null);
+      composerImages.clear();
       const me = queryClient.getQueryData<Identity>(keys.me);
       applyOptimisticSentTurn(queryClient, cardID, {
         eventID: result.event_id,
         turnID: result.turn_id,
         content: result.content,
+        attachments: result.attachments,
         actorName: me?.display_name,
         deviceTarget: result.deviceTarget,
       });
@@ -656,7 +662,11 @@ function CardPageContent({
   });
 
   function submit() {
-    if (!comment.trim() || blocked || send.isPending) return;
+    const hasContent =
+      Boolean(comment.trim()) || composerImages.readyAttachments.length > 0;
+    if (!hasContent || blocked || send.isPending || composerImages.uploading) {
+      return;
+    }
     send.mutate();
   }
 
@@ -1154,6 +1164,10 @@ function CardPageContent({
                     selectedRouteId={card?.preferred_model_route_id}
                     comment={comment}
                     setComment={setComment}
+                    images={composerImages.items}
+                    uploadingImages={composerImages.uploading}
+                    onAddImages={(files) => void composerImages.addFiles(files)}
+                    onRemoveImage={composerImages.removeItem}
                     replyTo={replyTo}
                     onCancelReply={() => setReplyTo(null)}
                     blocked={blocked}

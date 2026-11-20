@@ -26,6 +26,7 @@ import {
   type CardMessageDetail,
 } from "../../shared/realtime/cardUpdates";
 import { Spinner } from "../../shared/ui/components";
+import { useComposerImages } from "../cards/useComposerImages";
 
 const ConversationView = lazy(() =>
   import("../timeline/ConversationView").then((m) => ({
@@ -326,6 +327,10 @@ export function MainChatDock() {
     Boolean(current) &&
     ["queued", "running"].includes(current?.status || "");
   const blocked = card?.discussion_state === "archived";
+  const composerImages = useComposerImages({
+    cardID: cardID || undefined,
+    disabled: Boolean(blocked) || !cardID,
+  });
 
   async function sync() {
     if (!cardID) return;
@@ -338,6 +343,7 @@ export function MainChatDock() {
   const send = useMutation({
     mutationFn: async () => {
       const text = comment.trim();
+      const attachments = composerImages.readyAttachments;
       const content = replyTo
         ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
         : text;
@@ -349,17 +355,20 @@ export function MainChatDock() {
         undefined,
         deviceTarget,
         main.data?.preferred_model_route_id || undefined,
+        attachments.map((att) => att.id),
       );
-      return { ...result, content, deviceTarget };
+      return { ...result, content, attachments, deviceTarget };
     },
     onSuccess: (result) => {
       setComment("");
       setReplyTo(null);
+      composerImages.clear();
       const me = queryClient.getQueryData<Identity>(keys.me);
       applyOptimisticSentTurn(queryClient, cardID, {
         eventID: result.event_id,
         turnID: result.turn_id,
         content: result.content,
+        attachments: result.attachments,
         actorName: me?.display_name,
         deviceTarget: result.deviceTarget,
       });
@@ -885,6 +894,10 @@ export function MainChatDock() {
                 selectedRouteId={main.data?.preferred_model_route_id}
                 comment={comment}
                 setComment={setComment}
+                images={composerImages.items}
+                uploadingImages={composerImages.uploading}
+                onAddImages={(files) => void composerImages.addFiles(files)}
+                onRemoveImage={composerImages.removeItem}
                 replyTo={replyTo}
                 onCancelReply={() => setReplyTo(null)}
                 blocked={Boolean(blocked) || !cardID}
@@ -894,7 +907,17 @@ export function MainChatDock() {
                 streamError={stream.lastError}
                 cancelPending={cancelAttempt.isPending}
                 onSubmit={() => {
-                  if (!comment.trim() || blocked || send.isPending) return;
+                  const hasContent =
+                    Boolean(comment.trim()) ||
+                    composerImages.readyAttachments.length > 0;
+                  if (
+                    !hasContent ||
+                    blocked ||
+                    send.isPending ||
+                    composerImages.uploading
+                  ) {
+                    return;
+                  }
                   send.mutate();
                 }}
                 onCancel={() => cancelAttempt.mutate()}
