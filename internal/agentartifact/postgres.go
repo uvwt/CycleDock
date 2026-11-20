@@ -16,6 +16,9 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentdata"
 )
 
+// ErrNotFound 表示请求的 Artifact 不存在，或已超过保留期被后台清理任务回收。
+var ErrNotFound = errors.New("artifact not found or expired")
+
 type PostgresService struct {
 	pool *pgxpool.Pool
 }
@@ -111,7 +114,7 @@ func (s *PostgresService) Load(ctx context.Context, req *artifact.LoadRequest) (
 	var raw []byte
 	if err := s.pool.QueryRow(ctx, query, args...).Scan(&raw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("artifact %q not found", req.FileName)
+			return nil, fmt.Errorf("%w: artifact %q not found (it may have expired and been cleaned up)", ErrNotFound, req.FileName)
 		}
 		return nil, fmt.Errorf("load artifact %q: %w", req.FileName, err)
 	}
@@ -235,7 +238,7 @@ func (s *PostgresService) GetArtifactVersion(
 	var createdAt time.Time
 	err := s.pool.QueryRow(ctx, query, args...).Scan(&version, &mimeType, &rawMetadata, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("artifact %q not found", req.FileName)
+		return nil, fmt.Errorf("%w: artifact %q not found (it may have expired and been cleaned up)", ErrNotFound, req.FileName)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load artifact metadata %q: %w", req.FileName, err)

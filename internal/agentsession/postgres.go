@@ -523,7 +523,55 @@ func (s *PostgresService) loadEvents(ctx context.Context, req *session.GetReques
 		return nil, fmt.Errorf("load session events: %w", err)
 	}
 	slices.Reverse(reverse)
-	return reverse, nil
+	return alignPrunedCompactionEvents(reverse), nil
+}
+
+// alignPrunedCompactionEvents 保证当早期被 compaction 覆盖的原始事件被保留策略清理后，
+// 残留的 compaction 摘要事件在返回切片中的位置依然早于其 EndTimestamp 之后的未压缩尾部事件。
+//
+// ADK v2 的 compactioninternal.Apply 在遍历事件时会把 compaction 摘要插入到
+// “最后一个时间戳 <= EndTimestamp 的原始事件”所在槽位；一旦旧原始事件全部被删除，
+// 该槽位将退化到 compaction 事件自身在切片中的索引位置。如果 compaction 事件的 sequence
+// 晚于部分尾部事件（例如后台按时间阈值清理掉早期原始事件后，或者 compaction 晚于异步写入落库），
+// 摘要会被错误地排到尾部事件之后，从而颠倒模型上下文时间顺序。
+// 该调整仅作用于内存中的返回切片，不修改数据库中的 sequence 与原始记录。
+func alignPrunedCompactionEvents(events []*session.Event) []*session.Event {
+	if len(events) < 2 {
+		return events
+	}
+	var result []*session.Event
+	var pendingCompactions []*session.Event
+	for _, ev := range events {
+		if ev != nil && ev.Actions.Compaction != nil {
+			pendingCompactions = append(pendingCompactions, ev)
+			continue
+		}
+		result = append(result, ev)
+	}
+	if len(pendingCompactions) == 0 {
+		return events
+	}
+	for _, comp := range pendingCompactions {
+		endTS := comp.Actions.Compaction.EndTimestamp
+		insertAt := len(result)
+		for i, ev := range result {
+			if ev == nil {
+				continue
+			}
+			// 将 compaction 放在第一条严格晚于其覆盖窗口的事件之前；
+			// 若仍存在未被清理的覆盖范围内事件，insertAt 会落在该批事件末尾，与原始顺序一致。
+			evTime := ev.Timestamp
+			if ev.Actions.Compaction != nil {
+				evTime = ev.Actions.Compaction.EndTimestamp
+			}
+			if evTime.After(endTS) {
+				insertAt = i
+				break
+			}
+		}
+		result = slices.Insert(result, insertAt, comp)
+	}
+	return result
 }
 
 func (s *PostgresService) loadMergedState(
