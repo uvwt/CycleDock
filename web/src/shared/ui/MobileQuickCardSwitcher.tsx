@@ -85,9 +85,13 @@ export function QuickCardSwitcherTrigger({
       ? "bg-emerald-500 text-white shadow-[0_0_8px_rgba(16,185,129,0.5)]"
       : focusSummary.highestVisualStatus === "approval"
         ? "bg-orange-500 text-white shadow-[0_0_6px_rgba(249,115,22,0.45)]"
-        : focusSummary.highestVisualStatus === "unread"
-          ? "bg-sky-500 text-white shadow-[0_0_6px_rgba(14,165,233,0.45)]"
-          : "bg-primary text-primary-foreground shadow";
+        : focusSummary.highestVisualStatus === "critical"
+          ? "bg-rose-500 text-white shadow-[0_0_6px_rgba(244,63,94,0.45)]"
+          : focusSummary.highestVisualStatus === "warning"
+            ? "bg-amber-500 text-white shadow-[0_0_6px_rgba(245,158,11,0.45)]"
+            : focusSummary.highestVisualStatus === "unread"
+              ? "bg-sky-500 text-white shadow-[0_0_6px_rgba(14,165,233,0.45)]"
+              : "bg-primary text-primary-foreground shadow";
 
   return (
     <button
@@ -542,6 +546,22 @@ export function QuickCardSwitcherModal({
                     })}
                   </span>
                 )}
+                {focusSummary.criticalCount > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-700 dark:text-rose-300">
+                    <span className="size-1.5 rounded-full bg-rose-500" />
+                    {t("{{count}} 异常", {
+                      count: focusSummary.criticalCount,
+                    })}
+                  </span>
+                )}
+                {focusSummary.warningCount > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                    <span className="size-1.5 rounded-full bg-amber-500" />
+                    {t("{{count}} 需留意", {
+                      count: focusSummary.warningCount,
+                    })}
+                  </span>
+                )}
                 {focusSummary.answeringCount > 0 && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                     <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -558,6 +578,8 @@ export function QuickCardSwitcherModal({
                 )}
                 {focusSummary.answeringCount === 0 &&
                   focusSummary.approvalCount === 0 &&
+                  focusSummary.criticalCount === 0 &&
+                  focusSummary.warningCount === 0 &&
                   focusSummary.unreadCount === 0 && (
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                       {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
@@ -630,13 +652,17 @@ export function QuickCardSwitcherModal({
                           ? "bg-emerald-500 text-white"
                           : tab.badgeStatus === "approval"
                             ? "bg-orange-500 text-white"
-                            : tab.badgeStatus === "unread"
-                              ? "bg-sky-500 text-white"
-                              : tab.id === "review"
-                                ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
-                                : isActive
-                                  ? "bg-primary text-primary-foreground"
-                                  : "bg-muted text-muted-foreground",
+                            : tab.badgeStatus === "critical"
+                              ? "bg-rose-500 text-white"
+                              : tab.badgeStatus === "warning"
+                                ? "bg-amber-500 text-white"
+                                : tab.badgeStatus === "unread"
+                                  ? "bg-sky-500 text-white"
+                                  : tab.id === "review"
+                                    ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
+                                    : isActive
+                                      ? "bg-primary text-primary-foreground"
+                                      : "bg-muted text-muted-foreground",
                       )}
                     >
                       {tab.count}
@@ -835,6 +861,16 @@ export function QuickCardSwitcherModal({
                         {focusReason === "approval" && (
                           <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-700 dark:text-orange-300">
                             {t("待确认")}
+                          </span>
+                        )}
+                        {focusReason === "critical" && (
+                          <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-[10px] font-medium text-rose-700 dark:text-rose-300">
+                            {t("异常")}
+                          </span>
+                        )}
+                        {focusReason === "warning" && (
+                          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            {t("需留意")}
                           </span>
                         )}
                         {focusReason === "answering" && (
