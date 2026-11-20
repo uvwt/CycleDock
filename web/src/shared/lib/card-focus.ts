@@ -31,6 +31,7 @@ type FocusCardFields = Pick<
   | "current_attempt_status"
   | "unread"
   | "pending_tool_approval_count"
+  | "notifications_muted"
 >;
 
 function isArchived(
@@ -82,9 +83,14 @@ export function getCardFocusReason(
   isActive: boolean = false,
   activeAttemptStatus?: string,
 ): CardFocusReason | null {
-  // 即使后台又有新 Turn 在运行，旧的待确认审批仍需人处理，所以先于运行状态判断。
+  // 即使后台又有新 Turn 在运行或卡片已静音，挂起的安全守卫审批仍需人处理，所以优先豁免。
   if (hasPendingApproval(card)) {
     return "approval";
+  }
+
+  // 已开启静音（关闭消息推送）的卡片视为免打扰，除待人工审批外不再进入全局焦点。
+  if (card.notifications_muted) {
+    return null;
   }
 
   // 已归档的讨论或定时任务不再进入日常焦点流，除非其仍有正在运行的 Attempt
@@ -179,6 +185,7 @@ export function buildFocusSummary(
 
 /**
  * 计算某个一级导航分类（讨论 / 任务 / 定时）下的最高视觉状态，用于在导航图标右上角展示呼吸绿点、待确认橙点或未读蓝点。
+ * 与焦点规则保持一致：已静音卡片忽略运行中（绿点）与未读（蓝点），仅在存在待人工确认审批时触发橙点。
  */
 export function getKindVisualStatus(
   cards: Card[],
@@ -190,6 +197,12 @@ export function getKindVisualStatus(
   let hasUnread = false;
   for (const card of cards) {
     if (card.kind !== kind) continue;
+    if (card.notifications_muted) {
+      // 静音卡片同时在运行新 Turn 时，getCardVisualStatus 会返回 answering；
+      // 这里直接检查待审批数量，避免把唯一的硬阻塞豁免（橙点）误吞掉。
+      if (hasPendingApproval(card)) hasApproval = true;
+      continue;
+    }
     const isActive = Boolean(activeCardID && card.id === activeCardID);
     const status = getCardVisualStatus(card, isActive, activeAttemptStatus);
     if (status === "answering") return "answering";

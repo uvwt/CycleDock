@@ -628,13 +628,15 @@ export function QuickCardSwitcherModal({
                         "rounded-full px-1.5 py-0.2 text-[10px] font-bold tabular-nums",
                         tab.badgeStatus === "answering"
                           ? "bg-emerald-500 text-white"
-                          : tab.badgeStatus === "unread"
-                            ? "bg-sky-500 text-white"
-                            : tab.id === "review"
-                              ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
-                              : isActive
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground",
+                          : tab.badgeStatus === "approval"
+                            ? "bg-orange-500 text-white"
+                            : tab.badgeStatus === "unread"
+                              ? "bg-sky-500 text-white"
+                              : tab.id === "review"
+                                ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
+                                : isActive
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-muted text-muted-foreground",
                       )}
                     >
                       {tab.count}

@@ -229,3 +229,170 @@ test("导航分类状态点：待确认优先于未读，低于运行中", () =>
   assert.equal(getKindVisualStatus(cards, "discussion"), "approval");
   assert.equal(getKindVisualStatus(cards, "todo"), "answering");
 });
+
+test("已静音卡片忽略运行中、未读、待验收和进行中，不进入焦点列表但保留自身真实状态点", () => {
+  const mutedRunning = makeCard({
+    id: "muted-running",
+    kind: "ongoing",
+    ongoing_state: "active",
+    current_attempt_status: "running",
+    notifications_muted: true,
+  });
+  const mutedUnread = makeCard({
+    id: "muted-unread",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    notifications_muted: true,
+  });
+  const mutedReview = makeCard({
+    id: "muted-review",
+    kind: "todo",
+    todo_state: "review",
+    notifications_muted: true,
+  });
+  const mutedWorking = makeCard({
+    id: "muted-working",
+    kind: "todo",
+    todo_state: "working",
+    notifications_muted: true,
+  });
+
+  // 均不进入焦点（包括正在查看且活跃运行中的场景）
+  assert.equal(getCardFocusReason(mutedRunning), null);
+  assert.equal(getCardFocusReason(mutedUnread, true, "running"), null);
+  assert.equal(getCardFocusReason(mutedUnread), null);
+  assert.equal(getCardFocusReason(mutedReview), null);
+  assert.equal(getCardFocusReason(mutedWorking), null);
+
+  // 分类列表自身仍依赖 getCardVisualStatus 展示真实状态
+  assert.equal(getCardVisualStatus(mutedRunning), "answering");
+  assert.equal(getCardVisualStatus(mutedUnread), "unread");
+
+  const summary = buildFocusSummary([
+    mutedRunning,
+    mutedUnread,
+    mutedReview,
+    mutedWorking,
+  ]);
+  assert.deepEqual(summary.cards, []);
+  assert.equal(summary.approvalCount, 0);
+  assert.equal(summary.answeringCount, 0);
+  assert.equal(summary.unreadCount, 0);
+  assert.equal(summary.reviewCount, 0);
+  assert.equal(summary.workingCount, 0);
+  assert.equal(summary.highestVisualStatus, "idle");
+});
+
+test("已静音卡片存在待人工确认审批时仍进入焦点并触发橙色状态，归档后退出", () => {
+  const mutedApproval = makeCard({
+    id: "muted-approval",
+    kind: "todo",
+    todo_state: "working",
+    pending_tool_approval_count: 1,
+    notifications_muted: true,
+    updated_at: "2026-11-08T03:00:00Z",
+  });
+  // 静音卡同时有待审批与后台新运行 Turn，仍只按 approval 豁免，不计为 answering
+  const mutedApprovalRunning = makeCard({
+    id: "muted-approval-running",
+    kind: "discussion",
+    discussion_state: "active",
+    current_attempt_status: "running",
+    pending_tool_approval_count: 2,
+    notifications_muted: true,
+    updated_at: "2026-11-08T04:00:00Z",
+  });
+  const mutedUnread = makeCard({
+    id: "muted-unread",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    notifications_muted: true,
+    updated_at: "2026-11-08T05:00:00Z",
+  });
+  const mutedArchivedApproval = makeCard({
+    id: "muted-archived-approval",
+    kind: "discussion",
+    discussion_state: "archived",
+    pending_tool_approval_count: 1,
+    notifications_muted: true,
+    updated_at: "2026-11-08T06:00:00Z",
+  });
+
+  assert.equal(getCardFocusReason(mutedApproval), "approval");
+  assert.equal(getCardFocusReason(mutedApprovalRunning), "approval");
+  assert.equal(getCardFocusReason(mutedArchivedApproval), null);
+
+  const summary = buildFocusSummary([
+    mutedApproval,
+    mutedApprovalRunning,
+    mutedUnread,
+    mutedArchivedApproval,
+  ]);
+  assert.deepEqual(
+    summary.cards.map((c) => c.id),
+    ["muted-approval-running", "muted-approval"],
+  );
+  assert.equal(summary.approvalCount, 2);
+  assert.equal(summary.answeringCount, 0);
+  assert.equal(summary.unreadCount, 0);
+  assert.equal(summary.workingCount, 0);
+  assert.equal(summary.highestVisualStatus, "approval");
+});
+
+test("导航分类状态点：已静音卡片不亮绿/蓝点，仅待审批挂起触发橙点", () => {
+  const mutedOnlyCards = [
+    makeCard({
+      id: "d-muted-unread",
+      kind: "discussion",
+      unread: true,
+      notifications_muted: true,
+    }),
+    makeCard({
+      id: "d-muted-running",
+      kind: "discussion",
+      current_attempt_status: "running",
+      notifications_muted: true,
+    }),
+    makeCard({
+      id: "t-muted-queued",
+      kind: "todo",
+      todo_state: "working",
+      current_attempt_status: "queued",
+      notifications_muted: true,
+    }),
+    makeCard({
+      id: "o-muted-approval-running",
+      kind: "ongoing",
+      ongoing_state: "active",
+      current_attempt_status: "running",
+      pending_tool_approval_count: 1,
+      notifications_muted: true,
+    }),
+  ];
+
+  assert.equal(getKindVisualStatus(mutedOnlyCards, "discussion"), "idle");
+  assert.equal(getKindVisualStatus(mutedOnlyCards, "todo"), "idle");
+  // 静音卡同时运行中 + 待审批：忽略运行中绿点，仍保留待审批橙点
+  assert.equal(getKindVisualStatus(mutedOnlyCards, "ongoing"), "approval");
+
+  // 混排场景：静音卡的审批优先于未静音卡的未读；未静音卡的运行中仍正常亮绿点
+  const mixedCards = [
+    ...mutedOnlyCards,
+    makeCard({
+      id: "o-unmuted-unread",
+      kind: "ongoing",
+      ongoing_state: "active",
+      unread: true,
+    }),
+    makeCard({
+      id: "t-unmuted-running",
+      kind: "todo",
+      todo_state: "working",
+      current_attempt_status: "running",
+    }),
+  ];
+  assert.equal(getKindVisualStatus(mixedCards, "ongoing"), "approval");
+  assert.equal(getKindVisualStatus(mixedCards, "todo"), "answering");
+});
