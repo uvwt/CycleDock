@@ -9,13 +9,11 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
@@ -62,24 +60,9 @@ func TestBuildUserTurnContentPersistsReferenceOnlyNoInlineBytes(t *testing.T) {
 }
 
 func TestAdkRequestHydratesUserAttachmentAndDegradesWhenExpiredOrOld(t *testing.T) {
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect db: %v", err)
-	}
-	defer pool.Close()
-
-	if _, err := pool.Exec(ctx, `
-		TRUNCATE TABLE workspace_attachments, agent_artifacts, agent_session_events, agent_sessions,
-			turn_attempts, card_turns, events, card_schedules, cards, projects, sources, workspaces
-		RESTART IDENTITY CASCADE
-	`); err != nil {
-		t.Fatalf("reset db: %v", err)
-	}
+	// 复用隔离临时 schema 并执行完整迁移，避免依赖外部预迁移的 public schema。
+	_, pool := newAgentIntegrationStore(t)
 
 	wsID := uuid.New()
 	srcID := uuid.New()

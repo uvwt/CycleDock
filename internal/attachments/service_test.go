@@ -9,11 +9,16 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func makeTestPNG(t *testing.T, w, h int, alpha uint8, seed byte) []byte {
@@ -120,19 +125,44 @@ func TestServiceUploadDedupAndCleanupTTLandCapacity(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL is not set")
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	// 在独立临时 schema 中执行完整迁移，避免依赖外部预迁移或污染 public schema。
+	adminPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect test db: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(adminPool.Close)
 
-	if _, err := pool.Exec(ctx, `
-		TRUNCATE TABLE workspace_attachments, agent_artifacts, agent_session_events, agent_sessions,
-			turn_attempts, card_turns, events, card_schedules, cards, projects, sources, workspaces
-		RESTART IDENTITY CASCADE
-	`); err != nil {
-		t.Fatalf("reset db: %v", err)
+	schema := "attachments_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := adminPool.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create test schema: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE")
+	})
+
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse test db url: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*cfg.ConnConfig)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	_, filename, _, _ := runtime.Caller(0)
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatalf("set goose dialect: %v", err)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("migrate test schema: %v", err)
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect test schema pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
 
 	wsID := uuid.New()
 	wsOtherID := uuid.New()
