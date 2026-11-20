@@ -47,6 +47,12 @@ services:
       CYCLEDOCK_VAPID_PUBLIC_KEY: ${CYCLEDOCK_VAPID_PUBLIC_KEY:-}
       CYCLEDOCK_VAPID_PRIVATE_KEY: ${CYCLEDOCK_VAPID_PRIVATE_KEY:-}
       CYCLEDOCK_VAPID_SUBJECT: ${CYCLEDOCK_VAPID_SUBJECT:-}
+      # 临时图片本地磁盘目录（独立挂载，不上传 R2，也不纳入 PostgreSQL/云端备份）。
+      CYCLEDOCK_UPLOAD_DIR: ${CYCLEDOCK_UPLOAD_DIR:-/var/lib/cycledock/uploads}
+      CYCLEDOCK_UPLOAD_TTL_HOURS: ${CYCLEDOCK_UPLOAD_TTL_HOURS:-720}
+      CYCLEDOCK_UPLOAD_MAX_MB: ${CYCLEDOCK_UPLOAD_MAX_MB:-1024}
+    volumes:
+      - cycledock_uploads:/var/lib/cycledock/uploads
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -60,3 +66,4 @@ services:
 
 volumes:
   cycledock_postgres:
+  cycledock_uploads:

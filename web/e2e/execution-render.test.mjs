@@ -1703,3 +1703,94 @@ test("NexusDockPage 按插件与来源分组整理 Skill 和动态 MCP", () => {
     queryClient.removeQueries({ queryKey: ["tool-guard"] });
   }
 });
+
+test("用户评论附带图片与过期图片渲染，输入框支持纯图片发送", () => {
+  const withImageHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      cardID: "card-img",
+      events: [
+        {
+          id: "evt-img-1",
+          type: "comment",
+          actor_kind: "human",
+          actor_name: "Alice",
+          content: "帮我看看这张截图",
+          message: {
+            attachments: [
+              {
+                id: "att-1",
+                mime_type: "image/jpeg",
+                size_bytes: 20480,
+                width: 800,
+                height: 600,
+                url: "/api/v1/workspaces/ws-1/attachments/att-1",
+                status: "active",
+              },
+              {
+                id: "att-2",
+                mime_type: "image/png",
+                size_bytes: 12000,
+                width: 400,
+                height: 300,
+                url: "/api/v1/workspaces/ws-1/attachments/att-2",
+                status: "purged",
+              },
+            ],
+          },
+          sequence: 1,
+          created_at: "2026-10-29T00:00:00Z",
+        },
+      ],
+      attemptHistory: [],
+      pendingTurns: [],
+    }),
+  );
+  assert.match(withImageHtml, /\/api\/v1\/workspaces\/ws-1\/attachments\/att-1/);
+  assert.match(withImageHtml, /attachment-expired-placeholder/);
+  assert.match(withImageHtml, /图片已过期清理/);
+  assert.match(withImageHtml, /帮我看看这张截图/);
+
+  const composerWithImageHtml = renderToStaticMarkup(
+    createElement(ConversationComposer, {
+      cardID: "card-img",
+      projectID: "project",
+      comment: "",
+      setComment() {},
+      images: [
+        {
+          localID: "local-1",
+          previewURL: "blob:preview-1",
+          name: "shot.png",
+          status: "ready",
+          attachment: {
+            id: "att-ready-1",
+            mime_type: "image/jpeg",
+            size_bytes: 10240,
+            width: 640,
+            height: 480,
+            url: "/api/v1/workspaces/ws-1/attachments/att-ready-1",
+            status: "active",
+          },
+        },
+      ],
+      uploadingImages: false,
+      onAddImages() {},
+      onRemoveImage() {},
+      blocked: false,
+      hasCurrent: false,
+      sendPending: false,
+      streamConnected: true,
+      cancelPending: false,
+      onSubmit() {},
+      onCancel() {},
+    }),
+  );
+  assert.match(composerWithImageHtml, /composer-image-tray/);
+  assert.match(composerWithImageHtml, /composer-image-button/);
+  // 纯图片待发时发送按钮处于可用态（不带 disabled 属性）
+  assert.match(composerWithImageHtml, /type="submit"[^>]*aria-label="发送"/);
+  assert.doesNotMatch(
+    composerWithImageHtml,
+    /<button[^>]*type="submit"[^>]*disabled[^>]*aria-label="发送"/,
+  );
+});

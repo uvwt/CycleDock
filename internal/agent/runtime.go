@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
@@ -26,6 +27,7 @@ type RunnerConfig struct {
 	LeaseDuration     time.Duration
 	SessionService    session.Service
 	ArtifactService   artifact.Service
+	Attachments       *attachments.Service
 	ModelAuth         *modelauth.Service
 	NexusDock         *nexusdock.Service
 	Live              *realtime.Hub
@@ -36,6 +38,7 @@ type Runner struct {
 	model                    *modelclient.Client
 	sessionService           session.Service
 	artifactService          artifact.Service
+	attachments              *attachments.Service
 	modelAuth                *modelauth.Service
 	nexusDock                *nexusdock.Service
 	live                     *realtime.Hub
@@ -71,6 +74,7 @@ func NewRunner(
 		logger:                   logger,
 		sessionService:           config.SessionService,
 		artifactService:          config.ArtifactService,
+		attachments:              config.Attachments,
 		modelAuth:                config.ModelAuth,
 		nexusDock:                config.NexusDock,
 		live:                     config.Live,

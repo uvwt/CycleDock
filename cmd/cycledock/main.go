@@ -18,6 +18,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/agentartifact"
 	"github.com/uvwt/CycleDock/internal/agentsession"
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
@@ -134,6 +135,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	uploadTTLHours, err := envPositiveInt("CYCLEDOCK_UPLOAD_TTL_HOURS", int(attachments.DefaultTTL/time.Hour))
+	if err != nil {
+		logger.Error("configure upload ttl", "error", err)
+		os.Exit(1)
+	}
+	uploadMaxMB, err := envPositiveInt("CYCLEDOCK_UPLOAD_MAX_MB", int(attachments.DefaultMaxTotalBytes>>20))
+	if err != nil {
+		logger.Error("configure upload max size", "error", err)
+		os.Exit(1)
+	}
+	attachmentsService, err := attachments.New(pool, attachments.Config{
+		Dir:           os.Getenv("CYCLEDOCK_UPLOAD_DIR"),
+		TTL:           time.Duration(uploadTTLHours) * time.Hour,
+		MaxTotalBytes: int64(uploadMaxMB) << 20,
+		Logger:        logger,
+	})
+	if err != nil {
+		logger.Error("configure attachment storage", "error", err)
+		os.Exit(1)
+	}
+
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
 	if publicURL != "" {
@@ -150,6 +172,7 @@ func main() {
 		Logger:       logger,
 		OAuth:        oauthService,
 		NexusDock:    nexusDockService,
+		Attachments:  attachmentsService,
 		MCP:          mcpHandlers.MCP,
 		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
 		ModelAuth:    modelAuthService,
@@ -166,6 +189,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go attachmentsService.RunBackgroundCleanup(ctx)
 	sessionService := agentsession.NewPostgresService(pool)
 	artifactService := agentartifact.NewPostgresService(pool)
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
@@ -173,6 +197,7 @@ func main() {
 		MaxConcurrentPerWorkspace: maxPerWorkspace,
 		SessionService:            sessionService,
 		ArtifactService:           artifactService,
+		Attachments:               attachmentsService,
 		ModelAuth:                 modelAuthService,
 		NexusDock:                 nexusDockService,
 		Live:                      live,

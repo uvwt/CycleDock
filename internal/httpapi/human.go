@@ -21,6 +21,8 @@ import (
 func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/workspaces", api.listWorkspaces)
 	r.Post("/workspaces/{workspaceID}/switch", api.switchWorkspace)
+	r.Post("/workspaces/{workspaceID}/attachments", api.uploadWorkspaceAttachment)
+	r.Get("/workspaces/{workspaceID}/attachments/{attachmentID}", api.getWorkspaceAttachment)
 
 	r.Get("/projects", api.listProjects)
 	r.Post("/projects", api.createProject)
@@ -1185,6 +1187,7 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		Content               string              `json:"content"`
+		AttachmentIDs         []string            `json:"attachment_ids,omitempty"`
 		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
 		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
 		DispatchMode          string              `json:"dispatch_mode"`
@@ -1193,8 +1196,12 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Content = strings.TrimSpace(request.Content)
-	if request.Content == "" {
-		writeError(w, http.StatusBadRequest, "invalid_content", "comment content is required")
+	attachmentIDs, ok := parseAttachmentIDs(w, request.AttachmentIDs)
+	if !ok {
+		return
+	}
+	if request.Content == "" && len(attachmentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_content", "comment content or image attachment is required")
 		return
 	}
 	if request.DispatchMode == "" {
@@ -1226,6 +1233,7 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID:        identity.SourceID,
 		Content:               request.Content,
+		AttachmentIDs:         attachmentIDs,
 		IdempotencyKey:        idempotencyKey,
 		DeviceTarget:          request.DeviceTarget,
 		PreferredModelRouteID: preferredRouteID,
@@ -1287,6 +1295,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		Content               string              `json:"content"`
+		AttachmentIDs         []string            `json:"attachment_ids,omitempty"`
 		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
 		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
 		AttemptID             string              `json:"attempt_id"`
@@ -1296,8 +1305,12 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Content = strings.TrimSpace(request.Content)
-	if request.Content == "" {
-		writeError(w, http.StatusBadRequest, "invalid_content", "reply content is required")
+	attachmentIDs, ok := parseAttachmentIDs(w, request.AttachmentIDs)
+	if !ok {
+		return
+	}
+	if request.Content == "" && len(attachmentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_content", "reply content or image attachment is required")
 		return
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
@@ -1335,6 +1348,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: identity.WorkspaceID, CardID: cardID,
 		AuthorSourceID:        identity.SourceID,
 		Content:               request.Content,
+		AttachmentIDs:         attachmentIDs,
 		IdempotencyKey:        idempotencyKey,
 		DeviceTarget:          request.DeviceTarget,
 		PreferredModelRouteID: preferredRouteID,
@@ -1836,7 +1850,7 @@ func timelineToResponse(rows []db.ListCardTimelineRow) []eventResponse {
 		if row.CheckinStatus.Valid {
 			item.CheckinStatus = row.CheckinStatus.String
 		}
-		if row.EventType == "message" && len(row.Message) > 0 {
+		if (row.EventType == "message" || row.EventType == "comment") && len(row.Message) > 0 {
 			item.Message = json.RawMessage(row.Message)
 		}
 		if row.AttemptID.Valid {
@@ -1867,7 +1881,7 @@ func timelineBeforeToResponse(rows []db.ListCardTimelineBeforeRow) []eventRespon
 		if row.CheckinStatus.Valid {
 			item.CheckinStatus = row.CheckinStatus.String
 		}
-		if row.EventType == "message" && len(row.Message) > 0 {
+		if (row.EventType == "message" || row.EventType == "comment") && len(row.Message) > 0 {
 			item.Message = json.RawMessage(row.Message)
 		}
 		if row.AttemptID.Valid {

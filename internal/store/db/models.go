@@ -425,6 +425,22 @@ type WorkspaceApiCredential struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type WorkspaceAttachment struct {
+	ID                 uuid.UUID          `json:"id"`
+	WorkspaceID        uuid.UUID          `json:"workspace_id"`
+	CardID             uuid.NullUUID      `json:"card_id"`
+	UploadedBySourceID uuid.UUID          `json:"uploaded_by_source_id"`
+	MimeType           string             `json:"mime_type"`
+	SizeBytes          int64              `json:"size_bytes"`
+	Width              int32              `json:"width"`
+	Height             int32              `json:"height"`
+	Sha256             string             `json:"sha256"`
+	RelativePath       string             `json:"relative_path"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	PurgedAt           pgtype.Timestamptz `json:"purged_at"`
+}
+
 type WorkspaceDeviceToolGuard struct {
 	ID           uuid.UUID          `json:"id"`
 	WorkspaceID  uuid.UUID          `json:"workspace_id"`
