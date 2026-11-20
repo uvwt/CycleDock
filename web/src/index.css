@@ -180,6 +180,8 @@ button:disabled {
 .prose-chat {
   line-height: 1.62;
   overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
 }
 .prose-chat p {
   margin: 0.38rem 0;
@@ -234,16 +236,64 @@ button:disabled {
   font-weight: 650;
   margin: 0.75rem 0 0.3rem;
 }
+/* 聊天表格独立横向滚动与列宽保护：
+ * - 隔断外层 .prose-chat 的 overflow-wrap: anywhere，避免浏览器把多列表格压成单字竖排
+ * - 表头不换行；短单元格保持自然单行宽度，超长说明列达到上限后再折行 */
+.prose-chat-table-wrap {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.prose-chat-table-wrap::-webkit-scrollbar {
+  height: 6px;
+}
+.prose-chat-table-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+.prose-chat-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 9999px;
+}
 .prose-chat table {
   border-collapse: collapse;
-  max-width: 100%;
-  display: block;
-  overflow: auto;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
 }
-.prose-chat td,
+.prose-chat thead th {
+  background: var(--muted);
+  color: var(--strong);
+  font-weight: 600;
+}
 .prose-chat th {
-  border: 1px solid var(--line-strong);
-  padding: 0.35rem 0.6rem;
+  white-space: nowrap;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--line-strong);
+  border-right: 1px solid var(--line);
+}
+.prose-chat td {
+  min-width: 3.5rem;
+  vertical-align: top;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+.prose-chat th:last-child,
+.prose-chat td:last-child {
+  border-right: 0;
+}
+.prose-chat tbody tr:last-child td {
+  border-bottom: 0;
+}
+.prose-chat-table-cell {
+  width: max-content;
+  min-width: 100%;
+  max-width: min(24rem, 68vw);
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 @keyframes message-enter {
   from {
