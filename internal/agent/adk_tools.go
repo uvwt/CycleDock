@@ -198,6 +198,14 @@ func (r attemptToolRuntime) internalHandler(
 		return r.deleteScheduleTool, nil
 	case "cycledock_update_card":
 		return r.updateCardTool, nil
+	case "cycledock_watch_event":
+		return r.watchEventTool, nil
+	case "cycledock_schedule_wakeup":
+		return r.scheduleWakeupTool, nil
+	case "cycledock_list_watchers":
+		return r.listWatchersTool, nil
+	case "cycledock_cancel_watcher":
+		return r.cancelWatcherTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。

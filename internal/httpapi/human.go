@@ -73,6 +73,16 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Put("/cards/{cardID}/schedules/{scheduleID}", api.updateSchedule)
 	r.Delete("/cards/{cardID}/schedules/{scheduleID}", api.deleteSchedule)
 
+	r.Get("/cards/{cardID}/watchers", api.listCardWatchers)
+	r.Post("/cards/{cardID}/watchers/{watcherID}/cancel", api.cancelCardWatcher)
+
+	r.Get("/triggers", api.listTriggers)
+	r.Post("/triggers", api.createTrigger)
+	r.Patch("/triggers/{triggerID}", api.updateTrigger)
+	r.Post("/triggers/{triggerID}/rotate-secret", api.rotateTriggerSecret)
+	r.Delete("/triggers/{triggerID}", api.deleteTrigger)
+	r.Get("/triggers/{triggerID}/deliveries", api.listTriggerDeliveries)
+
 	r.Get("/agent/status", api.getAgentStatus)
 	r.Get("/agent/settings", api.getAgentSettings)
 	r.Put("/agent/settings", api.saveAgentSettings)

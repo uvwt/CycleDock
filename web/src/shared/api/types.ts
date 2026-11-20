@@ -128,7 +128,7 @@ export type PendingTurn = {
   device_name?: string;
   id: string;
   sequence: number;
-  source: "human" | "schedule" | "system";
+  source: "human" | "schedule" | "system" | "trigger";
   dispatch_mode: string;
   source_event_id?: string;
   content: string;
