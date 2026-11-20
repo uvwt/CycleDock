@@ -26,6 +26,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/retention"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
 )
@@ -40,6 +41,11 @@ func main() {
 	maxPerWorkspace, err := envPositiveInt("CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE", agent.DefaultMaxConcurrentPerWorkspace)
 	if err != nil {
 		logger.Error("configure workspace agent concurrency", "error", err)
+		os.Exit(1)
+	}
+	retentionCfg, err := loadRetentionConfigFromEnv()
+	if err != nil {
+		logger.Error("configure db retention cleaner", "error", err)
 		os.Exit(1)
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -178,6 +184,8 @@ func main() {
 		Live:                      live,
 	})
 	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
+	retentionCleaner := retention.NewCleaner(pool, retentionCfg, logger)
+	go retentionCleaner.Run(ctx)
 	if pushSender != nil {
 		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, logger)
 	}
@@ -232,4 +240,59 @@ func envPositiveInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return parsed, nil
+}
+
+func envPositiveDuration(key string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", key)
+	}
+	return parsed, nil
+}
+
+func loadRetentionConfigFromEnv() (retention.Config, error) {
+	enabled := true
+	if parsed, ok, err := envBool("CYCLEDOCK_DB_RETENTION_ENABLED"); err != nil {
+		return retention.Config{}, fmt.Errorf("invalid CYCLEDOCK_DB_RETENTION_ENABLED: %w", err)
+	} else if ok {
+		enabled = parsed
+	}
+
+	dryRun := false
+	if parsed, ok, err := envBool("CYCLEDOCK_DB_RETENTION_DRY_RUN"); err != nil {
+		return retention.Config{}, fmt.Errorf("invalid CYCLEDOCK_DB_RETENTION_DRY_RUN: %w", err)
+	} else if ok {
+		dryRun = parsed
+	}
+
+	retentionDays, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_DAYS", retention.DefaultRetentionDays)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	interval, err := envPositiveDuration("CYCLEDOCK_DB_RETENTION_INTERVAL", retention.DefaultInterval)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	batchSize, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_BATCH_SIZE", retention.DefaultBatchSize)
+	if err != nil {
+		return retention.Config{}, err
+	}
+	maxBatches, err := envPositiveInt("CYCLEDOCK_DB_RETENTION_MAX_BATCHES", retention.DefaultMaxBatchesPerRun)
+	if err != nil {
+		return retention.Config{}, err
+	}
+
+	return retention.Config{
+		Enabled:       enabled,
+		DryRun:        dryRun,
+		RetentionDays: retentionDays,
+		Interval:      interval,
+		BatchSize:     batchSize,
+		MaxBatches:    maxBatches,
+		StartupDelay:  2 * time.Minute,
+	}, nil
 }
