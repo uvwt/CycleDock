@@ -188,6 +188,26 @@ type CardTurn struct {
 	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
 }
 
+type CardWatcher struct {
+	ID                 uuid.UUID          `json:"id"`
+	WorkspaceID        uuid.UUID          `json:"workspace_id"`
+	CardID             uuid.UUID          `json:"card_id"`
+	Kind               string             `json:"kind"`
+	MatchKey           string             `json:"match_key"`
+	Note               string             `json:"note"`
+	DispatchMode       string             `json:"dispatch_mode"`
+	Status             string             `json:"status"`
+	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
+	CreatedBySourceID  uuid.NullUUID      `json:"created_by_source_id"`
+	CreatedByAttemptID uuid.NullUUID      `json:"created_by_attempt_id"`
+	TriggeredTurnID    uuid.NullUUID      `json:"triggered_turn_id"`
+	ResolvedReason     string             `json:"resolved_reason"`
+	ResolvedAt         pgtype.Timestamptz `json:"resolved_at"`
+	IdempotencyKey     pgtype.Text        `json:"idempotency_key"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Event struct {
 	ID                uuid.UUID          `json:"id"`
 	Sequence          int64              `json:"sequence"`
@@ -350,6 +370,25 @@ type Source struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type TriggerDelivery struct {
+	ID                      uuid.UUID          `json:"id"`
+	WorkspaceID             uuid.UUID          `json:"workspace_id"`
+	TriggerID               uuid.UUID          `json:"trigger_id"`
+	DeliveryID              string             `json:"delivery_id"`
+	Provider                string             `json:"provider"`
+	EventType               string             `json:"event_type"`
+	EventAction             string             `json:"event_action"`
+	SignatureValid          bool               `json:"signature_valid"`
+	Status                  string             `json:"status"`
+	Reason                  string             `json:"reason"`
+	MatchKeys               []string           `json:"match_keys"`
+	PayloadSummary          string             `json:"payload_summary"`
+	TriggeredTurnID         uuid.NullUUID      `json:"triggered_turn_id"`
+	TriggeredWatcherTurnIds []uuid.UUID        `json:"triggered_watcher_turn_ids"`
+	CreatedCardID           uuid.NullUUID      `json:"created_card_id"`
+	ReceivedAt              pgtype.Timestamptz `json:"received_at"`
+}
+
 type TurnAttempt struct {
 	ID               uuid.UUID          `json:"id"`
 	WorkspaceID      uuid.UUID          `json:"workspace_id"`
@@ -503,4 +542,26 @@ type WorkspaceNexusdockConnection struct {
 	ConnectedAt            pgtype.Timestamptz `json:"connected_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 	AuthorizedSubject      string             `json:"authorized_subject"`
+}
+
+type WorkspaceTrigger struct {
+	ID                uuid.UUID          `json:"id"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	Name              string             `json:"name"`
+	Provider          string             `json:"provider"`
+	AuthMode          string             `json:"auth_mode"`
+	SignatureHeader   string             `json:"signature_header"`
+	SecretCiphertext  []byte             `json:"secret_ciphertext"`
+	SecretHint        string             `json:"secret_hint"`
+	Enabled           bool               `json:"enabled"`
+	RoutingMode       string             `json:"routing_mode"`
+	TargetProjectID   uuid.NullUUID      `json:"target_project_id"`
+	TargetCardID      uuid.NullUUID      `json:"target_card_id"`
+	DispatchMode      string             `json:"dispatch_mode"`
+	FilterConfig      []byte             `json:"filter_config"`
+	CooldownSeconds   int32              `json:"cooldown_seconds"`
+	LastTriggeredAt   pgtype.Timestamptz `json:"last_triggered_at"`
+	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
