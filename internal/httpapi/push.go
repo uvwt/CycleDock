@@ -7,22 +7,26 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
-
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
 )
 
 const (
-	maxPushTitleRunes = 80
-	maxPushBodyRunes  = 240
-	singlePushTimeout = 15 * time.Second
+	maxPushTitleRunes    = 80
+	maxPushBodyRunes     = 240
+	singlePushTimeout    = 15 * time.Second
+	maxConcurrentPushes  = 8
+	pushFallbackInterval = 15 * time.Second
 )
 
 type pushSender interface {
@@ -78,12 +82,38 @@ func (api *API) savePushSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	identity := identityFromRequest(r)
-	err := api.store.SavePushSubscription(r.Context(), identity.WorkspaceID, identity.HumanAccountID, store.PushSubscription{
+	subID, err := api.store.SavePushSubscription(r.Context(), identity.WorkspaceID, identity.HumanAccountID, store.PushSubscription{
 		Endpoint: endpoint, P256dh: request.Keys.P256dh, AuthSecret: request.Keys.Auth,
 	})
 	if err != nil {
 		api.handleError(w, err)
 		return
+	}
+	// 新订阅（或切换到新工作区后尚无快照）立即用当前工作区快照建立基线，
+	// 防止新设备刚订阅时把历史卡片一次性轰炸推送，同时确保订阅之后的下一条消息立刻可推。
+	existing, err := api.store.ListPushSubscriptionCardSnapshots(r.Context(), identity.WorkspaceID, subID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if len(existing) == 0 {
+		updates, err := api.cardUpdates(r.Context(), identity.WorkspaceID)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		baseline := make([]store.PushCardSnapshot, 0, len(updates))
+		for _, update := range updates {
+			cardID, err := uuid.Parse(update.ID)
+			if err != nil {
+				continue
+			}
+			baseline = append(baseline, cardUpdateToPushSnapshot(subID, cardID, update))
+		}
+		if err := api.store.SavePushSubscriptionCardSnapshotsBatch(r.Context(), identity.WorkspaceID, subID, baseline); err != nil {
+			api.handleError(w, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -157,22 +187,59 @@ func normalizePushEndpoint(w http.ResponseWriter, raw string) (string, bool) {
 	return parsed.String(), true
 }
 
-// DeliverPushes 在进程存活期间把已关闭页面的卡片变化推出去。
-// 多个副本会各自推送；浏览器按卡片合并同一条未读通知。
-func DeliverPushes(ctx context.Context, pool *pgxpool.Pool, dataStore *store.Store, sender pushSender, logger *slog.Logger) {
+// DeliverPushes 在进程存活期间把已切后台或关闭页面的卡片变化推出去。
+// 优先由 realtime.Hub 在消息/审批/状态落库后零延迟唤醒并只扫目标工作区；
+// 同时保留低频全量兜底轮询，覆盖心跳过期、跨副本写入和上次失败重试。
+func DeliverPushes(ctx context.Context, pool *pgxpool.Pool, dataStore *store.Store, sender pushSender, live *realtime.Hub, logger *slog.Logger) {
 	if sender == nil || sender.PublicKey() == "" {
 		return
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	api := &API{pool: pool, store: dataStore, push: sender, logger: logger}
-	ticker := time.NewTicker(3 * time.Second)
+	api := &API{pool: pool, store: dataStore, push: sender, live: live, logger: logger}
+
+	var wake <-chan uuid.UUID
+	if live != nil {
+		var unsubscribe func()
+		wake, unsubscribe = live.SubscribeAllWorkspaces()
+		defer unsubscribe()
+	}
+
+	interval := 3 * time.Second
+	if wake != nil {
+		interval = pushFallbackInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case workspaceID, ok := <-wake:
+			if !ok {
+				return
+			}
+			// 合并瞬间连续写入（如一次回复 + 状态更新），避免同一毫秒对同一工作区重复查询。
+			pending := map[uuid.UUID]struct{}{workspaceID: {}}
+		drain:
+			for {
+				select {
+				case nextID, ok := <-wake:
+					if !ok {
+						break drain
+					}
+					pending[nextID] = struct{}{}
+				default:
+					break drain
+				}
+			}
+			for wsID := range pending {
+				if err := api.deliverWorkspacePushes(ctx, wsID); err != nil && ctx.Err() == nil {
+					logger.Error("workspace push delivery failed", "workspace_id", wsID, "error", err)
+				}
+			}
 		case <-ticker.C:
 			if err := api.deliverPushes(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("push delivery failed", "error", err)
@@ -197,77 +264,172 @@ func (api *API) deliverPushes(ctx context.Context) error {
 	return nil
 }
 
+type pushJob struct {
+	sub     store.PushSubscription
+	cardID  uuid.UUID
+	update  cardUpdate
+	payload []byte
+	topic   string
+}
+
 func (api *API) deliverWorkspacePushes(ctx context.Context, workspaceID uuid.UUID) error {
-	updates, err := api.cardUpdates(ctx, workspaceID)
-	if err != nil {
-		return err
-	}
-	snapshots, err := api.store.ListPushCardSnapshots(ctx, workspaceID)
-	if err != nil {
-		return err
-	}
-	known := make(map[uuid.UUID]store.PushCardSnapshot, len(snapshots))
-	for _, snapshot := range snapshots {
-		known[snapshot.CardID] = snapshot
-	}
 	idle, err := api.store.ListIdlePushSubscriptions(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
-	for _, update := range updates {
-		cardID, err := uuid.Parse(update.ID)
-		if err != nil {
-			continue
+	// 无空闲订阅时直接跳过，避免无谓执行全工作区 cardUpdates SQL；
+	// 活跃设备由前端 SSE + /seen 维护各自快照，切后台或心跳过期后即进入 idle 队列。
+	if len(idle) == 0 {
+		return nil
+	}
+	updates, err := api.cardUpdates(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	allSnapshots, err := api.store.ListWorkspacePushSubscriptionCardSnapshots(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	knownBySub := make(map[uuid.UUID]map[uuid.UUID]store.PushCardSnapshot, len(idle))
+	for _, snap := range allSnapshots {
+		byCard := knownBySub[snap.SubscriptionID]
+		if byCard == nil {
+			byCard = make(map[uuid.UUID]store.PushCardSnapshot)
+			knownBySub[snap.SubscriptionID] = byCard
 		}
-		previous, seen := known[cardID]
-		if seen && previous.Revision == update.Revision {
-			continue
-		}
-		// 第一次见到只建立基线。页面还开着时不记版本，等页面确认看过；
-		// 否则标签刚关掉、心跳还没过期时，这次更新会被记成已读，之后再也推不出去。
-		if !seen {
-			if err := api.savePushSnapshot(ctx, workspaceID, cardID, update); err != nil {
+		byCard[snap.CardID] = snap
+	}
+
+	var jobs []pushJob
+	for _, sub := range idle {
+		known := knownBySub[sub.ID]
+		var silentSnapshots []store.PushCardSnapshot
+		for _, update := range updates {
+			cardID, err := uuid.Parse(update.ID)
+			if err != nil {
+				continue
+			}
+			previous, seen := known[cardID]
+			if seen && previous.Revision == update.Revision {
+				continue
+			}
+			// 订阅从未见过该卡片时（例如订阅后新建了卡片）：
+			// 若卡片尚无任何可推消息，则只建立基线；若已有正式消息或工具审批（如新建 Todo 并已产生首条回复），立即投递。
+			if !seen && update.MessagePreview == "" {
+				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
+				continue
+			}
+			// 置顶、改标题、日程、审批处理完成回落到旧消息等都会改 revision，但不是新通知。记下来避免重复推送。
+			if seen && !newCardMessage(update, previous) {
+				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
+				continue
+			}
+			// 单卡片静音时跳过普通消息推送，但工具审批待确认穿透静音；
+			// 跳过时推进该订阅快照，避免后续解除静音时把静音期间的历史消息补推出来。
+			if update.NotificationsMuted && update.NotificationKind != "tool_approval" {
+				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
+				continue
+			}
+			if update.MessagePreview == "" {
+				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
+				continue
+			}
+			payload, err := buildPushPayload(workspaceID, update)
+			if err != nil {
 				return err
 			}
-			continue
+			jobs = append(jobs, pushJob{
+				sub:     sub,
+				cardID:  cardID,
+				update:  update,
+				payload: payload,
+				topic:   strings.ReplaceAll(update.ID, "-", ""),
+			})
 		}
-		// 置顶、改标题、日程和执行状态都会改 revision，但不是新消息。记下来，关闭页面后也不补推。
-		if !newCardMessage(update, previous) {
-			if err := api.savePushSnapshot(ctx, workspaceID, cardID, update); err != nil {
+		if len(silentSnapshots) > 0 {
+			if err := api.store.SavePushSubscriptionCardSnapshotsBatch(ctx, workspaceID, sub.ID, silentSnapshots); err != nil {
 				return err
 			}
-			continue
-		}
-		// 单卡片静音时跳过实际 Web Push 投递，但仍推进快照版本，避免后续解除静音时把静音期间的历史消息补推出来。
-		if update.NotificationsMuted {
-			if err := api.savePushSnapshot(ctx, workspaceID, cardID, update); err != nil {
-				return err
-			}
-			continue
-		}
-		if len(idle) == 0 {
-			continue
-		}
-		if err := api.sendCardPush(ctx, workspaceID, update, idle); err != nil {
-			// 保留旧版本，下一轮重试。已经退订的浏览器会在发送时被删掉。
-			return err
-		}
-		if err := api.savePushSnapshot(ctx, workspaceID, cardID, update); err != nil {
-			return err
 		}
 	}
-	return nil
+
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	// 并发向各空闲端点投递，单个慢/失效端点绝不阻塞其他设备，且仅在对应端点发送成功时推进其快照。
+	sem := make(chan struct{}, maxConcurrentPushes)
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+		}
+		errMu.Unlock()
+	}
+
+	for _, job := range jobs {
+		job := job
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			sendCtx, cancel := context.WithTimeout(ctx, singlePushTimeout)
+			err := api.push.Send(sendCtx, job.sub.Endpoint, job.sub.P256dh, job.sub.AuthSecret, job.topic, job.payload)
+			cancel()
+
+			if errors.Is(err, webpush.ErrGone) {
+				if delErr := api.store.DeletePushSubscriptionByEndpoint(ctx, job.sub.Endpoint); delErr != nil {
+					recordErr(delErr)
+				}
+				return
+			}
+			if err != nil {
+				// 保留该订阅的旧快照，下一轮仅对该失败端点重试，不影响其他已成功设备。
+				if api.logger != nil {
+					api.logger.Warn("card web push delivery failed",
+						"workspace_id", workspaceID,
+						"card_id", job.update.ID,
+						"endpoint_host", pushEndpointHost(job.sub.Endpoint),
+						"error", err,
+					)
+				}
+				recordErr(err)
+				return
+			}
+			if saveErr := api.store.SavePushSubscriptionCardSnapshot(
+				ctx, workspaceID, job.sub.ID, cardUpdateToPushSnapshot(job.sub.ID, job.cardID, job.update),
+			); saveErr != nil {
+				recordErr(saveErr)
+			}
+		}()
+	}
+	wg.Wait()
+	return firstErr
 }
 
-func (api *API) savePushSnapshot(ctx context.Context, workspaceID, cardID uuid.UUID, update cardUpdate) error {
-	return api.store.SavePushCardSnapshot(ctx, workspaceID, store.PushCardSnapshot{
-		CardID: cardID, Revision: update.Revision, EventSequence: update.EventSequence,
-		MessagePreview: update.MessagePreview, AttemptStatus: update.AttemptStatus, Title: update.Title,
-	})
+func cardUpdateToPushSnapshot(subscriptionID, cardID uuid.UUID, update cardUpdate) store.PushCardSnapshot {
+	return store.PushCardSnapshot{
+		SubscriptionID: subscriptionID,
+		CardID:         cardID,
+		Revision:       update.Revision,
+		EventSequence:  update.EventSequence,
+		MessagePreview: update.MessagePreview,
+		AttemptStatus:  update.AttemptStatus,
+		Title:          update.Title,
+	}
 }
 
 type pushSeenRequest struct {
-	Cards []struct {
+	Endpoint string `json:"endpoint"`
+	Cards    []struct {
 		ID       string `json:"id"`
 		Revision string `json:"revision"`
 	} `json:"cards"`
@@ -282,7 +444,34 @@ func (api *API) ackPushCards(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_revision", "too many cards")
 		return
 	}
+	if len(request.Cards) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	identity := identityFromRequest(r)
+
+	var subID uuid.UUID
+	var hasEndpoint bool
+	if strings.TrimSpace(request.Endpoint) != "" {
+		endpoint, ok := normalizePushEndpoint(w, request.Endpoint)
+		if !ok {
+			return
+		}
+		var err error
+		subID, hasEndpoint, err = api.store.GetPushSubscriptionIDByEndpoint(
+			r.Context(), identity.WorkspaceID, identity.HumanAccountID, endpoint,
+		)
+		if err != nil {
+			api.handleError(w, err)
+			return
+		}
+		if !hasEndpoint {
+			// 订阅不存在（可能已退订或刚切换账号），直接返回 204 不影响其他设备。
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
 	updates, err := api.cardUpdates(r.Context(), identity.WorkspaceID)
 	if err != nil {
 		api.handleError(w, err)
@@ -292,6 +481,50 @@ func (api *API) ackPushCards(w http.ResponseWriter, r *http.Request) {
 	for _, update := range updates {
 		byID[update.ID] = update
 	}
+
+	if hasEndpoint {
+		snapshots := make([]store.PushCardSnapshot, 0, len(request.Cards))
+		for _, card := range request.Cards {
+			update, ok := byID[card.ID]
+			if !ok || update.Revision != card.Revision {
+				continue
+			}
+			cardID, err := uuid.Parse(card.ID)
+			if err != nil {
+				continue
+			}
+			snapshots = append(snapshots, cardUpdateToPushSnapshot(subID, cardID, update))
+		}
+		if err := api.store.SavePushSubscriptionCardSnapshotsBatch(r.Context(), identity.WorkspaceID, subID, snapshots); err != nil {
+			api.handleError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// 兼容未传 endpoint 的旧客户端：仅写旧表并同步到当前用户当前仍处于活跃态的订阅，绝不吞掉已锁屏/空闲的其他设备推送。
+	subs, err := api.store.ListPushSubscriptions(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	idleSubs, err := api.store.ListIdlePushSubscriptions(r.Context(), identity.WorkspaceID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	idleSet := make(map[uuid.UUID]struct{}, len(idleSubs))
+	for _, sub := range idleSubs {
+		idleSet[sub.ID] = struct{}{}
+	}
+	var activeSubs []store.PushSubscription
+	for _, sub := range subs {
+		if _, isIdle := idleSet[sub.ID]; !isIdle {
+			activeSubs = append(activeSubs, sub)
+		}
+	}
+
 	for _, card := range request.Cards {
 		update, ok := byID[card.ID]
 		if !ok || update.Revision != card.Revision {
@@ -301,75 +534,61 @@ func (api *API) ackPushCards(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		if err := api.savePushSnapshot(r.Context(), identity.WorkspaceID, cardID, update); err != nil {
+		if err := api.store.SavePushCardSnapshot(r.Context(), identity.WorkspaceID, cardUpdateToPushSnapshot(uuid.Nil, cardID, update)); err != nil {
 			api.handleError(w, err)
 			return
+		}
+		for _, sub := range activeSubs {
+			if err := api.store.SavePushSubscriptionCardSnapshot(r.Context(), identity.WorkspaceID, sub.ID, cardUpdateToPushSnapshot(sub.ID, cardID, update)); err != nil {
+				api.handleError(w, err)
+				return
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (api *API) sendCardPush(ctx context.Context, workspaceID uuid.UUID, update cardUpdate, subs []store.PushSubscription) error {
+func buildPushPayload(workspaceID uuid.UUID, update cardUpdate) ([]byte, error) {
 	title := truncatePushText(update.Title, maxPushTitleRunes)
 	if title == "" {
 		title = "新消息"
 	}
-	section := "cards"
-	if update.Kind == "discussion" {
-		section = "chat"
-	}
-	payload, err := json.Marshal(pushPayload{
-		Type: "card.updated", WorkspaceID: workspaceID.String(), CardID: update.ID, Revision: update.Revision,
-		Title: title, Body: truncatePushText(cardPushBody(update), maxPushBodyRunes),
-		URL: "/" + section + "/" + url.PathEscape(update.ProjectID) + "/" + url.PathEscape(update.ID),
-		Tag: "card:" + workspaceID.String() + ":" + update.ID,
+	section := cardNotificationSection(update.Kind)
+	return json.Marshal(pushPayload{
+		Type:        "card.updated",
+		WorkspaceID: workspaceID.String(),
+		CardID:      update.ID,
+		Revision:    update.Revision,
+		Title:       title,
+		Body:        truncatePushText(cardPushBody(update), maxPushBodyRunes),
+		URL:         "/" + section + "/" + url.PathEscape(update.ProjectID) + "/" + url.PathEscape(update.ID),
+		Tag:         "card:" + workspaceID.String() + ":" + update.ID,
 	})
-	if err != nil {
-		return err
-	}
-	topic := strings.ReplaceAll(update.ID, "-", "")
-	var sendErr error
-	var deleteErr error
-	delivered := 0
-	failed := 0
-	for _, sub := range subs {
-		sendCtx, cancel := context.WithTimeout(ctx, singlePushTimeout)
-		err := api.push.Send(sendCtx, sub.Endpoint, sub.P256dh, sub.AuthSecret, topic, payload)
-		cancel()
-		if errors.Is(err, webpush.ErrGone) {
-			if err := api.store.DeletePushSubscriptionByEndpoint(ctx, sub.Endpoint); err != nil && deleteErr == nil {
-				deleteErr = err
-			}
-			continue
-		}
-		if err != nil {
-			failed++
-			if sendErr == nil {
-				sendErr = err
-			}
-			if api.logger != nil {
-				api.logger.Warn("card web push delivery failed",
-					"workspace_id", workspaceID,
-					"card_id", update.ID,
-					"endpoint_host", pushEndpointHost(sub.Endpoint),
-					"error", err,
-				)
-			}
-			continue
-		}
-		delivered++
-	}
-	if deleteErr != nil {
-		return deleteErr
-	}
-	if delivered == 0 && failed > 0 {
-		return sendErr
-	}
-	return nil
 }
 
+func cardNotificationSection(kind string) string {
+	switch kind {
+	case "discussion":
+		return "chat"
+	case "ongoing":
+		return "plans"
+	default:
+		return "cards"
+	}
+}
+
+// newCardMessage 判断当前快照相比上次已处理快照是否产生了更新的通知事件。
+// 使用递增序号比较（curr > prev），确保审批处理完成后 m.sequence 回落到历史旧消息时不会被误当成新消息重推。
 func newCardMessage(current cardUpdate, previous store.PushCardSnapshot) bool {
-	return current.EventSequence != previous.EventSequence && current.MessagePreview != ""
+	if current.MessagePreview == "" {
+		return false
+	}
+	currSeq, currErr := strconv.ParseInt(current.EventSequence, 10, 64)
+	prevSeq, prevErr := strconv.ParseInt(previous.EventSequence, 10, 64)
+	if currErr == nil && prevErr == nil {
+		return currSeq > prevSeq
+	}
+	return current.EventSequence != previous.EventSequence
 }
 
 func cardPushBody(current cardUpdate) string {

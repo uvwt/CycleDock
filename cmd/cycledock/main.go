@@ -217,10 +217,11 @@ func main() {
 		Live:                      live,
 	})
 	dataStore.SetWorkReadyNotifier(dispatcher.Wake)
+	dataStore.SetWorkspaceChangedNotifier(live.NotifyWorkspace)
 	retentionCleaner := retention.NewCleaner(pool, retentionCfg, logger)
 	go retentionCleaner.Run(ctx)
 	if pushSender != nil {
-		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, logger)
+		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, live, logger)
 	}
 	go func() {
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

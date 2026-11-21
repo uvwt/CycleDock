@@ -512,7 +512,11 @@ func (s *Store) CompleteAttempt(
 	if command.RowsAffected() != 1 {
 		return domain.ErrAttemptNotCurrent
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return nil
 }
 
 func requireCurrentAttempt(

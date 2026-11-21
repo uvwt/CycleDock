@@ -113,5 +113,6 @@ func (s *Store) claimBuiltInWorkspaceAttempt(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return claim, nil
 }

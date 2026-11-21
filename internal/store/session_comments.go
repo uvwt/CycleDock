@@ -396,6 +396,7 @@ func (s *Store) EditSessionCommentAndRerun(
 		return SubmitSessionCommentResult{}, err
 	}
 	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return SubmitSessionCommentResult{EventID: p.EventID, TurnID: turnID}, nil
 }
 
@@ -633,6 +634,7 @@ func (s *Store) submitSessionComment(
 		return SubmitSessionCommentResult{}, err
 	}
 	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return SubmitSessionCommentResult{EventID: eventID, TurnID: turn.ID}, nil
 }
 

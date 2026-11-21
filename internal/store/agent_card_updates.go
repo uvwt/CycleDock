@@ -371,6 +371,9 @@ func (s *Store) UpdateCardFromAgentAttempt(
 	if err := tx.Commit(ctx); err != nil {
 		return UpdateCardFromAttemptResult{}, err
 	}
+	if metadataChanged || statusChanged {
+		s.notifyWorkspaceChanged(p.WorkspaceID)
+	}
 
 	return UpdateCardFromAttemptResult{
 		Card:          updated,

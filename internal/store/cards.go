@@ -48,6 +48,7 @@ func (s *Store) MoveTodoWithCard(
 	if err := tx.Commit(ctx); err != nil {
 		return db.Card{}, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return card, nil
 }
 
@@ -221,6 +222,7 @@ func (s *Store) ArchiveDiscussionWithCard(
 	if err := tx.Commit(ctx); err != nil {
 		return db.Card{}, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return card, nil
 }
 
@@ -406,6 +408,7 @@ func (s *Store) SetOngoingStateWithCard(
 	if err := tx.Commit(ctx); err != nil {
 		return db.Card{}, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return card, nil
 }
 
