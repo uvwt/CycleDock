@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, useLocation } from "react-router-dom";
-import { Bot, BrainCircuit, LogOut, Plug, Settings, ShieldAlert } from "lucide-react";
+import { Bot, BrainCircuit, LogOut, Plug, Settings, ShieldAlert, Webhook } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -24,6 +24,7 @@ import { NotificationSettings } from "./NotificationSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ToolGuardSettings } from "./ToolGuardSettings";
 import { MCPSettings } from "./ConnectionsSettings";
+import { TriggersSettings } from "./TriggersSettings";
 import { AuthorizedClientsSettings } from "./AuthorizedClientsSettings";
 
 const menus = [
@@ -41,6 +42,7 @@ const menus = [
   {
     group: "外部连接",
     items: [
+      { id: "triggers", title: "触发器", icon: Webhook },
       { id: "mcp", title: "MCP 服务", icon: Plug },
       { id: "clients", title: "AI 客户端", icon: Bot },
     ],
@@ -198,6 +200,7 @@ export default function SettingsPage({ role }: { role: string }) {
           )}
           {tab === "models" && isOwner && <ModelsSettings />}
           {tab === "tool-guard" && isOwner && <ToolGuardSettings />}
+          {tab === "triggers" && <TriggersSettings />}
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "clients" && <AuthorizedClientsSettings />}
 

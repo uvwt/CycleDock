@@ -40,6 +40,15 @@ type CardWatcher struct {
 	UpdatedAt          time.Time
 }
 
+// WorkspaceCardWatcher 在基础 Watcher 之上附带卡片与项目元信息，供工作区级等待总览直接展示和跳转。
+type WorkspaceCardWatcher struct {
+	CardWatcher
+	ProjectID   uuid.UUID
+	ProjectName string
+	CardTitle   string
+	CardKind    domain.CardKind
+}
+
 type CreateCardWatcherParams struct {
 	WorkspaceID        uuid.UUID
 	CardID             uuid.UUID
@@ -189,6 +198,83 @@ func (s *Store) ListCardWatchers(
 		item, err := scanCardWatcher(rows)
 		if err != nil {
 			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ListWorkspaceWatchers 返回当前工作区（可按项目筛选）下挂起或历史的一次性事件等待与延时自唤醒。
+func (s *Store) ListWorkspaceWatchers(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	projectID uuid.NullUUID,
+	armedOnly bool,
+	limit int,
+) ([]WorkspaceCardWatcher, error) {
+	if limit <= 0 {
+		limit = defaultWatcherListLimit
+	}
+	if limit > maxWatcherListLimit {
+		limit = maxWatcherListLimit
+	}
+
+	args := []any{workspaceID}
+	var b strings.Builder
+	b.WriteString(`
+		SELECT w.id, w.workspace_id, w.card_id, w.kind, w.match_key, w.note,
+		       w.dispatch_mode, w.status, w.expires_at,
+		       w.created_by_source_id, w.created_by_attempt_id, w.triggered_turn_id,
+		       w.resolved_reason, w.resolved_at, COALESCE(w.idempotency_key, ''),
+		       w.created_at, w.updated_at,
+		       c.project_id, p.name, c.title, c.kind
+		FROM card_watchers w
+		JOIN cards c ON c.workspace_id = w.workspace_id AND c.id = w.card_id
+		JOIN projects p ON p.workspace_id = c.workspace_id AND p.id = c.project_id
+		WHERE w.workspace_id = $1
+	`)
+	if projectID.Valid {
+		args = append(args, projectID.UUID)
+		fmt.Fprintf(&b, " AND c.project_id = $%d", len(args))
+	}
+	if armedOnly {
+		b.WriteString(" AND w.status = 'armed'")
+		b.WriteString(" ORDER BY w.expires_at ASC, w.created_at DESC")
+	} else {
+		b.WriteString(" ORDER BY CASE WHEN w.status = 'armed' THEN 0 ELSE 1 END, w.expires_at ASC, w.created_at DESC")
+	}
+	args = append(args, limit)
+	fmt.Fprintf(&b, " LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, b.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []WorkspaceCardWatcher
+	for rows.Next() {
+		var item WorkspaceCardWatcher
+		var kind, dispatchMode, status, cardKind string
+		var resolvedAt *time.Time
+		if err := rows.Scan(
+			&item.ID, &item.WorkspaceID, &item.CardID, &kind, &item.MatchKey, &item.Note,
+			&dispatchMode, &status, &item.ExpiresAt,
+			&item.CreatedBySourceID, &item.CreatedByAttemptID, &item.TriggeredTurnID,
+			&item.ResolvedReason, &resolvedAt, &item.IdempotencyKey,
+			&item.CreatedAt, &item.UpdatedAt,
+			&item.ProjectID, &item.ProjectName, &item.CardTitle, &cardKind,
+		); err != nil {
+			return nil, err
+		}
+		item.Kind = domain.WatcherKind(kind)
+		item.DispatchMode = domain.DispatchMode(dispatchMode)
+		item.Status = domain.WatcherStatus(status)
+		item.CardKind = domain.CardKind(cardKind)
+		item.ExpiresAt = item.ExpiresAt.UTC()
+		if resolvedAt != nil {
+			t := resolvedAt.UTC()
+			item.ResolvedAt = &t
 		}
 		out = append(out, item)
 	}

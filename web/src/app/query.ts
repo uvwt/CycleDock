@@ -28,6 +28,12 @@ export const keys = {
   nexusFleet: (workspaceID: string) => ["nexus", "fleet", workspaceID] as const,
   deviceToolGuards: (workspaceID: string) =>
     ["device-tool-guards", workspaceID] as const,
+  triggers: ["triggers"] as const,
+  triggerDeliveries: (triggerID = "") =>
+    ["trigger-deliveries", triggerID] as const,
+  cardWatchers: (cardID: string) => ["card-watchers", cardID] as const,
+  workspaceWatchers: (armedOnly = true, projectID = "") =>
+    ["workspace-watchers", armedOnly ? "armed" : "all", projectID] as const,
 };
 
 function isSessionUnauthorized(error: unknown): error is APIError {

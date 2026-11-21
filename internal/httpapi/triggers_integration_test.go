@@ -528,3 +528,205 @@ func TestCardWatchers_TimeoutFallbackAndDelayedWakeup(t *testing.T) {
 		t.Fatalf("unexpected timeout fallback turn content: %s", timeoutContent)
 	}
 }
+
+func TestWorkspaceWatchersAndEnrichedTriggerDeliveries(t *testing.T) {
+	handler, _, dataStore := newHTTPIntegration(t)
+	ctx := context.Background()
+
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+	var identity identityResponse
+	decodeRecorder(t, login, &identity)
+	workspaceID := uuid.MustParse(identity.Workspace.ID)
+
+	projA := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name": "Alpha Project", "description": "Triggers UI test",
+	}, cookie, nil)
+	if projA.Code != http.StatusCreated {
+		t.Fatalf("create project A: %d %s", projA.Code, projA.Body.String())
+	}
+	var projectA projectResponse
+	decodeRecorder(t, projA, &projectA)
+
+	projB := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name": "Beta Project", "description": "Secondary project",
+	}, cookie, nil)
+	if projB.Code != http.StatusCreated {
+		t.Fatalf("create project B: %d %s", projB.Code, projB.Body.String())
+	}
+	var projectB projectResponse
+	decodeRecorder(t, projB, &projectB)
+
+	todoA := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectA.ID+"/todos", map[string]any{
+		"title": "CI Watcher Card", "description": "Watch PR #108",
+	}, cookie, nil)
+	if todoA.Code != http.StatusCreated {
+		t.Fatalf("create todo A: %d %s", todoA.Code, todoA.Body.String())
+	}
+	var cardA cardResponse
+	decodeRecorder(t, todoA, &cardA)
+
+	todoB := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectB.ID+"/todos", map[string]any{
+		"title": "Delayed Check Card", "description": "Check rollout metrics",
+	}, cookie, nil)
+	if todoB.Code != http.StatusCreated {
+		t.Fatalf("create todo B: %d %s", todoB.Code, todoB.Body.String())
+	}
+	var cardB cardResponse
+	decodeRecorder(t, todoB, &cardB)
+
+	now := time.Now().UTC()
+	eventW, err := dataStore.CreateCardWatcher(ctx, store.CreateCardWatcherParams{
+		WorkspaceID:    workspaceID,
+		CardID:         uuid.MustParse(cardA.ID),
+		Kind:           domain.WatcherKindEvent,
+		MatchKey:       "github:uvwt/cycledock:pr:108:ci_completed",
+		Note:           "等待 PR #108 CI 完成",
+		DispatchMode:   domain.DispatchModeEnqueue,
+		ExpiresAt:      now.Add(45 * time.Minute),
+		IdempotencyKey: "ws-watch-pr-108",
+	})
+	if err != nil {
+		t.Fatalf("create event watcher: %v", err)
+	}
+	wakeupW, err := dataStore.CreateCardWatcher(ctx, store.CreateCardWatcherParams{
+		WorkspaceID:    workspaceID,
+		CardID:         uuid.MustParse(cardB.ID),
+		Kind:           domain.WatcherKindWakeup,
+		Note:           "15 分钟后复查灰度指标",
+		DispatchMode:   domain.DispatchModeInterrupt,
+		ExpiresAt:      now.Add(15 * time.Minute),
+		IdempotencyKey: "ws-wakeup-rollout",
+	})
+	if err != nil {
+		t.Fatalf("create wakeup watcher: %v", err)
+	}
+
+	// 1. 工作区级挂起 Watcher 总览：默认按 expires_at 升序（最先到期在前）并带卡片/项目元信息
+	wsWatchersRec := doJSON(t, handler, http.MethodGet, "/api/v1/watchers", nil, cookie, nil)
+	if wsWatchersRec.Code != http.StatusOK {
+		t.Fatalf("list workspace watchers: %d %s", wsWatchersRec.Code, wsWatchersRec.Body.String())
+	}
+	var wsWatchers struct {
+		Watchers []cardWatcherResponse `json:"watchers"`
+	}
+	decodeRecorder(t, wsWatchersRec, &wsWatchers)
+	if len(wsWatchers.Watchers) != 2 {
+		t.Fatalf("expected 2 armed workspace watchers, got %d", len(wsWatchers.Watchers))
+	}
+	if wsWatchers.Watchers[0].ID != wakeupW.Watcher.ID.String() ||
+		wsWatchers.Watchers[0].CardTitle != "Delayed Check Card" ||
+		wsWatchers.Watchers[0].ProjectName != "Beta Project" {
+		t.Fatalf("unexpected first workspace watcher: %+v", wsWatchers.Watchers[0])
+	}
+	if wsWatchers.Watchers[1].ID != eventW.Watcher.ID.String() ||
+		wsWatchers.Watchers[1].CardTitle != "CI Watcher Card" ||
+		wsWatchers.Watchers[1].ProjectName != "Alpha Project" {
+		t.Fatalf("unexpected second workspace watcher: %+v", wsWatchers.Watchers[1])
+	}
+
+	// 2. 按 project_id 筛选
+	projAWatchersRec := doJSON(t, handler, http.MethodGet, "/api/v1/watchers?project_id="+projectA.ID, nil, cookie, nil)
+	if projAWatchersRec.Code != http.StatusOK {
+		t.Fatalf("list project A watchers: %d %s", projAWatchersRec.Code, projAWatchersRec.Body.String())
+	}
+	var projAWatchers struct {
+		Watchers []cardWatcherResponse `json:"watchers"`
+	}
+	decodeRecorder(t, projAWatchersRec, &projAWatchers)
+	if len(projAWatchers.Watchers) != 1 || projAWatchers.Watchers[0].ID != eventW.Watcher.ID.String() {
+		t.Fatalf("expected only project A watcher, got %+v", projAWatchers.Watchers)
+	}
+
+	// 3. 创建指向 cardA 的 Generic Bearer 触发器并发送命中投递
+	createTrig := doJSON(t, handler, http.MethodPost, "/api/v1/triggers", map[string]any{
+		"name":           "Release Hook",
+		"provider":       "generic",
+		"auth_mode":      "bearer",
+		"routing_mode":   "fixed_card",
+		"target_card_id": cardA.ID,
+		"dispatch_mode":  "enqueue",
+		"filter_config": map[string]any{
+			"match_key_path": "meta.match_key",
+		},
+	}, cookie, nil)
+	if createTrig.Code != http.StatusCreated {
+		t.Fatalf("create trigger: %d %s", createTrig.Code, createTrig.Body.String())
+	}
+	var created struct {
+		Trigger triggerResponse `json:"trigger"`
+		Secret  string          `json:"secret"`
+	}
+	decodeRecorder(t, createTrig, &created)
+
+	payload := []byte(`{"event":"deploy.done","title":"Production deploy succeeded","summary":"v1.4.2 healthy","meta":{"match_key":"github:uvwt/cycledock:pr:108:ci_completed"}}`)
+	hookRec := doRawRequest(handler, http.MethodPost, created.Trigger.WebhookPath, payload, map[string]string{
+		"Content-Type":  "application/json",
+		"Authorization": "Bearer " + created.Secret,
+		"X-Delivery-Id": "deliv-ws-108",
+	})
+	if hookRec.Code != http.StatusOK {
+		t.Fatalf("webhook delivery failed: %d %s", hookRec.Code, hookRec.Body.String())
+	}
+
+	// 4. GET /api/v1/triggers 返回目标卡片标题与最近投递状态
+	listTrigRec := doJSON(t, handler, http.MethodGet, "/api/v1/triggers", nil, cookie, nil)
+	if listTrigRec.Code != http.StatusOK {
+		t.Fatalf("list triggers: %d %s", listTrigRec.Code, listTrigRec.Body.String())
+	}
+	var listTrig struct {
+		Triggers []triggerResponse `json:"triggers"`
+	}
+	decodeRecorder(t, listTrigRec, &listTrig)
+	if len(listTrig.Triggers) != 1 {
+		t.Fatalf("expected 1 trigger, got %d", len(listTrig.Triggers))
+	}
+	trig := listTrig.Triggers[0]
+	if trig.TargetCardTitle != "CI Watcher Card" || trig.TargetCardProjectID != projectA.ID || trig.TargetCardKind != "todo" {
+		t.Fatalf("expected enriched target card metadata, got %+v", trig)
+	}
+	if trig.LastDeliveryStatus != "triggered" || trig.LastDeliveryAt == "" {
+		t.Fatalf("expected last delivery metadata, got status=%q at=%q", trig.LastDeliveryStatus, trig.LastDeliveryAt)
+	}
+
+	// 5. GET /api/v1/triggers/deliveries 返回工作区级投递日志，含 trigger_name 与 linked_cards
+	delivRec := doJSON(t, handler, http.MethodGet, "/api/v1/triggers/deliveries?limit=20", nil, cookie, nil)
+	if delivRec.Code != http.StatusOK {
+		t.Fatalf("list workspace deliveries: %d %s", delivRec.Code, delivRec.Body.String())
+	}
+	var delivBody struct {
+		Deliveries []triggerDeliveryResponse `json:"deliveries"`
+	}
+	decodeRecorder(t, delivRec, &delivBody)
+	if len(delivBody.Deliveries) != 1 {
+		t.Fatalf("expected 1 workspace delivery, got %d", len(delivBody.Deliveries))
+	}
+	d := delivBody.Deliveries[0]
+	if d.TriggerName != "Release Hook" || len(d.LinkedCards) != 1 || d.LinkedCards[0].ID != cardA.ID || d.LinkedCards[0].Title != "CI Watcher Card" {
+		t.Fatalf("expected enriched delivery with trigger_name and linked_cards, got %+v", d)
+	}
+
+	// 6. 事件 Watcher 已被唤醒，armed_only=true 仅剩 wakeupW，armed_only=false 包含两者
+	afterArmedRec := doJSON(t, handler, http.MethodGet, "/api/v1/watchers?armed_only=true", nil, cookie, nil)
+	var afterArmed struct {
+		Watchers []cardWatcherResponse `json:"watchers"`
+	}
+	decodeRecorder(t, afterArmedRec, &afterArmed)
+	if len(afterArmed.Watchers) != 1 || afterArmed.Watchers[0].ID != wakeupW.Watcher.ID.String() {
+		t.Fatalf("expected 1 remaining armed watcher, got %+v", afterArmed.Watchers)
+	}
+	afterAllRec := doJSON(t, handler, http.MethodGet, "/api/v1/watchers?armed_only=false", nil, cookie, nil)
+	var afterAll struct {
+		Watchers []cardWatcherResponse `json:"watchers"`
+	}
+	decodeRecorder(t, afterAllRec, &afterAll)
+	if len(afterAll.Watchers) != 2 {
+		t.Fatalf("expected 2 total watchers with armed_only=false, got %d", len(afterAll.Watchers))
+	}
+}
+
