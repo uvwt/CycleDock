@@ -723,6 +723,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		ChatID:            "-100777888",
 		ChatType:          "group",
 		ThreadID:          "42",
+		Mentioned:         true,
 		Content:           "hello auto target",
 	}
 	deadline = time.Now().Add(3 * time.Second)
