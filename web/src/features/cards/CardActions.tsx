@@ -4,6 +4,8 @@ import {
   Bell,
   BellOff,
   FileText,
+  Mail,
+  MailOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -20,6 +22,8 @@ import {
   removeCachedCard,
 } from "../../shared/lib/card-cache";
 import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
+import { isCardUnread } from "../../shared/lib/card-read-state";
+import { useCardReadState } from "../../shared/lib/useCardReadState";
 import {
   Button,
   ConfirmDialog,
@@ -51,6 +55,7 @@ export function CardActions({
   menuSide = "bottom",
   preserve = false,
   variant = "inline",
+  isActive = false,
 }: {
   card: Card;
   taskDetails?: { detail: CardDetail; projectCards: Card[] };
@@ -59,6 +64,8 @@ export function CardActions({
   // 主聊天跟着项目走，不能从讨论列表里归档或删除。
   preserve?: boolean;
   variant?: "inline" | "toolbar";
+  // 当前卡片是否正在主视图打开（用于在当前打开卡片上标为未读时抑制自动回弹为已读）
+  isActive?: boolean;
 }) {
   const { t } = useTranslation();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -125,6 +132,9 @@ export function CardActions({
   });
 
   const toggleMute = useCardNotificationMute(card);
+  const toggleReadState = useCardReadState(card);
+  const effectiveIsActive = isActive || variant === "toolbar";
+  const unread = isCardUnread(card, effectiveIsActive);
 
   const remove = useMutation({
     mutationFn: () => api.deleteCard(card.id),
@@ -213,6 +223,34 @@ export function CardActions({
                     <span>{t("任务详情")}</span>
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  disabled={toggleReadState.isPending}
+                  onClick={() => {
+                    setDrawerOpen(false);
+                    toggleReadState.mutate({
+                      id: card.id,
+                      unread: !unread,
+                      projectID: card.project_id,
+                      isActive: effectiveIsActive,
+                    });
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-foreground transition active:bg-muted/80 disabled:opacity-50"
+                >
+                  {unread ? (
+                    <>
+                      <MailOpen className="size-4 text-muted-foreground" />
+                      <span>{t("标为已读")}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="size-4 text-muted-foreground" />
+                      <span>{t("标为未读")}</span>
+                    </>
+                  )}
+                </button>
+
                 {!preserve && (
                   <button
                     type="button"
@@ -323,6 +361,31 @@ export function CardActions({
               {t("任务详情")}
             </MenuItem>
           )}
+
+          <MenuItem
+            disabled={toggleReadState.isPending}
+            onSelect={() =>
+              toggleReadState.mutate({
+                id: card.id,
+                unread: !unread,
+                projectID: card.project_id,
+                isActive: effectiveIsActive,
+              })
+            }
+          >
+            {unread ? (
+              <>
+                <MailOpen className="size-4" />
+                {t("标为已读")}
+              </>
+            ) : (
+              <>
+                <Mail className="size-4" />
+                {t("标为未读")}
+              </>
+            )}
+          </MenuItem>
+
           {!preserve && (
             <MenuItem onSelect={openEditor}>
               <Pencil className="size-4" />

@@ -19,6 +19,7 @@ type cardUpdate struct {
 	NotificationsMuted     bool   `json:"notifications_muted"`
 	NotificationSuppressed bool   `json:"notification_suppressed"`
 	Revision               string `json:"revision"`
+	ReadRevision           string `json:"read_revision,omitempty"`
 	EventSequence          string `json:"event_sequence"`
 	MessagePreview         string `json:"message_preview"`
 	// PendingApprovalCount 是该卡片当前待人工审批的数量；
@@ -31,10 +32,20 @@ type cardUpdate struct {
 
 // 只比较持久业务变化，排除 token、阶段文案和 heartbeat，避免流式输出造成通知轰炸。
 func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardUpdate, error) {
+	return api.cardUpdatesForSource(ctx, workspaceID, uuid.Nil)
+}
+
+// cardUpdatesForSource 在工作空间级业务 Revision 之外，按 Human Source 附带只读态版本 ReadRevision，
+// 使同账号多端通过 SSE 实时同步已读/标未读状态，同时保持工作空间级 Revision 与 Web Push 快照解耦。
+func (api *API) cardUpdatesForSource(ctx context.Context, workspaceID, sourceID uuid.UUID) ([]cardUpdate, error) {
 	rows, err := api.pool.Query(ctx, `
  SELECT c.id::text, c.project_id::text, c.kind, c.title, c.notifications_muted,
  md5(concat_ws('|', c.updated_at::text, c.notifications_muted::text, e.sequence::text, a.id::text, a.status,
    t.sequence::text, t.cancelled_at::text, s.updated_at::text, s.count::text, ap.pending::text, ap.latest_id::text)),
+ CASE
+   WHEN $2::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN ''
+   ELSE concat_ws(':', COALESCE(rc.last_read_message_sequence, 0)::text, COALESCE(rc.marked_unread, false)::text)
+ END,
  COALESCE(m.sequence::text, '0'), COALESCE(m.preview, ''), COALESCE(m.notification_kind, ''), COALESCE(ap.pending, 0), COALESCE(a.status, '')
  FROM cards c
  LEFT JOIN LATERAL (
@@ -93,7 +104,11 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
    SELECT COUNT(*)::int AS pending, MAX(id::text) AS latest_id FROM card_tool_approvals
    WHERE workspace_id=c.workspace_id AND card_id=c.id AND status='pending'
  ) ap ON true
- WHERE c.workspace_id=$1 ORDER BY c.id`, workspaceID)
+ LEFT JOIN card_read_cursors rc
+   ON rc.workspace_id = c.workspace_id
+  AND rc.card_id = c.id
+  AND rc.source_id = $2
+ WHERE c.workspace_id=$1 ORDER BY c.id`, workspaceID, sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +118,7 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 		var update cardUpdate
 		if err := rows.Scan(
 			&update.ID, &update.ProjectID, &update.Kind, &update.Title, &update.NotificationsMuted,
-			&update.Revision, &update.EventSequence, &update.MessagePreview, &update.NotificationKind, &update.PendingApprovalCount, &update.AttemptStatus,
+			&update.Revision, &update.ReadRevision, &update.EventSequence, &update.MessagePreview, &update.NotificationKind, &update.PendingApprovalCount, &update.AttemptStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -128,8 +143,10 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 // 工作空间级连接不随 Card 路由卸载；重连时发送快照，由客户端保留的版本基线补齐断线期间的更新。
 // 优先通过内存 Hub 工作区信号零延迟唤醒，仅保留低频兜底轮询应对跨副本写入。
 func (api *API) streamCardUpdates(w http.ResponseWriter, r *http.Request) {
-	workspaceID := identityFromRequest(r).WorkspaceID
-	updates, err := api.cardUpdates(r.Context(), workspaceID)
+	identity := identityFromRequest(r)
+	workspaceID := identity.WorkspaceID
+	sourceID := identity.SourceID
+	updates, err := api.cardUpdatesForSource(r.Context(), workspaceID, sourceID)
 	if err != nil {
 		api.handleError(w, err)
 		return
@@ -178,7 +195,7 @@ func (api *API) streamCardUpdates(w http.ResponseWriter, r *http.Request) {
 	defer expire.Stop()
 
 	refresh := func() bool {
-		updates, err := api.cardUpdates(r.Context(), workspaceID)
+		updates, err := api.cardUpdatesForSource(r.Context(), workspaceID, sourceID)
 		if err != nil {
 			return false
 		}

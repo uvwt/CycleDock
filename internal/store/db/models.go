@@ -118,6 +118,7 @@ type CardReadCursor struct {
 	CardID                  uuid.UUID          `json:"card_id"`
 	LastReadMessageSequence int64              `json:"last_read_message_sequence"`
 	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
+	MarkedUnread            bool               `json:"marked_unread"`
 }
 
 type CardSchedule struct {

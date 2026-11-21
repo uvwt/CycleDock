@@ -220,11 +220,17 @@ export const api = {
       `/cards/${id}/timeline?before_sequence=${encodeURIComponent(String(beforeSequence))}&limit=${encodeURIComponent(String(limit))}`,
     ),
   markCardRead: (id: string) =>
-    request<{ last_read_message_sequence: number }>(
-      `/cards/${id}/read`,
-      "POST",
-      {},
-    ),
+    request<{
+      last_read_message_sequence: number;
+      unread: boolean;
+      marked_unread: boolean;
+    }>(`/cards/${id}/read`, "POST", {}),
+  markCardUnread: (id: string) =>
+    request<{
+      last_read_message_sequence: number;
+      unread: boolean;
+      marked_unread: boolean;
+    }>(`/cards/${id}/unread`, "POST", {}),
   updateCard: (id: string, title: string, description: string) =>
     request<Card>(`/cards/${id}`, "PATCH", { title, description }),
   pinCard: (id: string, pinned: boolean) =>

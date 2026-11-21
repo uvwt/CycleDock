@@ -2,7 +2,15 @@ package store
 
 import (
 	"context"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
@@ -78,7 +86,66 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	`).Scan(&migrationVersion); err != nil {
 		t.Fatal(err)
 	}
-	if migrationVersion != 44 {
-		t.Fatalf("migration version=%d want 44", migrationVersion)
+	if migrationVersion != 45 {
+		t.Fatalf("migration version=%d want 45", migrationVersion)
+	}
+}
+
+func TestMigration000045MarkedUnreadUpDownUp(t *testing.T) {
+	s := requireIntegration(t)
+	ctx := context.Background()
+
+	schema := "mig45_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+	})
+
+	cfg := s.pool.Config().ConnConfig.Copy()
+	cfg.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*cfg)
+	defer sqlDB.Close()
+
+	_, filename, _, _ := runtime.Caller(0)
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("initial goose up: %v", err)
+	}
+	if err := goose.DownTo(sqlDB, migrations, 44); err != nil {
+		t.Fatalf("goose down-to 44: %v", err)
+	}
+	var colCount int
+	if err := sqlDB.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'card_read_cursors'
+		  AND column_name = 'marked_unread'
+	`, schema).Scan(&colCount); err != nil {
+		t.Fatal(err)
+	}
+	if colCount != 0 {
+		t.Fatalf("marked_unread column still exists after down-to 44: count=%d", colCount)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("goose re-up to 45: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'card_read_cursors'
+		  AND column_name = 'marked_unread'
+	`, schema).Scan(&colCount); err != nil {
+		t.Fatal(err)
+	}
+	if colCount != 1 {
+		t.Fatalf("marked_unread column missing after re-up to 45: count=%d", colCount)
 	}
 }

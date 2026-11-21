@@ -1,14 +1,10 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Bell,
-  BellOff,
   ChevronDown,
   ChevronRight,
-  Pencil,
   Pin,
   PinOff,
-  Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +15,8 @@ import {
   removeCachedCard,
 } from "../../shared/lib/card-cache";
 import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
+import { activeCardAutoReadSuppression } from "../../shared/lib/card-read-state";
+import { useCardReadState } from "../../shared/lib/useCardReadState";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -31,6 +29,8 @@ import {
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
 import { CardActions } from "../cards/CardActions";
+import { CardRowActionSheet } from "../cards/CardRowActionSheet";
+import { buildCardSwipeActions } from "../cards/card-swipe-actions";
 
 type WorkGroup = TodoState;
 
@@ -115,6 +115,7 @@ export function WorkSidebar({
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
   const [editTarget, setEditTarget] = useState<Card | null>(null);
+  const [sheetTargetID, setSheetTargetID] = useState<string | null>(null);
 
   const pinMutation = useMutation({
     mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
@@ -139,6 +140,24 @@ export function WorkSidebar({
   });
 
   const muteMutation = useCardNotificationMute();
+  const readStateMutation = useCardReadState();
+  const sheetTarget = useMemo(
+    () => workCards.find((item) => item.id === sheetTargetID) || null,
+    [workCards, sheetTargetID],
+  );
+
+  const handleSelect = (card: Card) => {
+    activeCardAutoReadSuppression.clearSuppressed(card.id);
+    if (card.id === activeCardID && card.marked_unread) {
+      readStateMutation.mutate({
+        id: card.id,
+        unread: false,
+        projectID: card.project_id,
+        isActive: true,
+      });
+    }
+    onSelect(card);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
@@ -214,59 +233,28 @@ export function WorkSidebar({
                     groupCards.map((card) => {
                       const active = card.id === activeCardID;
                       const isMuted = Boolean(card.notifications_muted);
-                      const swipeActions = [
-                        {
-                          key: "mute",
-                          label: isMuted ? t("取消静音") : t("静音通知"),
-                          icon: isMuted ? (
-                            <Bell className="size-4" />
-                          ) : (
-                            <BellOff className="size-4" />
-                          ),
-                          variant: "secondary" as const,
-                          onClick: () => {
-                            muteMutation.mutate({
-                              id: card.id,
-                              muted: !isMuted,
-                              projectID: card.project_id,
-                            });
-                          },
+                      const swipeActions = buildCardSwipeActions({
+                        card,
+                        isActive: active,
+                        t,
+                        onToggleRead: (nextUnread) => {
+                          readStateMutation.mutate({
+                            id: card.id,
+                            unread: nextUnread,
+                            projectID: card.project_id,
+                            isActive: active,
+                          });
                         },
-                        {
-                          key: "pin",
-                          label: card.pinned_at ? t("取消置顶") : t("置顶"),
-                          icon: card.pinned_at ? (
-                            <PinOff className="size-4" />
-                          ) : (
-                            <Pin className="size-4 rotate-45" />
-                          ),
-                          variant: "primary" as const,
-                          onClick: () => {
-                            pinMutation.mutate({
-                              id: card.id,
-                              pinned: !card.pinned_at,
-                            });
-                          },
+                        onTogglePin: () => {
+                          pinMutation.mutate({
+                            id: card.id,
+                            pinned: !card.pinned_at,
+                          });
                         },
-                        {
-                          key: "edit",
-                          label: t("编辑"),
-                          icon: <Pencil className="size-4" />,
-                          variant: "secondary" as const,
-                          onClick: () => {
-                            setEditTarget(card);
-                          },
+                        onDelete: () => {
+                          setDeleteTarget(card);
                         },
-                        {
-                          key: "delete",
-                          label: t("删除"),
-                          icon: <Trash2 className="size-4" />,
-                          variant: "danger" as const,
-                          onClick: () => {
-                            setDeleteTarget(card);
-                          },
-                        },
-                      ];
+                      });
 
                       return (
                         <ContextSidebarItem
@@ -274,7 +262,8 @@ export function WorkSidebar({
                           active={active}
                           pinned={Boolean(card.pinned_at)}
                           muted={isMuted}
-                          onClick={() => onSelect(card)}
+                          onClick={() => handleSelect(card)}
+                          onLongPress={() => setSheetTargetID(card.id)}
                           swipeActions={swipeActions}
                           icon={
                             <CardStatusDot
@@ -316,6 +305,7 @@ export function WorkSidebar({
                               <CardActions
                                 card={card}
                                 menuSide="right"
+                                isActive={active}
                                 onDeleted={() => {
                                   if (card.id === activeCardID) {
                                     navigate(
@@ -361,6 +351,40 @@ export function WorkSidebar({
         card={editTarget}
         open={Boolean(editTarget)}
         onOpenChange={(open) => !open && setEditTarget(null)}
+      />
+
+      <CardRowActionSheet
+        card={sheetTarget}
+        open={Boolean(sheetTarget)}
+        onOpenChange={(open) => !open && setSheetTargetID(null)}
+        isActive={Boolean(sheetTarget && sheetTarget.id === activeCardID)}
+        readPending={readStateMutation.isPending}
+        pinPending={pinMutation.isPending}
+        mutePending={muteMutation.isPending}
+        deletePending={deleteMutation.isPending}
+        onToggleRead={(target, nextUnread) => {
+          readStateMutation.mutate({
+            id: target.id,
+            unread: nextUnread,
+            projectID: target.project_id,
+            isActive: target.id === activeCardID,
+          });
+        }}
+        onTogglePin={(target) => {
+          pinMutation.mutate({
+            id: target.id,
+            pinned: !target.pinned_at,
+          });
+        }}
+        onToggleMute={(target) => {
+          muteMutation.mutate({
+            id: target.id,
+            muted: !target.notifications_muted,
+            projectID: target.project_id,
+          });
+        }}
+        onEdit={(target) => setEditTarget(target)}
+        onDelete={(target) => setDeleteTarget(target)}
       />
     </ContextSidebar>
   );

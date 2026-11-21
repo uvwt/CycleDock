@@ -17,6 +17,7 @@ import { api } from "../api/client";
 import {
   cardMessageEvent,
   cardNotificationBody,
+  hasCardSnapshotChanged,
   type CardMessageDetail,
   type CardUpdate,
 } from "./cardUpdates";
@@ -145,7 +146,7 @@ export function useCardNotifications(workspaceID: string) {
         if (previousCards) {
           for (const card of cards) {
             const previous = previousCards.get(card.id);
-            if (previous?.revision === card.revision) continue;
+            if (!hasCardSnapshotChanged(card, previous)) continue;
             const viewingCardID = viewedCardID();
             void query.invalidateQueries({ queryKey: keys.card(card.id) });
             void query.invalidateQueries({

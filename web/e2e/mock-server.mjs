@@ -984,8 +984,23 @@ http
               0,
             );
             card.last_read_message_sequence = latestSeq;
+            card.marked_unread = false;
             card.unread = false;
-            return data(res, { last_read_message_sequence: latestSeq });
+            return data(res, {
+              last_read_message_sequence: latestSeq,
+              marked_unread: false,
+              unread: false,
+            });
+          }
+          if (rest === "unread" && req.method === "POST") {
+            const lastReadSeq = card.last_read_message_sequence || 0;
+            card.marked_unread = true;
+            card.unread = true;
+            return data(res, {
+              last_read_message_sequence: lastReadSeq,
+              marked_unread: true,
+              unread: true,
+            });
           }
           if (rest === "ongoing-state" && req.method === "POST") {
             card.ongoing_state = (await body(req)).state;

@@ -316,6 +316,7 @@ export function ContextSidebarItem({
   metaHoverOnly = false,
   actions,
   swipeActions,
+  onLongPress,
   onClick,
 }: {
   active: boolean;
@@ -328,6 +329,7 @@ export function ContextSidebarItem({
   metaHoverOnly?: boolean;
   actions?: ReactNode;
   swipeActions?: SwipeActionItem[];
+  onLongPress?: () => void;
   onClick: () => void;
 }) {
   const { t } = useTranslation();
@@ -406,6 +408,7 @@ export function ContextSidebarItem({
       {/* 桌面端 hover 时展示 actions，移动端触控屏避免与手势冲突；滑开抽屉时隐藏 */}
       {actions ? (
         <div
+          data-no-long-press="true"
           className={`hidden [@media(hover:hover)]:flex opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto absolute right-1.5 items-center rounded-lg bg-surface/90 backdrop-blur-xs group-data-[swipe-open=true]/swipe:hidden ${
             description ? "top-1.5" : "top-1/2 -translate-y-1/2"
           }`}
@@ -416,10 +419,11 @@ export function ContextSidebarItem({
     </div>
   );
 
-  if (swipeActions && swipeActions.length > 0) {
+  if ((swipeActions && swipeActions.length > 0) || onLongPress) {
     return (
       <SwipeableRow
         actions={swipeActions}
+        onLongPress={onLongPress}
         className="rounded-xl my-0.5"
         contentClassName={active ? "bg-surface" : "bg-canvas"}
       >

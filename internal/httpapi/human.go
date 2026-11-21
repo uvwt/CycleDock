@@ -49,6 +49,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Get("/cards/{cardID}/timeline", api.getCardTimeline)
 	r.Get("/cards/{cardID}/stream", api.streamCard)
 	r.Post("/cards/{cardID}/read", api.markCardRead)
+	r.Post("/cards/{cardID}/unread", api.markCardUnread)
 	r.Patch("/cards/{cardID}", api.updateCard)
 	r.Post("/cards/{cardID}/pin", api.togglePinCard)
 	r.Post("/cards/{cardID}/notifications", api.toggleCardNotifications)
@@ -147,6 +148,7 @@ type cardResponse struct {
 	LatestAttemptStatus     string     `json:"latest_attempt_status,omitempty"`
 	LatestMessageSequence   *int64     `json:"latest_message_sequence,omitempty"`
 	LastReadMessageSequence *int64     `json:"last_read_message_sequence,omitempty"`
+	MarkedUnread            *bool      `json:"marked_unread,omitempty"`
 	Unread                  *bool      `json:"unread,omitempty"`
 	PreferredModelRouteID   *string    `json:"preferred_model_route_id,omitempty"`
 	PinnedAt                *time.Time `json:"pinned_at,omitempty"`
@@ -163,6 +165,8 @@ type cardResponse struct {
 
 type cardReadResponse struct {
 	LastReadMessageSequence int64 `json:"last_read_message_sequence"`
+	Unread                  bool  `json:"unread"`
+	MarkedUnread            bool  `json:"marked_unread"`
 }
 
 type attemptResponse struct {
@@ -514,7 +518,37 @@ func (api *API) markCardRead(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cardReadResponse{LastReadMessageSequence: sequence})
+	if api.live != nil {
+		api.live.NotifyWorkspaceSSE(identity.WorkspaceID)
+	}
+	writeJSON(w, http.StatusOK, cardReadResponse{
+		LastReadMessageSequence: sequence,
+		Unread:                  false,
+		MarkedUnread:            false,
+	})
+}
+
+func (api *API) markCardUnread(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	sequence, err := api.store.MarkCardUnread(
+		r.Context(), identity.WorkspaceID, cardID, identity.SourceID,
+	)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if api.live != nil {
+		api.live.NotifyWorkspaceSSE(identity.WorkspaceID)
+	}
+	writeJSON(w, http.StatusOK, cardReadResponse{
+		LastReadMessageSequence: sequence,
+		Unread:                  true,
+		MarkedUnread:            true,
+	})
 }
 
 func (api *API) listProjectSchedules(w http.ResponseWriter, r *http.Request) {
@@ -1835,6 +1869,7 @@ func cardToResponse(card db.Card) cardResponse {
 func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
+	markedUnread := card.MarkedUnread
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
 	attachmentCount := card.AttachmentCount
@@ -1845,6 +1880,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
+		MarkedUnread:             &markedUnread,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
 		AttachmentCount:          &attachmentCount,
@@ -1881,6 +1917,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) cardResponse {
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
+	markedUnread := card.MarkedUnread
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
 	attachmentCount := card.AttachmentCount
@@ -1891,6 +1928,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
+		MarkedUnread:             &markedUnread,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
 		AttachmentCount:          &attachmentCount,
@@ -1927,6 +1965,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardResponse {
 	latestMessageSequence := card.LatestMessageSequence
 	lastReadMessageSequence := card.LastReadMessageSequence
+	markedUnread := card.MarkedUnread
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
 	attachmentCount := card.AttachmentCount
@@ -1937,6 +1976,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 		Health:             card.Health, CreatedAt: card.CreatedAt.Time, UpdatedAt: card.UpdatedAt.Time,
 		LatestMessageSequence:    &latestMessageSequence,
 		LastReadMessageSequence:  &lastReadMessageSequence,
+		MarkedUnread:             &markedUnread,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
 		AttachmentCount:          &attachmentCount,
