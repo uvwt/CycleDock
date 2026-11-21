@@ -25,6 +25,7 @@ import (
 type RunnerConfig struct {
 	HeartbeatInterval time.Duration
 	LeaseDuration     time.Duration
+	PublicBaseURL     string
 	SessionService    session.Service
 	ArtifactService   artifact.Service
 	Attachments       *attachments.Service
@@ -43,6 +44,7 @@ type Runner struct {
 	nexusDock                *nexusdock.Service
 	live                     *realtime.Hub
 	logger                   *slog.Logger
+	publicBaseURL            string
 	heartbeatInterval        time.Duration
 	leaseDuration            time.Duration
 	compactionTokenThreshold int
@@ -72,6 +74,7 @@ func NewRunner(
 		store:                    dataStore,
 		model:                    model,
 		logger:                   logger,
+		publicBaseURL:            strings.TrimRight(strings.TrimSpace(config.PublicBaseURL), "/"),
 		sessionService:           config.SessionService,
 		artifactService:          config.ArtifactService,
 		attachments:              config.Attachments,

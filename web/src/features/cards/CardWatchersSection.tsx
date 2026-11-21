@@ -1,13 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  AlarmClock,
-  Check,
-  Copy,
-  History,
-  Radar,
-  XCircle,
-} from "lucide-react";
+import { AlarmClock, History, Radar, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -43,7 +36,6 @@ export function CardWatchersSection({
   const { t, i18n } = useTranslation();
   const isEnglish = i18n.resolvedLanguage === "en";
   const [showHistory, setShowHistory] = useState(false);
-  const [copiedID, setCopiedID] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const query = useQuery({
@@ -75,28 +67,13 @@ export function CardWatchersSection({
             : old,
       );
       void queryClient.invalidateQueries({ queryKey: ["workspace-watchers"] });
-      toast.success(t("已取消该等待项"));
+      toast.success(t("已取消等待"));
       onChanged?.();
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : t("取消等待失败"));
     },
   });
-
-  async function copyMatchKey(watcher: CardWatcher) {
-    if (!watcher.match_key) return;
-    try {
-      await navigator.clipboard.writeText(watcher.match_key);
-      setCopiedID(watcher.id);
-      toast.success(t("已复制 Match Key"));
-      window.setTimeout(
-        () => setCopiedID((cur) => (cur === watcher.id ? null : cur)),
-        1500,
-      );
-    } catch {
-      toast.error(t("复制失败，请手动复制"));
-    }
-  }
 
   if (allWatchers.length === 0) return null;
 
@@ -105,7 +82,7 @@ export function CardWatchersSection({
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="flex items-center gap-1.5 font-medium text-foreground">
           <Radar className="size-3.5 text-amber-500" />
-          <span>{t("等待与定时唤醒")}</span>
+          <span>{t("等待与定时提醒")}</span>
           {armedWatchers.length > 0 && (
             <Badge
               variant="secondary"
@@ -133,7 +110,7 @@ export function CardWatchersSection({
 
       {armedWatchers.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">
-          {t("当前没有挂起中的事件等待或定时自唤醒。")}
+          {t("当前没有等待中的事件或定时提醒。")}
         </p>
       ) : (
         <div className="space-y-2">
@@ -151,6 +128,7 @@ export function CardWatchersSection({
               <div
                 key={watcher.id}
                 className="space-y-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-2.5 text-xs"
+                title={watcher.match_key || undefined}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-1.5 min-w-0">
@@ -160,16 +138,8 @@ export function CardWatchersSection({
                       ) : (
                         <AlarmClock className="size-3 text-sky-600 dark:text-sky-400 shrink-0" />
                       )}
-                      {isEvent ? t("事件等待") : t("定时自唤醒")}
+                      {isEvent ? t("等待外部事件") : t("定时唤醒")}
                     </span>
-                    <Badge
-                      variant="outline"
-                      className="h-4 px-1.5 text-[10px] font-normal"
-                    >
-                      {watcher.dispatch_mode === "interrupt"
-                        ? t("打断执行")
-                        : t("排队执行")}
-                    </Badge>
                   </div>
                   <button
                     type="button"
@@ -178,34 +148,19 @@ export function CardWatchersSection({
                     className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-surface px-2 text-[11px] font-medium text-muted-foreground transition hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50 cursor-pointer"
                   >
                     <XCircle className="size-3" />
-                    <span>{cancelling ? t("取消中…") : t("取消等待")}</span>
+                    <span>{cancelling ? t("取消中…") : t("取消")}</span>
                   </button>
                 </div>
 
-                {isEvent && watcher.match_key && (
-                  <div className="flex items-center justify-between gap-1.5 rounded bg-surface/80 px-2 py-1 border border-line/50">
-                    <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-foreground">
-                      {watcher.match_key}
-                    </code>
-                    <button
-                      type="button"
-                      onClick={() => void copyMatchKey(watcher)}
-                      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
-                      aria-label={t("复制 Match Key")}
-                      title={t("复制 Match Key")}
-                    >
-                      {copiedID === watcher.id ? (
-                        <Check className="size-3 text-emerald-500" />
-                      ) : (
-                        <Copy className="size-3" />
-                      )}
-                    </button>
-                  </div>
+                {watcher.note && (
+                  <p className="text-[11px] text-foreground/85 break-words">
+                    {watcher.note}
+                  </p>
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                   <span>
-                    {isEvent ? t("超时兜底") : t("唤醒时间")}：
+                    {isEvent ? t("超时兜底") : t("预计唤醒")}：
                     {formatLocalDateTime(watcher.expires_at)}
                   </span>
                   {countdown && (
@@ -214,12 +169,6 @@ export function CardWatchersSection({
                     </span>
                   )}
                 </div>
-
-                {watcher.note && (
-                  <p className="text-[11px] leading-relaxed text-secondary-foreground break-words">
-                    {watcher.note}
-                  </p>
-                )}
               </div>
             );
           })}
@@ -228,39 +177,27 @@ export function CardWatchersSection({
 
       {showHistory && historyWatchers.length > 0 && (
         <div className="space-y-1.5 pt-1">
-          {historyWatchers.slice(0, 6).map((watcher) => (
-            <div
-              key={watcher.id}
-              className="space-y-1 rounded-lg border border-line/50 bg-surface/50 px-2.5 py-2 text-[11px] text-muted-foreground"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-secondary-foreground">
-                  {watcher.kind === "event" ? t("事件等待") : t("定时自唤醒")}
+          {historyWatchers.map((watcher) => {
+            const isEvent = watcher.kind === "event";
+            return (
+              <div
+                key={watcher.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-line/60 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground"
+                title={watcher.note || watcher.match_key || undefined}
+              >
+                <span className="min-w-0 truncate">
+                  {isEvent ? t("等待外部事件") : t("定时唤醒")}
+                  {watcher.note ? ` · ${watcher.note}` : ""}
                 </span>
-                <Badge
-                  variant="outline"
-                  className="h-4 px-1.5 text-[10px] font-normal"
-                >
-                  {t(watcherStatusLabel[watcher.status] || watcher.status)}
-                </Badge>
+                <span className="shrink-0 tabular-nums">
+                  {t(watcherStatusLabel[watcher.status] || watcher.status)} ·{" "}
+                  {formatLocalDateTime(
+                    watcher.resolved_at || watcher.expires_at,
+                  )}
+                </span>
               </div>
-              {watcher.match_key && (
-                <code className="block break-all font-mono text-[10px] text-muted-foreground">
-                  {watcher.match_key}
-                </code>
-              )}
-              {watcher.note && (
-                <p className="break-words text-muted-foreground">
-                  {watcher.note}
-                </p>
-              )}
-              <div className="text-[10px] text-faint">
-                {watcher.resolved_at
-                  ? `${t("结束于")} ${formatLocalDateTime(watcher.resolved_at)}`
-                  : formatLocalDateTime(watcher.expires_at)}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
