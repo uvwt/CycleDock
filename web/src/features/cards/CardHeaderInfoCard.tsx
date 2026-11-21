@@ -14,6 +14,7 @@ import { Badge } from "../../shared/ui/badge";
 import { Spinner } from "../../shared/ui/components";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { CardStatusSwitch } from "./CardStatusSwitch";
+import { CardWatchersSection } from "./CardWatchersSection";
 import { RichText } from "../timeline/RichText";
 
 const ScheduleEditor = lazy(() =>
@@ -446,6 +447,14 @@ export function CardHeaderInfoCard({
           )}
         </div>
       )}
+
+      {/* 卡片等待与定时自唤醒 */}
+      <CardWatchersSection
+        cardID={card.id}
+        onChanged={() => {
+          if (onSync) void onSync();
+        }}
+      />
 
       {/* Ongoing 计划调度配置 */}
       {card.kind === "ongoing" && onSync && detail && (

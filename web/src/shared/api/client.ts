@@ -36,6 +36,12 @@ import type {
   ToolApproval,
   DeviceToolGuard,
   ToolGuardSettings,
+  WorkspaceTrigger,
+  CreateTriggerInput,
+  UpdateTriggerInput,
+  TriggerWithSecretResponse,
+  TriggerDelivery,
+  CardWatcher,
 } from "./types";
 
 export class APIError extends Error {
@@ -452,4 +458,60 @@ export const api = {
       undefined,
       (value.timeout_ms || 30_000) + 5_000,
     ),
+  triggers: () =>
+    request<{ triggers: WorkspaceTrigger[] }>("/triggers").then(
+      (res) => res.triggers,
+    ),
+  createTrigger: (input: CreateTriggerInput) =>
+    request<TriggerWithSecretResponse>("/triggers", "POST", input),
+  updateTrigger: (id: string, input: UpdateTriggerInput) =>
+    request<{ trigger: WorkspaceTrigger }>(
+      `/triggers/${encodeURIComponent(id)}`,
+      "PATCH",
+      input,
+    ).then((res) => res.trigger),
+  rotateTriggerSecret: (id: string, secret?: string) =>
+    request<TriggerWithSecretResponse>(
+      `/triggers/${encodeURIComponent(id)}/rotate-secret`,
+      "POST",
+      secret ? { secret } : {},
+    ),
+  deleteTrigger: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/triggers/${encodeURIComponent(id)}`,
+      "DELETE",
+    ),
+  triggerDeliveries: (triggerID?: string, limit = 50) => {
+    const query = `?limit=${encodeURIComponent(String(limit))}`;
+    const path = triggerID
+      ? `/triggers/${encodeURIComponent(triggerID)}/deliveries${query}`
+      : `/triggers/deliveries${query}`;
+    return request<{ deliveries: TriggerDelivery[] }>(path).then(
+      (res) => res.deliveries,
+    );
+  },
+  cardWatchers: (cardID: string, armedOnly = false) =>
+    request<{ watchers: CardWatcher[] }>(
+      `/cards/${encodeURIComponent(cardID)}/watchers${armedOnly ? "?armed_only=true" : ""}`,
+    ).then((res) => res.watchers),
+  workspaceWatchers: (options?: {
+    armedOnly?: boolean;
+    projectID?: string;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (options?.armedOnly === false) params.set("armed_only", "false");
+    if (options?.projectID) params.set("project_id", options.projectID);
+    if (options?.limit) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    return request<{ watchers: CardWatcher[] }>(
+      `/watchers${qs ? `?${qs}` : ""}`,
+    ).then((res) => res.watchers);
+  },
+  cancelCardWatcher: (cardID: string, watcherID: string, reason?: string) =>
+    request<{ watcher: CardWatcher }>(
+      `/cards/${encodeURIComponent(cardID)}/watchers/${encodeURIComponent(watcherID)}/cancel`,
+      "POST",
+      reason ? { reason } : {},
+    ).then((res) => res.watcher),
 };

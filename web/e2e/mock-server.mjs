@@ -38,6 +38,215 @@ let deviceToolGuards = [
     updated_at: now(),
   },
 ];
+const minutesFromNow = (minutes) =>
+  new Date(Date.now() + minutes * 60 * 1000).toISOString();
+
+let triggers = [
+  {
+    id: "trig-gh-ci",
+    name: "GitHub Actions CI 完成唤醒",
+    provider: "github",
+    auth_mode: "github_hmac_sha256",
+    signature_header: "X-Hub-Signature-256",
+    secret_hint: "whsec_9a...4f2c",
+    webhook_path: "/api/v1/webhooks/trig-gh-ci",
+    enabled: true,
+    routing_mode: "match_watchers",
+    dispatch_mode: "enqueue",
+    filter_config: {
+      events: ["workflow_run"],
+      actions: ["completed"],
+      repositories: ["cycledock/cycledock"],
+    },
+    cooldown_seconds: 15,
+    last_triggered_at: hoursAgo(1),
+    last_delivery_status: "triggered",
+    last_delivery_reason: "matched 1 armed watcher",
+    last_delivery_at: hoursAgo(1),
+    created_at: hoursAgo(24),
+    updated_at: hoursAgo(1),
+  },
+  {
+    id: "trig-generic-alert",
+    name: "生产告警自动建单",
+    provider: "generic",
+    auth_mode: "bearer",
+    signature_header: "",
+    secret_hint: "tok_7e...18bd",
+    webhook_path: "/api/v1/webhooks/trig-generic-alert",
+    enabled: true,
+    routing_mode: "create_todo",
+    target_project_id: project.id,
+    target_project_name: project.name,
+    dispatch_mode: "interrupt",
+    filter_config: {
+      json_matches: { severity: "critical", env: "prod" },
+      match_key_path: "alert.fingerprint",
+    },
+    cooldown_seconds: 60,
+    last_delivery_status: "filtered",
+    last_delivery_reason: "filter_config json_matches mismatch",
+    last_delivery_at: hoursAgo(3),
+    created_at: hoursAgo(48),
+    updated_at: hoursAgo(3),
+  },
+  {
+    id: "trig-circleci-deploy",
+    name: "CircleCI 发布流水线",
+    provider: "circleci",
+    auth_mode: "circleci_hmac_sha256",
+    signature_header: "circleci-signature",
+    secret_hint: "cci_3c...89a0",
+    webhook_path: "/api/v1/webhooks/trig-circleci-deploy",
+    enabled: false,
+    routing_mode: "fixed_card",
+    target_card_id: "ongoing-1",
+    target_card_project_id: project.id,
+    target_card_kind: "ongoing",
+    target_card_title: "每天检查服务器健康",
+    dispatch_mode: "enqueue",
+    filter_config: {
+      events: ["workflow-completed"],
+      branches: ["main"],
+    },
+    cooldown_seconds: 0,
+    created_at: hoursAgo(72),
+    updated_at: hoursAgo(12),
+  },
+];
+
+let triggerDeliveries = [
+  {
+    id: "deliv-1",
+    trigger_id: "trig-gh-ci",
+    trigger_name: "GitHub Actions CI 完成唤醒",
+    delivery_id: "gh-987654",
+    provider: "github",
+    event_type: "workflow_run",
+    event_action: "completed",
+    signature_valid: true,
+    status: "triggered",
+    reason: "",
+    match_keys: [
+      "github:cycledock/cycledock:pr:128:ci_completed",
+      "github:cycledock/cycledock:branch:feat/triggers-and-watchers-ui:ci_completed",
+    ],
+    payload_summary:
+      "GitHub workflow_run.completed: CI on cycledock/cycledock@feat/triggers-and-watchers-ui (conclusion=success)",
+    triggered_turn_id: "turn-ci-1",
+    triggered_watcher_turn_ids: ["turn-ci-1"],
+    linked_cards: [
+      {
+        id: "todo-1",
+        project_id: project.id,
+        kind: "todo",
+        title: "检查 RN 服务器异常日志",
+      },
+    ],
+    received_at: hoursAgo(1),
+  },
+  {
+    id: "deliv-2",
+    trigger_id: "trig-generic-alert",
+    trigger_name: "生产告警自动建单",
+    delivery_id: "alert-551",
+    provider: "generic",
+    event_type: "alert.firing",
+    event_action: "",
+    signature_valid: true,
+    status: "filtered",
+    reason: "filter_config json_matches mismatch (severity=warning)",
+    match_keys: ["generic:trig-generic-alert:disk-usage-node-2"],
+    payload_summary: "Generic webhook alert.firing: severity=warning on node-2",
+    triggered_watcher_turn_ids: [],
+    linked_cards: [],
+    received_at: hoursAgo(3),
+  },
+  {
+    id: "deliv-3",
+    trigger_id: "trig-gh-ci",
+    trigger_name: "GitHub Actions CI 完成唤醒",
+    delivery_id: "gh-987600",
+    provider: "github",
+    event_type: "workflow_run",
+    event_action: "completed",
+    signature_valid: false,
+    status: "rejected",
+    reason: "invalid signature",
+    match_keys: [],
+    payload_summary: "Signature verification failed for incoming GitHub webhook",
+    triggered_watcher_turn_ids: [],
+    linked_cards: [],
+    received_at: hoursAgo(6),
+  },
+];
+
+let cardWatchers = [
+  {
+    id: "watcher-1",
+    card_id: "todo-1",
+    project_id: project.id,
+    project_name: project.name,
+    card_title: "检查 RN 服务器异常日志",
+    card_kind: "todo",
+    kind: "event",
+    match_key: "github:cycledock/cycledock:pr:128:ci_completed",
+    note: "等待 PR #128 CI 构建完成后自动复核日志并推进验收",
+    dispatch_mode: "enqueue",
+    status: "armed",
+    expires_at: minutesFromNow(42),
+    created_at: hoursAgo(0.3),
+    updated_at: hoursAgo(0.3),
+  },
+  {
+    id: "watcher-2",
+    card_id: "todo-1",
+    project_id: project.id,
+    project_name: project.name,
+    card_title: "检查 RN 服务器异常日志",
+    card_kind: "todo",
+    kind: "wakeup",
+    note: "15 分钟后自动复查容器重启计数与内存趋势",
+    dispatch_mode: "interrupt",
+    status: "armed",
+    expires_at: minutesFromNow(15),
+    created_at: hoursAgo(0.1),
+    updated_at: hoursAgo(0.1),
+  },
+  {
+    id: "watcher-3",
+    card_id: "ongoing-1",
+    project_id: project.id,
+    project_name: project.name,
+    card_title: "每天检查服务器健康",
+    card_kind: "ongoing",
+    kind: "wakeup",
+    note: "2 小时后复检磁盘水位",
+    dispatch_mode: "enqueue",
+    status: "armed",
+    expires_at: minutesFromNow(120),
+    created_at: hoursAgo(0.5),
+    updated_at: hoursAgo(0.5),
+  },
+  {
+    id: "watcher-4",
+    card_id: "todo-1",
+    project_id: project.id,
+    project_name: project.name,
+    card_title: "检查 RN 服务器异常日志",
+    card_kind: "todo",
+    kind: "event",
+    match_key: "github:cycledock/cycledock:pr:127:ci_completed",
+    note: "上一轮 PR #127 CI 等待",
+    dispatch_mode: "enqueue",
+    status: "triggered",
+    expires_at: hoursAgo(2),
+    resolved_reason: "matched webhook delivery",
+    resolved_at: hoursAgo(2.5),
+    created_at: hoursAgo(3),
+    updated_at: hoursAgo(2.5),
+  },
+];
 const cards = [
   {
     id: "discussion-1",
@@ -868,7 +1077,8 @@ http
               return data(res, updated, 200);
             }
           }
-          if (rest?.includes("/cancel")) return data(res, {});
+          if (rest && !rest.startsWith("watchers/") && rest.includes("/cancel"))
+            return data(res, {});
           if (rest?.includes("/retry"))
             return data(res, { attempt_id: "attempt-retry-demo" });
         }
@@ -1318,6 +1528,133 @@ http
           });
         if (route === "/notifications/push" && req.method === "GET")
           return data(res, { public_key: "" });
+        if (route === "/triggers" && req.method === "GET") {
+          return data(res, { triggers });
+        }
+        if (route === "/triggers" && req.method === "POST") {
+          const input = await body(req);
+          const id = `trig-${Date.now().toString(36)}`;
+          const secret =
+            input.secret ||
+            `whsec_demo_${Math.random().toString(36).slice(2, 12)}_${Date.now().toString(36)}`;
+          const targetProject = projects.find(
+            (pr) => pr.id === input.target_project_id,
+          );
+          const targetCard = cards.find((c) => c.id === input.target_card_id);
+          const created = {
+            id,
+            name: input.name,
+            provider: input.provider || "github",
+            auth_mode: input.auth_mode || "github_hmac_sha256",
+            signature_header: input.signature_header || "",
+            secret_hint: `${secret.slice(0, 6)}...${secret.slice(-4)}`,
+            webhook_path: `/api/v1/webhooks/${id}`,
+            enabled: input.enabled ?? true,
+            routing_mode: input.routing_mode || "match_watchers",
+            target_project_id: input.target_project_id || undefined,
+            target_project_name: targetProject?.name,
+            target_card_id: input.target_card_id || undefined,
+            target_card_project_id: targetCard?.project_id,
+            target_card_kind: targetCard?.kind,
+            target_card_title: targetCard?.title,
+            dispatch_mode: input.dispatch_mode || "enqueue",
+            filter_config: input.filter_config || {},
+            cooldown_seconds: input.cooldown_seconds || 0,
+            created_at: now(),
+            updated_at: now(),
+          };
+          triggers = [created, ...triggers];
+          return data(res, { trigger: created, secret }, 201);
+        }
+        if (route === "/triggers/deliveries" && req.method === "GET") {
+          return data(res, { deliveries: triggerDeliveries });
+        }
+        const trigMatch = route.match(/^\/triggers\/([^/]+)$/);
+        if (trigMatch) {
+          const id = decodeURIComponent(trigMatch[1]);
+          const idx = triggers.findIndex((t) => t.id === id);
+          if (idx === -1) return failure(res, 404);
+          if (req.method === "PATCH") {
+            const input = await body(req);
+            const cur = triggers[idx];
+            const next = {
+              ...cur,
+              ...input,
+              updated_at: now(),
+            };
+            const targetProject = projects.find(
+              (pr) => pr.id === next.target_project_id,
+            );
+            const targetCard = cards.find((c) => c.id === next.target_card_id);
+            next.target_project_name = targetProject?.name;
+            next.target_card_project_id = targetCard?.project_id;
+            next.target_card_kind = targetCard?.kind;
+            next.target_card_title = targetCard?.title;
+            triggers[idx] = next;
+            return data(res, { trigger: next });
+          }
+          if (req.method === "DELETE") {
+            triggers.splice(idx, 1);
+            triggerDeliveries = triggerDeliveries.filter(
+              (d) => d.trigger_id !== id,
+            );
+            return data(res, { deleted: true });
+          }
+        }
+        const trigRotateMatch = route.match(
+          /^\/triggers\/([^/]+)\/rotate-secret$/,
+        );
+        if (trigRotateMatch && req.method === "POST") {
+          const id = decodeURIComponent(trigRotateMatch[1]);
+          const item = triggers.find((t) => t.id === id);
+          if (!item) return failure(res, 404);
+          const secret = `whsec_rot_${Math.random().toString(36).slice(2, 12)}_${Date.now().toString(36)}`;
+          item.secret_hint = `${secret.slice(0, 6)}...${secret.slice(-4)}`;
+          item.updated_at = now();
+          return data(res, { trigger: item, secret });
+        }
+        const trigDelivMatch = route.match(/^\/triggers\/([^/]+)\/deliveries$/);
+        if (trigDelivMatch && req.method === "GET") {
+          const id = decodeURIComponent(trigDelivMatch[1]);
+          return data(res, {
+            deliveries: triggerDeliveries.filter((d) => d.trigger_id === id),
+          });
+        }
+        if (route === "/watchers" && req.method === "GET") {
+          const armedOnly = url.searchParams.get("armed_only") !== "false";
+          const projID = url.searchParams.get("project_id") || "";
+          const filtered = cardWatchers.filter((w) => {
+            if (armedOnly && w.status !== "armed") return false;
+            if (projID && w.project_id !== projID) return false;
+            return true;
+          });
+          return data(res, { watchers: filtered });
+        }
+        const cardWatchersMatch = route.match(/^\/cards\/([^/]+)\/watchers$/);
+        if (cardWatchersMatch && req.method === "GET") {
+          const cid = decodeURIComponent(cardWatchersMatch[1]);
+          const armedOnly = url.searchParams.get("armed_only") === "true";
+          const filtered = cardWatchers.filter(
+            (w) => w.card_id === cid && (!armedOnly || w.status === "armed"),
+          );
+          return data(res, { watchers: filtered });
+        }
+        const cancelWatcherMatch = route.match(
+          /^\/cards\/([^/]+)\/watchers\/([^/]+)\/cancel$/,
+        );
+        if (cancelWatcherMatch && req.method === "POST") {
+          const cid = decodeURIComponent(cancelWatcherMatch[1]);
+          const wid = decodeURIComponent(cancelWatcherMatch[2]);
+          const item = cardWatchers.find(
+            (w) => w.card_id === cid && w.id === wid,
+          );
+          if (!item) return failure(res, 404);
+          item.status = "cancelled";
+          item.resolved_reason = "manual_cancelled";
+          item.resolved_at = now();
+          item.updated_at = now();
+          return data(res, { watcher: item });
+        }
         if (
           (route === "/notifications/push/subscription" &&
             (req.method === "PUT" || req.method === "DELETE")) ||

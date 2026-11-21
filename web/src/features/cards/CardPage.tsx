@@ -12,7 +12,7 @@ import {
 import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { BellOff, Check, Info, PanelLeft } from "lucide-react";
+import { BellOff, Check, Info, PanelLeft, Radar } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -258,6 +258,16 @@ function CardPageContent({
     // 切回卡片时缓存里的 running 只是离开前的快照，先刷新再决定是否显示执行中占位。
     refetchOnMount: "always",
   });
+  const cardWatchers = useQuery({
+    queryKey: keys.cardWatchers(cardID),
+    queryFn: () => api.cardWatchers(cardID, false),
+    enabled: Boolean(cardID),
+    staleTime: 10_000,
+  });
+  const armedWatcherCount = useMemo(
+    () => (cardWatchers.data || []).filter((w) => w.status === "armed").length,
+    [cardWatchers.data],
+  );
   const card = detail.data?.card;
   const actualProjectID = card?.project_id || projectID;
   const stream = useCardStream(cardID, actualProjectID);
@@ -834,6 +844,17 @@ function CardPageContent({
                   {liveTaskCompleted}/{liveTaskTotal}
                 </span>
               )}
+              {armedWatcherCount > 0 && (
+                <span
+                  aria-label={t("有 {{count}} 个挂起等待项", {
+                    count: armedWatcherCount,
+                  })}
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                >
+                  <Radar className="size-2.5" />
+                  <span className="tabular-nums">{armedWatcherCount}</span>
+                </span>
+              )}
             </button>
 
             <div className="relative flex shrink-0 items-center gap-1.5 pointer-events-auto">
@@ -856,7 +877,9 @@ function CardPageContent({
                 title={t("任务详情")}
                 onClick={() => setInfoOpen((prev) => !prev)}
                 className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
-                  liveTaskTotal > 0 ? "px-2.5" : "w-8 sm:w-auto sm:px-2.5"
+                  liveTaskTotal > 0 || armedWatcherCount > 0
+                    ? "px-2.5"
+                    : "w-8 sm:w-auto sm:px-2.5"
                 } ${
                   infoOpen
                     ? "border-primary/40 bg-primary/10 text-primary font-medium"
@@ -868,6 +891,17 @@ function CardPageContent({
                 {liveTaskTotal > 0 && (
                   <span className="tabular-nums text-[11px] opacity-80">
                     {liveTaskCompleted}/{liveTaskTotal}
+                  </span>
+                )}
+                {armedWatcherCount > 0 && (
+                  <span
+                    aria-label={t("有 {{count}} 个挂起等待项", {
+                      count: armedWatcherCount,
+                    })}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                  >
+                    <Radar className="size-2.5" />
+                    <span className="tabular-nums">{armedWatcherCount}</span>
                   </span>
                 )}
               </button>
