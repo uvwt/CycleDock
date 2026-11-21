@@ -749,14 +749,43 @@ func hasApprovedMatchingToolCall(
 	if err != nil {
 		targetRaw = []byte("{}")
 	}
+	targetCanonical, targetOK := canonicalizeToolArguments(targetRaw)
 	for _, app := range approvals {
 		if app.Status == "approved" && app.ToolName == toolName {
+			if targetOK {
+				if appCanonical, ok := canonicalizeToolArguments(app.Arguments); ok {
+					if bytes.Equal(appCanonical, targetCanonical) {
+						return true
+					}
+					continue
+				}
+			}
 			if bytes.Equal(bytes.TrimSpace(app.Arguments), bytes.TrimSpace(targetRaw)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// canonicalizeToolArguments 将 JSON/JSONB 字节归一化为紧凑且键有序的标准形式，
+// 避免 PostgreSQL JSONB 返回的空格与键序差异导致参数比对失败。
+func canonicalizeToolArguments(raw []byte) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return []byte("{}"), true
+	}
+	var decoded any
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		return nil, false
+	}
+	return canonical, true
 }
 
 // ToolGuardScope 描述被守卫工具在当前卡片内的临时白名单作用域（设备 / MCP / 兜底工具名）
@@ -968,8 +997,40 @@ func EvaluateToolGuard(
 
 	scope := resolveToolGuardScope(ctx, storeInstance, workspaceID, cardDeviceNodeID, deviceNames, toolName, args)
 
-	// 2. 明确高危系统级破坏命令（如 rm -rf /、drop database）必须位于白名单之前，
-	// 确保即便卡片已临时允许某设备，高危系统级破坏命令仍强制人工确认且不允许加入临时白名单。
+	// 2. 优先检查目标设备或 MCP 连接的安全守卫开关：
+	// 未开启守卫的设备/MCP 直接放行，不再触发后续静态极高危命令或小模型拦截。
+	policy, ok := resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, settings, scope)
+	if !ok || !policy.Enabled {
+		return ToolGuardDecision{
+			Reversible:            true,
+			RiskLevel:             "low",
+			Decision:              "allow",
+			Reason:                "目标设备或 MCP 连接未启用安全守卫，予以放行",
+			ScopeType:             scope.ScopeType,
+			ScopeTarget:           scope.ScopeTarget,
+			ScopeLabel:            scope.ScopeLabel,
+			AllowSessionWhitelist: true,
+		}
+	}
+
+	// 3. 单次已批准匹配调用检查（位于极高危静态规则之前）：
+	// 避免用户对某条极高危命令点击「允许本次执行」后，因重放/重试再次被静态规则拦截陷入死循环。
+	if storeInstance != nil && hasApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
+		return ToolGuardDecision{
+			Reversible:            true,
+			RiskLevel:             "low",
+			Decision:              "allow",
+			Reason:                "该工具调用已获人工批准，放行执行",
+			ScopeType:             scope.ScopeType,
+			ScopeTarget:           scope.ScopeTarget,
+			ScopeLabel:            scope.ScopeLabel,
+			AllowSessionWhitelist: true,
+		}
+	}
+
+	// 4. 明确高危系统级破坏命令检查（位于卡片临时白名单之前）：
+	// 确保已开启守卫的设备即便在当前卡片点了临时允许，遇到 rm -rf /、drop database 等极高危命令
+	// 依然强制人工确认且不允许加入临时白名单。
 	if isCrit, critReason := isCriticalDestructiveCommand(toolName, args); isCrit {
 		return ToolGuardDecision{
 			Reversible:            false,
@@ -983,20 +1044,8 @@ func EvaluateToolGuard(
 		}
 	}
 
-	// 3. 卡片临时白名单检查（当前卡片 + 设备 / MCP / 兜底工具）及单次已批准防死循环检查
+	// 5. 卡片临时白名单检查（当前卡片 + 设备 / MCP / 兜底工具）
 	if storeInstance != nil {
-		if hasApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
-			return ToolGuardDecision{
-				Reversible:            true,
-				RiskLevel:             "low",
-				Decision:              "allow",
-				Reason:                "该工具调用已获人工批准，放行执行",
-				ScopeType:             scope.ScopeType,
-				ScopeTarget:           scope.ScopeTarget,
-				ScopeLabel:            scope.ScopeLabel,
-				AllowSessionWhitelist: true,
-			}
-		}
 		whitelisted, err := storeInstance.IsCardScopeWhitelisted(ctx, workspaceID, cardID, scope.ScopeType, scope.ScopeTarget)
 		if err == nil && whitelisted {
 			return ToolGuardDecision{
@@ -1009,21 +1058,6 @@ func EvaluateToolGuard(
 				ScopeLabel:            scope.ScopeLabel,
 				AllowSessionWhitelist: true,
 			}
-		}
-	}
-
-	// 4. 检查设备或 MCP 连接布尔开关，开启时统一应用工作区全局守卫参数
-	policy, ok := resolveScopedGuardPolicyFromScope(ctx, storeInstance, workspaceID, settings, scope)
-	if !ok || !policy.Enabled {
-		return ToolGuardDecision{
-			Reversible:            true,
-			RiskLevel:             "low",
-			Decision:              "allow",
-			Reason:                "目标设备或 MCP 连接未启用安全守卫，予以放行",
-			ScopeType:             scope.ScopeType,
-			ScopeTarget:           scope.ScopeTarget,
-			ScopeLabel:            scope.ScopeLabel,
-			AllowSessionWhitelist: true,
 		}
 	}
 
