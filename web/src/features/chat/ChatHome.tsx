@@ -9,10 +9,14 @@ import {
   BellOff,
   CalendarClock,
   ChevronRight,
+  CheckCircle2,
+  ListTodo,
   MessageSquare,
   MessageSquareText,
   PanelLeft,
+  Pin,
   PlayCircle,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -265,6 +269,14 @@ export default function ChatHome() {
                             })}
                           </span>
                         )}
+                        {focusSummary.pinnedCount > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                            <Pin className="size-2.5 fill-current rotate-45" />
+                            {t("{{count}} 置顶", {
+                              count: focusSummary.pinnedCount,
+                            })}
+                          </span>
+                        )}
                       </div>
 
                       <button
@@ -311,6 +323,12 @@ export default function ChatHome() {
                                 <MessageSquare className="size-3.5 shrink-0 text-indigo-500" />
                               ) : card.kind === "ongoing" ? (
                                 <CalendarClock className="size-3.5 shrink-0 text-violet-500" />
+                              ) : card.todo_state === "todo" ? (
+                                <ListTodo className="size-3.5 shrink-0 text-slate-500" />
+                              ) : card.todo_state === "review" ? (
+                                <ShieldCheck className="size-3.5 shrink-0 text-amber-500" />
+                              ) : card.todo_state === "done" ? (
+                                <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
                               ) : (
                                 <PlayCircle className="size-3.5 shrink-0 text-sky-500" />
                               )}
@@ -325,6 +343,12 @@ export default function ChatHome() {
                                       ? t("未命名定时任务")
                                       : t("未命名卡片"))}
                               </span>
+                              {Boolean(card.pinned_at) && (
+                                <Pin
+                                  aria-label={t("已置顶")}
+                                  className="size-3 shrink-0 text-amber-500 fill-amber-500 rotate-45"
+                                />
+                              )}
                               {card.notifications_muted && (
                                 <BellOff
                                   aria-label={t("通知已静音")}
@@ -367,6 +391,11 @@ export default function ChatHome() {
                               {reason === "working" && (
                                 <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                                   {t("进行中")}
+                                </span>
+                              )}
+                              {reason === "pinned" && (
+                                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                  {t("已置顶")}
                                 </span>
                               )}
                             </div>
