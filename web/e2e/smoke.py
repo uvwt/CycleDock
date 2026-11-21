@@ -1895,6 +1895,138 @@ class CycleDockSmoke(unittest.TestCase):
             finally:
                 ctx.close()
 
+    def test_main_chat_dock_peek_shows_source_title_and_navigates(self):
+        def dispatch_card_message(page, detail):
+            page.evaluate(
+                """(payload) => {
+                    window.dispatchEvent(new CustomEvent("cycledock:card-message", { detail: payload }));
+                }""",
+                detail,
+            )
+
+        for width, height in [(1280, 860), (390, 844)]:
+            ctx = self.browser.new_context(viewport={"width": width, "height": height})
+            page = ctx.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            try:
+                page.goto(BASE + "/board")
+                trigger = page.get_by_role("button", name="打开主聊天")
+                trigger.wait_for()
+                # 确保当前项目主聊天卡片已创建并加载 mainCardID
+                trigger.click()
+                dock_window = page.locator('section[aria-label="主聊天"]')
+                dock_window.wait_for()
+                page.get_by_role("button", name="关闭主聊天").click()
+                dock_window.wait_for(state="hidden")
+
+                # 1. 其他待办卡片：展示来源标题并点击直达 /cards/...
+                dispatch_card_message(
+                    page,
+                    {
+                        "id": "todo-1",
+                        "project_id": "demo-project",
+                        "kind": "todo",
+                        "title": "检查 RN 服务器异常日志",
+                        "revision": "rev-peek-todo",
+                        "event_sequence": "201",
+                        "message_preview": "已定位到 3 条容器重启日志，请查看详情",
+                        "body": "已定位到 3 条容器重启日志，请查看详情",
+                        "attempt_status": "completed",
+                        "viewing": False,
+                        "notifications_muted": False,
+                    },
+                )
+                todo_peek = page.get_by_role(
+                    "button", name=re.compile("已定位到 3 条容器重启日志，请查看详情")
+                )
+                todo_peek.wait_for()
+                expect(todo_peek).to_contain_text("检查 RN 服务器异常日志")
+                todo_peek.click()
+                page.wait_for_url("**/cards/demo-project/todo-1")
+                expect(dock_window).to_be_hidden()
+
+                # 2. 其他定时任务卡片（静音但待审批）：审批穿透静音，展示来源标题并直达 /plans/...
+                dispatch_card_message(
+                    page,
+                    {
+                        "id": "ongoing-1",
+                        "project_id": "demo-project",
+                        "kind": "ongoing",
+                        "title": "每天检查服务器健康",
+                        "revision": "rev-peek-plan",
+                        "event_sequence": "202",
+                        "message_preview": "等待人工审批：执行重启 Nginx 容器操作",
+                        "body": "等待人工审批：执行重启 Nginx 容器操作",
+                        "notification_kind": "tool_approval",
+                        "attempt_status": "running",
+                        "viewing": False,
+                        "notifications_muted": True,
+                    },
+                )
+                plan_peek = page.get_by_role(
+                    "button", name=re.compile("等待人工审批：执行重启 Nginx 容器操作")
+                )
+                plan_peek.wait_for()
+                expect(plan_peek).to_contain_text("每天检查服务器健康")
+                plan_peek.click()
+                page.wait_for_url("**/plans/demo-project/ongoing-1")
+                expect(dock_window).to_be_hidden()
+
+                # 3. 其他讨论卡片：展示来源标题并直达 /chat/...
+                dispatch_card_message(
+                    page,
+                    {
+                        "id": "discussion-1",
+                        "project_id": "demo-project",
+                        "kind": "discussion",
+                        "title": "讨论服务器巡检计划",
+                        "revision": "rev-peek-disc",
+                        "event_sequence": "203",
+                        "message_preview": "建议补充磁盘空间与证书到期检查",
+                        "body": "建议补充磁盘空间与证书到期检查",
+                        "attempt_status": "completed",
+                        "viewing": False,
+                        "notifications_muted": False,
+                    },
+                )
+                disc_peek = page.get_by_role(
+                    "button", name=re.compile("建议补充磁盘空间与证书到期检查")
+                )
+                disc_peek.wait_for()
+                expect(disc_peek).to_contain_text("讨论服务器巡检计划")
+                disc_peek.click()
+                page.wait_for_url("**/chat/demo-project/discussion-1")
+                expect(dock_window).to_be_hidden()
+
+                # 4. 主聊天消息：保持轻量不重复展示“主聊天”标题，点击展开主聊天浮窗且停留在原页面
+                dispatch_card_message(
+                    page,
+                    {
+                        "id": "main-demo-project",
+                        "project_id": "demo-project",
+                        "kind": "discussion",
+                        "title": "主聊天",
+                        "revision": "rev-peek-main",
+                        "event_sequence": "204",
+                        "message_preview": "主聊天已汇总今日全部任务进展",
+                        "body": "主聊天已汇总今日全部任务进展",
+                        "attempt_status": "completed",
+                        "viewing": False,
+                        "notifications_muted": False,
+                    },
+                )
+                main_peek = page.get_by_role(
+                    "button", name="主聊天已汇总今日全部任务进展", exact=True
+                )
+                main_peek.wait_for()
+                main_peek.click()
+                dock_window.wait_for()
+                self.assertIn("/chat/demo-project/discussion-1", page.url)
+                self.assertEqual(errors, [], f"Browser JS errors at {width}x{height}")
+            finally:
+                ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
