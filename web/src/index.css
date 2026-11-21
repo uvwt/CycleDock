@@ -202,13 +202,96 @@ button:disabled {
 }
 .prose-chat pre {
   background: var(--code-background);
-  color: #f1f5f9;
-  padding: 1rem;
+  color: #e2e8f0;
+  padding: 0.9rem 1rem;
   overflow-x: auto;
   border-radius: 12px;
   margin: 0.75rem 0;
-  font-size: 0.875rem;
-  line-height: 1.6;
+  font-size: 0.85rem;
+  line-height: 1.62;
+  tab-size: 2;
+}
+.prose-chat-codeblock pre {
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.prose-chat-codeblock pre code {
+  display: block;
+  min-width: max-content;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+}
+/* 语法高亮配色（适配深色代码底色 --code-background，保证亮/暗主题均清晰可读） */
+.prose-chat pre .hljs {
+  color: #e2e8f0;
+}
+.prose-chat pre .hljs-comment,
+.prose-chat pre .hljs-quote {
+  color: #8b9bb4;
+  font-style: italic;
+}
+.prose-chat pre .hljs-keyword,
+.prose-chat pre .hljs-selector-tag,
+.prose-chat pre .hljs-subst,
+.prose-chat pre .hljs-template-tag,
+.prose-chat pre .hljs-doctag {
+  color: #ff7b72;
+}
+.prose-chat pre .hljs-title,
+.prose-chat pre .hljs-title.class_,
+.prose-chat pre .hljs-title.function_,
+.prose-chat pre .hljs-section {
+  color: #d2a8ff;
+}
+.prose-chat pre .hljs-string,
+.prose-chat pre .hljs-regexp,
+.prose-chat pre .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+.prose-chat pre .hljs-number,
+.prose-chat pre .hljs-literal,
+.prose-chat pre .hljs-variable.constant_,
+.prose-chat pre .hljs-attr,
+.prose-chat pre .hljs-attribute,
+.prose-chat pre .hljs-selector-attr,
+.prose-chat pre .hljs-selector-pseudo,
+.prose-chat pre .hljs-meta {
+  color: #79c0ff;
+}
+.prose-chat pre .hljs-built_in,
+.prose-chat pre .hljs-type,
+.prose-chat pre .hljs-symbol,
+.prose-chat pre .hljs-variable,
+.prose-chat pre .hljs-template-variable,
+.prose-chat pre .hljs-params {
+  color: #ffa657;
+}
+.prose-chat pre .hljs-name,
+.prose-chat pre .hljs-tag,
+.prose-chat pre .hljs-selector-id,
+.prose-chat pre .hljs-selector-class {
+  color: #7ee787;
+}
+.prose-chat pre .hljs-addition {
+  color: #aff5b4;
+  background-color: rgba(46, 160, 67, 0.2);
+}
+.prose-chat pre .hljs-deletion {
+  color: #ffdcd7;
+  background-color: rgba(248, 81, 73, 0.2);
+}
+.prose-chat pre .hljs-emphasis {
+  font-style: italic;
+}
+.prose-chat pre .hljs-strong {
+  font-weight: 600;
 }
 .prose-chat code:not(pre code) {
   background: var(--inline-code-background);

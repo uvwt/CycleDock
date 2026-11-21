@@ -1831,3 +1831,62 @@ test("用户评论附带图片与过期图片渲染，输入框支持纯图片�
     /<button[^>]*type="submit"[^>]*disabled[^>]*aria-label="发送"/,
   );
 });
+
+test("Markdown 代码块渲染语法高亮、语言标签与独立复制按钮", () => {
+  const markdown = [
+    "下面是三段示例：",
+    "",
+    "```go",
+    "package main",
+    "",
+    "func main() {",
+    '  println("hello")',
+    "}",
+    "```",
+    "",
+    "```tsx",
+    "export function Demo({ ok }: { ok: boolean }) {",
+    "  return <span>{ok ? 'yes' : 'no'}</span>;",
+    "}",
+    "```",
+    "",
+    "```text",
+    "plain text output",
+    "```",
+  ].join("\n");
+
+  const codeMsg = {
+    ...result,
+    id: "code-highlight-msg",
+    type: "message",
+    content: markdown,
+    message: {
+      type: "text",
+      content: markdown,
+      end_turn: true,
+    },
+  };
+
+  const html = render([comment, codeMsg], attempt);
+
+  // 三个代码块各自有独立的 prose-chat-codeblock 容器与复制按钮
+  const blockCount = (html.match(/prose-chat-codeblock/g) || []).length;
+  const copyBtnCount = (html.match(/aria-label="复制代码"/g) || []).length;
+  assert.equal(blockCount, 3);
+  assert.equal(copyBtnCount, 3);
+
+  // 头部正确展示语言标签（go / tsx / text）
+  assert.match(html, />go<\/span>/);
+  assert.match(html, />tsx<\/span>/);
+  assert.match(html, />text<\/span>/);
+
+  // Go 和 TSX 代码块经 rehype-highlight 产生 hljs 语法 token
+  assert.match(html, /class="hljs language-go"/);
+  assert.match(html, /class="hljs language-tsx"/);
+  assert.match(html, /hljs-keyword/);
+  assert.match(html, /hljs-string/);
+
+  // text 代码块保持纯文本不着色
+  assert.match(html, /class="language-text"/);
+  assert.match(html, /plain text output/);
+});

@@ -1,20 +1,145 @@
 import {
+  isValidElement,
   memo,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type AnchorHTMLAttributes,
+  type ComponentProps,
   type DetailedHTMLProps,
   type MouseEvent,
+  type ReactElement,
+  type ReactNode,
   type TdHTMLAttributes,
 } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
+import { common } from "lowlight";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import nginx from "highlight.js/lib/languages/nginx";
+import powershell from "highlight.js/lib/languages/powershell";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "../../app/project-context";
 import { ChatActionCard } from "../../shared/ui/chat";
+
+// 在 lowlight 常用语言包的基础上补充运维/开发高频语言，避免引入全量数百种冷门语法导致前端包膨胀。
+const HIGHLIGHT_LANGUAGES = {
+  ...common,
+  dockerfile,
+  nginx,
+  powershell,
+};
+
+const HIGHLIGHT_ALIASES = {
+  typescript: ["tsx"],
+  javascript: ["jsx"],
+  dockerfile: ["docker"],
+  powershell: ["ps1", "pwsh"],
+  ini: ["toml", "dotenv", "env"],
+  bash: ["zsh", "sh"],
+  plaintext: ["text", "txt"],
+};
+
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [
+  [
+    rehypeHighlight,
+    {
+      languages: HIGHLIGHT_LANGUAGES,
+      aliases: HIGHLIGHT_ALIASES,
+      plainText: ["text", "txt", "plaintext"],
+      detect: false,
+    },
+  ],
+] as NonNullable<ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>;
+
+/**
+ * 从 <pre><code className="hljs language-xxx"> 中提取用户标注的语言名称，用于代码块头部展示。
+ */
+function extractCodeLanguage(children: ReactNode): string | null {
+  if (!isValidElement(children)) return null;
+  const props = (children as ReactElement<{ className?: string }>).props;
+  const className = typeof props?.className === "string" ? props.className : "";
+  const match = className.match(/\blanguage-([a-zA-Z0-9_+-]+)\b/);
+  if (!match) return null;
+  return match[1].toLowerCase();
+}
+
+/**
+ * 独立代码块组件：
+ * - 每个代码块独立持有 copied 状态与清理定时器，避免同一条消息中多个代码块联动误显示“已复制”
+ * - 展示语言标签与固定头部栏，移动端和桌面端均可清晰操作且不遮挡第一行代码
+ */
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+  const timerRef = useRef<number | null>(null);
+  const language = extractCodeLanguage(children);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopy = useCallback(async () => {
+    const code = preRef.current?.querySelector("code")?.textContent ?? "";
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+      }
+      timerRef.current = window.setTimeout(() => {
+        setCopied(false);
+        timerRef.current = null;
+      }, 1400);
+    } catch {
+      // 忽略剪贴板权限拒绝，避免抛出未捕获异常
+    }
+  }, []);
+
+  return (
+    <div className="prose-chat-codeblock group my-3 overflow-hidden rounded-xl border border-slate-700/60 bg-[var(--code-background)]">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-700/60 bg-slate-900/45 px-3.5 py-1.5 text-xs text-slate-300">
+        <span className="truncate font-mono text-[11px] font-medium tracking-wide text-slate-300/90 select-none">
+          {language || "code"}
+        </span>
+        <button
+          type="button"
+          title={copied ? t("已复制") : t("复制代码")}
+          aria-label={copied ? t("已复制") : t("复制代码")}
+          data-copied={copied ? "true" : "false"}
+          onClick={handleCopy}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-slate-300 transition-colors hover:bg-slate-700/70 hover:text-white"
+        >
+          {copied ? (
+            <>
+              <Check className="size-3.5 text-emerald-400" />
+              <span className="text-emerald-300">{t("已复制")}</span>
+            </>
+          ) : (
+            <>
+              <Copy className="size-3.5" />
+              <span>{t("复制代码")}</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre ref={preRef} className="scrollbar-thin">
+        {children}
+      </pre>
+    </div>
+  );
+}
 
 /**
  * 允许应用专属协议 cycledock:// 与 card:，避免被 ReactMarkdown 默认安全协议白名单过滤为空字符串
@@ -98,10 +223,8 @@ export const RichText = memo(function RichText({
   content: string;
   className?: string;
 }) {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const { projectID } = useProject();
-  const [copied, setCopied] = useState(false);
 
   const handleLinkClick = useCallback(
     (e: MouseEvent<HTMLAnchorElement>, href: string | undefined) => {
@@ -218,31 +341,10 @@ export const RichText = memo(function RichText({
           <div className="min-w-0 flex-1 leading-relaxed">{children}</div>
         </div>
       ),
-      pre: ({ children }: { children?: React.ReactNode }) => (
-        <div className="relative">
-          <button
-            title={t("复制代码")}
-            aria-label={t("复制代码")}
-            onClick={async (event) => {
-              const code =
-                event.currentTarget.parentElement?.querySelector("code")
-                  ?.textContent || "";
-              await navigator.clipboard.writeText(code);
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1400);
-            }}
-            className="absolute top-2 right-2 z-10 rounded-lg bg-slate-700/80 p-1.5 text-white hover:bg-slate-600"
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </button>
-          <pre>{children}</pre>
-        </div>
+      pre: ({ children }: { children?: ReactNode }) => (
+        <CodeBlock>{children}</CodeBlock>
       ),
-      table: ({ children }: { children?: React.ReactNode }) => (
+      table: ({ children }: { children?: ReactNode }) => (
         // 独立横向滚动容器：避免外层气泡折行压缩列宽，同时配合移动端手势避让
         <div
           data-chat-table-scroll="true"
@@ -267,13 +369,14 @@ export const RichText = memo(function RichText({
         </td>
       ),
     }),
-    [handleLinkClick, projectID, t, copied],
+    [handleLinkClick, projectID],
   );
 
   return (
     <div className={`prose-chat text-foreground ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         urlTransform={customUrlTransform}
         components={markdownComponents}
       >
