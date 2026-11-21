@@ -34,7 +34,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -110,7 +116,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -187,7 +199,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -267,7 +285,7 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 
 -- name: MarkCardRead :one
 INSERT INTO card_read_cursors (
-    workspace_id, source_id, card_id, last_read_message_sequence, updated_at
+    workspace_id, source_id, card_id, last_read_message_sequence, marked_unread, updated_at
 )
 SELECT
     c.workspace_id,
@@ -280,6 +298,7 @@ SELECT
           AND e.card_id = c.id
           AND e.event_type IN ('comment', 'message')
     ), 0),
+    false,
     now()
 FROM cards c
 JOIN sources s
@@ -293,6 +312,30 @@ SET last_read_message_sequence = GREATEST(
         card_read_cursors.last_read_message_sequence,
         EXCLUDED.last_read_message_sequence
     ),
+    marked_unread = false,
+    updated_at = now()
+RETURNING last_read_message_sequence;
+
+-- name: MarkCardUnread :one
+INSERT INTO card_read_cursors (
+    workspace_id, source_id, card_id, last_read_message_sequence, marked_unread, updated_at
+)
+SELECT
+    c.workspace_id,
+    s.id,
+    c.id,
+    0,
+    true,
+    now()
+FROM cards c
+JOIN sources s
+  ON s.workspace_id = c.workspace_id
+ AND s.id = sqlc.arg(source_id)
+ AND s.kind = 'human'
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.id = sqlc.arg(card_id)
+ON CONFLICT (workspace_id, source_id, card_id) DO UPDATE
+SET marked_unread = true,
     updated_at = now()
 RETURNING last_read_message_sequence;
 

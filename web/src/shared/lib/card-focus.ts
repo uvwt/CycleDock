@@ -49,6 +49,7 @@ type FocusCardFields = Pick<
   | "ongoing_state"
   | "health"
   | "current_attempt_status"
+  | "marked_unread"
   | "unread"
   | "pending_tool_approval_count"
   | "notifications_muted"
@@ -109,9 +110,10 @@ export function getCardVisualStatus(
     return ongoingAlert;
   }
 
-  // unread 由后端基于 message sequence + Human Source read cursor 计算；
-  // 标题、置顶、状态变化不会推进这个游标。
-  if (!isActive && card.unread) {
+  // unread 由后端基于 message sequence + Human Source read cursor + marked_unread 计算；
+  // 普通新消息在正在查看当前卡片时抑制蓝点，但若用户显式手动「标为未读」（marked_unread === true），
+  // 即使当前仍停留在该卡片会话中，也必须保留未读蓝点与未读提示。
+  if (card.marked_unread || (!isActive && card.unread)) {
     return "unread";
   }
 

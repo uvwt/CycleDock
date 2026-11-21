@@ -803,6 +803,21 @@ const en = {
   取消等待失败: "Failed to cancel watcher",
   "复制 Match Key": "Copy Match Key",
   "有 {{count}} 个挂起等待项": "{{count}} armed watcher(s)",
+  标为未读: "Mark as unread",
+  标为已读: "Mark as read",
+  已标为未读: "Marked as unread",
+  已标为已读: "Marked as read",
+  未读: "Unread",
+  未读状态更新失败: "Failed to update unread state",
+  置顶: "Pin",
+  取消置顶: "Unpin",
+  置顶讨论: "Pin discussion",
+  置顶任务: "Pin task",
+  置顶定时任务: "Pin scheduled task",
+  编辑信息: "Edit details",
+  删除讨论: "Delete discussion",
+  删除任务: "Delete task",
+  删除定时任务: "Delete scheduled task",
 } as const;
 
 void i18n.use(initReactI18next).init({
