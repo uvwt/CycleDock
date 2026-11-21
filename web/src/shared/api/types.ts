@@ -74,8 +74,13 @@ export type AttachmentMeta = {
   id: string;
   workspace_id?: string;
   card_id?: string;
+  kind?: "image" | "text" | string;
+  file_name?: string;
+  storage_encoding?: "identity" | "gzip" | string;
   mime_type: string;
   size_bytes: number;
+  stored_size_bytes?: number;
+  line_count?: number;
   width: number;
   height: number;
   url: string;

@@ -499,6 +499,11 @@ type WorkspaceAttachment struct {
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	ExpiresAt          pgtype.Timestamptz `json:"expires_at"`
 	PurgedAt           pgtype.Timestamptz `json:"purged_at"`
+	Kind               string             `json:"kind"`
+	FileName           string             `json:"file_name"`
+	StorageEncoding    string             `json:"storage_encoding"`
+	StoredSizeBytes    int64              `json:"stored_size_bytes"`
+	LineCount          int32              `json:"line_count"`
 }
 
 type WorkspaceDeviceToolGuard struct {

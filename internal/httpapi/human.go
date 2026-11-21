@@ -934,6 +934,7 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.attachToolApprovals(ctx, identity.WorkspaceID, cardID, timelineResp)
+	api.enrichTimelineAttachments(ctx, identity.WorkspaceID, timelineResp)
 
 	// 6. AttemptHistory depends on oldestSeq from Timeline
 	var attemptHistory []store.SessionAttemptView
@@ -1022,6 +1023,7 @@ func (api *API) getCardTimeline(w http.ResponseWriter, r *http.Request) {
 
 	timelineResp := timelineBeforeToResponse(rows)
 	api.attachToolApprovals(r.Context(), identity.WorkspaceID, cardID, timelineResp)
+	api.enrichTimelineAttachments(r.Context(), identity.WorkspaceID, timelineResp)
 	var oldestSeq int64
 	if len(timelineResp) > 0 {
 		oldestSeq = timelineResp[0].Sequence

@@ -2,12 +2,13 @@ import { useRef, useState } from "react";
 import { ModelSetupNotice } from "../models/ModelSetupNotice";
 import { useAgentStatus } from "../models/useAgentStatus";
 import { ChatInput, ChatReplyBar } from "../../shared/ui/chat";
-import { ArrowUp, ImagePlus, LoaderCircle, Square } from "lucide-react";
+import { ArrowUp, LoaderCircle, Paperclip, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QuotedMessage } from "../timeline/ConversationView";
 import { ModelMenu } from "../models/ModelMenu";
 import { ComposerImageTray } from "../timeline/AttachmentGallery";
 import {
+  COMPOSER_FILE_ACCEPT,
   MAX_COMPOSER_IMAGES,
   type ComposerImageItem,
 } from "./useComposerImages";
@@ -102,9 +103,7 @@ export function ConversationComposer({
       onDrop={(event) => {
         setDragOver(false);
         if (!onAddImages || blocked) return;
-        const files = Array.from(event.dataTransfer.files).filter((file) =>
-          file.type.startsWith("image/"),
-        );
+        const files = Array.from(event.dataTransfer.files);
         if (files.length > 0) {
           event.preventDefault();
           onAddImages(files);
@@ -141,7 +140,7 @@ export function ConversationComposer({
             if (!onAddImages || blocked) return;
             const pastedFiles: File[] = [];
             for (const item of Array.from(event.clipboardData.items)) {
-              if (item.kind === "file" && item.type.startsWith("image/")) {
+              if (item.kind === "file") {
                 const file = item.getAsFile();
                 if (file) pastedFiles.push(file);
               }
@@ -168,7 +167,7 @@ export function ConversationComposer({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept={COMPOSER_FILE_ACCEPT}
                 multiple
                 className="hidden"
                 data-testid="composer-image-input"
@@ -184,12 +183,12 @@ export function ConversationComposer({
                 type="button"
                 disabled={!canAttach}
                 onClick={() => fileInputRef.current?.click()}
-                title={t("添加图片（支持粘贴或拖拽）")}
-                aria-label={t("添加图片")}
+                title={t("添加图片或文本/代码文件（支持粘贴或拖拽）")}
+                aria-label={t("添加附件")}
                 data-testid="composer-image-button"
                 className="inline-flex size-8 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <ImagePlus className="size-4" />
+                <Paperclip className="size-4" />
               </button>
             </>
           )}
