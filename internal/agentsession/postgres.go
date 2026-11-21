@@ -313,7 +313,11 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 		return fmt.Errorf("commit append event: %w", err)
 	}
 
-	local.append(event, persistedEvent)
+	// 数据库持久化使用已脱敏的 persistedEvent；当前内存会话保留规范化后的原始工具返回，
+	// 以便模型在同一轮调用（如刚生成一次性 webhook_secret 后立即调用 gh api 配置仓库）中读取。
+	// 下一轮从 PostgreSQL 重新加载会话时仅看到已脱敏版本。
+	liveEvent := liveSessionEvent(event, persistedEvent)
+	local.append(event, liveEvent)
 	return nil
 }
 
@@ -748,7 +752,7 @@ func persistentEvent(event *session.Event) (*session.Event, bool) {
 
 	if event.Actions.Compaction != nil && event.Actions.Compaction.CompactedContent != nil {
 		compactionCopy := *event.Actions.Compaction
-		compactedContent, changed := normalizeGenaiContent(event.Actions.Compaction.CompactedContent)
+		compactedContent, changed := normalizeGenaiContent(event.Actions.Compaction.CompactedContent, true)
 		if changed {
 			normalized = true
 		}
@@ -757,7 +761,7 @@ func persistentEvent(event *session.Event) (*session.Event, bool) {
 	}
 
 	if event.Content != nil {
-		content, changed := normalizeGenaiContent(event.Content)
+		content, changed := normalizeGenaiContent(event.Content, true)
 		if changed {
 			normalized = true
 		}
@@ -767,7 +771,29 @@ func persistentEvent(event *session.Event) (*session.Event, bool) {
 	return &out, normalized
 }
 
-func normalizeGenaiContent(input *genai.Content) (*genai.Content, bool) {
+// liveSessionEvent 构造仅存在于当前 Attempt 内存会话中的事件副本：
+// 剥离 Thought/ThoughtSignature 并做 UTF-8 规范化，但保留 FunctionResponse 中的一次性字段，
+// 避免同一轮工具返回的一次性密钥在传递给模型前就被覆盖为 [REDACTED]。
+func liveSessionEvent(original, persisted *session.Event) *session.Event {
+	if original == nil || original.Content == nil {
+		return persisted
+	}
+	hasFunctionResponse := false
+	for _, part := range original.Content.Parts {
+		if part != nil && part.FunctionResponse != nil {
+			hasFunctionResponse = true
+			break
+		}
+	}
+	if !hasFunctionResponse {
+		return persisted
+	}
+	live := *persisted
+	live.Content, _ = normalizeGenaiContent(original.Content, false)
+	return &live
+}
+
+func normalizeGenaiContent(input *genai.Content, redactSecrets bool) (*genai.Content, bool) {
 	if input == nil {
 		return nil, false
 	}
@@ -778,6 +804,19 @@ func normalizeGenaiContent(input *genai.Content) (*genai.Content, bool) {
 			normalized = true
 		}
 		return clean
+	}
+	processMap := func(m map[string]any) map[string]any {
+		var processed any
+		var changed bool
+		if redactSecrets {
+			processed, changed = agentdata.SanitizeWithReport(m)
+		} else {
+			processed, changed = agentdata.NormalizeValueWithReport(m)
+		}
+		if changed {
+			normalized = true
+		}
+		return processed.(map[string]any)
 	}
 
 	content := *input
@@ -797,11 +836,7 @@ func normalizeGenaiContent(input *genai.Content) (*genai.Content, bool) {
 			call.ID = normStr(call.ID)
 			call.Name = normStr(call.Name)
 			if part.FunctionCall.Args != nil {
-				sanitizedArgs, changed := agentdata.SanitizeWithReport(part.FunctionCall.Args)
-				if changed {
-					normalized = true
-				}
-				call.Args = sanitizedArgs.(map[string]any)
+				call.Args = processMap(part.FunctionCall.Args)
 			}
 			copyPart.FunctionCall = &call
 		}
@@ -810,11 +845,7 @@ func normalizeGenaiContent(input *genai.Content) (*genai.Content, bool) {
 			response.ID = normStr(response.ID)
 			response.Name = normStr(response.Name)
 			if part.FunctionResponse.Response != nil {
-				sanitizedResp, changed := agentdata.SanitizeWithReport(part.FunctionResponse.Response)
-				if changed {
-					normalized = true
-				}
-				response.Response = sanitizedResp.(map[string]any)
+				response.Response = processMap(part.FunctionResponse.Response)
 			}
 			copyPart.FunctionResponse = &response
 		}
