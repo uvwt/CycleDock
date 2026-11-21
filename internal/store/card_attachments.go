@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -41,9 +42,28 @@ func (s *Store) CreateTodoCardWithAttachments(
 	requiredConfirmations int32,
 	attachmentIDs []uuid.UUID,
 ) (db.Card, []CardAttachmentMeta, error) {
+	return s.CreateTodoCardWithAttachmentsAndOptions(
+		ctx, workspaceID, projectID, sourceID,
+		title, description, sourceDiscussionID, requiredConfirmations,
+		attachmentIDs, false,
+	)
+}
+
+// CreateTodoCardWithAttachmentsAndOptions 在单个事务内创建待办卡片，绑定附件，并在 autoStart=true 时立即写入首轮系统执行 Turn。
+func (s *Store) CreateTodoCardWithAttachmentsAndOptions(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+	title, description string,
+	sourceDiscussionID uuid.NullUUID,
+	requiredConfirmations int32,
+	attachmentIDs []uuid.UUID,
+	autoStart bool,
+) (db.Card, []CardAttachmentMeta, error) {
 	if requiredConfirmations <= 0 {
 		requiredConfirmations = 1
 	}
+	title, _ = agentdata.NormalizeText(strings.TrimSpace(title))
+	description, _ = agentdata.NormalizeText(strings.TrimSpace(description))
 	normalizedIDs, err := normalizeCommentAttachmentIDs(attachmentIDs)
 	if err != nil {
 		return db.Card{}, nil, err
@@ -61,8 +81,8 @@ func (s *Store) CreateTodoCardWithAttachments(
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
 		Kind:                  string(domain.CardKindTodo),
-		Title:                 strings.TrimSpace(title),
-		Description:           strings.TrimSpace(description),
+		Title:                 title,
+		Description:           description,
 		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
 		SourceDiscussionID:    sourceDiscussionID,
 		RequiredConfirmations: requiredConfirmations,
@@ -92,8 +112,35 @@ func (s *Store) CreateTodoCardWithAttachments(
 		}
 	}
 
+	if autoStart {
+		initialTurnContent := buildInitialWorkTurnContent(title, description)
+		turnRequestHash := stableRequestHash(
+			"manual_todo_initial_turn",
+			workspaceID.String(),
+			card.ID.String(),
+			sourceID.String(),
+			initialTurnContent,
+		)
+		if _, err := insertTurn(ctx, tx, insertTurnParams{
+			WorkspaceID:       workspaceID,
+			CardID:            card.ID,
+			Source:            domain.TurnSourceSystem,
+			Content:           initialTurnContent,
+			CreatedBySourceID: uuid.NullUUID{UUID: sourceID, Valid: true},
+			DispatchMode:      domain.DispatchModeEnqueue,
+			IdempotencyKey:    "manual-todo-start:" + card.ID.String(),
+			RequestHash:       turnRequestHash,
+		}); err != nil {
+			return db.Card{}, nil, err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return db.Card{}, nil, err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	if autoStart {
+		s.notifyWorkReady()
 	}
 	return card, metas, nil
 }

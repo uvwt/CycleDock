@@ -799,8 +799,8 @@ export function QuickCardSwitcherModal({
                           : "border-line/60 bg-canvas/70 hover:border-line hover:bg-muted/70",
                       )}
                     >
-                      <div className="flex min-w-0 flex-1 items-start gap-2.5">
-                        <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <div className="flex shrink-0 items-center gap-1.5">
                           {visualStatus !== "idle" ? (
                             <CardStatusDot
                               status={visualStatus}
@@ -855,11 +855,6 @@ export function QuickCardSwitcherModal({
                               </span>
                             )}
                           </div>
-                          {card.description && (
-                            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                              {card.description}
-                            </p>
-                          )}
                         </div>
                       </div>
 

@@ -32,7 +32,19 @@ type GenerateWorkParams struct {
 	Title                 string
 	Description           string
 	RequiredConfirmations int32
-	IdempotencyKey        string
+	// AutoStart 控制派生卡片后是否立即排入首轮系统执行；nil 默认为 true，传 false 时仅建卡留档不唤醒调度器。
+	AutoStart      *bool
+	IdempotencyKey string
+}
+
+// buildInitialWorkTurnContent 生成待办/定时卡片首轮系统执行的统一输入文案。
+func buildInitialWorkTurnContent(title, description string) string {
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return fmt.Sprintf("# %s", title)
+	}
+	return fmt.Sprintf("# %s\n\n%s", title, description)
 }
 
 type AgentCardCreateResult struct {
@@ -146,10 +158,18 @@ func (s *Store) GenerateWorkFromDiscussion(
 	if p.RequiredConfirmations <= 0 || p.Kind == domain.CardKindOngoing {
 		p.RequiredConfirmations = 1
 	}
+	autoStart := true
+	if p.AutoStart != nil {
+		autoStart = *p.AutoStart
+	}
 	requestHash := stableRequestHash(
 		"generate_work", p.WorkspaceID.String(), p.DiscussionID.String(), p.SourceID.String(),
 		string(p.Kind), p.Title, p.Description, fmt.Sprint(p.RequiredConfirmations),
 	)
+	if !autoStart {
+		// 保持 auto_start=true / 未传与历史哈希一致，仅在显式关闭自动启动时区分幂等哈希。
+		requestHash = stableRequestHash(requestHash, "auto_start", "false")
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -225,8 +245,9 @@ func (s *Store) GenerateWorkFromDiscussion(
 	if err := tx.QueryRow(ctx, "SELECT kind FROM sources WHERE workspace_id=$1 AND id=$2", p.WorkspaceID, p.SourceID).Scan(&sourceKind); err != nil {
 		return AgentCardCreateResult{}, err
 	}
-	if sourceKind == string(domain.SourceKindCycleAgent) {
-		initialTurnContent := fmt.Sprintf("# %s\n\n%s", p.Title, p.Description)
+	shouldStart := autoStart && sourceKind == string(domain.SourceKindCycleAgent)
+	if shouldStart {
+		initialTurnContent := buildInitialWorkTurnContent(p.Title, p.Description)
 		turnRequestHash := stableRequestHash(
 			"agent_turn", p.WorkspaceID.String(), card.ID.String(), p.SourceID.String(),
 			string(domain.DispatchModeEnqueue), initialTurnContent,
@@ -248,10 +269,146 @@ func (s *Store) GenerateWorkFromDiscussion(
 	if err := tx.Commit(ctx); err != nil {
 		return AgentCardCreateResult{}, err
 	}
-	if sourceKind == string(domain.SourceKindCycleAgent) {
+	if shouldStart {
 		s.notifyWorkReady()
 	}
 	return AgentCardCreateResult{Card: card}, nil
+}
+
+// StartCardExecutionParams 描述人工一键启动待办/定时卡片首轮执行的参数。
+type StartCardExecutionParams struct {
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	AuthorSourceID        uuid.UUID
+	IdempotencyKey        string
+	DeviceTarget          *DeviceTarget
+	PreferredModelRouteID *uuid.UUID
+}
+
+// StartCardExecution 为尚未开始任何执行轮次的待办或定时卡片插入首轮系统 Turn 并唤醒内置 Agent。
+// 若卡片已经存在未取消的 Turn 或历史 Attempt，或当前状态不允许启动，则拒绝重复启动。
+func (s *Store) StartCardExecution(
+	ctx context.Context,
+	p StartCardExecutionParams,
+) (CreateTurnResult, error) {
+	p.IdempotencyKey, _ = agentdata.NormalizeText(strings.TrimSpace(p.IdempotencyKey))
+	if p.IdempotencyKey == "" {
+		return CreateTurnResult{}, fmt.Errorf("%w: idempotency key is required", domain.ErrConflict)
+	}
+
+	var deviceNodeID, deviceName string
+	if p.DeviceTarget != nil {
+		deviceNodeID, _ = agentdata.NormalizeText(strings.TrimSpace(p.DeviceTarget.NodeID))
+		deviceName, _ = agentdata.NormalizeText(strings.TrimSpace(p.DeviceTarget.Name))
+		if deviceNodeID == "" || len([]rune(deviceNodeID)) > 200 || len([]rune(deviceName)) > 200 {
+			return CreateTurnResult{}, fmt.Errorf("%w: invalid device target", domain.ErrConflict)
+		}
+	}
+
+	requestHash := stableRequestHash(
+		"start_card_execution",
+		p.WorkspaceID.String(),
+		p.CardID.String(),
+		p.AuthorSourceID.String(),
+	)
+	if deviceNodeID != "" {
+		requestHash = stableRequestHash(requestHash, "device_target", deviceNodeID, deviceName)
+	}
+	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
+		requestHash = stableRequestHash(requestHash, "preferred_model_route", p.PreferredModelRouteID.String())
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return CreateTurnResult{}, err
+	}
+	if err := requireHumanSource(ctx, tx, p.WorkspaceID, p.AuthorSourceID); err != nil {
+		return CreateTurnResult{}, err
+	}
+	if existing, found, err := findTurnByIdempotency(
+		ctx, tx, p.WorkspaceID, p.AuthorSourceID, p.IdempotencyKey,
+	); err != nil {
+		return CreateTurnResult{}, err
+	} else if found {
+		if existing.requestHash != requestHash {
+			return CreateTurnResult{}, domain.ErrIdempotencyMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CreateTurnResult{}, err
+		}
+		return CreateTurnResult{Turn: existing.turn, Reused: true}, nil
+	}
+
+	var kind, title, description, todoState, ongoingState string
+	err = tx.QueryRow(ctx, `
+		SELECT kind, title, description, COALESCE(todo_state, ''), COALESCE(ongoing_state, '')
+		FROM cards
+		WHERE workspace_id = $1 AND id = $2
+	`, p.WorkspaceID, p.CardID).Scan(&kind, &title, &description, &todoState, &ongoingState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CreateTurnResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+
+	switch domain.CardKind(kind) {
+	case domain.CardKindTodo:
+		if todoState != string(domain.TodoStateTodo) {
+			return CreateTurnResult{}, fmt.Errorf("%w: only todo cards in todo state can be started", domain.ErrInvalidTransition)
+		}
+	case domain.CardKindOngoing:
+		if ongoingState != string(domain.OngoingStateActive) {
+			return CreateTurnResult{}, fmt.Errorf("%w: only active ongoing cards can be started", domain.ErrInvalidTransition)
+		}
+	default:
+		return CreateTurnResult{}, fmt.Errorf("%w: only todo or ongoing cards support one-click start", domain.ErrInvalidTransition)
+	}
+
+	var existingTurnCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM card_turns
+		WHERE workspace_id = $1 AND card_id = $2 AND cancelled_at IS NULL
+	`, p.WorkspaceID, p.CardID).Scan(&existingTurnCount); err != nil {
+		return CreateTurnResult{}, err
+	}
+	if existingTurnCount > 0 {
+		return CreateTurnResult{}, fmt.Errorf("%w: card has already started or queued execution", domain.ErrConflict)
+	}
+
+	var preferredModelRouteID uuid.NullUUID
+	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
+		preferredModelRouteID = uuid.NullUUID{UUID: *p.PreferredModelRouteID, Valid: true}
+	}
+
+	turn, err := insertTurn(ctx, tx, insertTurnParams{
+		WorkspaceID:           p.WorkspaceID,
+		CardID:                p.CardID,
+		Source:                domain.TurnSourceSystem,
+		Content:               buildInitialWorkTurnContent(title, description),
+		CreatedBySourceID:     uuid.NullUUID{UUID: p.AuthorSourceID, Valid: true},
+		DispatchMode:          domain.DispatchModeEnqueue,
+		DeviceNodeID:          deviceNodeID,
+		DeviceName:            deviceName,
+		PreferredModelRouteID: preferredModelRouteID,
+		IdempotencyKey:        p.IdempotencyKey,
+		RequestHash:           requestHash,
+	})
+	if err != nil {
+		return CreateTurnResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return CreateTurnResult{}, err
+	}
+	s.notifyWorkReady()
+	return CreateTurnResult{Turn: turn}, nil
 }
 
 func findCreatedCardRetry(

@@ -162,15 +162,46 @@ export const api = {
     project: string,
     title: string,
     description: string,
-    attachmentIDs?: string[],
-  ) =>
-    request<Card>(`/projects/${project}/todos`, "POST", {
+    attachmentIDsOrAutoStart?: string[] | boolean,
+    autoStartArg?: boolean,
+  ) => {
+    const attachmentIDs = Array.isArray(attachmentIDsOrAutoStart)
+      ? attachmentIDsOrAutoStart
+      : undefined;
+    const autoStart =
+      typeof attachmentIDsOrAutoStart === "boolean"
+        ? attachmentIDsOrAutoStart
+        : Boolean(autoStartArg);
+    return request<Card>(`/projects/${project}/todos`, "POST", {
       title,
       description,
       ...(attachmentIDs && attachmentIDs.length > 0
         ? { attachment_ids: attachmentIDs }
         : {}),
-    }),
+      auto_start: autoStart,
+    });
+  },
+  startCard: (
+    id: string,
+    options?: {
+      idempotencyKey?: string;
+      device_target?: DeviceTarget | null;
+      preferred_model_route_id?: string | null;
+    },
+  ) =>
+    request<{ turn_id: string; reused: boolean }>(
+      `/cards/${id}/start`,
+      "POST",
+      {
+        ...(options?.device_target
+          ? { device_target: options.device_target }
+          : {}),
+        ...(options?.preferred_model_route_id
+          ? { preferred_model_route_id: options.preferred_model_route_id }
+          : {}),
+      },
+      options?.idempotencyKey ?? true,
+    ),
   card: (id: string, limit?: number, all = false) => {
     const params = new URLSearchParams();
     if (limit !== undefined) params.set("limit", String(limit));
@@ -318,17 +349,35 @@ export const api = {
       "PATCH",
       { content },
     ),
+  regenerateMessage: (
+    id: string,
+    eventID: string,
+    preferredModelRouteID?: string | null,
+  ) =>
+    request<{ event_id?: string; turn_id: string }>(
+      `/cards/${id}/messages/${eventID}/regenerate`,
+      "POST",
+      preferredModelRouteID
+        ? { preferred_model_route_id: preferredModelRouteID }
+        : { preferred_model_route_id: null },
+    ),
   editTurn: (id: string, turnID: string, content: string) =>
     request<void>(`/cards/${id}/turns/${turnID}`, "PATCH", { content }),
   steerTurn: (id: string, turnID: string) =>
     request<void>(`/cards/${id}/turns/${turnID}/steer`, "POST", {}),
   cancelTurn: (id: string, turnID: string) =>
     request<void>(`/cards/${id}/turns/${turnID}/cancel`, "POST", {}),
-  retryAttempt: (id: string, attemptID: string) =>
+  retryAttempt: (
+    id: string,
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) =>
     request<{ attempt_id: string }>(
       `/cards/${id}/attempts/${attemptID}/retry`,
       "POST",
-      {},
+      preferredModelRouteID !== undefined
+        ? { preferred_model_route_id: preferredModelRouteID }
+        : {},
     ),
   getAttemptTrace: (id: string, attemptID: string) =>
     request<TraceOverview>(`/cards/${id}/attempts/${attemptID}/trace`),

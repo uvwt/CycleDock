@@ -26,6 +26,15 @@ const { CardHeaderInfoCard } = await server.ssrLoadModule(
 const { WorkSidebar } = await server.ssrLoadModule(
   "/src/features/board/WorkSidebar.tsx",
 );
+const { default: BoardPage } = await server.ssrLoadModule(
+  "/src/features/board/BoardPage.tsx",
+);
+const { PlanSidebar } = await server.ssrLoadModule(
+  "/src/features/plans/PlanSidebar.tsx",
+);
+const { default: PlanPage } = await server.ssrLoadModule(
+  "/src/features/plans/PlanPage.tsx",
+);
 const { stripMarkdownSummary } = await server.ssrLoadModule(
   "/src/shared/lib/markdown.ts",
 );
@@ -986,16 +995,27 @@ test("右侧卡片详情面板独立渲染标题、描述、来源讨论与实�
   assert.match(html, /验证审核按钮闭环/);
 });
 
-test("尚无消息的待办卡片空白状态渲染完整标题与 Markdown 描述，侧边栏摘要自动清理原始符号", () => {
+test("尚无消息的待办卡片空白状态渲染完整标题与 Markdown 描述，任务与定时列表隐藏卡片描述预览", () => {
   const card = {
     id: "todo-empty-1",
-    project_id: "project-1",
+    project_id: "project",
     title: "重构前端空白状态（Empty State）布局与完整长标题展示，不再硬性截断",
     description:
       "问题背景：\n需要支持 `ReactMarkdown` 渲染与 **层级强化**，清理列表预览里的 `inline_code` 反引号。",
     kind: "todo",
     todo_state: "todo",
     ongoing_state: "",
+    updated_at: "2026-11-01T00:00:00Z",
+  };
+  const ongoingCard = {
+    id: "ongoing-clean-1",
+    project_id: "project",
+    title: "每日服务巡检计划",
+    description: "定时检查核心服务健康状态，不应在定时列表卡片中平铺展示该描述。",
+    kind: "ongoing",
+    todo_state: "",
+    ongoing_state: "active",
+    health: "healthy",
     updated_at: "2026-11-01T00:00:00Z",
   };
   const emptyHtml = renderToStaticMarkup(
@@ -1018,6 +1038,13 @@ test("尚无消息的待办卡片空白状态渲染完整标题与 Markdown 描�
   assert.match(emptyHtml, /<code>ReactMarkdown<\/code>/);
   assert.match(emptyHtml, /<strong>层级强化<\/strong>/);
 
+  const headerInfoHtml = renderToStaticMarkup(
+    createElement(CardHeaderInfoCard, {
+      card,
+    }),
+  );
+  assert.match(headerInfoHtml, /ReactMarkdown/);
+
   const summary = stripMarkdownSummary(card.description);
   assert.ok(!summary.includes("`"));
   assert.ok(!summary.includes("**"));
@@ -1031,11 +1058,37 @@ test("尚无消息的待办卡片空白状态渲染完整标题与 Markdown 描�
       onSelect() {},
     }),
   );
+  assert.match(sidebarHtml, /重构前端空白状态/);
   assert.doesNotMatch(
     sidebarHtml,
-    /`ReactMarkdown`|`inline_code`|\*\*层级强化\*\*/,
+    /问题背景|ReactMarkdown|inline_code|层级强化/,
   );
-  assert.match(sidebarHtml, /ReactMarkdown/);
+
+  const planSidebarHtml = renderToStaticMarkup(
+    createElement(PlanSidebar, {
+      cards: [ongoingCard],
+      activeCardID: ongoingCard.id,
+      onSelect() {},
+    }),
+  );
+  assert.match(planSidebarHtml, /每日服务巡检计划/);
+  assert.doesNotMatch(planSidebarHtml, /不应在定时列表卡片中平铺展示/);
+
+  try {
+    queryClient.setQueryData(["cards", "project"], [card, ongoingCard]);
+    queryClient.setQueryData(["project-schedules", "project"], []);
+
+    const boardHtml = renderToStaticMarkup(createElement(BoardPage));
+    assert.match(boardHtml, /重构前端空白状态/);
+    assert.doesNotMatch(boardHtml, /问题背景|ReactMarkdown|层级强化/);
+
+    const planPageHtml = renderToStaticMarkup(createElement(PlanPage));
+    assert.match(planPageHtml, /每日服务巡检计划/);
+    assert.doesNotMatch(planPageHtml, /不应在定时列表卡片中平铺展示/);
+  } finally {
+    queryClient.removeQueries({ queryKey: ["cards", "project"] });
+    queryClient.removeQueries({ queryKey: ["project-schedules", "project"] });
+  }
 });
 
 test("缺少模型时保留草稿并提示设置，恢复配置后允许发送", () => {
@@ -1889,4 +1942,66 @@ test("Markdown 代码块渲染语法高亮、语言标签与独立复制按钮",
   // text 代码块保持纯文本不着色
   assert.match(html, /class="language-text"/);
   assert.match(html, /plain text output/);
+});
+
+test("未启动的待办卡片空态展示一键开始执行按钮，且 createTodo/startCard 透传参数", async (t) => {
+  const emptyTodoHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      card: {
+        id: "todo-backlog-1",
+        project_id: "proj-1",
+        kind: "todo",
+        title: "先建卡留档待办",
+        description: "后续确认排期后再一键启动。",
+        todo_state: "todo",
+      },
+      events: [],
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      canStartCard: true,
+      startingCard: false,
+      onStartCard() {},
+      onRetryAttempt() {},
+    }),
+  );
+  assert.match(emptyTodoHtml, /先建卡留档待办/);
+  assert.match(emptyTodoHtml, /开始执行/);
+  assert.match(emptyTodoHtml, /当前待办尚未开始执行/);
+
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init.method,
+      headers: init.headers,
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    return new Response(
+      JSON.stringify({ id: "card-1", turn_id: "turn-1", reused: false }),
+    );
+  });
+  await apiClient.createTodo("proj-1", "留档任务", "暂不执行");
+  await apiClient.createTodo("proj-1", "立即执行任务", "马上开工", true);
+  await apiClient.startCard("card-1", {
+    idempotencyKey: "start-card:card-1",
+    preferred_model_route_id: "route-1",
+  });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0].body, {
+    title: "留档任务",
+    description: "暂不执行",
+    auto_start: false,
+  });
+  assert.deepEqual(calls[1].body, {
+    title: "立即执行任务",
+    description: "马上开工",
+    auto_start: true,
+  });
+  assert.equal(calls[2].url, "/api/v1/cards/card-1/start");
+  assert.equal(calls[2].method, "POST");
+  assert.equal(calls[2].headers["Idempotency-Key"], "start-card:card-1");
+  assert.deepEqual(calls[2].body, { preferred_model_route_id: "route-1" });
 });

@@ -25,6 +25,7 @@ import {
   Field,
   Modal,
   Spinner,
+  Switch,
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
@@ -33,7 +34,6 @@ import {
   CardStatusDot,
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
-import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { loadCardPage } from "../../app/route-preload";
 import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
 import type { Card, Project, TodoState } from "../../shared/api/types";
@@ -184,7 +184,6 @@ function TaskCard({
   });
   const visualStatus = getCardVisualStatus(card);
   const updatedTime = formatRelativeTime(card.updated_at);
-  const summary = stripMarkdownSummary(card.description);
   const attachmentCount =
     card.attachment_count ?? card.attachments?.length ?? 0;
 
@@ -216,11 +215,6 @@ function TaskCard({
                 </span>
               )}
             </div>
-            {summary && (
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80">
-                {summary}
-              </p>
-            )}
           </div>
         </div>
       </div>
@@ -270,11 +264,6 @@ function TaskCard({
               </span>
             )}
           </div>
-          {summary && (
-            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80">
-              {summary}
-            </p>
-          )}
         </div>
       </div>
     </button>
@@ -291,12 +280,14 @@ export default function BoardPage() {
   const [todoTitle, setTodoTitle] = useState("");
   const [todoDescription, setTodoDescription] = useState("");
   const [todoImageDragOver, setTodoImageDragOver] = useState(false);
+  const [todoAutoStart, setTodoAutoStart] = useState(false);
   const todoImageInputRef = useRef<HTMLInputElement | null>(null);
   const todoImages = useComposerImages({});
 
   function closeCreateTodoModal() {
     setCreatingTodo(false);
     setTodoImageDragOver(false);
+    setTodoAutoStart(false);
     todoImages.clear();
   }
   const [isDesktop, setIsDesktop] = useState(() => {
@@ -499,6 +490,7 @@ export default function BoardPage() {
         todoTitle.trim(),
         todoDescription.trim(),
         attachmentIDs,
+        todoAutoStart,
       );
     },
     onSuccess: (card) => {
@@ -506,6 +498,7 @@ export default function BoardPage() {
       setTodoTitle("");
       setTodoDescription("");
       setTodoImageDragOver(false);
+      setTodoAutoStart(false);
       todoImages.clear();
       if (projectID) {
         upsertCachedProjectCard(queryClient, projectID, card);
@@ -853,7 +846,7 @@ export default function BoardPage() {
           </Field>
           <Field label={t("待办描述")}>
             <TextArea
-              rows={4}
+              rows={3}
               value={todoDescription}
               onChange={(e) => setTodoDescription(e.target.value)}
               placeholder={t("补充目标、范围或完成条件")}
@@ -932,6 +925,24 @@ export default function BoardPage() {
               </div>
             </div>
           </Field>
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-line/70 bg-muted/20 px-3 py-2.5">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-xs font-semibold text-heading">
+                {t("创建后立即开始执行")}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {todoAutoStart
+                  ? t("创建后立即交给 Cycle 开始推进此待办。")
+                  : t("仅先收入待办池留档，不消耗 Token，可随时在卡片内一键启动。")}
+              </p>
+            </div>
+            <Switch
+              aria-label={t("创建后立即开始执行")}
+              checked={todoAutoStart}
+              onCheckedChange={setTodoAutoStart}
+              className="mt-0.5 shrink-0"
+            />
+          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button
               variant="secondary"
@@ -947,7 +958,11 @@ export default function BoardPage() {
                 !todoTitle.trim() || createTodo.isPending || todoImages.uploading
               }
             >
-              {todoImages.uploading ? t("上传中...") : t("创建待办")}
+              {todoImages.uploading
+                ? t("上传中...")
+                : todoAutoStart
+                  ? t("创建并开始执行")
+                  : t("创建待办")}
             </Button>
           </div>
         </form>

@@ -642,12 +642,25 @@ http
             kind: "todo",
             title: input.title,
             description: input.description || "",
-            todo_state: "todo",
+            todo_state: input.auto_start ? "working" : "todo",
+            current_attempt_status: input.auto_start ? "running" : undefined,
             created_at: now(),
             updated_at: now(),
           };
           cards.unshift(card);
-          events[card.id] = [];
+          events[card.id] = input.auto_start
+            ? [
+                {
+                  id: "event-" + ++seq,
+                  sequence: seq,
+                  type: "status_change",
+                  content: "todo -> working",
+                  actor_kind: "cycle_agent",
+                  actor_name: "Cycle",
+                  created_at: now(),
+                },
+              ]
+            : [];
           return data(res, card, 201);
         }
         const cardMatch = route.match(/^\/cards\/([^/]+)(?:\/(.*))?$/);
@@ -768,6 +781,28 @@ http
           if (rest === "ongoing-state" && req.method === "POST") {
             card.ongoing_state = (await body(req)).state;
             return data(res, card);
+          }
+          if (rest === "start" && req.method === "POST") {
+            if (card.kind === "todo" && card.todo_state === "todo") {
+              card.todo_state = "working";
+            }
+            card.current_attempt_status = "running";
+            card.updated_at = now();
+            events[id] = events[id] || [];
+            events[id].push({
+              id: "event-" + ++seq,
+              sequence: seq,
+              type: "status_change",
+              content: "todo -> working",
+              actor_kind: "cycle_agent",
+              actor_name: "Cycle",
+              created_at: now(),
+            });
+            return data(
+              res,
+              { turn_id: "turn-start-" + Date.now(), reused: false },
+              201,
+            );
           }
           if (rest === "comments" && req.method === "POST") {
             const input = await body(req);

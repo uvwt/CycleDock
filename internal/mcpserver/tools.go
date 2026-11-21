@@ -24,7 +24,7 @@ func registerTools(server *mcp.Server, dataStore *store.Store) {
 	mcp.AddTool(server, &mcp.Tool{Name: "update_schedule", Description: "Replace an Ongoing Card schedule rule and set enabled. Read list_schedules first and retain unchanged rule fields; enabled=false pauses a schedule without deleting history."}, updateScheduleHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "delete_schedule", Description: "Remove a schedule from an Ongoing Card. Schedules without Turn history are deleted permanently; schedules with execution history are archived (disabled and hidden) while preserving historical Turns."}, deleteScheduleHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "create_discussion", Description: "Create a Discussion as the entry point for new work. idempotency_key is required for safe retries."}, createDiscussionHandler(dataStore))
-	mcp.AddTool(server, &mcp.Tool{Name: "generate_work", Description: "Generate one Todo or Ongoing Card from an active Discussion. kind is the agent's semantic classification; Todo/Ongoing Cards cannot generate more work."}, generateWorkHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "generate_work", Description: "Generate one Todo or Ongoing Card from an active Discussion. kind is the agent's semantic classification; Todo/Ongoing Cards cannot generate more work. Optional auto_start defaults to true; pass false to backlog the card without auto-starting execution."}, generateWorkHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "update_card", Description: "Update a Card title and/or description without changing workflow state."}, updateCardHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "move_card", Description: "Move a Todo between todo and working. Agents cannot move directly to Review or Done; use confirm_card for Review and a human for Done."}, moveCardHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "add_comment", Description: "Append durable context to a Card without creating a new Turn. Use create_turn when new work should be queued."}, addCommentHandler(dataStore))
@@ -170,7 +170,7 @@ func generateWorkHandler(dataStore *store.Store) mcp.ToolHandlerFor[GenerateWork
 		result, err := dataStore.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
 			WorkspaceID: actor.WorkspaceID, DiscussionID: discussionID, SourceID: actor.SourceID,
 			Kind: domain.CardKind(input.Kind), Title: input.Title, Description: input.Description,
-			RequiredConfirmations: input.RequiredConfirmations, IdempotencyKey: input.IdempotencyKey,
+			RequiredConfirmations: input.RequiredConfirmations, AutoStart: input.AutoStart, IdempotencyKey: input.IdempotencyKey,
 		})
 		if err != nil {
 			return nil, CardOutput{}, stableToolError(err)

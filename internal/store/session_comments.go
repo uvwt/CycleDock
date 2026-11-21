@@ -96,89 +96,91 @@ type EditSessionCommentParams struct {
 	Content        string
 }
 
-func (s *Store) SubmitSessionComment(
-	ctx context.Context,
-	p SubmitSessionCommentParams,
-) (SubmitSessionCommentResult, error) {
-	return s.submitSessionComment(ctx, p, false)
+// RegenerateSessionMessageParams 描述从某条对话气泡（AI 回复气泡或用户消息气泡）
+// 截断后续记录并使用可选模型路由重新回答的请求参数。
+type RegenerateSessionMessageParams struct {
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	EventID               uuid.UUID
+	AuthorSourceID        uuid.UUID
+	PreferredModelRouteID *uuid.UUID
 }
 
-// EditSessionCommentAndRerun 编辑已发送的人类消息气泡，截断该消息之后的全部回复、后续轮次与 ADK Session 上下文，
-// 并将该轮次重置为待领取状态，唤醒 Built-in Agent 重新回答。
-func (s *Store) EditSessionCommentAndRerun(
+// validateEnabledWorkspaceModelRouteTx 校验可选的模型路由 ID 属于当前工作区且处于启用状态。
+// 传入 nil 或 uuid.Nil 表示不指定单次覆盖，继续沿用卡片/工作区默认路由。
+func validateEnabledWorkspaceModelRouteTx(
 	ctx context.Context,
-	p EditSessionCommentParams,
-) (SubmitSessionCommentResult, error) {
-	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
-	if p.Content == "" {
-		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content is required", domain.ErrConflict)
+	tx pgx.Tx,
+	workspaceID uuid.UUID,
+	routeID *uuid.UUID,
+) (uuid.NullUUID, error) {
+	if routeID == nil || *routeID == uuid.Nil {
+		return uuid.NullUUID{}, nil
 	}
-
-	tx, err := s.pool.Begin(ctx)
+	var enabled bool
+	err := tx.QueryRow(ctx, `
+		SELECT enabled
+		FROM workspace_model_routes
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, *routeID).Scan(&enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.NullUUID{}, fmt.Errorf("%w: model route not found in workspace", domain.ErrNotFound)
+	}
 	if err != nil {
-		return SubmitSessionCommentResult{}, err
+		return uuid.NullUUID{}, err
 	}
-	defer tx.Rollback(ctx)
+	if !enabled {
+		return uuid.NullUUID{}, fmt.Errorf("%w: model route is disabled", domain.ErrConflict)
+	}
+	return uuid.NullUUID{UUID: *routeID, Valid: true}, nil
+}
 
-	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
-		return SubmitSessionCommentResult{}, err
-	}
-	if err := requireHumanSource(ctx, tx, p.WorkspaceID, p.AuthorSourceID); err != nil {
-		return SubmitSessionCommentResult{}, err
-	}
-
+// ensureCardAllowsRerunTx 校验目标卡片当前生命周期是否允许截断历史并重新执行。
+func ensureCardAllowsRerunTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, cardID uuid.UUID,
+) (string, error) {
 	var cardKind, discussionState, todoState, ongoingState string
 	if err := tx.QueryRow(ctx, `
 		SELECT kind, COALESCE(discussion_state, ''), COALESCE(todo_state, ''), COALESCE(ongoing_state, '')
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
-	`, p.WorkspaceID, p.CardID).Scan(&cardKind, &discussionState, &todoState, &ongoingState); err != nil {
+	`, workspaceID, cardID).Scan(&cardKind, &discussionState, &todoState, &ongoingState); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return SubmitSessionCommentResult{}, domain.ErrNotFound
+			return "", domain.ErrNotFound
 		}
-		return SubmitSessionCommentResult{}, err
+		return "", err
 	}
 	switch cardKind {
 	case string(domain.CardKindDiscussion):
 		if discussionState != string(domain.DiscussionStateActive) {
-			return SubmitSessionCommentResult{}, fmt.Errorf("%w: discussion is archived", domain.ErrInvalidTransition)
+			return "", fmt.Errorf("%w: discussion is archived", domain.ErrInvalidTransition)
 		}
 	case string(domain.CardKindTodo):
 		if todoState == string(domain.TodoStateDone) {
-			return SubmitSessionCommentResult{}, fmt.Errorf("%w: done todo card cannot rerun turns", domain.ErrInvalidTransition)
+			return "", fmt.Errorf("%w: done todo card cannot rerun turns", domain.ErrInvalidTransition)
 		}
 	case string(domain.CardKindOngoing):
 		if ongoingState != string(domain.OngoingStateActive) {
-			return SubmitSessionCommentResult{}, fmt.Errorf("%w: ongoing card is not active", domain.ErrInvalidTransition)
+			return "", fmt.Errorf("%w: ongoing card is not active", domain.ErrInvalidTransition)
 		}
 	}
+	return cardKind, nil
+}
 
-	var eventSequence, turnSequence int64
-	var turnID uuid.UUID
-	var turnSource string
-	err = tx.QueryRow(ctx, `
-		SELECT e.sequence, t.id, t.sequence, t.source
-		FROM events e
-		JOIN card_turns t
-		  ON t.workspace_id = e.workspace_id
-		 AND t.card_id = e.card_id
-		 AND t.source_event_id = e.id
-		WHERE e.workspace_id = $1
-		  AND e.card_id = $2
-		  AND e.id = $3
-		  AND e.event_type = 'comment'
-		FOR UPDATE OF e, t
-	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventSequence, &turnID, &turnSequence, &turnSource)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return SubmitSessionCommentResult{}, domain.ErrNotFound
-	}
-	if err != nil {
-		return SubmitSessionCommentResult{}, err
-	}
-	if turnSource != string(domain.TurnSourceHuman) {
-		return SubmitSessionCommentResult{}, fmt.Errorf("%w: only human comments can be edited", domain.ErrConflict)
-	}
-
+// truncateCardHistoryFromTurnTx 截断指定轮次（含该轮次自身旧执行）及其后的全部
+// 业务事件、ADK 会话事件、turn_attempts 与后续 card_turns，保留源触发事件（若有）。
+func truncateCardHistoryFromTurnTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, cardID uuid.UUID,
+	cardKind string,
+	turnSequence int64,
+	keepEventID uuid.NullUUID,
+	cutoffEventSequence int64,
+	approvalReason string,
+) error {
 	rows, err := tx.Query(ctx, `
 		SELECT a.id, COALESCE(a.invocation_id, '')
 		FROM turn_attempts a
@@ -190,9 +192,9 @@ func (s *Store) EditSessionCommentAndRerun(
 		  AND a.card_id = $2
 		  AND ct.sequence >= $3
 		FOR UPDATE OF a
-	`, p.WorkspaceID, p.CardID, turnSequence)
+	`, workspaceID, cardID, turnSequence)
 	if err != nil {
-		return SubmitSessionCommentResult{}, err
+		return err
 	}
 	attemptIDs := make([]uuid.UUID, 0)
 	invocationIDs := make([]string, 0)
@@ -201,7 +203,7 @@ func (s *Store) EditSessionCommentAndRerun(
 		var invocationID string
 		if err := rows.Scan(&attemptID, &invocationID); err != nil {
 			rows.Close()
-			return SubmitSessionCommentResult{}, err
+			return err
 		}
 		attemptIDs = append(attemptIDs, attemptID)
 		if strings.TrimSpace(invocationID) != "" {
@@ -210,15 +212,11 @@ func (s *Store) EditSessionCommentAndRerun(
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return SubmitSessionCommentResult{}, err
+		return err
 	}
 	rows.Close()
 
-	// 3) 截断后续轮次和业务记录（若当前编辑的消息关联了更晚创建的工具审批记录且其指向后续被删轮次，
-	//    先保留事件记录并作废 pending 审批；由于 events -> card_turns 存在 ON DELETE SET NULL 复合外键，
-	//    删除 events 时若先删 events 会触发对 card_turns(workspace_id, card_id) 的级联置空，因此先清理
-	//    card_turns 再由级联或前置过滤删除，避免复合外键 SET NULL 将保留轮次的 workspace_id/card_id 置空）。
-	//    实际上我们这里先解除被删轮次的 source_event_id 引用再删 events，即可彻底避免复合外键误伤保留行。
+	// 先解除后续被删轮次的 source_event_id 引用再删 events，避免复合外键 ON DELETE SET NULL 误伤保留行。
 	if _, err := tx.Exec(ctx, `
 		UPDATE card_turns
 		SET source_event_id = NULL
@@ -226,8 +224,8 @@ func (s *Store) EditSessionCommentAndRerun(
 		  AND card_id = $2
 		  AND sequence > $3
 		  AND source_event_id IS NOT NULL
-	`, p.WorkspaceID, p.CardID, turnSequence); err != nil {
-		return SubmitSessionCommentResult{}, err
+	`, workspaceID, cardID, turnSequence); err != nil {
+		return err
 	}
 
 	// 先删除关联的业务 Events，避免先删 turn_attempts 触发 ON DELETE SET NULL (attempt_id)
@@ -236,7 +234,7 @@ func (s *Store) EditSessionCommentAndRerun(
 		DELETE FROM events e
 		WHERE e.workspace_id = $1
 		  AND e.card_id = $2
-		  AND e.id <> $3
+		  AND ($3::uuid IS NULL OR e.id <> $3)
 		  AND (
 		    e.attempt_id = ANY($4::uuid[])
 		    OR (
@@ -263,8 +261,8 @@ func (s *Store) EditSessionCommentAndRerun(
 		      )
 		    )
 		  )
-	`, p.WorkspaceID, p.CardID, p.EventID, attemptIDs, eventSequence, turnSequence); err != nil {
-		return SubmitSessionCommentResult{}, err
+	`, workspaceID, cardID, keepEventID, attemptIDs, cutoffEventSequence, turnSequence); err != nil {
+		return err
 	}
 
 	if len(invocationIDs) > 0 {
@@ -287,8 +285,8 @@ func (s *Store) EditSessionCommentAndRerun(
 			      9223372036854775807
 			    )
 			  )
-		`, p.WorkspaceID.String(), p.CardID.String(), invocationIDs); err != nil {
-			return SubmitSessionCommentResult{}, err
+		`, workspaceID.String(), cardID.String(), invocationIDs); err != nil {
+			return err
 		}
 	}
 
@@ -300,16 +298,16 @@ func (s *Store) EditSessionCommentAndRerun(
 			  AND card_id = $2
 			  AND id = ANY($3::uuid[])
 			  AND retry_of_attempt_id IS NOT NULL
-		`, p.WorkspaceID, p.CardID, attemptIDs); err != nil {
-			return SubmitSessionCommentResult{}, err
+		`, workspaceID, cardID, attemptIDs); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM turn_attempts
 			WHERE workspace_id = $1
 			  AND card_id = $2
 			  AND id = ANY($3::uuid[])
-		`, p.WorkspaceID, p.CardID, attemptIDs); err != nil {
-			return SubmitSessionCommentResult{}, err
+		`, workspaceID, cardID, attemptIDs); err != nil {
+			return err
 		}
 	}
 
@@ -318,37 +316,8 @@ func (s *Store) EditSessionCommentAndRerun(
 		WHERE workspace_id = $1
 		  AND card_id = $2
 		  AND sequence > $3
-	`, p.WorkspaceID, p.CardID, turnSequence); err != nil {
-		return SubmitSessionCommentResult{}, err
-	}
-
-	requestHash := stableRequestHash(
-		"session_comment",
-		p.WorkspaceID.String(),
-		p.CardID.String(),
-		p.AuthorSourceID.String(),
-		string(domain.DispatchModeEnqueue),
-		p.Content,
-	)
-	if _, err := tx.Exec(ctx, `
-		UPDATE events
-		SET content = $4,
-		    request_hash = $5
-		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
-	`, p.WorkspaceID, p.CardID, p.EventID, p.Content, requestHash); err != nil {
-		return SubmitSessionCommentResult{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE card_turns
-		SET content = $4,
-		    dispatch_mode = 'enqueue',
-		    cancelled_at = NULL,
-		    cancelled_by_source_id = NULL,
-		    cancel_reason = '',
-		    request_hash = $5
-		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
-	`, p.WorkspaceID, p.CardID, turnID, p.Content, requestHash); err != nil {
-		return SubmitSessionCommentResult{}, err
+	`, workspaceID, cardID, turnSequence); err != nil {
+		return err
 	}
 
 	if cardKind == string(domain.CardKindTodo) {
@@ -380,15 +349,109 @@ func (s *Store) EditSessionCommentAndRerun(
 			    ),
 			    updated_at = now()
 			WHERE c.workspace_id = $1 AND c.id = $2
-		`, p.WorkspaceID, p.CardID); err != nil {
-			return SubmitSessionCommentResult{}, err
+		`, workspaceID, cardID); err != nil {
+			return err
 		}
 	}
 
-	// 编辑重跑会截断后续历史并重新唤醒 Agent，任何遗留的 pending 审批都必须同步失效，避免残留幽灵待确认焦点。
-	if err := supersedePendingToolApprovalsTx(
-		ctx, tx, p.WorkspaceID, p.CardID, "消息已编辑并重新执行，旧审批已自动失效",
+	return supersedePendingToolApprovalsTx(ctx, tx, workspaceID, cardID, approvalReason)
+}
+
+func (s *Store) SubmitSessionComment(
+	ctx context.Context,
+	p SubmitSessionCommentParams,
+) (SubmitSessionCommentResult, error) {
+	return s.submitSessionComment(ctx, p, false)
+}
+
+// EditSessionCommentAndRerun 编辑已发送的人类消息气泡，截断该消息之后的全部回复、后续轮次与 ADK Session 上下文，
+// 并将该轮次重置为待领取状态，唤醒 Built-in Agent 重新回答。
+func (s *Store) EditSessionCommentAndRerun(
+	ctx context.Context,
+	p EditSessionCommentParams,
+) (SubmitSessionCommentResult, error) {
+	p.Content, _ = agentdata.NormalizeText(strings.TrimSpace(p.Content))
+	if p.Content == "" {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content is required", domain.ErrConflict)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if err := requireHumanSource(ctx, tx, p.WorkspaceID, p.AuthorSourceID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	cardKind, err := ensureCardAllowsRerunTx(ctx, tx, p.WorkspaceID, p.CardID)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	var eventSequence, turnSequence int64
+	var turnID uuid.UUID
+	var turnSource string
+	err = tx.QueryRow(ctx, `
+		SELECT e.sequence, t.id, t.sequence, t.source
+		FROM events e
+		JOIN card_turns t
+		  ON t.workspace_id = e.workspace_id
+		 AND t.card_id = e.card_id
+		 AND t.source_event_id = e.id
+		WHERE e.workspace_id = $1
+		  AND e.card_id = $2
+		  AND e.id = $3
+		  AND e.event_type = 'comment'
+		FOR UPDATE OF e, t
+	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventSequence, &turnID, &turnSequence, &turnSource)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SubmitSessionCommentResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if turnSource != string(domain.TurnSourceHuman) {
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: only human comments can be edited", domain.ErrConflict)
+	}
+
+	requestHash := stableRequestHash(
+		"session_comment",
+		p.WorkspaceID.String(),
+		p.CardID.String(),
+		p.AuthorSourceID.String(),
+		string(domain.DispatchModeEnqueue),
+		p.Content,
+	)
+	if err := truncateCardHistoryFromTurnTx(
+		ctx, tx, p.WorkspaceID, p.CardID, cardKind, turnSequence,
+		uuid.NullUUID{UUID: p.EventID, Valid: true}, eventSequence,
+		"消息已编辑并重新执行，旧审批已自动失效",
 	); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE events
+		SET content = $4,
+		    request_hash = $5
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, p.WorkspaceID, p.CardID, p.EventID, p.Content, requestHash); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns
+		SET content = $4,
+		    dispatch_mode = 'enqueue',
+		    cancelled_at = NULL,
+		    cancelled_by_source_id = NULL,
+		    cancel_reason = '',
+		    request_hash = $5
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, p.WorkspaceID, p.CardID, turnID, p.Content, requestHash); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}
 
@@ -398,6 +461,167 @@ func (s *Store) EditSessionCommentAndRerun(
 	s.notifyWorkReady()
 	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return SubmitSessionCommentResult{EventID: p.EventID, TurnID: turnID}, nil
+}
+
+// RegenerateSessionMessage 从指定的 AI 回复气泡或用户消息气泡重新生成回答：
+// 定位到对应 Turn，截断该 Turn 自身的旧回复及其之后的所有记录和 ADK Session 历史，
+// 将该 Turn 的单次 preferred_model_route_id 覆盖为所选路由（传 nil 则沿用卡片/工作区默认），
+// 并重新排队唤醒 Built-in Agent 执行（不修改卡片默认模型路由与工作区默认模型路由）。
+func (s *Store) RegenerateSessionMessage(
+	ctx context.Context,
+	p RegenerateSessionMessageParams,
+) (SubmitSessionCommentResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	if err := requireHumanSource(ctx, tx, p.WorkspaceID, p.AuthorSourceID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	cardKind, err := ensureCardAllowsRerunTx(ctx, tx, p.WorkspaceID, p.CardID)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	preferredRouteID, err := validateEnabledWorkspaceModelRouteTx(
+		ctx, tx, p.WorkspaceID, p.PreferredModelRouteID,
+	)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	var eventType string
+	var eventSequence int64
+	var eventAttemptID uuid.NullUUID
+	err = tx.QueryRow(ctx, `
+		SELECT event_type, sequence, attempt_id
+		FROM events
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+		FOR UPDATE
+	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventType, &eventSequence, &eventAttemptID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SubmitSessionCommentResult{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	var turnID uuid.UUID
+	var turnSequence int64
+	var sourceEventID uuid.NullUUID
+	var cutoffEventSequence int64
+
+	switch eventType {
+	case "message":
+		if !eventAttemptID.Valid {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: reply message has no associated turn attempt", domain.ErrConflict)
+		}
+		err = tx.QueryRow(ctx, `
+			SELECT t.id, t.sequence, t.source_event_id
+			FROM turn_attempts a
+			JOIN card_turns t
+			  ON t.workspace_id = a.workspace_id
+			 AND t.card_id = a.card_id
+			 AND t.id = a.turn_id
+			WHERE a.workspace_id = $1
+			  AND a.card_id = $2
+			  AND a.id = $3
+			FOR UPDATE OF t
+		`, p.WorkspaceID, p.CardID, eventAttemptID.UUID).Scan(&turnID, &turnSequence, &sourceEventID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SubmitSessionCommentResult{}, domain.ErrNotFound
+		}
+		if err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+		if sourceEventID.Valid {
+			err = tx.QueryRow(ctx, `
+				SELECT sequence
+				FROM events
+				WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+			`, p.WorkspaceID, p.CardID, sourceEventID.UUID).Scan(&cutoffEventSequence)
+			if errors.Is(err, pgx.ErrNoRows) {
+				sourceEventID = uuid.NullUUID{}
+				cutoffEventSequence = eventSequence
+			} else if err != nil {
+				return SubmitSessionCommentResult{}, err
+			}
+		} else {
+			// 定时/系统触发等无 source_event_id 的轮次：以本轮最早产出的事件前一位作为截断点，
+			// 保留本轮之前的所有历史事件，截断本轮及之后产生的全部事件。
+			err = tx.QueryRow(ctx, `
+				SELECT COALESCE(MIN(e.sequence) - 1, $4 - 1)
+				FROM events e
+				JOIN turn_attempts a
+				  ON a.workspace_id = e.workspace_id
+				 AND a.card_id = e.card_id
+				 AND a.id = e.attempt_id
+				WHERE e.workspace_id = $1
+				  AND e.card_id = $2
+				  AND a.turn_id = $3
+			`, p.WorkspaceID, p.CardID, turnID, eventSequence).Scan(&cutoffEventSequence)
+			if err != nil {
+				return SubmitSessionCommentResult{}, err
+			}
+		}
+	case "comment":
+		err = tx.QueryRow(ctx, `
+			SELECT t.id, t.sequence
+			FROM card_turns t
+			WHERE t.workspace_id = $1
+			  AND t.card_id = $2
+			  AND t.source_event_id = $3
+			FOR UPDATE OF t
+		`, p.WorkspaceID, p.CardID, p.EventID).Scan(&turnID, &turnSequence)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SubmitSessionCommentResult{}, domain.ErrNotFound
+		}
+		if err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+		sourceEventID = uuid.NullUUID{UUID: p.EventID, Valid: true}
+		cutoffEventSequence = eventSequence
+	default:
+		return SubmitSessionCommentResult{}, fmt.Errorf("%w: only reply or comment bubbles can be regenerated", domain.ErrConflict)
+	}
+
+	if err := truncateCardHistoryFromTurnTx(
+		ctx, tx, p.WorkspaceID, p.CardID, cardKind, turnSequence,
+		sourceEventID, cutoffEventSequence,
+		"已发起重新回答，旧审批已自动失效",
+	); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	// 覆盖本轮的单次优先模型路由并重置为待执行状态（不篡改卡片默认路由）。
+	if _, err := tx.Exec(ctx, `
+		UPDATE card_turns
+		SET preferred_model_route_id = $4,
+		    dispatch_mode = 'enqueue',
+		    cancelled_at = NULL,
+		    cancelled_by_source_id = NULL,
+		    cancel_reason = ''
+		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, p.WorkspaceID, p.CardID, turnID, preferredRouteID); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
+	s.notifyWorkReady()
+
+	resultEventID := p.EventID
+	if sourceEventID.Valid {
+		resultEventID = sourceEventID.UUID
+	}
+	return SubmitSessionCommentResult{EventID: resultEventID, TurnID: turnID}, nil
 }
 
 func (s *Store) ReplySessionAndContinue(
@@ -596,7 +820,12 @@ func (s *Store) submitSessionComment(
 
 	var preferredRouteID uuid.NullUUID
 	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
-		preferredRouteID = uuid.NullUUID{UUID: *p.PreferredModelRouteID, Valid: true}
+		preferredRouteID, err = validateEnabledWorkspaceModelRouteTx(
+			ctx, tx, p.WorkspaceID, p.PreferredModelRouteID,
+		)
+		if err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
 	}
 
 	turnContent := p.Content

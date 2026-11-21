@@ -298,6 +298,20 @@ const en = {
   "要完成什么？": "What needs to be done?",
   "补充目标、范围或完成条件": "Add goals, scope, or completion criteria",
   创建待办: "Create to-do",
+  创建并开始执行: "Create & start",
+  创建后立即开始执行: "Start immediately after creating",
+  "创建后立即交给 Cycle 开始推进此待办。":
+    "Hand this to-do to Cycle right after creation.",
+  "仅先收入待办池留档，不消耗 Token，可随时在卡片内一键启动。":
+    "Save to the backlog without using tokens; start with one click anytime.",
+  开始执行: "Start execution",
+  "正在启动...": "Starting...",
+  已开始执行: "Execution started",
+  启动失败: "Failed to start",
+  "当前待办尚未开始执行，点击即可由 Cycle 开始处理，或直接发送补充说明。":
+    "This to-do hasn't started yet. Click to let Cycle begin, or send additional context below.",
+  "当前定时任务尚未开始执行，点击即可立即启动首轮执行，或直接发送补充说明。":
+    "This scheduled task hasn't run yet. Click to start the first run, or send additional context below.",
   切换项目: "Switch project",
   从讨论中生成工作: "Generate work from discussions",
   没有任务: "No tasks",
@@ -595,6 +609,25 @@ const en = {
   请求模型: "Requested model",
   "上游未返回，按请求模型展示": "Not returned by upstream; showing requested model",
   模型提供方: "Model provider",
+  重新回答: "Regenerate",
+  切换模型或重新回答: "Regenerate or switch model",
+  "正在重新生成...": "Regenerating...",
+  "当前正在生成回答，请稍候重试": "Response is currently generating; please wait",
+  重新回答失败: "Failed to regenerate response",
+  选择模型重新回答: "Choose a model to regenerate",
+  "仅对本次重试生效，不会修改当前卡片默认模型。":
+    "Applies to this retry only and does not change the card default model.",
+  "仅对本次重试生效，确认后将重新生成该轮并清空后续消息。":
+    "Applies to this retry only; confirming will regenerate this turn and clear following messages.",
+  使用当前默认重试: "Retry with current default",
+  "上次使用：{{model}}": "Last used: {{model}}",
+  切换指定模型: "Switch model",
+  上次模型: "Last used",
+  "确认重新生成回答？": "Regenerate this response?",
+  "将使用 {{model}} 重新生成该轮回答，并清空此消息之后的后续对话记录。":
+    "This will regenerate the response using {{model}} and clear all messages after it.",
+  "将重新生成该轮回答，并清空此消息之后的后续对话记录。":
+    "This will regenerate the response and clear all messages after it.",
 } as const;
 
 void i18n.use(initReactI18next).init({

@@ -72,6 +72,7 @@ type GenerateWorkInput struct {
 	Title                 string `json:"title"`
 	Description           string `json:"description,omitempty"`
 	RequiredConfirmations int32  `json:"required_confirmations,omitempty" jsonschema:"Todo confirmation threshold; default 1"`
+	AutoStart             *bool  `json:"auto_start,omitempty" jsonschema:"Whether to immediately enqueue the initial Turn when called by the built-in Cycle Agent; default true. Pass false to create/backlog the card without starting execution immediately."`
 	IdempotencyKey        string `json:"idempotency_key" jsonschema:"Stable unique key for safe retries"`
 }
 

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { LoaderCircle, Monitor, RotateCcw } from "lucide-react";
+import { Monitor } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { Attempt } from "../../shared/api/types";
+import type { Attempt, CardKind } from "../../shared/api/types";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
 import type { ExecutionAttempt } from "./execution";
+import { BubbleRetryMenu } from "./BubbleRetryMenu";
 import { RichText } from "./RichText";
 import { ChatBubbleMessage, MessageLoading } from "../../shared/ui/chat";
 import { Button, HintTooltip } from "../../shared/ui/components";
@@ -83,13 +84,20 @@ export function OperatingDevice({ name }: { name: string }) {
 /** 正文上方共用的执行元信息，不用错误块替代已输出的内容。 */
 export function AttemptMetadata({
   attempt,
+  cardKind,
+  cardPreferredRouteID,
   retryingAttemptID,
   onRetryAttempt,
   onOpenTrace,
 }: {
   attempt: Attempt;
+  cardKind?: CardKind;
+  cardPreferredRouteID?: string | null;
   retryingAttemptID?: string;
-  onRetryAttempt: (attemptID: string) => void;
+  onRetryAttempt: (
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) => void;
   onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
@@ -123,19 +131,29 @@ export function AttemptMetadata({
         ? " · " + t("重试")
         : ""}
       {attempt.can_retry && (
-        <button
-          type="button"
-          disabled={retryingAttemptID === attempt.id}
-          onClick={() => onRetryAttempt(attempt.id)}
-          className="inline-flex items-center gap-1 text-sky-700"
-        >
-          {retryingAttemptID === attempt.id ? (
-            <LoaderCircle className="size-3 animate-spin" />
-          ) : (
-            <RotateCcw className="size-3" />
+        <BubbleRetryMenu
+          replyModel={attempt.model}
+          cardKind={cardKind}
+          cardPreferredRouteID={cardPreferredRouteID}
+          align="start"
+          loading={retryingAttemptID === attempt.id}
+          disabled={Boolean(retryingAttemptID && retryingAttemptID !== attempt.id)}
+          onConfirmRetry={(preferredModelRouteID) =>
+            onRetryAttempt(attempt.id, preferredModelRouteID)
+          }
+          renderTrigger={({ onClick, disabled, title, icon }) => (
+            <button
+              type="button"
+              disabled={disabled}
+              title={title}
+              onClick={onClick}
+              className="inline-flex cursor-pointer items-center gap-1 text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="[&>svg]:size-3">{icon}</span>
+              {t("重试")}
+            </button>
           )}
-          {t("重试")}
-        </button>
+        />
       )}
     </span>
   );
@@ -145,6 +163,8 @@ function AgentAttempt({
   attempt,
   live,
   showSender = true,
+  cardKind,
+  cardPreferredRouteID,
   retryingAttemptID,
   onRetryAttempt,
   onOpenTrace,
@@ -152,8 +172,13 @@ function AgentAttempt({
   attempt: ExecutionAttempt;
   live?: LiveAttempt | null;
   showSender?: boolean;
+  cardKind?: CardKind;
+  cardPreferredRouteID?: string | null;
   retryingAttemptID?: string;
-  onRetryAttempt: (attemptID: string) => void;
+  onRetryAttempt: (
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) => void;
   onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
@@ -203,6 +228,8 @@ function AgentAttempt({
               </span>
               <AttemptMetadata
                 attempt={execution}
+                cardKind={cardKind}
+                cardPreferredRouteID={cardPreferredRouteID}
                 retryingAttemptID={retryingAttemptID}
                 onRetryAttempt={onRetryAttempt}
                 onOpenTrace={onOpenTrace}
@@ -297,20 +324,32 @@ function AgentAttempt({
               )}
             </div>
             {history?.can_retry && (
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={retryingAttemptID === history.id}
-                onClick={() => onRetryAttempt(history.id)}
-                className="text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/40"
-              >
-                {retryingAttemptID === history.id ? (
-                  <LoaderCircle className="size-3 animate-spin" />
-                ) : (
-                  <RotateCcw className="size-3" />
+              <BubbleRetryMenu
+                replyModel={history.model}
+                cardKind={cardKind}
+                cardPreferredRouteID={cardPreferredRouteID}
+                align="end"
+                loading={retryingAttemptID === history.id}
+                disabled={Boolean(
+                  retryingAttemptID && retryingAttemptID !== history.id,
                 )}
-                {t("重试")}
-              </Button>
+                onConfirmRetry={(preferredModelRouteID) =>
+                  onRetryAttempt(history.id, preferredModelRouteID)
+                }
+                renderTrigger={({ onClick, disabled, title, icon }) => (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={disabled}
+                    title={title}
+                    onClick={onClick}
+                    className="text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/40"
+                  >
+                    <span className="[&>svg]:size-3">{icon}</span>
+                    {t("重试")}
+                  </Button>
+                )}
+              />
             )}
           </div>
         </div>
@@ -321,8 +360,13 @@ function AgentAttempt({
 
 type ExecutionActions = {
   live?: LiveAttempt | null;
+  cardKind?: CardKind;
+  cardPreferredRouteID?: string | null;
   retryingAttemptID?: string;
-  onRetryAttempt: (attemptID: string) => void;
+  onRetryAttempt: (
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) => void;
   onOpenTrace?: (attemptID: string) => void;
 };
 

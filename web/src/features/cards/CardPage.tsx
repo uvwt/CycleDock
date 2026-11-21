@@ -293,6 +293,7 @@ function CardPageContent({
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
+  const [regeneratingEventID, setRegeneratingEventID] = useState("");
   const [traceAttemptID, setTraceAttemptID] = useState("");
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
@@ -589,14 +590,37 @@ function CardPageContent({
   });
 
   const retryAttempt = useMutation({
-    mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
-    onMutate: (attemptID) => setRetryingAttemptID(attemptID),
+    mutationFn: ({
+      attemptID,
+      preferredModelRouteID,
+    }: {
+      attemptID: string;
+      preferredModelRouteID?: string | null;
+    }) => api.retryAttempt(cardID, attemptID, preferredModelRouteID),
+    onMutate: ({ attemptID }) => setRetryingAttemptID(attemptID),
     onSuccess: () => {
       void sync();
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("重试失败")),
     onSettled: () => setRetryingAttemptID(""),
+  });
+
+  const regenerateMessage = useMutation({
+    mutationFn: ({
+      eventID,
+      preferredModelRouteID,
+    }: {
+      eventID: string;
+      preferredModelRouteID: string | null;
+    }) => api.regenerateMessage(cardID, eventID, preferredModelRouteID),
+    onMutate: ({ eventID }) => setRegeneratingEventID(eventID),
+    onSuccess: () => {
+      setOlderEvents([]);
+      setOlderAttempts([]);
+      void sync();
+    },
+    onSettled: () => setRegeneratingEventID(""),
   });
 
   const approveReview = useMutation({
@@ -660,6 +684,33 @@ function CardPageContent({
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("状态更新失败")),
   });
+
+  const startCard = useMutation({
+    mutationFn: () =>
+      api.startCard(cardID, {
+        idempotencyKey: `start-card:${cardID}`,
+        device_target: target,
+        preferred_model_route_id: card?.preferred_model_route_id ?? null,
+      }),
+    onSuccess: () => {
+      void sync();
+      toast.success(t("已开始执行"));
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("启动失败")),
+  });
+
+  const canStartCard = Boolean(
+    card &&
+      ((card.kind === "todo" && card.todo_state === "todo") ||
+        (card.kind === "ongoing" && card.ongoing_state === "active")) &&
+      !combinedTimeline.length &&
+      !combinedAttempts.length &&
+      !detail.data?.current_attempt &&
+      !detail.data?.pending_turns.length &&
+      !stream.live &&
+      !pendingInitialTurn,
+  );
 
   function submit() {
     const hasContent =
@@ -1008,7 +1059,20 @@ function CardPageContent({
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
                 retryingAttemptID={retryingAttemptID}
-                onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+                regeneratingEventID={regeneratingEventID}
+                onRetryAttempt={(attemptID, preferredModelRouteID) =>
+                  retryAttempt.mutate({ attemptID, preferredModelRouteID })
+                }
+                onRegenerateMessage={
+                  !blocked && card.todo_state !== "done"
+                    ? async (eventID, preferredModelRouteID) => {
+                        await regenerateMessage.mutateAsync({
+                          eventID,
+                          preferredModelRouteID,
+                        });
+                      }
+                    : undefined
+                }
                 onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
                 canApproveReview={
                   card.kind === "todo" && card.todo_state === "review"
@@ -1022,6 +1086,9 @@ function CardPageContent({
                 }
                 acknowledgingCheckin={acknowledgeCheckin.isPending}
                 onAcknowledgeCheckin={() => acknowledgeCheckin.mutate()}
+                canStartCard={canStartCard}
+                startingCard={startCard.isPending}
+                onStartCard={() => startCard.mutate()}
                 onReply={(quote) => setReplyTo(quote)}
                 onEditMessage={
                   !blocked && card.todo_state !== "done"

@@ -53,6 +53,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/pin", api.togglePinCard)
 	r.Post("/cards/{cardID}/notifications", api.toggleCardNotifications)
 	r.Post("/cards/{cardID}/move", api.moveCard)
+	r.Post("/cards/{cardID}/start", api.startCard)
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteCard)
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
@@ -60,6 +61,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/model-route", api.setCardModelRoute)
 	r.Post("/cards/{cardID}/comments", api.submitComment)
 	r.Patch("/cards/{cardID}/comments/{eventID}", api.editComment)
+	r.Post("/cards/{cardID}/messages/{eventID}/regenerate", api.regenerateMessage)
 	r.Post("/cards/{cardID}/reply", api.replyAndContinue)
 	r.Post("/cards/{cardID}/tool-approvals/{approvalID}/resolve", api.resolveToolApproval)
 	r.Post("/cards/{cardID}/turns/{turnID}/cancel", api.cancelPendingTurn)
@@ -704,6 +706,7 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		Title         string   `json:"title"`
 		Description   string   `json:"description"`
 		AttachmentIDs []string `json:"attachment_ids,omitempty"`
+		AutoStart     bool     `json:"auto_start"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -723,7 +726,7 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	card, cardAttachments, err := api.store.CreateTodoCardWithAttachments(
+	card, cardAttachments, err := api.store.CreateTodoCardWithAttachmentsAndOptions(
 		r.Context(),
 		identity.WorkspaceID,
 		projectID,
@@ -733,6 +736,7 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		uuid.NullUUID{},
 		1,
 		attachmentIDs,
+		request.AutoStart,
 	)
 	if err != nil {
 		api.handleError(w, err)
@@ -745,6 +749,59 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		resp.Attachments = cardAttachments
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// startCard 为尚未开始执行过的待办或定时卡片一键发起首轮系统执行。
+func (api *API) startCard(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
+		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &request) {
+			return
+		}
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+
+	var preferredRouteID *uuid.UUID
+	if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+			return
+		}
+		preferredRouteID = &id
+	}
+
+	identity := identityFromRequest(r)
+	result, err := api.store.StartCardExecution(r.Context(), store.StartCardExecutionParams{
+		WorkspaceID:           identity.WorkspaceID,
+		CardID:                cardID,
+		AuthorSourceID:        identity.SourceID,
+		IdempotencyKey:        idempotencyKey,
+		DeviceTarget:          request.DeviceTarget,
+		PreferredModelRouteID: preferredRouteID,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if !result.Reused && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"turn_id": result.Turn.ID.String(),
+		"reused":  result.Reused,
+	})
 }
 
 func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
@@ -1329,6 +1386,58 @@ func (api *API) editComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, commentResultToResponse(result))
 }
 
+// parseOptionalPreferredModelRouteID 解析可选的 preferred_model_route_id 字段。
+// 传 nil 或空字符串返回 (nil, true)，表示不指定单次模型覆盖；非合法 UUID 返回 400。
+func parseOptionalPreferredModelRouteID(w http.ResponseWriter, raw *string) (*uuid.UUID, bool) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, true
+	}
+	id, err := uuid.Parse(strings.TrimSpace(*raw))
+	if err != nil || id == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+		return nil, false
+	}
+	return &id, true
+}
+
+func (api *API) regenerateMessage(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDParam(w, r, "eventID")
+	if !ok {
+		return
+	}
+	var request struct {
+		PreferredModelRouteID *string `json:"preferred_model_route_id,omitempty"`
+	}
+	if !decodeOptionalJSON(w, r, &request) {
+		return
+	}
+	preferredRouteID, ok := parseOptionalPreferredModelRouteID(w, request.PreferredModelRouteID)
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	result, err := api.store.RegenerateSessionMessage(r.Context(), store.RegenerateSessionMessageParams{
+		WorkspaceID:           identity.WorkspaceID,
+		CardID:                cardID,
+		EventID:               eventID,
+		AuthorSourceID:        identity.SourceID,
+		PreferredModelRouteID: preferredRouteID,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "timeline.truncated"})
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
+	writeJSON(w, http.StatusOK, commentResultToResponse(result))
+}
+
 func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
@@ -1519,8 +1628,14 @@ func (api *API) retryAttempt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var request struct{}
-	if !decodeJSON(w, r, &request) {
+	var request struct {
+		PreferredModelRouteID *string `json:"preferred_model_route_id,omitempty"`
+	}
+	if !decodeOptionalJSON(w, r, &request) {
+		return
+	}
+	preferredRouteID, ok := parseOptionalPreferredModelRouteID(w, request.PreferredModelRouteID)
+	if !ok {
 		return
 	}
 	identity := identityFromRequest(r)
@@ -1529,8 +1644,9 @@ func (api *API) retryAttempt(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	result, err := api.store.RetryAttempt(
+	result, err := api.store.RetryAttemptWithModelRoute(
 		r.Context(), identity.WorkspaceID, cardID, attemptID, settings.SourceID, domain.AttemptReasonRetry,
+		preferredRouteID,
 	)
 	if err != nil {
 		api.handleError(w, err)

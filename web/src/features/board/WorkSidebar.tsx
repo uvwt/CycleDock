@@ -30,7 +30,6 @@ import {
   CardStatusDot,
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
-import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { CardActions } from "../cards/CardActions";
 
 type WorkGroup = TodoState;
@@ -215,7 +214,6 @@ export function WorkSidebar({
                     groupCards.map((card) => {
                       const active = card.id === activeCardID;
                       const isMuted = Boolean(card.notifications_muted);
-                      const summary = stripMarkdownSummary(card.description);
                       const swipeActions = [
                         {
                           key: "mute",
@@ -288,7 +286,6 @@ export function WorkSidebar({
                             />
                           }
                           title={card.title || t("未命名任务")}
-                          description={summary || undefined}
                           actions={
                             <div className="flex items-center gap-0.5">
                               <button
