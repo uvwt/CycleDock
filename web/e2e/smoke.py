@@ -1606,7 +1606,12 @@ class CycleDockSmoke(unittest.TestCase):
         original_cards = self.page.request.get(BASE + "/api/v1/projects/demo-project/cards").json()
         original_detail = self.page.request.get(BASE + "/api/v1/cards/todo-1").json()
 
-        cards = copy.deepcopy(original_cards)
+        # 过滤此前用例可能按需创建的已置顶主聊天卡片，保持当前焦点仅验证 todo-1 的待确认进出
+        cards = [
+            c
+            for c in copy.deepcopy(original_cards)
+            if not c.get("main_chat")
+        ]
         target = next(c for c in cards if c["id"] == "todo-1")
         target.pop("current_attempt_status", None)
         target["todo_state"] = "todo"
