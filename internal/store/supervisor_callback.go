@@ -13,7 +13,78 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
-const supervisorProgressBudget = 5
+const (
+	supervisorProgressBudget     = 5
+	supervisorCallbackKeyPrefix  = "supervisor-callback:"
+	supervisorReviewCallbackMark = ":review:"
+	supervisorAttemptMark        = ":attempt:"
+)
+
+// SupervisorReviewCallbackKey 返回指定确认轮次的 Review 监督回调 Turn 幂等键。
+// 第 1 轮保持历史键格式兼容，重新开启进入 Working 后的第 2+ 轮附带轮次后缀以触发新一轮回调。
+func SupervisorReviewCallbackKey(cardID uuid.UUID, confirmationRound int64) string {
+	return supervisorCallbackKeyPrefix + cardID.String() + ":" + supervisorReviewCallbackSuffix(cardID, confirmationRound)
+}
+
+// SupervisorFailureCallbackKey 返回指定失败/超时 Attempt 的监督回调 Turn 幂等键。
+func SupervisorFailureCallbackKey(cardID, attemptID uuid.UUID) string {
+	return supervisorCallbackKeyPrefix + cardID.String() + supervisorAttemptMark + attemptID.String()
+}
+
+func supervisorReviewCallbackSuffix(cardID uuid.UUID, confirmationRound int64) string {
+	if confirmationRound > 1 {
+		return fmt.Sprintf("review:%s:round:%d", cardID.String(), confirmationRound)
+	}
+	return "review:" + cardID.String()
+}
+
+// IsNonCircuitSupervisorFailureCallback 判断触发讨论卡本轮执行的 Turn 是否为
+// “非熔断的监督失败回调”（即由系统自动回调主控做方案调整/自愈重试，而非 Review 汇总或熔断汇报）。
+func IsNonCircuitSupervisorFailureCallback(turnSource, idempotencyKey, turnContent string) bool {
+	if turnSource != string(domain.TurnSourceSystem) {
+		return false
+	}
+	if !strings.HasPrefix(idempotencyKey, supervisorCallbackKeyPrefix) {
+		return false
+	}
+	if strings.Contains(idempotencyKey, supervisorReviewCallbackMark) {
+		return false
+	}
+	isAttemptCallback := strings.Contains(idempotencyKey, supervisorAttemptMark)
+	hasFailureOutcome := false
+	hasCircuitLine := false
+	circuitOpen := false
+	legacyCircuitHint := false
+
+	for _, rawLine := range strings.Split(turnContent, "\n") {
+		line := strings.TrimSpace(rawLine)
+		switch line {
+		case "outcome=review":
+			return false
+		case "outcome=failed", "outcome=expired":
+			hasFailureOutcome = true
+		case "circuit_open=true":
+			hasCircuitLine = true
+			circuitOpen = true
+		case "circuit_open=false":
+			hasCircuitLine = true
+			circuitOpen = false
+		default:
+			// 兼容历史已入库但尚未写入 circuit_open 字段的回调正文，忽略 error_summary 中的子任务原始报错文本。
+			if !strings.HasPrefix(line, "error_summary=") &&
+				(strings.Contains(line, "熔断") || strings.Contains(line, "需人工介入")) {
+				legacyCircuitHint = true
+			}
+		}
+	}
+	if !isAttemptCallback && !hasFailureOutcome {
+		return false
+	}
+	if hasCircuitLine {
+		return !circuitOpen
+	}
+	return !legacyCircuitHint
+}
 
 type supervisorTarget struct {
 	CardID    uuid.UUID
@@ -29,7 +100,7 @@ type supervisorDecision struct {
 	SameCount     int
 }
 
-func notifySupervisorReview(ctx context.Context, tx pgx.Tx, workspaceID, cardID, actorSourceID uuid.UUID) error {
+func notifySupervisorReview(ctx context.Context, tx pgx.Tx, workspaceID, cardID, actorSourceID uuid.UUID, confirmationRound int64) error {
 	target, err := loadSupervisorTarget(ctx, tx, workspaceID, cardID)
 	if err != nil || target.Kind != domain.CardKindTodo {
 		return err
@@ -38,7 +109,7 @@ func notifySupervisorReview(ctx context.Context, tx pgx.Tx, workspaceID, cardID,
 		"子任务终态回调：%s（%s）已进入 Review。\ncard_id=%s\nkind=todo\noutcome=review\n请向用户总结结果。这是完成回调，不要自动重开。",
 		displayCardTitle(target.Title, target.CardID), target.CardID, target.CardID,
 	)
-	return enqueueSupervisorCallback(ctx, tx, workspaceID, target, actorSourceID, "review:"+cardID.String(), content)
+	return enqueueSupervisorCallback(ctx, tx, workspaceID, target, actorSourceID, supervisorReviewCallbackSuffix(cardID, confirmationRound), content)
 }
 
 func decideSupervisorFailure(ctx context.Context, tx pgx.Tx, workspaceID, cardID, turnID uuid.UUID, summary string) (supervisorDecision, error) {
@@ -93,11 +164,11 @@ func notifySupervisorFailure(
 		}
 	}
 	content := fmt.Sprintf(
-		"子任务终态回调：%s（%s）执行失败。\ncard_id=%s\nturn_id=%s\nattempt_id=%s\nkind=%s\noutcome=%s\nattempt=%d/%d\nidentical_error_count=%d\nerror_summary=%s\n%s",
+		"子任务终态回调：%s（%s）执行失败。\ncard_id=%s\nturn_id=%s\nattempt_id=%s\nkind=%s\noutcome=%s\nattempt=%d/%d\nidentical_error_count=%d\ncircuit_open=%t\nerror_summary=%s\n%s",
 		displayCardTitle(target.Title, target.CardID), target.CardID,
 		target.CardID, turnID, attemptID, target.Kind, status,
 		decision.AttemptNumber, supervisorProgressBudget, decision.SameCount,
-		summary, action,
+		decision.CircuitOpen, summary, action,
 	)
 	return enqueueSupervisorCallback(
 		ctx, tx, workspaceID, target, actorSourceID,

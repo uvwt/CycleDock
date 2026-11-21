@@ -12,15 +12,16 @@ import (
 )
 
 type cardUpdate struct {
-	ID                 string `json:"id"`
-	ProjectID          string `json:"project_id"`
-	Kind               string `json:"kind"`
-	Title              string `json:"title"`
-	NotificationsMuted bool   `json:"notifications_muted"`
-	Revision           string `json:"revision"`
-	EventSequence      string `json:"event_sequence"`
-	MessagePreview     string `json:"message_preview"`
-	AttemptStatus      string `json:"attempt_status"`
+	ID                     string `json:"id"`
+	ProjectID              string `json:"project_id"`
+	Kind                   string `json:"kind"`
+	Title                  string `json:"title"`
+	NotificationsMuted     bool   `json:"notifications_muted"`
+	NotificationSuppressed bool   `json:"notification_suppressed"`
+	Revision               string `json:"revision"`
+	EventSequence          string `json:"event_sequence"`
+	MessagePreview         string `json:"message_preview"`
+	AttemptStatus          string `json:"attempt_status"`
 }
 
 // 只比较持久业务变化，排除 token、阶段文案和 heartbeat，避免流式输出造成通知轰炸。
@@ -85,7 +86,13 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 		}
 		updates = append(updates, update)
 	}
-	return updates, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := api.applySupervisorNotificationSuppression(ctx, workspaceID, updates); err != nil {
+		return nil, err
+	}
+	return updates, nil
 }
 
 // 工作空间级连接不随 Card 路由卸载；重连时发送快照，由客户端保留的版本基线补齐断线期间的更新。

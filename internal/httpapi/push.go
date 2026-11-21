@@ -238,8 +238,9 @@ func (api *API) deliverWorkspacePushes(ctx context.Context, workspaceID uuid.UUI
 			}
 			continue
 		}
-		// 单卡片静音时跳过实际 Web Push 投递，但仍推进快照版本，避免后续解除静音时把静音期间的历史消息补推出来。
-		if update.NotificationsMuted {
+		// 单卡片静音或已被监督回调链路静默收口时跳过实际 Web Push 投递，
+		// 但仍推进快照版本，避免后续解除静音或轮询时把历史消息补推出来。
+		if shouldSuppressCardNotification(update) {
 			if err := api.savePushSnapshot(ctx, workspaceID, cardID, update); err != nil {
 				return err
 			}

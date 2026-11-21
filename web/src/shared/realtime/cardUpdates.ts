@@ -15,9 +15,10 @@ export type CardUpdate = {
   message_preview: string;
   attempt_status: string;
   notifications_muted?: boolean;
+  notification_suppressed?: boolean;
 };
 
-// 只有新的讨论消息或模型回复且未静音时才触发浏览器/气泡通知。
+// 只有新的讨论消息或模型回复、且未被静音或监督回调静默收口时才触发浏览器/气泡通知。
 // 置顶、静音切换、标题和执行状态会改变 revision，用于刷新页面缓存，但不会弹窗通知。
 export function cardNotificationBody(
   card: CardUpdate,
@@ -25,6 +26,7 @@ export function cardNotificationBody(
 ): string {
   if (
     card.notifications_muted ||
+    card.notification_suppressed ||
     card.event_sequence === previous?.event_sequence ||
     !card.message_preview
   ) {

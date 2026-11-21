@@ -143,7 +143,12 @@ export function useCardNotifications(workspaceID: string) {
               queryKey: keys.schedules(card.project_id),
             });
             const body = cardNotificationBody(card, previous);
-            if (!body || card.notifications_muted) continue;
+            if (
+              !body ||
+              card.notifications_muted ||
+              card.notification_suppressed
+            )
+              continue;
             const detail: CardMessageDetail = {
               ...card,
               body,
