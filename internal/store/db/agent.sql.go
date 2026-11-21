@@ -386,7 +386,7 @@ func (q *Queries) GetWorkspaceMCPConnection(ctx context.Context, arg GetWorkspac
 }
 
 const listAttemptModelCalls = `-- name: ListAttemptModelCalls :many
-SELECT id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at
+SELECT id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at, response_model
 FROM agent_model_calls
 WHERE workspace_id = $1
   AND card_id = $2
@@ -433,6 +433,7 @@ func (q *Queries) ListAttemptModelCalls(ctx context.Context, arg ListAttemptMode
 			&i.ErrorCode,
 			&i.ErrorSummary,
 			&i.CreatedAt,
+			&i.ResponseModel,
 		); err != nil {
 			return nil, err
 		}
@@ -743,19 +744,19 @@ func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid
 const recordAgentModelCall = `-- name: RecordAgentModelCall :one
 INSERT INTO agent_model_calls (
     id, workspace_id, card_id, turn_id, attempt_id, invocation_id,
-    call_index, purpose, model_route_id, model_id, provider,
+    call_index, purpose, model_route_id, model_id, response_model, provider,
     started_at, finished_at, duration_ms, status,
     input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens,
     usage_source, error_code, error_summary
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11,
-    $12, $13, $14, $15,
-    $16, $17, $18, $19,
-    $20, $21, $22
+    $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16,
+    $17, $18, $19, $20,
+    $21, $22, $23
 )
-RETURNING id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at
+RETURNING id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_index, purpose, model_route_id, model_id, provider, started_at, finished_at, duration_ms, status, input_tokens, output_tokens, cached_input_tokens, reasoning_output_tokens, usage_source, error_code, error_summary, created_at, response_model
 `
 
 type RecordAgentModelCallParams struct {
@@ -769,6 +770,7 @@ type RecordAgentModelCallParams struct {
 	Purpose               string             `json:"purpose"`
 	ModelRouteID          uuid.NullUUID      `json:"model_route_id"`
 	ModelID               string             `json:"model_id"`
+	ResponseModel         string             `json:"response_model"`
 	Provider              string             `json:"provider"`
 	StartedAt             pgtype.Timestamptz `json:"started_at"`
 	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
@@ -795,6 +797,7 @@ func (q *Queries) RecordAgentModelCall(ctx context.Context, arg RecordAgentModel
 		arg.Purpose,
 		arg.ModelRouteID,
 		arg.ModelID,
+		arg.ResponseModel,
 		arg.Provider,
 		arg.StartedAt,
 		arg.FinishedAt,
@@ -833,6 +836,7 @@ func (q *Queries) RecordAgentModelCall(ctx context.Context, arg RecordAgentModel
 		&i.ErrorCode,
 		&i.ErrorSummary,
 		&i.CreatedAt,
+		&i.ResponseModel,
 	)
 	return i, err
 }

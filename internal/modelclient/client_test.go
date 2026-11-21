@@ -260,3 +260,44 @@ func TestChatCompletionsSerializesMultimodalAndPreservesStringContentWhenTextOnl
 		t.Fatalf("roundTrip message[1]=%+v", roundTrip.Messages[1])
 	}
 }
+
+func TestCompleteParsesResponseModel(t *testing.T) {
+	t.Run("captures trimmed response model", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":" gpt-5-2026-01-15 ","choices":[{"message":{"content":"ok"}}]}`))
+		}))
+		defer server.Close()
+
+		got, err := New().Complete(context.Background(), Config{
+			BaseURL: server.URL,
+			Model:   "gpt-5",
+		}, []Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResponseModel != "gpt-5-2026-01-15" {
+			t.Fatalf("ResponseModel=%q, want gpt-5-2026-01-15", got.ResponseModel)
+		}
+	})
+
+	t.Run("empty when upstream omits model", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		}))
+		defer server.Close()
+
+		got, err := New().Complete(context.Background(), Config{
+			BaseURL: server.URL,
+			Model:   "gpt-5",
+		}, []Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResponseModel != "" {
+			t.Fatalf("ResponseModel=%q, want empty string", got.ResponseModel)
+		}
+	})
+}
+

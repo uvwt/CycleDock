@@ -51,6 +51,7 @@ type AgentModelCall struct {
 	ErrorCode             string             `json:"error_code"`
 	ErrorSummary          string             `json:"error_summary"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	ResponseModel         string             `json:"response_model"`
 }
 
 type AgentSession struct {
