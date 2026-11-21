@@ -36,6 +36,7 @@ type DispatcherConfig struct {
 	MaintenanceEvery          time.Duration
 	MaxConcurrent             int
 	LeaseDuration             time.Duration
+	PublicBaseURL             string
 	SessionService            session.Service
 	ArtifactService           artifact.Service
 	Attachments               *attachments.Service
@@ -87,6 +88,7 @@ func NewDispatcher(
 	runner := NewRunner(dataStore, model, logger, RunnerConfig{
 		HeartbeatInterval: config.LeaseDuration / 4,
 		LeaseDuration:     config.LeaseDuration,
+		PublicBaseURL:     config.PublicBaseURL,
 		SessionService:    config.SessionService,
 		ArtifactService:   config.ArtifactService,
 		Attachments:       config.Attachments,

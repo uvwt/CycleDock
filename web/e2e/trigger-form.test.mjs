@@ -4,6 +4,7 @@ import {
   emptyTriggerFormValues,
   formatRemainingCountdown,
   getCardRoute,
+  hasAdvancedTriggerConfig,
   parseCommaList,
   parseJSONMatchesText,
   toCreateTriggerInput,
@@ -64,7 +65,6 @@ test("新建与编辑触发器按路由模式只发送对应目标字段", () =>
   assert.equal(createFixed.target_card_id, "card-99");
   assert.equal(createFixed.target_project_id, undefined);
   assert.deepEqual(createFixed.filter_config, {
-    events: ["workflow_run"],
     json_matches: { severity: "critical" },
     match_key_path: "meta.key",
   });
@@ -141,5 +141,62 @@ test("触发器回填表单、卡片跳转路由与倒计时格式化", () => {
   assert.equal(
     formatRemainingCountdown("2026-11-21T09:59:00Z", now, false),
     "即将触发",
+  );
+});
+
+test("高级选项折叠判断：极简默认触发器默认折叠，含自定义配置时自动展开", () => {
+  const minimalTrigger = {
+    id: "t-min",
+    name: "GitHub Webhook",
+    provider: "github",
+    auth_mode: "github_hmac_sha256",
+    signature_header: "X-Hub-Signature-256",
+    secret_hint: "abcd...ef12",
+    webhook_path: "/api/v1/triggers/t-min/webhook",
+    enabled: true,
+    routing_mode: "match_watchers",
+    dispatch_mode: "enqueue",
+    filter_config: {},
+    cooldown_seconds: 0,
+    created_at: "2026-11-21T00:00:00Z",
+    updated_at: "2026-11-21T00:00:00Z",
+  };
+  assert.equal(hasAdvancedTriggerConfig(minimalTrigger), false);
+
+  assert.equal(
+    hasAdvancedTriggerConfig({
+      ...minimalTrigger,
+      routing_mode: "create_todo",
+    }),
+    true,
+  );
+  assert.equal(
+    hasAdvancedTriggerConfig({
+      ...minimalTrigger,
+      dispatch_mode: "interrupt",
+    }),
+    true,
+  );
+  assert.equal(
+    hasAdvancedTriggerConfig({
+      ...minimalTrigger,
+      cooldown_seconds: 60,
+    }),
+    true,
+  );
+  assert.equal(
+    hasAdvancedTriggerConfig({
+      ...minimalTrigger,
+      filter_config: { repositories: ["uvwt/CycleDock"] },
+    }),
+    true,
+  );
+  assert.equal(
+    hasAdvancedTriggerConfig({
+      ...minimalTrigger,
+      provider: "generic",
+      auth_mode: "bearer",
+    }),
+    true,
   );
 });
