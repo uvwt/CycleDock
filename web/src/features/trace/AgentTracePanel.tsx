@@ -253,14 +253,18 @@ export function AgentTracePanel({
             <div className="space-y-4">
               {/* 模型调用记录列表 */}
               <div className="space-y-3">
-                <div className="text-xs font-bold text-foreground/90 uppercase tracking-wider flex items-center justify-between">
-                  <span>{t("模型请求与路由调用")} ({overview?.model_calls.length || 0})</span>
-                  <span className="text-[11px] font-normal text-muted-foreground">{t("点击展开详细参数与 Token 指标")}</span>
+                <div className="text-xs font-bold text-foreground/90 uppercase tracking-wider flex items-center justify-between gap-2">
+                  <span className="shrink-0">{t("模型请求与路由调用")} ({overview?.model_calls.length || 0})</span>
+                  <span className="hidden sm:inline text-[11px] font-normal text-muted-foreground truncate">
+                    {t("点击展开详细参数与 Token 指标")}
+                  </span>
                 </div>
 
                 {overview?.model_calls.map((call) => {
                   const isExpanded = expandedCallIDs.has(call.id);
                   const isCompaction = call.purpose === "compaction";
+                  const answerModel = call.response_model?.trim() || "";
+                  const displayModel = answerModel || call.model_id;
 
                   return (
                     <div
@@ -270,38 +274,62 @@ export function AgentTracePanel({
                       <button
                         type="button"
                         onClick={() => toggleCall(call.id)}
-                        className="w-full flex items-center justify-between p-3.5 text-left hover:bg-muted/50 transition-colors"
+                        className="w-full p-3 sm:p-3.5 text-left hover:bg-muted/50 transition-colors"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          {isExpanded ? (
-                            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-                          ) : (
-                            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                          )}
-                          <span
-                            className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${
-                              isCompaction
-                                ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/60"
-                                : "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-300/60"
-                            }`}
-                          >
-                            {isCompaction ? t("压缩摘要") : t("Agent 请求")} #{call.call_index}
-                          </span>
-                          <span className="truncate text-xs font-bold text-foreground">{call.model_id}</span>
-                          <span className="text-[11px] text-muted-foreground font-mono">({call.provider})</span>
-                        </div>
+                        <div className="flex items-start sm:items-center justify-between gap-2 sm:gap-3">
+                          <div className="flex items-start sm:items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+                            {isExpanded ? (
+                              <ChevronDown className="size-4 shrink-0 text-muted-foreground mt-0.5 sm:mt-0" />
+                            ) : (
+                              <ChevronRight className="size-4 shrink-0 text-muted-foreground mt-0.5 sm:mt-0" />
+                            )}
+                            {/* 手机端优先把整行宽度留给模型名称，避免被 provider 名称挤压截断或把状态挤出屏幕 */}
+                            <div className="min-w-0 flex-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2">
+                              <span
+                                title={displayModel}
+                                className="order-1 sm:order-2 min-w-0 truncate text-xs font-bold text-foreground"
+                              >
+                                {displayModel || "-"}
+                              </span>
+                              <div className="order-2 sm:order-1 flex items-center gap-2 shrink-0">
+                                <span
+                                  className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${
+                                    isCompaction
+                                      ? "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300/60"
+                                      : "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-300/60"
+                                  }`}
+                                >
+                                  {isCompaction ? t("压缩摘要") : t("Agent 请求")} #{call.call_index}
+                                </span>
+                                <span className="sm:hidden text-[11px] font-semibold tabular-nums text-muted-foreground">
+                                  {call.duration_ms} ms
+                                </span>
+                              </div>
+                              {call.provider && (
+                                <span
+                                  title={call.provider}
+                                  className="hidden sm:inline sm:order-3 min-w-0 max-w-[160px] truncate text-[11px] text-muted-foreground font-mono"
+                                >
+                                  ({call.provider})
+                                </span>
+                              )}
+                            </div>
+                          </div>
 
-                        <div className="flex items-center gap-3 shrink-0 text-xs">
-                          <span className="font-semibold tabular-nums text-foreground/90">{call.duration_ms} ms</span>
-                          <span
-                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                              call.status === "success"
-                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
-                                : "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300"
-                            }`}
-                          >
-                            {call.status}
-                          </span>
+                          <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-xs">
+                            <span className="hidden sm:inline font-semibold tabular-nums text-foreground/90">
+                              {call.duration_ms} ms
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                call.status === "success"
+                                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                  : "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300"
+                              }`}
+                            >
+                              {call.status}
+                            </span>
+                          </div>
                         </div>
                       </button>
 
@@ -309,8 +337,30 @@ export function AgentTracePanel({
                         <div className="border-t border-border bg-muted/20 p-3.5 text-xs space-y-3">
                           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                             <div className="rounded border border-border/80 bg-card p-2">
+                              <span className="text-[11px] text-muted-foreground block">{t("回答模型")}</span>
+                              <span className="font-mono text-xs font-semibold text-foreground select-all break-all">
+                                {displayModel || "-"}
+                              </span>
+                              {answerModel && call.model_id && answerModel !== call.model_id && (
+                                <span className="mt-0.5 block font-mono text-[10px] text-muted-foreground break-all">
+                                  {t("请求模型")}: {call.model_id}
+                                </span>
+                              )}
+                              {!answerModel && call.model_id && (
+                                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                                  {t("上游未返回，按请求模型展示")}
+                                </span>
+                              )}
+                            </div>
+                            <div className="rounded border border-border/80 bg-card p-2">
+                              <span className="text-[11px] text-muted-foreground block">{t("模型提供方")}</span>
+                              <span className="font-mono text-xs font-semibold text-foreground select-all break-all">
+                                {call.provider || "-"}
+                              </span>
+                            </div>
+                            <div className="rounded border border-border/80 bg-card p-2">
                               <span className="text-[11px] text-muted-foreground block">{t("实际命中路由 ID")}</span>
-                              <span className="font-mono text-xs font-semibold text-foreground select-all">
+                              <span className="font-mono text-xs font-semibold text-foreground select-all break-all">
                                 {call.model_route_id || t("未关联固定路由")}
                               </span>
                             </div>

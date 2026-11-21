@@ -581,6 +581,10 @@ const en = {
   收起其余项: "Show less",
   加载更多插件分组: "Load more plugin groups",
   收起多余插件分组: "Collapse extra plugin groups",
+  回答模型: "Response model",
+  请求模型: "Requested model",
+  "上游未返回，按请求模型展示": "Not returned by upstream; showing requested model",
+  模型提供方: "Model provider",
 } as const;
 
 void i18n.use(initReactI18next).init({

@@ -468,6 +468,7 @@ func (m *adkRouteModel) GenerateContent(
 						Purpose:               m.purpose,
 						ModelRouteID:          uuid.NullUUID{UUID: matchedRoute.ID, Valid: true},
 						ModelID:               strings.TrimSpace(matchedRoute.Model),
+						ResponseModel:         strings.TrimSpace(completion.ResponseModel),
 						Provider:              normalizedProviderType(matchedRoute.ProviderType),
 						StartedAt:             callStarted,
 						FinishedAt:            callFinished,

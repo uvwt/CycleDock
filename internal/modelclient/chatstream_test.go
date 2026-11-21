@@ -95,3 +95,21 @@ func TestChatStreamParsesFinalUsageChunk(t *testing.T) {
 		t.Fatalf("usage=%+v, want %+v", *got.Usage, want)
 	}
 }
+
+func TestChatStreamParsesResponseModel(t *testing.T) {
+	// 末尾 usage-only chunk 不带 model 字段时，不能覆盖前面已解析到的实际模型名称。
+	data := strings.Join([]string{
+		`data: {"model":" gemini-2.5-pro-preview-05-06 ","choices":[{"delta":{"content":"Hel"}}]}`,
+		`data: {"model":"gemini-2.5-pro-preview-05-06","choices":[{"delta":{"content":"lo"}}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10}}`,
+		`data: [DONE]`,
+	}, "\n")
+	got, err := readChatStream(strings.NewReader(data), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ResponseModel != "gemini-2.5-pro-preview-05-06" {
+		t.Fatalf("ResponseModel=%q, want gemini-2.5-pro-preview-05-06", got.ResponseModel)
+	}
+}
+

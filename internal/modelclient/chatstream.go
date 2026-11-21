@@ -10,6 +10,7 @@ import (
 )
 
 type chatStreamDelta struct {
+	Model   string `json:"model"`
 	Choices []struct {
 		Delta struct {
 			Content   string `json:"content"`
@@ -37,6 +38,7 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 	completed := false
 	calls := make(map[int]*ToolCall)
 	var usage *TokenUsage
+	var responseModel string
 	for scanner.Scan() {
 		line := scanner.Text()
 		bytesRead += int64(len(line) + 1)
@@ -57,6 +59,9 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 		var packet chatStreamDelta
 		if err := json.Unmarshal([]byte(data), &packet); err != nil {
 			return Completion{}, fmt.Errorf("%w: chat stream data: %v", ErrMalformedResponse, err)
+		}
+		if modelName := strings.TrimSpace(packet.Model); modelName != "" {
+			responseModel = modelName
 		}
 		if parsed := packet.Usage.toTokenUsage(); parsed != nil {
 			usage = parsed
@@ -101,8 +106,9 @@ func readChatStream(reader io.Reader, onDelta func(string), onToolCall func(Tool
 	}
 	sort.Ints(indices)
 	result := Completion{
-		Content: strings.TrimSpace(answer.String()),
-		Usage:   usage,
+		Content:       strings.TrimSpace(answer.String()),
+		Usage:         usage,
+		ResponseModel: responseModel,
 	}
 	for _, i := range indices {
 		call := calls[i]
