@@ -1783,7 +1783,8 @@ test("用户评论附带图片与过期图片渲染，输入框支持纯图片�
   );
   assert.match(withImageHtml, /\/api\/v1\/workspaces\/ws-1\/attachments\/att-1/);
   assert.match(withImageHtml, /attachment-expired-placeholder/);
-  assert.match(withImageHtml, /图片已过期清理/);
+  assert.match(withImageHtml, /图片已过期/);
+  assert.doesNotMatch(withImageHtml, /节省磁盘空间|自动淘汰/);
   assert.match(withImageHtml, /帮我看看这张截图/);
 
   const composerWithImageHtml = renderToStaticMarkup(
