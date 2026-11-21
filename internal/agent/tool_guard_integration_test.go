@@ -172,6 +172,14 @@ func TestToolGuard_ScopedCardWhitelistIntegration(t *testing.T) {
 	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.AllowSessionWhitelist {
 		t.Fatalf("expected critical redline command on whitelisted device to still ask_human with allow_session_whitelist=false, got %+v", critDec)
 	}
+	critDBDec := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, cardA.ID, "node-tianyi", deviceNames,
+		"Card A", "", "exec_command", map[string]any{"node_id": "node-tianyi", "cmd": `psql -c "DROP DATABASE production;"`},
+	)
+	if critDBDec.Decision != "ask_human" || critDBDec.RiskLevel != "critical" || critDBDec.AllowSessionWhitelist {
+		t.Fatalf("expected critical drop database command on whitelisted device to still ask_human with allow_session_whitelist=false, got %+v", critDBDec)
+	}
 
 	// 2. Card A 允许 device 后不应放行 MCP 工具；为 Card A 单独允许 github MCP 后，仅放行 github 而不放行 dida365
 	mcpBefore := EvaluateToolGuard(
@@ -223,5 +231,265 @@ func TestToolGuard_ScopedCardWhitelistIntegration(t *testing.T) {
 	)
 	if cardBMCP.Decision != "ask_human" {
 		t.Fatalf("expected Card B MCP github NOT to inherit Card A whitelist, got %+v", cardBMCP)
+	}
+}
+
+func TestToolGuard_TogglePrecedenceAndSingleCriticalApprovalIntegration(t *testing.T) {
+	dataStore, _ := newAgentIntegrationStore(t)
+	ctx := context.Background()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Guard Toggle & Single Approval Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Guard Flow Card", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guardModelCalls := 0
+	guardHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guardModelCalls++
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"reversible": false, "risk_level": "high", "decision": "ask_human", "reason": "模型判定需人工确认"}`,
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer guardHTTP.Close()
+
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(guardHTTP.URL, "guard-model"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeID := settings.Routes[0].ID
+	if _, err := dataStore.SaveToolGuardSettings(ctx, workspace.ID, store.ToolGuardSettingsInput{
+		Mode:           "strict",
+		ModelRouteID:   &routeID,
+		TimeoutSeconds: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = dataStore.GetAgentSettings(ctx, workspace.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 配置：一台关闭守卫的设备、一台开启守卫的设备、一个关闭守卫的 MCP 连接（另有一台从未落库配置的设备）
+	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspace.ID, store.DeviceToolGuardInput{
+		DeviceNodeID: "node-off",
+		DeviceName:   "Dev Box",
+		Enabled:      false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspace.ID, store.DeviceToolGuardInput{
+		DeviceNodeID: "node-on",
+		DeviceName:   "Prod Box",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.SaveMCPConnection(ctx, workspace.ID, store.MCPConnectionInput{
+		Name:             "dev-db-mcp",
+		URL:              "https://mcp.example.com/dev-db",
+		Enabled:          true,
+		TimeoutMS:        5000,
+		ToolGuardEnabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	client := modelclient.NewWithHTTPClient(guardHTTP.Client())
+	deviceNames := map[string]string{
+		"node-off":     "Dev Box",
+		"node-on":      "Prod Box",
+		"node-default": "Default Box",
+	}
+
+	// 1. 未启用守卫的设备（显式关闭 / 从未落库）与未启用守卫的 MCP 执行 drop database、rm -rf / 均应直接放行，且不触发守卫小模型
+	unguardedCases := []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{
+			name: "disabled device rm -rf /",
+			tool: "exec_command",
+			args: map[string]any{"node_id": "node-off", "cmd": "sudo rm -rf / --no-preserve-root"},
+		},
+		{
+			name: "disabled device drop database",
+			tool: "exec_command",
+			args: map[string]any{"node_id": "node-off", "cmd": `psql -c "DROP DATABASE dev_db;"`},
+		},
+		{
+			name: "unconfigured device rm -rf /",
+			tool: "exec_command",
+			args: map[string]any{"node_id": "node-default", "cmd": "rm -rf /"},
+		},
+		{
+			name: "unconfigured device drop database",
+			tool: "exec_command",
+			args: map[string]any{"node_id": "node-default", "cmd": `docker exec pg psql -c "DROP DATABASE staging;"`},
+		},
+		{
+			name: "disabled mcp drop database",
+			tool: "call_mcp_tool",
+			args: map[string]any{"tool_id": "dev-db-mcp:exec_sql", "arguments": map[string]any{"sql": "DROP DATABASE dev_db;"}},
+		},
+	}
+	for _, tc := range unguardedCases {
+		dec := EvaluateToolGuard(
+			ctx, dataStore, client, nil, settings,
+			workspace.ID, card.ID, "node-off", deviceNames,
+			"Guard Flow Card", "", tc.tool, tc.args,
+		)
+		if dec.Decision != "allow" {
+			t.Fatalf("[%s] expected unguarded target to allow, got %+v", tc.name, dec)
+		}
+	}
+	if guardModelCalls != 0 {
+		t.Fatalf("expected unguarded targets never to call guard model, got %d calls", guardModelCalls)
+	}
+
+	// 2. 已开启守卫的设备即使加入了卡片临时白名单，执行极高危命令依然强制拦截且 AllowSessionWhitelist=false
+	if err := dataStore.AddCardScopeWhitelist(ctx, workspace.ID, card.ID, "device", "node-on", human.ID); err != nil {
+		t.Fatalf("add card whitelist: %v", err)
+	}
+	criticalArgs := map[string]any{
+		"node_id": "node-on",
+		"cmd":     `psql -c "DROP DATABASE staging;"`,
+	}
+	blockedCrit := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", criticalArgs,
+	)
+	if blockedCrit.Decision != "ask_human" || blockedCrit.RiskLevel != "critical" || blockedCrit.Reversible || blockedCrit.AllowSessionWhitelist {
+		t.Fatalf("expected critical command on whitelisted guarded device to ask_human with AllowSessionWhitelist=false, got %+v", blockedCrit)
+	}
+	if guardModelCalls != 0 {
+		t.Fatalf("expected static critical rule to intercept before calling guard model, got %d calls", guardModelCalls)
+	}
+
+	// 3. 用户对该极高危命令点击「允许本次执行」后，hasApprovedMatchingToolCall 优先于静态极高危规则放行，不陷入死循环
+	allowSession := false
+	approval, err := dataStore.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID:           workspace.ID,
+		CardID:                card.ID,
+		ToolCallID:            "call-crit-drop-db",
+		ToolName:              "exec_command",
+		Arguments:             criticalArgs,
+		RiskLevel:             blockedCrit.RiskLevel,
+		Reversible:            blockedCrit.Reversible,
+		Reason:                blockedCrit.Reason,
+		ScopeType:             blockedCrit.ScopeType,
+		ScopeTarget:           blockedCrit.ScopeTarget,
+		ScopeLabel:            blockedCrit.ScopeLabel,
+		AllowSessionWhitelist: &allowSession,
+	})
+	if err != nil {
+		t.Fatalf("create tool approval: %v", err)
+	}
+
+	// 审批仍为 pending 时，继续拦截
+	stillBlocked := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", criticalArgs,
+	)
+	if stillBlocked.Decision != "ask_human" || stillBlocked.RiskLevel != "critical" {
+		t.Fatalf("expected pending approval NOT to allow critical command, got %+v", stillBlocked)
+	}
+
+	// 人工批准本次调用后，同工具同参数重放应放行
+	if _, err := dataStore.ResolveToolApproval(ctx, store.ResolveToolApprovalParams{
+		WorkspaceID:        workspace.ID,
+		CardID:             card.ID,
+		ApprovalID:         approval.ID,
+		Status:             string(domain.ToolApprovalStatusApproved),
+		Comment:            "确认清理测试库",
+		ResolvedBySourceID: human.ID,
+	}); err != nil {
+		t.Fatalf("approve tool call: %v", err)
+	}
+
+	approvedReplay := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", criticalArgs,
+	)
+	if approvedReplay.Decision != "allow" {
+		t.Fatalf("expected single-approved critical command replay to be allowed, got %+v", approvedReplay)
+	}
+
+	// 单次批准仅对完全匹配的参数生效，同一设备上的其他极高危命令仍必须拦截
+	otherCritical := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", map[string]any{
+			"node_id": "node-on",
+			"cmd":     "sudo rm -rf / --no-preserve-root",
+		},
+	)
+	if otherCritical.Decision != "ask_human" || otherCritical.RiskLevel != "critical" || otherCritical.AllowSessionWhitelist {
+		t.Fatalf("expected different critical command to remain blocked after single approval, got %+v", otherCritical)
+	}
+
+	// 被拒绝的审批记录不应触发放行
+	rejectedArgs := map[string]any{
+		"node_id": "node-on",
+		"cmd":     `psql -c "DROP DATABASE production;"`,
+	}
+	rejectedApproval, err := dataStore.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID:           workspace.ID,
+		CardID:                card.ID,
+		ToolCallID:            "call-crit-reject",
+		ToolName:              "exec_command",
+		Arguments:             rejectedArgs,
+		RiskLevel:             "critical",
+		Reversible:            false,
+		Reason:                "drop database",
+		ScopeType:             "device",
+		ScopeTarget:           "node-on",
+		ScopeLabel:            "Prod Box",
+		AllowSessionWhitelist: &allowSession,
+	})
+	if err != nil {
+		t.Fatalf("create rejected approval: %v", err)
+	}
+	if _, err := dataStore.ResolveToolApproval(ctx, store.ResolveToolApprovalParams{
+		WorkspaceID:        workspace.ID,
+		CardID:             card.ID,
+		ApprovalID:         rejectedApproval.ID,
+		Status:             string(domain.ToolApprovalStatusRejected),
+		Comment:            "禁止删生产库",
+		ResolvedBySourceID: human.ID,
+	}); err != nil {
+		t.Fatalf("reject tool call: %v", err)
+	}
+	rejectedReplay := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", rejectedArgs,
+	)
+	if rejectedReplay.Decision != "ask_human" || rejectedReplay.RiskLevel != "critical" || rejectedReplay.AllowSessionWhitelist {
+		t.Fatalf("expected rejected critical command to remain blocked, got %+v", rejectedReplay)
 	}
 }

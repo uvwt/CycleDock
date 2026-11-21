@@ -49,24 +49,61 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 		t.Fatalf("expected github:delete_repository NOT to be classified as safe read-only")
 	}
 
-	// 3. 第一层：高危破坏性命令直接必审
+	// 3. 静态高危破坏性命令词法检测依然能准确识别 rm -rf / 与 drop database
 	isCrit, reason := isCriticalDestructiveCommand("exec_command", map[string]any{
 		"cmd": "sudo rm -rf / --no-preserve-root",
 	})
 	if !isCrit || reason == "" {
 		t.Fatalf("expected rm -rf / to be flagged as critical destructive command")
 	}
-	critDec := EvaluateToolGuard(
-		ctx, nil, nil, nil,
-		settings, workspaceID, cardID, "node-1", map[string]string{"node-1": "TianYi"},
-		"测试卡片", "测试描述",
-		"exec_command", map[string]any{"cmd": "sudo rm -rf /"},
-	)
-	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.Reversible {
-		t.Fatalf("expected critical destructive command to ask_human immediately, got %+v", critDec)
+	if critDB, dbReason := isCriticalDestructiveCommand("exec_command", map[string]any{
+		"cmd": `psql -c "DROP DATABASE production;"`,
+	}); !critDB || dbReason == "" {
+		t.Fatalf("expected drop database to be flagged as critical destructive command")
 	}
-	if critDec.ScopeType != "device" || critDec.ScopeTarget != "node-1" || critDec.ScopeLabel != "TianYi" || critDec.AllowSessionWhitelist {
-		t.Fatalf("expected critical destructive command scope=device:node-1(TianYi) and allow_session_whitelist=false, got %+v", critDec)
+
+	// 4. 目标设备/MCP 未开启守卫（无守卫策略时）直接放行，不再被静态高危规则硬拦截
+	for _, tc := range []struct {
+		tool        string
+		args        map[string]any
+		scopeType   string
+		scopeTarget string
+		scopeLabel  string
+	}{
+		{
+			tool:        "exec_command",
+			args:        map[string]any{"cmd": "sudo rm -rf /"},
+			scopeType:   "device",
+			scopeTarget: "node-1",
+			scopeLabel:  "TianYi",
+		},
+		{
+			tool:        "exec_command",
+			args:        map[string]any{"cmd": `psql -c "DROP DATABASE production;"`},
+			scopeType:   "device",
+			scopeTarget: "node-1",
+			scopeLabel:  "TianYi",
+		},
+		{
+			tool:        "call_mcp_tool",
+			args:        map[string]any{"tool_id": "github:delete_repository", "arguments": map[string]any{"repo": "demo"}},
+			scopeType:   "mcp",
+			scopeTarget: "github",
+			scopeLabel:  "github",
+		},
+	} {
+		dec := EvaluateToolGuard(
+			ctx, nil, nil, nil,
+			settings, workspaceID, cardID, "node-1", map[string]string{"node-1": "TianYi"},
+			"测试卡片", "测试描述",
+			tc.tool, tc.args,
+		)
+		if dec.Decision != "allow" {
+			t.Fatalf("expected unguarded %s (%v) to be allowed, got %+v", tc.tool, tc.args, dec)
+		}
+		if dec.ScopeType != tc.scopeType || dec.ScopeTarget != tc.scopeTarget || dec.ScopeLabel != tc.scopeLabel {
+			t.Fatalf("unexpected scope metadata for unguarded %s: got %+v", tc.tool, dec)
+		}
 	}
 }
 
@@ -115,14 +152,14 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 		CustomRules:    "禁止未经确认重启线上生产容器",
 	}
 
-	// 明确高危系统指令必审测试
-	critDec := EvaluateToolGuard(
+	// 未配置/未开启守卫时，EvaluateToolGuard 直接放行且不触发小模型评估
+	unguardedDec := EvaluateToolGuard(
 		ctx, nil, client, nil, settings, workspaceID, cardID, "node-prod-server", nil,
 		"测试卡片", "测试描述",
 		"exec_command", map[string]any{"cmd": "sudo rm -rf / --no-preserve-root"},
 	)
-	if critDec.Decision != "ask_human" || critDec.RiskLevel != "critical" || critDec.AllowSessionWhitelist {
-		t.Fatalf("expected critical command to ask_human with allow_session_whitelist=false, got %+v", critDec)
+	if unguardedDec.Decision != "allow" {
+		t.Fatalf("expected unguarded device to allow without store policy, got %+v", unguardedDec)
 	}
 
 	dec, err := evaluateDynamicModel(
@@ -378,5 +415,26 @@ func TestToolGuard_ResolveScope(t *testing.T) {
 	})
 	if noTargetDeviceScope.ScopeType != "tool" || noTargetDeviceScope.ScopeTarget != "exec_command" {
 		t.Fatalf("unexpected fallback scope: %+v", noTargetDeviceScope)
+	}
+}
+
+func TestToolGuard_CanonicalizeToolArguments(t *testing.T) {
+	// PostgreSQL JSONB 会按 key 长度排序并插入空格，归一化后应与 Go json.Marshal 结果一致
+	pgJSONB := []byte(`{"cmd": "sudo rm -rf /", "node_id": "node-tianyi", "nested": {"z": 1, "aa": true}}`)
+	goRaw, err := json.Marshal(map[string]any{
+		"node_id": "node-tianyi",
+		"cmd":     "sudo rm -rf /",
+		"nested":  map[string]any{"aa": true, "z": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonPG, ok1 := canonicalizeToolArguments(pgJSONB)
+	canonGo, ok2 := canonicalizeToolArguments(goRaw)
+	if !ok1 || !ok2 {
+		t.Fatalf("expected both payloads to canonicalize cleanly, got ok1=%v ok2=%v", ok1, ok2)
+	}
+	if string(canonPG) != string(canonGo) {
+		t.Fatalf("expected canonical JSON to match:\npg=%s\ngo=%s", string(canonPG), string(canonGo))
 	}
 }

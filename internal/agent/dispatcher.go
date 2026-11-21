@@ -25,6 +25,9 @@ import (
 const (
 	DefaultMaxConcurrent             = 32
 	DefaultMaxConcurrentPerWorkspace = 10
+	// shutdownInterruptTimeout 约束优雅停机时将单个运行中 Attempt 原子交接为
+	// recovery queued 状态的数据库超时，避免停机收尾被单次写库无限阻塞。
+	shutdownInterruptTimeout = 5 * time.Second
 )
 
 type DispatcherConfig struct {
@@ -44,6 +47,7 @@ type DispatcherConfig struct {
 type Dispatcher struct {
 	store                     *store.Store
 	runner                    *Runner
+	live                      *realtime.Hub
 	logger                    *slog.Logger
 	pollInterval              time.Duration
 	maintenanceEvery          time.Duration
@@ -91,7 +95,7 @@ func NewDispatcher(
 		Live:              config.Live,
 	})
 	return &Dispatcher{
-		store: dataStore, runner: runner, logger: logger,
+		store: dataStore, runner: runner, live: config.Live, logger: logger,
 		pollInterval: config.PollInterval, maintenanceEvery: config.MaintenanceEvery,
 		maxConcurrent: config.MaxConcurrent, leaseDuration: config.LeaseDuration,
 		maxConcurrentPerWorkspace: config.MaxConcurrentPerWorkspace,
@@ -219,9 +223,17 @@ func (d *Dispatcher) claimNextAttempt(ctx context.Context) (*store.AttemptClaim,
 
 func (d *Dispatcher) runAttempt(ctx context.Context, claim store.AttemptClaim) {
 	err := d.runner.RunAttempt(ctx, claim)
-	if err == nil ||
-		errors.Is(err, domain.ErrAttemptNotCurrent) ||
-		errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, domain.ErrAttemptNotCurrent) {
+		return
+	}
+	// 服务收到 SIGTERM/SIGINT 优雅停机时，Dispatcher 的根 ctx 会被显式取消（context.Canceled）。
+	// 仅在 context.Canceled 时交接为非故障重启续跑；若是 context.DeadlineExceeded（如单次模型超时），
+	// 仍应按真实失败落盘并汇报错误摘要。
+	if errors.Is(ctx.Err(), context.Canceled) {
+		d.interruptAttemptForShutdown(ctx, claim)
+		return
+	}
+	if errors.Is(err, context.Canceled) {
 		return
 	}
 	summary := publicRunError(err)
@@ -241,6 +253,40 @@ func (d *Dispatcher) runAttempt(ctx context.Context, claim store.AttemptClaim) {
 			"attempt_id", claim.Attempt.ID,
 			"error", failErr,
 		)
+	}
+}
+
+func (d *Dispatcher) interruptAttemptForShutdown(ctx context.Context, claim store.AttemptClaim) {
+	handoffCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownInterruptTimeout)
+	defer cancel()
+	result, err := d.store.InterruptAttemptForShutdown(
+		handoffCtx,
+		claim.Attempt.WorkspaceID,
+		claim.Attempt.CardID,
+		claim.Attempt.ID,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		d.logger.Error(
+			"Cycle Agent shutdown handoff failed; lease recovery will take over",
+			"workspace_id", claim.Attempt.WorkspaceID,
+			"card_id", claim.Attempt.CardID,
+			"attempt_id", claim.Attempt.ID,
+			"error", err,
+		)
+		return
+	}
+	if result.Interrupted {
+		d.logger.Info(
+			"Cycle Agent attempt handed off for graceful restart",
+			"workspace_id", claim.Attempt.WorkspaceID,
+			"card_id", claim.Attempt.CardID,
+			"attempt_id", claim.Attempt.ID,
+			"recovery_queued", result.RecoveryAttempt != nil,
+		)
+		if d.live != nil {
+			d.live.Publish(claim.Attempt.CardID, realtime.Event{Type: "card.updated"})
+		}
 	}
 }
 
