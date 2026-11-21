@@ -25,6 +25,11 @@ import {
   cardMessageEvent,
   type CardMessageDetail,
 } from "../../shared/realtime/cardUpdates";
+import {
+  resolveDockCardMessage,
+  resolveDockPeekClickAction,
+  type DockPeekMessage,
+} from "./main-chat-dock-peek";
 import { Spinner } from "../../shared/ui/components";
 import { useComposerImages } from "../cards/useComposerImages";
 
@@ -80,7 +85,7 @@ export function MainChatDock() {
   const hidden = isViewingMainDiscussion || isSettings;
 
   const [open, setOpen] = useState(false);
-  const [peek, setPeek] = useState("");
+  const [peek, setPeek] = useState<DockPeekMessage | null>(null);
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
@@ -214,7 +219,15 @@ export function MainChatDock() {
       e.stopPropagation();
       return;
     }
-    show();
+    if (!peek) return;
+    const targetPeek = peek;
+    setPeek(null);
+    const action = resolveDockPeekClickAction(targetPeek, cardID);
+    if (action.type === "open_main_chat") {
+      show();
+      return;
+    }
+    navigate(action.to);
   }
   const detail = useQuery({
     queryKey: keys.card(cardID),
@@ -227,16 +240,19 @@ export function MainChatDock() {
 
   useEffect(() => {
     setOpen(false);
-    setPeek("");
+    setPeek(null);
   }, [projectID]);
 
   useEffect(() => {
-    if (hidden) setOpen(false);
+    if (hidden) {
+      setOpen(false);
+      setPeek(null);
+    }
   }, [hidden]);
 
   useEffect(() => {
     if (!peek) return;
-    const timer = window.setTimeout(() => setPeek(""), 5000);
+    const timer = window.setTimeout(() => setPeek(null), 5000);
     return () => window.clearTimeout(timer);
   }, [peek]);
 
@@ -476,24 +492,23 @@ export function MainChatDock() {
     if (!projectID) return;
     const onMessage = (event: Event) => {
       const detail = (event as CustomEvent<CardMessageDetail>).detail;
-      if (
-        !detail ||
-        detail.project_id !== projectID ||
-        !detail.body ||
-        detail.viewing
-      ) {
-        return;
-      }
-      if (cardID) {
-        void queryClient.invalidateQueries({ queryKey: keys.card(cardID) });
-      }
-      void queryClient.invalidateQueries({
-        queryKey: keys.mainDiscussion(projectID),
+      const decision = resolveDockCardMessage(detail, {
+        projectID,
+        mainCardID: cardID,
+        isMainMuted,
+        isDockOpen: open,
       });
-      if (open || detail.notifications_muted || isMainMuted) {
-        return;
+      if (decision.shouldInvalidateMainChat) {
+        if (cardID) {
+          void queryClient.invalidateQueries({ queryKey: keys.card(cardID) });
+        }
+        void queryClient.invalidateQueries({
+          queryKey: keys.mainDiscussion(projectID),
+        });
       }
-      setPeek(detail.body);
+      if (decision.peek) {
+        setPeek(decision.peek);
+      }
     };
     window.addEventListener(cardMessageEvent, onMessage);
     return () => window.removeEventListener(cardMessageEvent, onMessage);
@@ -501,7 +516,7 @@ export function MainChatDock() {
 
   function show() {
     setOpen(true);
-    setPeek("");
+    setPeek(null);
     if (!cardID) openChat.mutate();
   }
 
@@ -687,6 +702,16 @@ export function MainChatDock() {
   }
 
   if (!projectID || hidden) return null;
+
+  const peekSourceTitle =
+    peek && !peek.isMainDiscussion
+      ? peek.title ||
+        (peek.kind === "discussion"
+          ? t("讨论")
+          : peek.kind === "ongoing"
+            ? t("定时任务")
+            : t("待办"))
+      : "";
 
   return (
     <>
@@ -983,11 +1008,25 @@ export function MainChatDock() {
           {peek && (
             <button
               type="button"
+              title={peekSourceTitle || undefined}
               onClick={handlePeekClick}
               onPointerDown={handleBubblePointerDown}
-              className="pointer-events-auto max-w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-line bg-surface px-3 py-2 text-left text-xs text-foreground shadow-lg transition hover:bg-muted active:scale-95 cursor-grab active:cursor-grabbing touch-none select-none"
+              className={`pointer-events-auto flex max-w-[min(20rem,calc(100vw-2rem))] flex-col rounded-2xl border bg-surface px-3 py-2 text-left text-xs text-foreground shadow-lg transition hover:bg-muted active:scale-95 cursor-grab active:cursor-grabbing touch-none select-none ${
+                peek.isToolApproval ? "border-warning-line" : "border-line"
+              }`}
             >
-              <span className="line-clamp-2">{peek}</span>
+              {peekSourceTitle && (
+                <span className="mb-0.5 flex min-w-0 items-center gap-1.5 text-[11px] font-medium leading-4 text-muted-foreground">
+                  {peek.isToolApproval && (
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full bg-warning"
+                    />
+                  )}
+                  <span className="truncate">{peekSourceTitle}</span>
+                </span>
+              )}
+              <span className="line-clamp-2 leading-snug">{peek.body}</span>
             </button>
           )}
 
