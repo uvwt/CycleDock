@@ -450,3 +450,140 @@ export type TraceEvent = {
 export type TraceEventsResponse = {
   events: TraceEvent[];
 };
+
+export type TriggerProvider = "github" | "circleci" | "generic";
+export type TriggerAuthMode =
+  | "github_hmac_sha256"
+  | "circleci_hmac_sha256"
+  | "generic_hmac_sha256"
+  | "bearer";
+export type TriggerRoutingMode =
+  | "fixed_card"
+  | "match_watchers"
+  | "create_todo";
+export type TriggerDeliveryStatus =
+  | "triggered"
+  | "filtered"
+  | "ignored"
+  | "cooldown"
+  | "rejected";
+export type TriggerDispatchMode = "enqueue" | "interrupt";
+
+export type TriggerFilterConfig = {
+  events?: string[];
+  actions?: string[];
+  conclusions?: string[];
+  branches?: string[];
+  repositories?: string[];
+  json_matches?: Record<string, string>;
+  match_key_path?: string;
+};
+
+export type TriggerCardRef = {
+  id: string;
+  project_id: string;
+  kind: CardKind;
+  title: string;
+};
+
+export type WorkspaceTrigger = {
+  id: string;
+  name: string;
+  provider: TriggerProvider;
+  auth_mode: TriggerAuthMode;
+  signature_header: string;
+  secret_hint: string;
+  webhook_path: string;
+  enabled: boolean;
+  routing_mode: TriggerRoutingMode;
+  target_project_id?: string;
+  target_project_name?: string;
+  target_card_id?: string;
+  target_card_project_id?: string;
+  target_card_kind?: CardKind;
+  target_card_title?: string;
+  dispatch_mode: TriggerDispatchMode;
+  filter_config: TriggerFilterConfig;
+  cooldown_seconds: number;
+  last_triggered_at?: string;
+  last_delivery_status?: TriggerDeliveryStatus;
+  last_delivery_reason?: string;
+  last_delivery_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateTriggerInput = {
+  name: string;
+  provider: TriggerProvider;
+  auth_mode?: TriggerAuthMode;
+  signature_header?: string;
+  secret?: string;
+  enabled?: boolean;
+  routing_mode: TriggerRoutingMode;
+  target_project_id?: string;
+  target_card_id?: string;
+  dispatch_mode?: TriggerDispatchMode;
+  filter_config?: TriggerFilterConfig;
+  cooldown_seconds?: number;
+};
+
+export type UpdateTriggerInput = {
+  name?: string;
+  enabled?: boolean;
+  signature_header?: string;
+  routing_mode?: TriggerRoutingMode;
+  target_project_id?: string;
+  target_card_id?: string;
+  dispatch_mode?: TriggerDispatchMode;
+  filter_config?: TriggerFilterConfig;
+  cooldown_seconds?: number;
+};
+
+export type TriggerWithSecretResponse = {
+  trigger: WorkspaceTrigger;
+  secret: string;
+};
+
+export type TriggerDelivery = {
+  id: string;
+  trigger_id: string;
+  trigger_name?: string;
+  delivery_id: string;
+  provider: TriggerProvider;
+  event_type: string;
+  event_action: string;
+  signature_valid: boolean;
+  status: TriggerDeliveryStatus;
+  reason: string;
+  match_keys: string[];
+  payload_summary: string;
+  triggered_turn_id?: string;
+  triggered_watcher_turn_ids: string[];
+  created_card_id?: string;
+  linked_cards?: TriggerCardRef[];
+  received_at: string;
+};
+
+export type WatcherKind = "event" | "wakeup";
+export type WatcherStatus = "armed" | "triggered" | "expired" | "cancelled";
+
+export type CardWatcher = {
+  id: string;
+  card_id: string;
+  project_id?: string;
+  project_name?: string;
+  card_title?: string;
+  card_kind?: CardKind;
+  kind: WatcherKind;
+  match_key?: string;
+  note: string;
+  dispatch_mode: TriggerDispatchMode;
+  status: WatcherStatus;
+  expires_at: string;
+  triggered_turn_id?: string;
+  resolved_reason?: string;
+  resolved_at?: string;
+  created_at: string;
+  updated_at: string;
+};

@@ -31,25 +31,40 @@ const (
 )
 
 type WorkspaceTrigger struct {
-	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
-	Name              string
-	Provider          domain.TriggerProvider
-	AuthMode          domain.TriggerAuthMode
-	SignatureHeader   string
-	SecretCiphertext  []byte
-	SecretHint        string
-	Enabled           bool
-	RoutingMode       domain.TriggerRoutingMode
-	TargetProjectID   uuid.NullUUID
-	TargetCardID      uuid.NullUUID
-	DispatchMode      domain.DispatchMode
-	FilterConfig      trigger.FilterConfig
-	CooldownSeconds   int
-	LastTriggeredAt   *time.Time
-	CreatedBySourceID uuid.NullUUID
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                  uuid.UUID
+	WorkspaceID         uuid.UUID
+	Name                string
+	Provider            domain.TriggerProvider
+	AuthMode            domain.TriggerAuthMode
+	SignatureHeader     string
+	SecretCiphertext    []byte
+	SecretHint          string
+	Enabled             bool
+	RoutingMode         domain.TriggerRoutingMode
+	TargetProjectID     uuid.NullUUID
+	TargetProjectName   string
+	TargetCardID        uuid.NullUUID
+	TargetCardProjectID uuid.NullUUID
+	TargetCardKind      domain.CardKind
+	TargetCardTitle     string
+	DispatchMode        domain.DispatchMode
+	FilterConfig        trigger.FilterConfig
+	CooldownSeconds     int
+	LastTriggeredAt     *time.Time
+	LastDeliveryStatus  domain.TriggerDeliveryStatus
+	LastDeliveryReason  string
+	LastDeliveryAt      *time.Time
+	CreatedBySourceID   uuid.NullUUID
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+// TriggerCardRef 表示 Webhook 投递所唤醒或新建的关联卡片摘要，供前端日志直接跳转。
+type TriggerCardRef struct {
+	ID        uuid.UUID
+	ProjectID uuid.UUID
+	Kind      domain.CardKind
+	Title     string
 }
 
 type CreateTriggerInput struct {
@@ -83,6 +98,7 @@ type TriggerDelivery struct {
 	ID                      uuid.UUID
 	WorkspaceID             uuid.UUID
 	TriggerID               uuid.UUID
+	TriggerName             string
 	DeliveryID              string
 	Provider                domain.TriggerProvider
 	EventType               string
@@ -95,6 +111,7 @@ type TriggerDelivery struct {
 	TriggeredTurnID         uuid.NullUUID
 	TriggeredWatcherTurnIDs []uuid.UUID
 	CreatedCardID           uuid.NullUUID
+	LinkedCards             []TriggerCardRef
 	ReceivedAt              time.Time
 }
 
@@ -416,14 +433,30 @@ func (s *Store) GetTriggerByID(ctx context.Context, triggerID uuid.UUID) (Worksp
 
 func (s *Store) ListTriggers(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceTrigger, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, name, provider, auth_mode, signature_header,
-		       secret_ciphertext, secret_hint, enabled, routing_mode,
-		       target_project_id, target_card_id, dispatch_mode,
-		       filter_config, cooldown_seconds, last_triggered_at,
-		       created_by_source_id, created_at, updated_at
-		FROM workspace_triggers
-		WHERE workspace_id=$1
-		ORDER BY created_at DESC
+		SELECT t.id, t.workspace_id, t.name, t.provider, t.auth_mode, t.signature_header,
+		       t.secret_ciphertext, t.secret_hint, t.enabled, t.routing_mode,
+		       t.target_project_id, t.target_card_id, t.dispatch_mode,
+		       t.filter_config, t.cooldown_seconds, t.last_triggered_at,
+		       t.created_by_source_id, t.created_at, t.updated_at,
+		       COALESCE(p.name, ''),
+		       c.project_id,
+		       COALESCE(c.kind, ''),
+		       COALESCE(c.title, ''),
+		       COALESCE(ld.status, ''),
+		       COALESCE(ld.reason, ''),
+		       ld.received_at
+		FROM workspace_triggers t
+		LEFT JOIN projects p ON p.workspace_id = t.workspace_id AND p.id = t.target_project_id
+		LEFT JOIN cards c ON c.workspace_id = t.workspace_id AND c.id = t.target_card_id
+		LEFT JOIN LATERAL (
+			SELECT d.status, d.reason, d.received_at
+			FROM trigger_deliveries d
+			WHERE d.workspace_id = t.workspace_id AND d.trigger_id = t.id
+			ORDER BY d.received_at DESC
+			LIMIT 1
+		) ld ON true
+		WHERE t.workspace_id=$1
+		ORDER BY t.created_at DESC
 	`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -432,9 +465,49 @@ func (s *Store) ListTriggers(ctx context.Context, workspaceID uuid.UUID) ([]Work
 
 	var out []WorkspaceTrigger
 	for rows.Next() {
-		item, err := scanTrigger(rows)
-		if err != nil {
+		var item WorkspaceTrigger
+		var provider, authMode, routingMode, dispatchMode string
+		var targetCardKind, lastDeliveryStatus string
+		var filterBytes []byte
+		var lastTriggered, lastDeliveryAt *time.Time
+		if err := rows.Scan(
+			&item.ID, &item.WorkspaceID, &item.Name, &provider, &authMode, &item.SignatureHeader,
+			&item.SecretCiphertext, &item.SecretHint, &item.Enabled, &routingMode,
+			&item.TargetProjectID, &item.TargetCardID, &dispatchMode,
+			&filterBytes, &item.CooldownSeconds, &lastTriggered,
+			&item.CreatedBySourceID, &item.CreatedAt, &item.UpdatedAt,
+			&item.TargetProjectName,
+			&item.TargetCardProjectID,
+			&targetCardKind,
+			&item.TargetCardTitle,
+			&lastDeliveryStatus,
+			&item.LastDeliveryReason,
+			&lastDeliveryAt,
+		); err != nil {
 			return nil, err
+		}
+		item.Provider = domain.TriggerProvider(provider)
+		item.AuthMode = domain.TriggerAuthMode(authMode)
+		item.RoutingMode = domain.TriggerRoutingMode(routingMode)
+		item.DispatchMode = domain.DispatchMode(dispatchMode)
+		if targetCardKind != "" {
+			item.TargetCardKind = domain.CardKind(targetCardKind)
+		}
+		if lastDeliveryStatus != "" {
+			item.LastDeliveryStatus = domain.TriggerDeliveryStatus(lastDeliveryStatus)
+		}
+		if lastTriggered != nil {
+			t := lastTriggered.UTC()
+			item.LastTriggeredAt = &t
+		}
+		if lastDeliveryAt != nil {
+			t := lastDeliveryAt.UTC()
+			item.LastDeliveryAt = &t
+		}
+		if len(filterBytes) > 0 {
+			if err := json.Unmarshal(filterBytes, &item.FilterConfig); err != nil {
+				return nil, fmt.Errorf("decode trigger filter_config: %w", err)
+			}
 		}
 		out = append(out, item)
 	}
@@ -632,22 +705,52 @@ func (s *Store) ListTriggerDeliveries(
 	workspaceID, triggerID uuid.UUID,
 	limit int,
 ) ([]TriggerDelivery, error) {
+	return s.listDeliveries(ctx, workspaceID, uuid.NullUUID{UUID: triggerID, Valid: true}, limit)
+}
+
+// ListWorkspaceTriggerDeliveries 返回当前工作区最近所有触发器的投递审计记录，便于集中排障。
+func (s *Store) ListWorkspaceTriggerDeliveries(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	limit int,
+) ([]TriggerDelivery, error) {
+	return s.listDeliveries(ctx, workspaceID, uuid.NullUUID{}, limit)
+}
+
+func (s *Store) listDeliveries(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	triggerID uuid.NullUUID,
+	limit int,
+) ([]TriggerDelivery, error) {
 	if limit <= 0 {
 		limit = defaultDeliveryListLimit
 	}
 	if limit > maxDeliveryListLimit {
 		limit = maxDeliveryListLimit
 	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, workspace_id, trigger_id, delivery_id, provider,
-		       event_type, event_action, signature_valid, status, reason,
-		       match_keys, payload_summary, triggered_turn_id,
-		       triggered_watcher_turn_ids, created_card_id, received_at
-		FROM trigger_deliveries
-		WHERE workspace_id=$1 AND trigger_id=$2
-		ORDER BY received_at DESC
-		LIMIT $3
-	`, workspaceID, triggerID, limit)
+
+	args := []any{workspaceID}
+	var b strings.Builder
+	b.WriteString(`
+		SELECT d.id, d.workspace_id, d.trigger_id, COALESCE(t.name, ''),
+		       d.delivery_id, d.provider,
+		       d.event_type, d.event_action, d.signature_valid, d.status, d.reason,
+		       d.match_keys, d.payload_summary, d.triggered_turn_id,
+		       d.triggered_watcher_turn_ids, d.created_card_id, d.received_at
+		FROM trigger_deliveries d
+		LEFT JOIN workspace_triggers t
+		  ON t.workspace_id = d.workspace_id AND t.id = d.trigger_id
+		WHERE d.workspace_id = $1
+	`)
+	if triggerID.Valid {
+		args = append(args, triggerID.UUID)
+		fmt.Fprintf(&b, " AND d.trigger_id = $%d", len(args))
+	}
+	args = append(args, limit)
+	fmt.Fprintf(&b, " ORDER BY d.received_at DESC LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, b.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -655,13 +758,141 @@ func (s *Store) ListTriggerDeliveries(
 
 	var out []TriggerDelivery
 	for rows.Next() {
-		item, err := scanTriggerDelivery(rows)
-		if err != nil {
+		var item TriggerDelivery
+		var provider, status string
+		if err := rows.Scan(
+			&item.ID, &item.WorkspaceID, &item.TriggerID, &item.TriggerName,
+			&item.DeliveryID, &provider,
+			&item.EventType, &item.EventAction, &item.SignatureValid, &status, &item.Reason,
+			&item.MatchKeys, &item.PayloadSummary, &item.TriggeredTurnID,
+			&item.TriggeredWatcherTurnIDs, &item.CreatedCardID, &item.ReceivedAt,
+		); err != nil {
 			return nil, err
 		}
+		item.Provider = domain.TriggerProvider(provider)
+		item.Status = domain.TriggerDeliveryStatus(status)
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachDeliveryLinkedCards(ctx, workspaceID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachDeliveryLinkedCards 批量反查投递所唤醒或新建的卡片摘要，避免列表逐行 N+1 查询。
+func (s *Store) attachDeliveryLinkedCards(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	items []TriggerDelivery,
+) error {
+	if len(items) == 0 {
+		return nil
+	}
+	turnIDSet := make(map[uuid.UUID]struct{})
+	cardIDSet := make(map[uuid.UUID]struct{})
+	for _, item := range items {
+		if item.CreatedCardID.Valid {
+			cardIDSet[item.CreatedCardID.UUID] = struct{}{}
+		}
+		if item.TriggeredTurnID.Valid {
+			turnIDSet[item.TriggeredTurnID.UUID] = struct{}{}
+		}
+		for _, turnID := range item.TriggeredWatcherTurnIDs {
+			turnIDSet[turnID] = struct{}{}
+		}
+	}
+
+	turnToCard := make(map[uuid.UUID]TriggerCardRef, len(turnIDSet))
+	if len(turnIDSet) > 0 {
+		turnIDs := make([]uuid.UUID, 0, len(turnIDSet))
+		for id := range turnIDSet {
+			turnIDs = append(turnIDs, id)
+		}
+		rows, err := s.pool.Query(ctx, `
+			SELECT ct.id, c.id, c.project_id, c.kind, c.title
+			FROM card_turns ct
+			JOIN cards c ON c.workspace_id = ct.workspace_id AND c.id = ct.card_id
+			WHERE ct.workspace_id = $1 AND ct.id = ANY($2::uuid[])
+		`, workspaceID, turnIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var turnID uuid.UUID
+			var ref TriggerCardRef
+			var kind string
+			if err := rows.Scan(&turnID, &ref.ID, &ref.ProjectID, &kind, &ref.Title); err != nil {
+				rows.Close()
+				return err
+			}
+			ref.Kind = domain.CardKind(kind)
+			turnToCard[turnID] = ref
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+
+	cardByID := make(map[uuid.UUID]TriggerCardRef, len(cardIDSet))
+	if len(cardIDSet) > 0 {
+		cardIDs := make([]uuid.UUID, 0, len(cardIDSet))
+		for id := range cardIDSet {
+			cardIDs = append(cardIDs, id)
+		}
+		rows, err := s.pool.Query(ctx, `
+			SELECT id, project_id, kind, title
+			FROM cards
+			WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		`, workspaceID, cardIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var ref TriggerCardRef
+			var kind string
+			if err := rows.Scan(&ref.ID, &ref.ProjectID, &kind, &ref.Title); err != nil {
+				rows.Close()
+				return err
+			}
+			ref.Kind = domain.CardKind(kind)
+			cardByID[ref.ID] = ref
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+
+	for i := range items {
+		seen := make(map[uuid.UUID]struct{})
+		appendCard := func(ref TriggerCardRef) {
+			if _, ok := seen[ref.ID]; ok {
+				return
+			}
+			seen[ref.ID] = struct{}{}
+			items[i].LinkedCards = append(items[i].LinkedCards, ref)
+		}
+		if items[i].CreatedCardID.Valid {
+			if ref, ok := cardByID[items[i].CreatedCardID.UUID]; ok {
+				appendCard(ref)
+			}
+		}
+		if items[i].TriggeredTurnID.Valid {
+			if ref, ok := turnToCard[items[i].TriggeredTurnID.UUID]; ok {
+				appendCard(ref)
+			}
+		}
+		for _, turnID := range items[i].TriggeredWatcherTurnIDs {
+			if ref, ok := turnToCard[turnID]; ok {
+				appendCard(ref)
+			}
+		}
+	}
+	return nil
 }
 
 // RecordRejectedWebhookDelivery 持久化验签失败的审计记录。
