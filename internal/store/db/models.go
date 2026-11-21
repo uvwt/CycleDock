@@ -370,6 +370,18 @@ type PushSubscription struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PushSubscriptionCardRevision struct {
+	SubscriptionID uuid.UUID          `json:"subscription_id"`
+	WorkspaceID    uuid.UUID          `json:"workspace_id"`
+	CardID         uuid.UUID          `json:"card_id"`
+	Revision       string             `json:"revision"`
+	EventSequence  string             `json:"event_sequence"`
+	MessagePreview string             `json:"message_preview"`
+	AttemptStatus  string             `json:"attempt_status"`
+	Title          string             `json:"title"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Source struct {
 	ID          uuid.UUID          `json:"id"`
 	WorkspaceID uuid.UUID          `json:"workspace_id"`

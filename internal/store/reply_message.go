@@ -220,6 +220,7 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, false, err
 	}
+	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return id, false, nil
 }
 

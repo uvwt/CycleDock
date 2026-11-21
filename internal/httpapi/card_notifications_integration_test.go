@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 )
 
 type spyPushSender struct {
+	mu        sync.Mutex
 	key       string
 	sent      []pushPayload
 	endpoints []string
@@ -32,6 +34,8 @@ func (s *spyPushSender) Send(_ context.Context, endpoint, _, _, _ string, payloa
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.endpoints = append(s.endpoints, endpoint)
 	s.sent = append(s.sent, msg)
 	return nil
@@ -145,11 +149,12 @@ func TestCardNotificationsMute_APIAndPushDelivery(t *testing.T) {
 	sender := &spyPushSender{}
 	api := &API{pool: pool, store: dataStore, push: sender}
 
-	if err := dataStore.SavePushSubscription(ctx, workspaceID, humanAccountID, store.PushSubscription{
+	subID, err := dataStore.SavePushSubscription(ctx, workspaceID, humanAccountID, store.PushSubscription{
 		Endpoint:   "https://push.example/sub-1",
 		P256dh:     "p256dh-key",
 		AuthSecret: "auth-secret",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	// 让订阅立刻进入空闲（后台关闭）状态
@@ -245,8 +250,8 @@ func TestCardNotificationsMute_APIAndPushDelivery(t *testing.T) {
 		t.Fatalf("muted cards must not trigger web push, got %+v", sender.sent)
 	}
 
-	// 检查 snapshot 已被推进到最新 EventSequence
-	snapshots, err := dataStore.ListPushCardSnapshots(ctx, workspaceID)
+	// 检查订阅维度 snapshot 已被推进到最新 EventSequence
+	snapshots, err := dataStore.ListPushSubscriptionCardSnapshots(ctx, workspaceID, subID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -107,8 +107,15 @@ export const api = {
     request<void>("/notifications/push/presence", "POST", { endpoint }),
   idlePushSubscription: (endpoint: string) =>
     request<void>("/notifications/push/inactive", "POST", { endpoint }),
-  ackPushCards: (cards: { id: string; revision: string }[]) =>
-    request<void>("/notifications/push/seen", "POST", { cards }),
+  ackPushCards: (
+    cards: { id: string; revision: string }[],
+    endpoint?: string,
+  ) =>
+    request<void>(
+      "/notifications/push/seen",
+      "POST",
+      endpoint ? { endpoint, cards } : { cards },
+    ),
   me: () => request<Identity>("/me"),
   workspaces: () => request<Workspace[]>("/workspaces"),
   switchWorkspace: (id: string) =>

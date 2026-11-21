@@ -374,3 +374,46 @@ test("静音卡片有新消息时不生成通知正文，恢复后仅对后续�
     "恢复通知后的新回复",
   );
 });
+
+test("监督回调静默收口期间不生成桌面通知，但后续人工追问或汇总消息照常通知", () => {
+  const baseline = {
+    id: "todo-1",
+    revision: "rev-1",
+    event_sequence: "1",
+    attempt_status: "running",
+    message_preview: "",
+    title: "子任务",
+    notifications_muted: false,
+    notification_suppressed: false,
+  };
+  const reviewSuppressed = {
+    ...baseline,
+    revision: "rev-2",
+    event_sequence: "2",
+    attempt_status: "completed",
+    message_preview: "已完成验证，进入 Review。",
+    notification_suppressed: true,
+  };
+  assert.equal(cardNotificationBody(reviewSuppressed, baseline), "");
+
+  // 即使后续仅有其他非消息状态变更导致 suppressed 变为 false，旧序号也不会被补推。
+  const sameSeqLater = {
+    ...reviewSuppressed,
+    revision: "rev-3",
+    notification_suppressed: false,
+  };
+  assert.equal(cardNotificationBody(sameSeqLater, reviewSuppressed), "");
+
+  // 后续用户在任务卡内追问产生新回复时照常通知。
+  const followUpReply = {
+    ...sameSeqLater,
+    revision: "rev-4",
+    event_sequence: "3",
+    message_preview: "已按你的补充要求更新。",
+    notification_suppressed: false,
+  };
+  assert.equal(
+    cardNotificationBody(followUpReply, sameSeqLater),
+    "已按你的补充要求更新。",
+  );
+});

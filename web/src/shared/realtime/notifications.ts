@@ -70,6 +70,10 @@ function forgetPushEndpoint() {
   }
 }
 
+export function currentPushEndpoint() {
+  return pushEndpoint;
+}
+
 export function notificationWorker() {
   if (!workerRequest) {
     workerRequest = navigator.serviceWorker

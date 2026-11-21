@@ -5,6 +5,7 @@ import { keys } from "../../app/query";
 import { i18n } from "../preferences";
 import {
   beatPushPresence,
+  currentPushEndpoint,
   markPushIdle,
   notificationWorker,
   notificationsSupported,
@@ -80,7 +81,7 @@ export function useCardNotifications(workspaceID: string) {
         if (document.visibilityState === "visible") {
           void beatPushPresence();
         }
-      }, 20_000);
+      }, 10_000);
       document.addEventListener("visibilitychange", syncPresenceWithVisibility);
       window.addEventListener("pagehide", markPushIdle);
       window.addEventListener("pageshow", syncPresenceWithVisibility);
@@ -111,16 +112,35 @@ export function useCardNotifications(workspaceID: string) {
         stopWatchingLocation = watchLocation(reportViewing);
       }
 
+      const ackedRevisions = new Map<string, string>();
+      const ackChangedCards = (cards: CardUpdate[]) => {
+        if (!canNotify || document.visibilityState !== "visible") return;
+        const endpoint = currentPushEndpoint();
+        if (!endpoint) return;
+        const delta: { id: string; revision: string }[] = [];
+        for (const card of cards) {
+          if (ackedRevisions.get(card.id) === card.revision) continue;
+          delta.push({ id: card.id, revision: card.revision });
+        }
+        if (delta.length === 0) return;
+        // 先乐观登记，避免多标签页或高频快照重复发送；若请求失败再撤回以便下次重传。
+        for (const item of delta) {
+          ackedRevisions.set(item.id, item.revision);
+        }
+        void api.ackPushCards(delta, endpoint).catch(() => {
+          for (const item of delta) {
+            if (ackedRevisions.get(item.id) === item.revision) {
+              ackedRevisions.delete(item.id);
+            }
+          }
+        });
+      };
+
       const onSnapshot = (event: MessageEvent<string>) => {
         const cards = JSON.parse(event.data) as CardUpdate[];
-        // 页面处于前台可见状态时才确认看过这些版本。
+        // 页面处于前台可见状态时才确认看过这些版本，且只发送有变化的增量并绑定当前设备 endpoint。
         // 若页面处于后台或锁屏（hidden），严禁自动 ack，保留让 Web Push 触达的机会。
-        // 待切回前台（visible）时再补发已阅确认。
-        if (canNotify && document.visibilityState === "visible") {
-          void api.ackPushCards(
-            cards.map((card) => ({ id: card.id, revision: card.revision })),
-          );
-        }
+        ackChangedCards(cards);
         // 首次快照只建立基线；原生 SSE 重连保留基线，补齐断线期间变化。
         if (previousCards) {
           for (const card of cards) {
@@ -143,7 +163,7 @@ export function useCardNotifications(workspaceID: string) {
               queryKey: keys.schedules(card.project_id),
             });
             const body = cardNotificationBody(card, previous);
-            if (!body || card.notifications_muted) continue;
+            if (!body) continue;
             const detail: CardMessageDetail = {
               ...card,
               body,
@@ -180,12 +200,7 @@ export function useCardNotifications(workspaceID: string) {
       if (canNotify) {
         const syncAckOnVisible = () => {
           if (document.visibilityState === "visible" && previousCards) {
-            const cards = Array.from(previousCards.values());
-            if (cards.length > 0) {
-              void api.ackPushCards(
-                cards.map((card) => ({ id: card.id, revision: card.revision })),
-              );
-            }
+            ackChangedCards(Array.from(previousCards.values()));
           }
         };
         document.addEventListener("visibilitychange", syncAckOnVisible);

@@ -250,5 +250,9 @@ func (s *Store) FailAttemptOwned(
 	); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return nil
 }

@@ -69,16 +69,25 @@ type liveState struct {
 	replied    bool
 }
 
+type WorkspaceSubscriber struct {
+	Events <-chan struct{}
+	Close  func()
+}
+
 type Hub struct {
-	mu          sync.Mutex
-	subscribers map[uuid.UUID]map[chan Event]struct{}
-	live        map[uuid.UUID]liveState
+	mu                   sync.Mutex
+	subscribers          map[uuid.UUID]map[chan Event]struct{}
+	live                 map[uuid.UUID]liveState
+	workspaceSubscribers map[uuid.UUID]map[chan struct{}]struct{}
+	globalSubscribers    map[chan uuid.UUID]struct{}
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		subscribers: make(map[uuid.UUID]map[chan Event]struct{}),
-		live:        make(map[uuid.UUID]liveState),
+		subscribers:          make(map[uuid.UUID]map[chan Event]struct{}),
+		live:                 make(map[uuid.UUID]liveState),
+		workspaceSubscribers: make(map[uuid.UUID]map[chan struct{}]struct{}),
+		globalSubscribers:    make(map[chan uuid.UUID]struct{}),
 	}
 }
 
@@ -272,3 +281,70 @@ func cloneTaskProgress(task *TaskProgress) *TaskProgress {
 }
 
 func Encode(event Event) ([]byte, error) { return json.Marshal(event) }
+
+// SubscribeWorkspace 订阅某个工作区的卡片变化信号。
+// 信号通道容量为 1 且采用合并投递，慢消费者不会阻塞写路径，只会合并为一次最新快照拉取。
+func (h *Hub) SubscribeWorkspace(workspaceID uuid.UUID) WorkspaceSubscriber {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ch := make(chan struct{}, 1)
+	if h.workspaceSubscribers[workspaceID] == nil {
+		h.workspaceSubscribers[workspaceID] = make(map[chan struct{}]struct{})
+	}
+	h.workspaceSubscribers[workspaceID][ch] = struct{}{}
+
+	return WorkspaceSubscriber{
+		Events: ch,
+		Close: func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if _, ok := h.workspaceSubscribers[workspaceID][ch]; ok {
+				delete(h.workspaceSubscribers[workspaceID], ch)
+				close(ch)
+				if len(h.workspaceSubscribers[workspaceID]) == 0 {
+					delete(h.workspaceSubscribers, workspaceID)
+				}
+			}
+		},
+	}
+}
+
+// SubscribeAllWorkspaces 订阅所有工作区的变更唤醒信号，供进程内 Web Push 调度器实时投递使用。
+func (h *Hub) SubscribeAllWorkspaces() (<-chan uuid.UUID, func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ch := make(chan uuid.UUID, 64)
+	h.globalSubscribers[ch] = struct{}{}
+	return ch, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if _, ok := h.globalSubscribers[ch]; ok {
+			delete(h.globalSubscribers, ch)
+			close(ch)
+		}
+	}
+}
+
+// NotifyWorkspace 在事务提交后通知指定工作区的 SSE 与 Web Push 消费者立即刷新。
+func (h *Hub) NotifyWorkspace(workspaceID uuid.UUID) {
+	if h == nil || workspaceID == uuid.Nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for ch := range h.workspaceSubscribers[workspaceID] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	for ch := range h.globalSubscribers {
+		select {
+		case ch <- workspaceID:
+		default:
+		}
+	}
+}

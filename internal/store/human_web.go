@@ -232,6 +232,9 @@ func (s *Store) UpdateCardText(
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
 	return card, err
 }
 
@@ -262,6 +265,9 @@ func (s *Store) SetCardPinned(
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
 	return card, err
 }
 
@@ -278,6 +284,9 @@ func (s *Store) SetCardNotificationsMuted(
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
+	}
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
 	}
 	return card, err
 }
@@ -405,6 +414,7 @@ func (s *Store) UpdateSchedule(ctx context.Context, p UpdateScheduleParams) (Car
 	if err := tx.Commit(ctx); err != nil {
 		return CardSchedule{}, err
 	}
+	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return CardSchedule{
 		ID:            p.ScheduleID,
 		WorkspaceID:   p.WorkspaceID,
@@ -466,7 +476,11 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 	if affected != 1 {
 		return domain.ErrNotFound
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return nil
 }
 
 func weekdayValue(day *time.Weekday) pgtype.Int2 {
