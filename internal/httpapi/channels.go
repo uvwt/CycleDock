@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -381,4 +382,310 @@ func (a *API) weixinLoginStore() *channels.WeixinLoginStore {
 		a.fallbackWeixinAuth = channels.NewWeixinLoginStore(nil, "")
 	}
 	return a.fallbackWeixinAuth
+}
+
+func (a *API) qrConnectStore() *channels.QRConnectStore {
+	if a.channelManager != nil {
+		return a.channelManager.QRConnectStore()
+	}
+	if a.fallbackQRAuth == nil {
+		a.fallbackQRAuth = channels.NewQRConnectStore(nil, a.weixinLoginStore())
+	}
+	return a.fallbackQRAuth
+}
+
+func defaultQRChannelName(platform domain.ChannelPlatform, role domain.ChannelRole) string {
+	label := string(platform)
+	switch platform {
+	case domain.ChannelPlatformWeixin:
+		label = "微信"
+	case domain.ChannelPlatformWeCom:
+		label = "企业微信"
+	case domain.ChannelPlatformDingTalk:
+		label = "钉钉"
+	case domain.ChannelPlatformFeishu:
+		label = "飞书"
+	case domain.ChannelPlatformQQ:
+		label = "QQ 机器人"
+	case domain.ChannelPlatformTelegram:
+		label = "Telegram"
+	}
+	if role == domain.ChannelRoleScheduledPush {
+		return label + " 定时推送"
+	}
+	return label
+}
+
+func (a *API) startChannelQRConnect(w http.ResponseWriter, r *http.Request) {
+	session := identityFromRequest(r)
+	var req struct {
+		ChannelID string                 `json:"channel_id"`
+		Platform  domain.ChannelPlatform `json:"platform"`
+		ProjectID string                 `json:"project_id"`
+		Role      domain.ChannelRole     `json:"role"`
+		Name      string                 `json:"name"`
+		Domain    string                 `json:"domain"`
+		BaseURL   string                 `json:"base_url"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+	}
+
+	var channelID uuid.UUID
+	var projectID uuid.UUID
+	platform := req.Platform
+	role := req.Role
+	name := strings.TrimSpace(req.Name)
+	domainVal := strings.TrimSpace(req.Domain)
+	baseURL := strings.TrimSpace(req.BaseURL)
+
+	if strings.TrimSpace(req.ChannelID) != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(req.ChannelID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid channel_id")
+			return
+		}
+		ch, err := a.store.GetRemoteChannel(r.Context(), session.WorkspaceID, parsed)
+		if err != nil {
+			a.handleError(w, err)
+			return
+		}
+		if platform == "" {
+			platform = ch.Platform
+		} else if platform != ch.Platform {
+			writeError(w, http.StatusConflict, "conflict", "platform does not match existing channel")
+			return
+		}
+		channelID = ch.ID
+		projectID = ch.ProjectID
+		role = ch.Role
+		if name == "" {
+			name = ch.Name
+		}
+		if domainVal == "" {
+			domainVal = ch.Config.Domain
+		}
+		if baseURL == "" {
+			baseURL = ch.Config.BaseURL
+		}
+	} else {
+		if platform == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "platform or channel_id is required")
+			return
+		}
+		parsedProj, err := uuid.Parse(strings.TrimSpace(req.ProjectID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "valid project_id is required when creating channel by QR")
+			return
+		}
+		if _, err := a.store.GetProject(r.Context(), session.WorkspaceID, parsedProj); err != nil {
+			a.handleError(w, err)
+			return
+		}
+		projectID = parsedProj
+		if role == "" {
+			role = domain.ChannelRoleMainChat
+		}
+		if name == "" {
+			name = defaultQRChannelName(platform, role)
+		}
+	}
+
+	qrStore := a.qrConnectStore()
+	sess, err := qrStore.Start(r.Context(), channels.QRConnectStartInput{
+		WorkspaceID: session.WorkspaceID,
+		ChannelID:   channelID,
+		Platform:    platform,
+		ProjectID:   projectID,
+		Role:        role,
+		Name:        name,
+		Domain:      domainVal,
+		BaseURL:     baseURL,
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			a.handleError(w, err)
+			return
+		}
+		writeError(w, http.StatusBadGateway, "channel_qr_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"session": sess})
+}
+
+func (a *API) pollChannelQRConnect(w http.ResponseWriter, r *http.Request) {
+	session := identityFromRequest(r)
+	sessionID := strings.TrimSpace(chi.URLParam(r, "sessionID"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "session_id is required")
+		return
+	}
+	verifyCode := strings.TrimSpace(r.URL.Query().Get("verify_code"))
+	qrStore := a.qrConnectStore()
+	sess, err := qrStore.Poll(r.Context(), session.WorkspaceID, sessionID, verifyCode)
+	if err != nil {
+		a.handleError(w, err)
+		return
+	}
+
+	var channelDTO *remoteChannelDTO
+	if sess.Status == "confirmed" {
+		if sess.Committed && sess.ChannelID != uuid.Nil {
+			if existing, err := a.store.GetRemoteChannel(r.Context(), session.WorkspaceID, sess.ChannelID); err == nil {
+				dto := toRemoteChannelDTO(existing)
+				channelDTO = &dto
+			}
+		} else {
+			ch, err := a.commitQRConnectChannel(r.Context(), session.WorkspaceID, session.SourceID, sess)
+			if err != nil {
+				a.handleError(w, err)
+				return
+			}
+			qrStore.MarkCommitted(sess.SessionID, ch.ID)
+			sess.ChannelID = ch.ID
+			if a.channelManager != nil {
+				_ = a.channelManager.ReloadChannel(r.Context(), session.WorkspaceID, ch.ID)
+				if refreshed, err := a.store.GetRemoteChannel(r.Context(), session.WorkspaceID, ch.ID); err == nil {
+					ch = refreshed
+				}
+			}
+			dto := toRemoteChannelDTO(ch)
+			channelDTO = &dto
+		}
+	}
+
+	resp := map[string]any{"session": sess}
+	if channelDTO != nil {
+		resp["channel"] = channelDTO
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *API) cancelChannelQRConnect(w http.ResponseWriter, r *http.Request) {
+	session := identityFromRequest(r)
+	sessionID := strings.TrimSpace(chi.URLParam(r, "sessionID"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "session_id is required")
+		return
+	}
+	sess, err := a.qrConnectStore().Cancel(session.WorkspaceID, sessionID)
+	if err != nil {
+		a.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": sess})
+}
+
+func (a *API) commitQRConnectChannel(
+	ctx context.Context,
+	workspaceID, sourceID uuid.UUID,
+	sess *channels.QRConnectSession,
+) (store.RemoteChannel, error) {
+	secrets, mutateCfg := buildQRCredentials(sess)
+
+	// 已有通道：更新加密凭据与非敏感配置，并确保通道处于启用状态以便立即启动长连接。
+	if sess.ChannelID != uuid.Nil {
+		updated, err := a.store.UpdateRemoteChannelSecretsAndConfig(
+			ctx,
+			workspaceID,
+			sess.ChannelID,
+			secrets,
+			mutateCfg,
+		)
+		if err != nil {
+			return store.RemoteChannel{}, err
+		}
+		if !updated.Enabled {
+			if enabledCh, err := a.store.SetRemoteChannelEnabled(ctx, workspaceID, updated.ID, true); err == nil {
+				updated = enabledCh
+			}
+		}
+		return updated, nil
+	}
+
+	// 新建通道：服务端自动推导最优长连接传输模式、补齐默认配置并加密落库。
+	role := sess.Role
+	if role == "" {
+		role = domain.ChannelRoleMainChat
+	}
+	name := strings.TrimSpace(sess.Name)
+	if name == "" {
+		name = defaultQRChannelName(sess.Platform, role)
+	}
+	var cfg store.RemoteChannelConfig
+	mutateCfg(&cfg)
+	return a.store.CreateRemoteChannel(ctx, workspaceID, sourceID, store.RemoteChannelInput{
+		Name:              name,
+		Platform:          sess.Platform,
+		Role:              role,
+		Enabled:           true,
+		ProjectID:         sess.ProjectID,
+		PushFilter:        domain.ChannelPushFilterAll,
+		MirrorWebMessages: false,
+		GroupPolicy:       domain.ChannelGroupPolicyMentionOnly,
+		Config:            cfg,
+		Secrets:           secrets,
+	})
+}
+
+func buildQRCredentials(sess *channels.QRConnectSession) (store.RemoteChannelSecrets, func(*store.RemoteChannelConfig)) {
+	switch sess.Platform {
+	case domain.ChannelPlatformWeixin:
+		return store.RemoteChannelSecrets{BotToken: sess.BotToken}, func(cfg *store.RemoteChannelConfig) {
+			if sess.BaseURL != "" {
+				cfg.BaseURL = sess.BaseURL
+			}
+			if sess.BotID != "" {
+				cfg.BotID = sess.BotID
+			}
+			if sess.WeixinUserID != "" {
+				cfg.WeixinUserID = sess.WeixinUserID
+				if cfg.TargetChatID == "" {
+					cfg.TargetChatID = sess.WeixinUserID
+				}
+			}
+		}
+
+	case domain.ChannelPlatformWeCom:
+		return store.RemoteChannelSecrets{Secret: sess.Secret}, func(cfg *store.RemoteChannelConfig) {
+			if sess.BotID != "" {
+				cfg.BotID = sess.BotID
+			}
+		}
+
+	case domain.ChannelPlatformDingTalk:
+		return store.RemoteChannelSecrets{ClientSecret: sess.ClientSecret}, func(cfg *store.RemoteChannelConfig) {
+			if sess.ClientID != "" {
+				cfg.ClientID = sess.ClientID
+			}
+		}
+
+	case domain.ChannelPlatformFeishu:
+		return store.RemoteChannelSecrets{AppSecret: sess.AppSecret}, func(cfg *store.RemoteChannelConfig) {
+			if sess.Domain != "" {
+				cfg.Domain = sess.Domain
+			}
+			if sess.AppID != "" {
+				cfg.AppID = sess.AppID
+			}
+			if sess.OpenID != "" && cfg.TargetChatID == "" {
+				cfg.TargetChatID = sess.OpenID
+				if cfg.TargetChatType == "" {
+					cfg.TargetChatType = "direct"
+				}
+			}
+		}
+
+	case domain.ChannelPlatformQQ:
+		return store.RemoteChannelSecrets{Secret: sess.Secret}, func(cfg *store.RemoteChannelConfig) {
+			if sess.AppID != "" {
+				cfg.AppID = sess.AppID
+			}
+		}
+
+	default:
+		return store.RemoteChannelSecrets{}, func(*store.RemoteChannelConfig) {}
+	}
 }
