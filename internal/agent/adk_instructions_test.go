@@ -73,6 +73,9 @@ func TestBuildADKInstructions_包含卡片引用跳转规范(t *testing.T) {
 	if !strings.Contains(mainInstructions, "auto_start: false") {
 		t.Fatal("主聊天指令必须明确说明先建待办暂不实施时传 auto_start: false")
 	}
+	if !strings.Contains(instructions, "cycledock_list_cards") || !strings.Contains(mainInstructions, "cycledock_list_cards") {
+		t.Fatal("通用指令与主聊天指令必须说明如何使用 cycledock_list_cards 盘点卡片")
+	}
 }
 
 func TestGenerateWorkToolDefinitionIncludesAutoStart(t *testing.T) {

@@ -187,6 +187,46 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_list_cards",
+				Description: "Read-only query to list cards in the current Project (default) or across the entire Workspace. Exclusively available to Discussion cards (including built-in proactive main chat turns). Useful for reviewing active work, finding abnormal ongoing checks (health=abnormal), or locating card_ids outside recent context. Results are strictly scoped to the current Workspace and sorted by abnormal/pending-approval priority, pinned status, and most recently updated.",
+				Parameters: object(map[string]any{
+					"scope": map[string]any{
+						"type":        "string",
+						"enum":        []string{"project", "workspace"},
+						"description": "Query scope: 'project' (default, current Project only) or 'workspace' (all Projects in the current Workspace).",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"enum":        []string{"all", "todo", "ongoing", "discussion"},
+						"description": "Filter by card kind: 'all' (default), 'todo', 'ongoing', or 'discussion'.",
+					},
+					"state": map[string]any{
+						"type":        "string",
+						"enum":        []string{"todo", "working", "review", "done", "active", "paused", "archived"},
+						"description": "Optional lifecycle state filter. Specifying 'done' or 'archived' automatically includes completed/archived cards.",
+					},
+					"health": map[string]any{
+						"type":        "string",
+						"enum":        []string{"healthy", "warning", "critical", "acknowledged", "unknown", "abnormal"},
+						"description": "Optional Ongoing health filter (applies only to ongoing cards). 'abnormal' matches both 'warning' and 'critical'.",
+					},
+					"query": stringField("Optional case-insensitive substring match against card titles."),
+					"include_done": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to include done and archived cards. Defaults to false unless state is explicitly 'done' or 'archived'.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     200,
+						"description": "Maximum number of cards to return (1-200). Defaults to 50.",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_inspect_card_session",
 				Description: "Inspect the conversation history/session of a non-discussion Card (todo or ongoing) within the current Workspace. Exclusively available to Discussion cards. Supports 'simple' mode (visible user messages and reply bubbles, matching what users see) and 'full' mode (detailed turns including thinking/reasoning and tool calls/results).",
 				Parameters: object(map[string]any{
