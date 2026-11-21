@@ -734,7 +734,8 @@ export function RemoteChannelsSettings() {
                             {ch.role === "main_chat" && (
                               <>
                                 <span>
-                                  Web 镜像：{ch.mirror_web_messages ? "已开启" : "关闭"}
+                                  同步 Web 对话回复：
+                                  {ch.mirror_web_messages ? "已开启" : "关闭"}
                                 </span>
                                 <span>
                                   白名单：
@@ -1321,10 +1322,12 @@ export function RemoteChannelsSettings() {
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-line px-3.5 py-2.5">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-heading">
-                      双向镜像 Web 主聊天消息
+                      同步 Web 对话回复
                     </p>
                     <p className="text-[11px] text-muted-foreground">
-                      开启后，在 Web 端发送与收到的终态消息也会同步到此 IM（已内置防回环保护）
+                      默认已推送本通道回复、主动消息、子任务回调与审批提醒；开启后，你在
+                      Web 主聊天发起对话的 AI
+                      最终回复也会同步过来（不回传你输入的原文）
                     </p>
                   </div>
                   <Switch

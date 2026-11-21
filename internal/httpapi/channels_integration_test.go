@@ -327,7 +327,9 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("expected 1 final bubble with card link, got %+v", sentMain)
 	}
 
-	// 6. 验证 Web 主聊天人类消息在开启 mirror_web_messages 时单向镜像到 IM
+	// 6. 验证 mirror_web_messages=true 时：
+	// - 不再把 Web 端人类评论原文包装成 [Web 主聊天] 回传到 IM；
+	// - 但 Web 端发起对话后的 AI 最终回复会同步到 IM。
 	webComment := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+mainCardID.String()+"/comments", map[string]any{
 		"content": "这是我在 Web 端发的补充消息",
 	}, cookie, map[string]string{"Idempotency-Key": "web-comment-mirror-1"})
@@ -338,8 +340,207 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after web comment: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "这是我在 Web 端发的补充消息") {
-		t.Fatalf("expected mirrored web message, got %+v", sentMain)
+	if len(sentMain) != 1 {
+		t.Fatalf("web human comment must NEVER be echoed back to IM even when mirror_web_messages=true, got %+v", sentMain)
+	}
+	webClaim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("claim web human turn attempt: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         mainCardID,
+		AttemptID:      webClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "web-reply-mirror-on-1",
+		FinishOnEnd:    true,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "已收到你在 Web 端的补充消息，正在继续跟进。",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish web reply (mirror on): %v", err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after web reply (mirror on): %v", err)
+	}
+	sentMain = mainStub.SentMessages()
+	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "已收到你在 Web 端的补充消息") {
+		t.Fatalf("expected mirrored web AI reply (without human echo), got %+v", sentMain)
+	}
+
+	// 6b. 关闭 mirror_web_messages=false 后验证：
+	// - Web 端人类发起对话的 AI 最终回复不再推送；
+	// - 后台 system（如主聊天子任务终态回调）与 schedule/主动消息回复仍默认始终推送；
+	// - Todo 进入 Review 回调主聊天时，不额外发重复模板提醒，仅由主聊天系统回调汇总。
+	if _, err := pool.Exec(ctx, `
+		UPDATE remote_channels SET mirror_web_messages = false WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, mainChID); err != nil {
+		t.Fatalf("disable mirror_web_messages: %v", err)
+	}
+	webComment2 := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+mainCardID.String()+"/comments", map[string]any{
+		"content": "关闭同步后在 Web 端问的问题",
+	}, cookie, map[string]string{"Idempotency-Key": "web-comment-mirror-off-1"})
+	if webComment2.Code != http.StatusCreated {
+		t.Fatalf("web comment 2 failed: %d %s", webComment2.Code, webComment2.Body.String())
+	}
+	webClaim2, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("claim web human turn attempt 2: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         mainCardID,
+		AttemptID:      webClaim2.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "web-reply-mirror-off-1",
+		FinishOnEnd:    true,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "这条 Web 对话回复在关闭同步时不应推到 IM。",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish web reply (mirror off): %v", err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after web reply (mirror off): %v", err)
+	}
+	if got := mainStub.SentMessages(); len(got) != 2 {
+		t.Fatalf("expected web human reply filtered when mirror_web_messages=false, got %+v", got)
+	}
+
+	// 主动消息/系统触发（source=system）的主聊天终态回复即使 mirror_web_messages=false 也必须推送。
+	proactiveTurnID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO card_turns (id, workspace_id, card_id, source, content, created_by_source_id, dispatch_mode, idempotency_key, request_hash)
+		VALUES ($1, $2, $3, 'system', '早安主动问候', $4, 'enqueue', 'proactive-main-greeting-1', 'hash-proactive-main-greeting-1')
+	`, proactiveTurnID, workspaceID, mainCardID, agentSrc.ID); err != nil {
+		t.Fatalf("insert proactive system turn on main chat: %v", err)
+	}
+	schedClaim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("claim proactive turn on main chat: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         mainCardID,
+		AttemptID:      schedClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "main-proactive-reply-1",
+		FinishOnEnd:    true,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "早安，昨晚所有巡检都已平稳通过。",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish proactive reply on main chat: %v", err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after proactive reply on main chat: %v", err)
+	}
+	sentMain = mainStub.SentMessages()
+	if len(sentMain) != 3 || !strings.Contains(sentMain[2].Text, "早安，昨晚所有巡检都已平稳通过") {
+		t.Fatalf("expected proactive reply delivered with mirror_web_messages=false, got %+v", sentMain)
+	}
+
+	// Todo 派生自主聊天进入 Review：触发主聊天 system 终态回调，不重复发纯模板【待验收】提醒；
+	// 主聊天收到 system 回调后回复的总结在 mirror_web_messages=false 下仍默认推送。
+	autoStartFalse := false
+	genTodo, err := dataStore.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
+		WorkspaceID:           workspaceID,
+		DiscussionID:          mainCardID,
+		SourceID:              agentSrc.ID,
+		Kind:                  domain.CardKindTodo,
+		Title:                 "修复微信长轮询解码",
+		Description:           "测试主聊天回调去重",
+		RequiredConfirmations: 1,
+		AutoStart:             &autoStartFalse,
+		IdempotencyKey:        "gen-todo-main-review-dedup",
+	})
+	if err != nil {
+		t.Fatalf("generate todo from main chat: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE cards SET todo_state = 'working' WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, genTodo.Card.ID); err != nil {
+		t.Fatalf("move todo to working: %v", err)
+	}
+	confirmRes, err := dataStore.ConfirmCard(ctx, workspaceID, genTodo.Card.ID, agentSrc.ID, "已通过单测", "confirm-main-review-dedup-1")
+	if err != nil || !confirmRes.MovedToReview {
+		t.Fatalf("confirm todo to review: res=%+v err=%v", confirmRes, err)
+	}
+	// 先跑一轮 Dispatcher：此时 Todo 已产生 working -> review 状态变更，因回调目标就是主聊天，绝不发重复模板提醒。
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after todo review: %v", err)
+	}
+	if got := mainStub.SentMessages(); len(got) != 3 {
+		t.Fatalf("expected no duplicate template review alert when supervisor callback targets main chat, got %+v", got)
+	}
+	// 接着主聊天认领该 system 终态回调并回复总结：即便 mirror_web_messages=false，也必须推送给 IM。
+	cbClaim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("claim supervisor review callback turn: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         mainCardID,
+		AttemptID:      cbClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "main-system-callback-reply-1",
+		FinishOnEnd:    true,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "子任务「修复微信长轮询解码」已完成验证进入待验收。",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish supervisor callback summary: %v", err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after supervisor callback summary: %v", err)
+	}
+	sentMain = mainStub.SentMessages()
+	if len(sentMain) != 4 || !strings.Contains(sentMain[3].Text, "修复微信长轮询解码") {
+		t.Fatalf("expected system callback summary delivered with mirror_web_messages=false, got %+v", sentMain)
+	}
+
+	// 而派生自非主聊天普通讨论的 Todo 进 Review，由于回调到普通讨论卡，主聊天通道仍应保留【待验收】模板提醒。
+	otherDiscCard, err := dataStore.CreateDiscussion(ctx, workspaceID, projectID, agentSrc.ID)
+	if err != nil {
+		t.Fatalf("create other discussion: %v", err)
+	}
+	otherDiscID := otherDiscCard.ID
+	otherTodo, err := dataStore.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
+		WorkspaceID:           workspaceID,
+		DiscussionID:          otherDiscID,
+		SourceID:              agentSrc.ID,
+		Kind:                  domain.CardKindTodo,
+		Title:                 "专项子任务",
+		Description:           "来自非主聊天讨论",
+		RequiredConfirmations: 1,
+		AutoStart:             &autoStartFalse,
+		IdempotencyKey:        "gen-todo-other-disc-review",
+	})
+	if err != nil {
+		t.Fatalf("generate todo from other discussion: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE cards SET todo_state = 'working' WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, otherTodo.Card.ID); err != nil {
+		t.Fatalf("move other todo to working: %v", err)
+	}
+	if res, err := dataStore.ConfirmCard(ctx, workspaceID, otherTodo.Card.ID, agentSrc.ID, "已核查", "confirm-other-disc-review-1"); err != nil || !res.MovedToReview {
+		t.Fatalf("confirm other todo to review: res=%+v err=%v", res, err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after other discussion todo review: %v", err)
+	}
+	sentMain = mainStub.SentMessages()
+	if len(sentMain) != 5 || !strings.Contains(sentMain[4].Text, "【待验收】专项子任务") {
+		t.Fatalf("expected template review reminder for non-main-chat todo, got %+v", sentMain)
 	}
 
 	// 7. 验证定时任务独立推送：healthy 巡检在 warnings_only 下被过滤，warning 巡检被推送，且绝不写入主聊天 Session！
