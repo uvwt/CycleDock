@@ -75,7 +75,7 @@ func (s *Store) CreateToolApproval(ctx context.Context, p CreateToolApprovalPara
 		attemptID = uuid.NullUUID{UUID: *p.AttemptID, Valid: true}
 	}
 
-	return s.queries.CreateCardToolApproval(ctx, db.CreateCardToolApprovalParams{
+	approval, err := s.queries.CreateCardToolApproval(ctx, db.CreateCardToolApprovalParams{
 		ID:                    id,
 		WorkspaceID:           p.WorkspaceID,
 		CardID:                p.CardID,
@@ -92,6 +92,10 @@ func (s *Store) CreateToolApproval(ctx context.Context, p CreateToolApprovalPara
 		ScopeLabel:            strings.TrimSpace(p.ScopeLabel),
 		AllowSessionWhitelist: allowSessionWhitelist,
 	})
+	if err == nil {
+		s.notifyWorkspaceChanged(p.WorkspaceID)
+	}
+	return approval, err
 }
 
 // GetToolApproval 查询单个工具审批记录
@@ -154,6 +158,9 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 			return db.CardToolApproval{}, fmt.Errorf("%w: tool approval has been superseded by newer activity", domain.ErrConflict)
 		}
 		return db.CardToolApproval{}, fmt.Errorf("%w: tool approval has already been resolved", domain.ErrConflict)
+	}
+	if err == nil {
+		s.notifyWorkspaceChanged(p.WorkspaceID)
 	}
 	return approval, err
 }
@@ -327,6 +334,7 @@ func (s *Store) PublishToolApprovalEvent(ctx context.Context, p PublishToolAppro
 		return uuid.Nil, err
 	}
 	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(p.WorkspaceID)
 	return eventID, nil
 }
 

@@ -29,6 +29,8 @@ type Store struct {
 	// workReady 在可能产生可认领 Trigger 的事务提交后叫醒本机 Dispatcher。
 	// 未注册时写入仍然成功，只是要等 Dispatcher 下一轮轮询。
 	workReady func()
+	// workspaceChanged 在卡片消息、工具审批或状态变更提交后叫醒工作区级 SSE 与 Web Push 投递。
+	workspaceChanged func(workspaceID uuid.UUID)
 }
 
 func New(pool *pgxpool.Pool) *Store {
@@ -42,9 +44,21 @@ func (s *Store) SetWorkReadyNotifier(notify func()) {
 	s.workReady = notify
 }
 
+// SetWorkspaceChangedNotifier 注册工作区卡片变化后的叫醒函数。
+// 进程启动时由 realtime.Hub 注册一次，确保消息提交、审批挂起与状态流转后零延迟唤醒 SSE 与 Web Push。
+func (s *Store) SetWorkspaceChangedNotifier(notify func(workspaceID uuid.UUID)) {
+	s.workspaceChanged = notify
+}
+
 func (s *Store) notifyWorkReady() {
 	if s.workReady != nil {
 		s.workReady()
+	}
+}
+
+func (s *Store) notifyWorkspaceChanged(workspaceID uuid.UUID) {
+	if s.workspaceChanged != nil && workspaceID != uuid.Nil {
+		s.workspaceChanged(workspaceID)
 	}
 }
 
@@ -79,7 +93,7 @@ func (s *Store) CreateDiscussion(
 	if len(preferredModelRouteID) > 0 {
 		preferredRouteID = preferredModelRouteID[0]
 	}
-	return s.queries.CreateCard(ctx, db.CreateCardParams{
+	card, err := s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
@@ -89,6 +103,10 @@ func (s *Store) CreateDiscussion(
 		CreatedBySourceID:     sourceID,
 		PreferredModelRouteID: preferredRouteID,
 	})
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
+	return card, err
 }
 
 func (s *Store) CreateTodoCard(
@@ -101,7 +119,7 @@ func (s *Store) CreateTodoCard(
 	if requiredConfirmations <= 0 {
 		requiredConfirmations = 1
 	}
-	return s.queries.CreateCard(ctx, db.CreateCardParams{
+	card, err := s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
@@ -113,6 +131,10 @@ func (s *Store) CreateTodoCard(
 		RequiredConfirmations: requiredConfirmations,
 		CreatedBySourceID:     sourceID,
 	})
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
+	return card, err
 }
 
 func (s *Store) CreateOngoingCard(
@@ -121,7 +143,7 @@ func (s *Store) CreateOngoingCard(
 	title, description string,
 	sourceDiscussionID uuid.NullUUID,
 ) (db.Card, error) {
-	return s.queries.CreateCard(ctx, db.CreateCardParams{
+	card, err := s.queries.CreateCard(ctx, db.CreateCardParams{
 		ID:                    uuid.New(),
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
@@ -133,6 +155,10 @@ func (s *Store) CreateOngoingCard(
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
 	})
+	if err == nil {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
+	return card, err
 }
 
 func (s *Store) GetCard(ctx context.Context, workspaceID, cardID uuid.UUID) (db.Card, error) {

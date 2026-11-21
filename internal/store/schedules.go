@@ -87,6 +87,7 @@ func (s *Store) CreateSchedule(
 	if err := tx.Commit(ctx); err != nil {
 		return CardSchedule{}, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return CardSchedule{
 		ID: scheduleID, WorkspaceID: workspaceID, CardID: cardID,
 		Rule: rule, Enabled: true, NextTriggerAt: next,

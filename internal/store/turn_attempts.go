@@ -328,6 +328,7 @@ func (s *Store) ClaimNextTurnAttempt(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	s.notifyWorkspaceChanged(workspaceID)
 	return claim, nil
 }
 
@@ -636,7 +637,11 @@ func (s *Store) FinishAttempt(
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return nil
 }
 
 const (
@@ -795,6 +800,7 @@ func (s *Store) SteerPendingTurn(
 		return err
 	}
 	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(workspaceID)
 	return nil
 }
 
@@ -927,6 +933,7 @@ func (s *Store) CancelAttempt(
 		return err
 	}
 	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(workspaceID)
 	return nil
 }
 
