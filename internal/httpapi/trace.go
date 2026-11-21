@@ -16,6 +16,7 @@ type modelCallResponse struct {
 	Purpose               string `json:"purpose"`
 	ModelRouteID          string `json:"model_route_id,omitempty"`
 	ModelID               string `json:"model_id"`
+	ResponseModel         string `json:"response_model,omitempty"`
 	Provider              string `json:"provider"`
 	StartedAt             string `json:"started_at"`
 	FinishedAt            string `json:"finished_at"`
@@ -97,6 +98,7 @@ func modelCallToResponse(call db.AgentModelCall) modelCallResponse {
 		CallIndex:             call.CallIndex,
 		Purpose:               call.Purpose,
 		ModelID:               call.ModelID,
+		ResponseModel:         call.ResponseModel,
 		Provider:              call.Provider,
 		DurationMS:            call.DurationMs,
 		Status:                call.Status,

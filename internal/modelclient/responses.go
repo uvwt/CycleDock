@@ -60,12 +60,14 @@ type responseOutputItem struct {
 
 type responsesEvent struct {
 	Type        string             `json:"type"`
+	Model       string             `json:"model"`
 	OutputIndex int                `json:"output_index"`
 	ItemID      string             `json:"item_id"`
 	Delta       string             `json:"delta"`
 	Item        responseOutputItem `json:"item"`
 	Usage       *wireTokenUsage    `json:"usage"`
 	Response    struct {
+		Model  string               `json:"model"`
 		Output []responseOutputItem `json:"output"`
 		Usage  *wireTokenUsage      `json:"usage"`
 	} `json:"response"`
@@ -244,6 +246,7 @@ func readResponsesStream(response *http.Response, onDelta func(string), onToolCa
 	streamingCalls := make(map[string]ToolCall)
 	var completedOutput []responseOutputItem
 	var usage *TokenUsage
+	var responseModel string
 	completed := false
 
 	for scanner.Scan() {
@@ -262,6 +265,12 @@ func readResponsesStream(response *http.Response, onDelta func(string), onToolCa
 		var event responsesEvent
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			return Completion{}, fmt.Errorf("%w: invalid Responses SSE event", ErrMalformedResponse)
+		}
+		if modelName := strings.TrimSpace(event.Model); modelName != "" {
+			responseModel = modelName
+		}
+		if modelName := strings.TrimSpace(event.Response.Model); modelName != "" {
+			responseModel = modelName
 		}
 		if parsed := event.Usage.toTokenUsage(); parsed != nil {
 			usage = parsed
@@ -333,9 +342,10 @@ func readResponsesStream(response *http.Response, onDelta func(string), onToolCa
 		}
 	}
 	return Completion{
-		Content:   strings.TrimSpace(text.String()),
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:       strings.TrimSpace(text.String()),
+		ToolCalls:     toolCalls,
+		Usage:         usage,
+		ResponseModel: responseModel,
 	}, nil
 }
 

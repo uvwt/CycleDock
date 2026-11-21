@@ -410,6 +410,7 @@ export type ModelCallTrace = {
   purpose: string;
   model_route_id?: string;
   model_id: string;
+  response_model?: string;
   provider: string;
   started_at: string;
   finished_at: string;

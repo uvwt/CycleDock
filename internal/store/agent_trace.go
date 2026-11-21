@@ -23,6 +23,7 @@ type RecordModelCallParams struct {
 	Purpose               string
 	ModelRouteID          uuid.NullUUID
 	ModelID               string
+	ResponseModel         string
 	Provider              string
 	StartedAt             time.Time
 	FinishedAt            time.Time
@@ -69,6 +70,7 @@ func (s *Store) RecordModelCall(ctx context.Context, params RecordModelCallParam
 		Purpose:               params.Purpose,
 		ModelRouteID:          params.ModelRouteID,
 		ModelID:               params.ModelID,
+		ResponseModel:         params.ResponseModel,
 		Provider:              params.Provider,
 		StartedAt:             pgtype.Timestamptz{Time: params.StartedAt.UTC(), Valid: true},
 		FinishedAt:            pgtype.Timestamptz{Time: params.FinishedAt.UTC(), Valid: true},

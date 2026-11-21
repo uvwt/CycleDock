@@ -301,3 +301,35 @@ func TestResponsesToolInputDeltasUseCallIDAndKeepCallsSeparate(t *testing.T) {
 		t.Fatalf("completion=%+v", completion)
 	}
 }
+
+func TestResponsesStreamParsesResponseModel(t *testing.T) {
+	t.Run("prefers response.model from response events", func(t *testing.T) {
+		data := strings.Join([]string{
+			`data: {"type":"response.created","response":{"model":"gpt-5.4-mini-2026"}}`,
+			`data: {"type":"response.output_text.delta","delta":"done"}`,
+			`data: {"type":"response.completed","response":{"model":"gpt-5.4-mini-2026-04-01","output":[]}}`,
+		}, "\n")
+		got, err := readResponsesStream(&http.Response{Body: io.NopCloser(strings.NewReader(data))}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResponseModel != "gpt-5.4-mini-2026-04-01" {
+			t.Fatalf("ResponseModel=%q, want gpt-5.4-mini-2026-04-01", got.ResponseModel)
+		}
+	})
+
+	t.Run("accepts top-level model field fallback", func(t *testing.T) {
+		data := strings.Join([]string{
+			`data: {"type":"response.output_text.delta","model":"proxy-resolved-model","delta":"ok"}`,
+			`data: {"type":"response.completed","response":{"output":[]}}`,
+		}, "\n")
+		got, err := readResponsesStream(&http.Response{Body: io.NopCloser(strings.NewReader(data))}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResponseModel != "proxy-resolved-model" {
+			t.Fatalf("ResponseModel=%q, want proxy-resolved-model", got.ResponseModel)
+		}
+	})
+}
+

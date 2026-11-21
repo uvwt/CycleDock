@@ -455,9 +455,10 @@ type ToolDefinitionFunc struct {
 }
 
 type Completion struct {
-	Content   string
-	ToolCalls []ToolCall
-	Usage     *TokenUsage
+	Content       string
+	ToolCalls     []ToolCall
+	Usage         *TokenUsage
+	ResponseModel string
 }
 
 type APIError struct {
@@ -620,6 +621,7 @@ func (c *Client) Complete(
 		}
 
 		var decoded struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Message struct {
 					Content   string     `json:"content"`
@@ -635,9 +637,10 @@ func (c *Client) Complete(
 			return Completion{}, ErrEmptyResponse
 		}
 		return Completion{
-			Content:   strings.TrimSpace(decoded.Choices[0].Message.Content),
-			ToolCalls: decoded.Choices[0].Message.ToolCalls,
-			Usage:     decoded.Usage.toTokenUsage(),
+			Content:       strings.TrimSpace(decoded.Choices[0].Message.Content),
+			ToolCalls:     decoded.Choices[0].Message.ToolCalls,
+			Usage:         decoded.Usage.toTokenUsage(),
+			ResponseModel: strings.TrimSpace(decoded.Model),
 		}, nil
 	}
 }
