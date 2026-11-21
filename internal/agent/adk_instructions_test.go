@@ -61,14 +61,25 @@ func TestBuildADKInstructions_主聊天场景不影响其他卡片(t *testing.T)
 func TestBuildADKInstructions_包含卡片引用跳转规范(t *testing.T) {
 	card := store.AgentCardContext{CardKind: domain.CardKindDiscussion, CardTitle: "普通讨论"}
 	instructions := buildADKInstructions(card, "", "")
-	if !strings.Contains(instructions, "[卡片标题](cycledock://card/<card_id>)") {
-		t.Fatal("通用指令必须包含标准卡片引用标记约束，以支持前端卡片跳转渲染")
+	for _, want := range []string{
+		"[卡片标题](cycledock://card/<card_id>)",
+		"独占一行的块级卡片组件",
+		"单独成行/成段",
+		"严禁在卡片引用前后紧跟冒号",
+		"紧贴括号说明",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("通用指令缺少卡片引用块级排版约束 %q", want)
+		}
 	}
 
 	mainCard := store.AgentCardContext{CardKind: domain.CardKindDiscussion, IsMainDiscussion: true, CardTitle: "主聊天"}
 	mainInstructions := buildADKInstructions(mainCard, "", "")
 	if !strings.Contains(mainInstructions, "必须使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)") {
 		t.Fatal("主聊天指令必须明确硬约束使用标准卡片引用标记")
+	}
+	if !strings.Contains(mainInstructions, "内嵌独占一行的块级卡片形式呈现") {
+		t.Fatal("主聊天指令必须说明卡片将渲染为独占一行的块级卡片并遵守单独成行规则")
 	}
 	if !strings.Contains(mainInstructions, "auto_start: false") {
 		t.Fatal("主聊天指令必须明确说明先建待办暂不实施时传 auto_start: false")
@@ -80,23 +91,37 @@ func TestBuildADKInstructions_包含卡片引用跳转规范(t *testing.T) {
 
 func TestGenerateWorkToolDefinitionIncludesAutoStart(t *testing.T) {
 	defs := internalToolDefinitions()
-	var found bool
+	var foundGenerateWork, foundReplyMessage bool
 	for _, def := range defs {
-		if def.Function.Name != "cycledock_generate_work" {
-			continue
-		}
-		found = true
-		props, _ := def.Function.Parameters["properties"].(map[string]any)
-		rawField, ok := props["auto_start"].(map[string]any)
-		if !ok || rawField["type"] != "boolean" {
-			t.Fatalf("cycledock_generate_work missing boolean auto_start schema: %#v", props["auto_start"])
-		}
-		if !strings.Contains(def.Function.Description, "auto_start=false") {
-			t.Fatalf("cycledock_generate_work description should mention auto_start=false: %s", def.Function.Description)
+		switch def.Function.Name {
+		case "cycledock_generate_work":
+			foundGenerateWork = true
+			props, _ := def.Function.Parameters["properties"].(map[string]any)
+			rawField, ok := props["auto_start"].(map[string]any)
+			if !ok || rawField["type"] != "boolean" {
+				t.Fatalf("cycledock_generate_work missing boolean auto_start schema: %#v", props["auto_start"])
+			}
+			if !strings.Contains(def.Function.Description, "auto_start=false") {
+				t.Fatalf("cycledock_generate_work description should mention auto_start=false: %s", def.Function.Description)
+			}
+			if !strings.Contains(def.Function.Description, "standalone full-width block card") {
+				t.Fatalf("cycledock_generate_work description should explain block card formatting: %s", def.Function.Description)
+			}
+		case "reply_message":
+			foundReplyMessage = true
+			props, _ := def.Function.Parameters["properties"].(map[string]any)
+			contentField, _ := props["content"].(map[string]any)
+			desc, _ := contentField["description"].(string)
+			if !strings.Contains(desc, "standalone block card") {
+				t.Fatalf("reply_message content description should explain standalone block card formatting: %s", desc)
+			}
 		}
 	}
-	if !found {
+	if !foundGenerateWork {
 		t.Fatal("cycledock_generate_work tool definition not found")
+	}
+	if !foundReplyMessage {
+		t.Fatal("reply_message tool definition not found")
 	}
 }
 
