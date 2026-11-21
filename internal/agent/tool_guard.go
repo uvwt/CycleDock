@@ -37,6 +37,8 @@ type ToolGuardDecision struct {
 }
 
 // 只读及系统内部协同工具清单（0 延迟、0 Token 消耗直接放行）
+// 注意：cycledock_create_trigger / cycledock_update_trigger / cycledock_delete_trigger 属于工作区
+// 外部入口配置写操作，故意不列入白名单，受既有安全机制约束。
 var safeReadOnlyToolNames = map[string]bool{
 	"reply_message":                    true,
 	"search_mcp_tools":                 true,
@@ -50,6 +52,11 @@ var safeReadOnlyToolNames = map[string]bool{
 	"cycledock_update_card":            true,
 	"cycledock_send_card_message":      true,
 	"cycledock_inspect_card_session":   true,
+	"cycledock_watch_event":            true,
+	"cycledock_schedule_wakeup":        true,
+	"cycledock_list_watchers":          true,
+	"cycledock_cancel_watcher":         true,
+	"cycledock_list_triggers":          true,
 	"cycledock_read_artifact":          true,
 	"cycledock_read_attachment":        true,
 	"cycledock_search_session_history": true,
@@ -69,7 +76,7 @@ var safeReadOnlyToolNames = map[string]bool{
 
 // 快速只读或系统内部工具判断（包含外部 MCP 只读启发式）
 func isSafeReadOnlyTool(toolName string, args map[string]any) bool {
-	if safeReadOnlyToolNames[toolName] || strings.HasPrefix(toolName, "cycledock_") {
+	if safeReadOnlyToolNames[toolName] {
 		return true
 	}
 	// 针对 call_mcp_tool，如果 remote tool name 是明显只读的

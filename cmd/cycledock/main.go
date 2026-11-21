@@ -234,6 +234,7 @@ func main() {
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
 		MaxConcurrent:             maxConcurrent,
 		MaxConcurrentPerWorkspace: maxPerWorkspace,
+		PublicBaseURL:             publicURL,
 		SessionService:            sessionService,
 		ArtifactService:           artifactService,
 		Attachments:               attachmentsService,

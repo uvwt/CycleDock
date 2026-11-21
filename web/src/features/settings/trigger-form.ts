@@ -156,7 +156,7 @@ export function emptyTriggerFormValues(
     target_card_id: "",
     dispatch_mode: "enqueue",
     cooldown_seconds: 0,
-    events_text: "workflow_run",
+    events_text: "",
     actions_text: "",
     conclusions_text: "",
     branches_text: "",
@@ -276,6 +276,35 @@ export function toUpdateTriggerInput(
     input.target_card_id = "";
   }
   return input;
+}
+
+export function hasAdvancedTriggerConfig(trigger: WorkspaceTrigger): boolean {
+  if (
+    trigger.routing_mode !== "match_watchers" ||
+    trigger.dispatch_mode !== "enqueue" ||
+    trigger.cooldown_seconds > 0
+  ) {
+    return true;
+  }
+  if (
+    trigger.provider === "generic" &&
+    (trigger.auth_mode !== "generic_hmac_sha256" ||
+      (trigger.signature_header &&
+        trigger.signature_header !== DEFAULT_GENERIC_SIGNATURE_HEADER))
+  ) {
+    return true;
+  }
+  const f = trigger.filter_config;
+  if (!f) return false;
+  return Boolean(
+    (f.events && f.events.length > 0) ||
+      (f.actions && f.actions.length > 0) ||
+      (f.conclusions && f.conclusions.length > 0) ||
+      (f.branches && f.branches.length > 0) ||
+      (f.repositories && f.repositories.length > 0) ||
+      (f.match_key_path && f.match_key_path.trim() !== "") ||
+      (f.json_matches && Object.keys(f.json_matches).length > 0),
+  );
 }
 
 export function getCardRoute(

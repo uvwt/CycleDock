@@ -277,6 +277,130 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 		{
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_list_triggers",
+				Description: "Read-only list of Webhook triggers in the current Workspace, including full webhook_url (when PublicBaseURL is configured, otherwise relative path), provider, enabled state, routing_mode, secret_hint, and last_triggered_at. Never returns plaintext secrets. Call this before creating a trigger to avoid duplicates.",
+				Parameters: object(map[string]any{
+					"provider": map[string]any{
+						"type":        "string",
+						"enum":        []string{"github", "circleci", "generic"},
+						"description": "Optional provider filter.",
+					},
+					"enabled_only": map[string]any{
+						"type":        "boolean",
+						"description": "When true, return only enabled triggers.",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_create_trigger",
+				Description: "Create a Workspace Webhook trigger with sensible defaults (routing_mode=match_watchers, dispatch_mode=enqueue, cooldown_seconds=0, enabled=true) and return full webhook_url plus a one-time webhook_secret so you can immediately configure external webhooks (e.g. via gh api repos/<owner>/<repo>/hooks) without asking the user to fill forms. Always call cycledock_list_triggers first. NEVER output or save webhook_secret in user replies, logs, files, or Recall memory.",
+				Parameters: object(map[string]any{
+					"provider": map[string]any{
+						"type":        "string",
+						"enum":        []string{"github", "circleci", "generic"},
+						"description": "Webhook provider: github, circleci, or generic.",
+					},
+					"name": stringField("Optional human-readable trigger name. Auto-generated if omitted."),
+					"enabled": map[string]any{
+						"type":        "boolean",
+						"description": "Whether the trigger is enabled immediately. Defaults to true.",
+					},
+					"routing_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"match_watchers", "fixed_card", "create_todo"},
+						"description": "Routing mode. Defaults to match_watchers (automatically wakes waiting cards).",
+					},
+					"dispatch_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"enqueue", "interrupt"},
+						"description": "Dispatch mode when waking a card. Defaults to enqueue.",
+					},
+					"cooldown_seconds": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     86400,
+						"description": "Optional cooldown in seconds between triggers (0-86400). Defaults to 0.",
+					},
+					"target_project_id": stringField("Optional target project UUID (used by create_todo; defaults to current project if omitted)."),
+					"target_card_id":    stringField("Optional target card UUID (required only when routing_mode=fixed_card)."),
+					"auth_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"github_hmac_sha256", "circleci_hmac_sha256", "generic_hmac_sha256", "bearer"},
+						"description": "Optional auth mode; automatically chosen for the provider when omitted.",
+					},
+					"signature_header": stringField("Optional custom signature header name for generic HMAC triggers."),
+					"filter_config": object(map[string]any{
+						"events":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional allowed event names, e.g. ['workflow_run']."},
+						"actions":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional allowed event actions, e.g. ['completed']."},
+						"conclusions":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional allowed conclusions, e.g. ['success', 'failure']."},
+						"branches":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional allowed branch names."},
+						"repositories":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional allowed repositories, e.g. ['owner/repo']."},
+						"match_key_path": stringField("Optional dot-separated JSON path for extracting match_key on generic webhooks."),
+						"json_matches":   map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Optional exact JSON field path-to-value matches."},
+					}),
+					"idempotency_key": stringField("Optional stable unique key to avoid duplicate creation on retry."),
+				}, "provider"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_update_trigger",
+				Description: "Update an existing Workspace Webhook trigger (for example enable/disable, rename, adjust routing or filters).",
+				Parameters: object(map[string]any{
+					"trigger_id": stringField("Trigger UUID from cycledock_list_triggers or cycledock_create_trigger."),
+					"name":       stringField("Optional updated trigger name."),
+					"enabled": map[string]any{
+						"type":        "boolean",
+						"description": "Optional enable/disable toggle.",
+					},
+					"routing_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"match_watchers", "fixed_card", "create_todo"},
+						"description": "Optional updated routing mode.",
+					},
+					"dispatch_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"enqueue", "interrupt"},
+						"description": "Optional updated dispatch mode.",
+					},
+					"cooldown_seconds": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"maximum":     86400,
+						"description": "Optional updated cooldown in seconds (0-86400).",
+					},
+					"target_project_id": stringField("Optional updated target project UUID (pass empty string to clear)."),
+					"target_card_id":    stringField("Optional updated target card UUID (pass empty string to clear)."),
+					"signature_header":  stringField("Optional updated signature header name."),
+					"filter_config": object(map[string]any{
+						"events":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"actions":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"conclusions":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"branches":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"repositories":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						"match_key_path": stringField("Optional dot-separated JSON path for match_key."),
+						"json_matches":   map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+					}),
+				}, "trigger_id"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_delete_trigger",
+				Description: "Delete an existing Workspace Webhook trigger by UUID.",
+				Parameters: object(map[string]any{
+					"trigger_id": stringField("Trigger UUID to delete."),
+				}, "trigger_id"),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
 				Name:        "search_mcp_tools",
 				Description: "Search available external MCP tools by task description, keyword, or exact tool ID. Returns matching tools with their stable tool_id, connection name, tool name, description, and full input_schema. Call this before call_mcp_tool when you need external third-party tools not already in your context.",
 				Parameters: object(map[string]any{

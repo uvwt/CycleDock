@@ -58,15 +58,17 @@ type imageArtifactRef struct {
 }
 
 type attemptToolRuntime struct {
-	store           *store.Store
-	context         store.AgentCardContext
-	mcpSessions     *mcpclient.SessionSet
-	artifactService artifact.Service
-	historyService  *agentsession.PostgresService
-	attachments     *attachments.Service
-	replies         *replyState
-	live            *realtime.Hub
-	activeModel     func() string
+	store              *store.Store
+	context            store.AgentCardContext
+	publicBaseURL      string
+	mcpSessions        *mcpclient.SessionSet
+	artifactService    artifact.Service
+	historyService     *agentsession.PostgresService
+	attachments        *attachments.Service
+	replies            *replyState
+	triggerCreateCache *triggerCreateCache
+	live               *realtime.Hub
+	activeModel        func() string
 }
 
 func (r attemptToolRuntime) activeModelName() string {
@@ -84,14 +86,20 @@ type replyState struct {
 
 func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	definitions := internalToolDefinitions()
-	// cycledock_inspect_card_session 仅供 Discussion（主聊天/全局协调）会话挂载。
-	// Todo 与 Ongoing 等具体工作卡片相互自治，禁止翻阅彼此底层会话，协作必须通过 cycledock_send_card_message 显式委派。
-	if runtime.context.CardKind != domain.CardKindDiscussion {
+	// 1) cycledock_inspect_card_session 仅供 Discussion（主聊天/全局协调）会话挂载；
+	//    Todo 与 Ongoing 相互自治，协作通过 cycledock_send_card_message 显式委派。
+	// 2) 触发器写工具（create/update/delete）仅挂载给 Discussion 与 Todo，Ongoing 仅允许只读列出。
+	if runtime.context.CardKind != domain.CardKindDiscussion || !triggerWriteAllowedForCard(runtime.context.CardKind) {
 		filtered := make([]modelclient.ToolDefinition, 0, len(definitions))
 		for _, definition := range definitions {
-			if definition.Function.Name != "cycledock_inspect_card_session" {
-				filtered = append(filtered, definition)
+			name := definition.Function.Name
+			if name == "cycledock_inspect_card_session" && runtime.context.CardKind != domain.CardKindDiscussion {
+				continue
 			}
+			if isTriggerWriteToolName(name) && !triggerWriteAllowedForCard(runtime.context.CardKind) {
+				continue
+			}
+			filtered = append(filtered, definition)
 		}
 		definitions = filtered
 	}
@@ -216,6 +224,14 @@ func (r attemptToolRuntime) internalHandler(
 		return r.listWatchersTool, nil
 	case "cycledock_cancel_watcher":
 		return r.cancelWatcherTool, nil
+	case "cycledock_list_triggers":
+		return r.listTriggersTool, nil
+	case "cycledock_create_trigger":
+		return r.createTriggerTool, nil
+	case "cycledock_update_trigger":
+		return r.updateTriggerTool, nil
+	case "cycledock_delete_trigger":
+		return r.deleteTriggerTool, nil
 	case "reply_message":
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			// 回复状态同时由 Runner 的工具边界检查读取。

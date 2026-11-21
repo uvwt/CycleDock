@@ -13,6 +13,7 @@ var sensitiveKeys = map[string]struct{}{
 	"passwd":             {},
 	"secret":             {},
 	"clientsecret":       {},
+	"webhooksecret":      {},
 	"apikey":             {},
 	"apitoken":           {},
 	"token":              {},
@@ -62,6 +63,17 @@ func Sanitize(value any) any {
 // SanitizeWithReport 在执行结构化凭据脱敏的同时，规范化所有键名与字符串值中的非法 UTF-8 及 NUL 字符，
 // 并返回本次处理是否发生过异常 Unicode 字符替换（不含敏感字段脱敏），供调用方按需记录脱敏摘要日志。
 func SanitizeWithReport(value any) (any, bool) {
+	return sanitizeValue(value, true)
+}
+
+// NormalizeValueWithReport 仅对键名与字符串值执行深拷贝与合法 UTF-8/NUL 规范化，不脱敏敏感字段。
+// 适用于同一轮执行期间内存中需向模型透传一次性密钥（如新建触发器的 webhook_secret）的场景，
+// 而落库版本仍由 SanitizeWithReport 统一脱敏。
+func NormalizeValueWithReport(value any) (any, bool) {
+	return sanitizeValue(value, false)
+}
+
+func sanitizeValue(value any, redactSecrets bool) (any, bool) {
 	switch current := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(current))
@@ -71,11 +83,11 @@ func SanitizeWithReport(value any) (any, bool) {
 			if keyChanged {
 				normalizedAny = true
 			}
-			if isSensitiveKey(cleanKey) {
+			if redactSecrets && isSensitiveKey(cleanKey) {
 				out[cleanKey] = Redacted
 				continue
 			}
-			cleanItem, itemChanged := SanitizeWithReport(item)
+			cleanItem, itemChanged := sanitizeValue(item, redactSecrets)
 			if itemChanged {
 				normalizedAny = true
 			}
@@ -86,7 +98,7 @@ func SanitizeWithReport(value any) (any, bool) {
 		out := make([]any, len(current))
 		normalizedAny := false
 		for i, item := range current {
-			cleanItem, itemChanged := SanitizeWithReport(item)
+			cleanItem, itemChanged := sanitizeValue(item, redactSecrets)
 			if itemChanged {
 				normalizedAny = true
 			}
@@ -116,7 +128,7 @@ func SanitizeWithReport(value any) (any, bool) {
 		}
 		// 嵌套 JSON 字符串（如 MCP TextContent 承载的序列化结果）解码后可能重新还原出 \u0000，
 		// 递归执行脱敏与 Unicode 规范化后再重编码，确保持久化与后续二次解析均安全。
-		sanitizedDecoded, nestedChanged := SanitizeWithReport(decoded)
+		sanitizedDecoded, nestedChanged := sanitizeValue(decoded, redactSecrets)
 		safe, err := json.Marshal(sanitizedDecoded)
 		if err != nil {
 			return clean, changed
