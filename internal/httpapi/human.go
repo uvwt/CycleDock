@@ -89,6 +89,15 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Delete("/triggers/{triggerID}", api.deleteTrigger)
 	r.Get("/triggers/{triggerID}/deliveries", api.listTriggerDeliveries)
 
+	r.Get("/channels", api.listRemoteChannels)
+	r.Post("/channels", api.createRemoteChannel)
+	r.Put("/channels/{channelID}", api.updateRemoteChannel)
+	r.Post("/channels/{channelID}/enabled", api.toggleRemoteChannel)
+	r.Post("/channels/{channelID}/test", api.testRemoteChannel)
+	r.Delete("/channels/{channelID}", api.deleteRemoteChannel)
+	r.Post("/channels/weixin/login/start", api.startWeixinLogin)
+	r.Get("/channels/weixin/login/{sessionID}", api.pollWeixinLogin)
+
 	r.Get("/agent/status", api.getAgentStatus)
 	r.Get("/agent/settings", api.getAgentSettings)
 	r.Put("/agent/settings", api.saveAgentSettings)
