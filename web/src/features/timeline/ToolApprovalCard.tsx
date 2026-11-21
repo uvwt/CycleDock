@@ -14,18 +14,23 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import type { CardDetail, ToolApproval } from "../../shared/api/types";
+import type { Attempt, CardDetail, ToolApproval } from "../../shared/api/types";
 import { api } from "../../shared/api/client";
 import { queryClient, keys } from "../../app/query";
+import { RunDuration } from "./ExecutionStatus";
 
 export function ToolApprovalCard({
   cardID,
   approval,
   fallbackContent,
+  completedAttempt,
+  onOpenTrace,
 }: {
   cardID?: string;
   approval?: ToolApproval;
   fallbackContent?: string;
+  completedAttempt?: Attempt;
+  onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
   const [rejecting, setRejecting] = useState(false);
@@ -149,42 +154,69 @@ export function ToolApprovalCard({
   }
 
   if (!isPending && !expandedHistory) {
+    const traceTrigger =
+      completedAttempt && completedAttempt.started_at && completedAttempt.finished_at ? (
+        <span
+          className="inline-flex shrink-0 items-center"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <RunDuration
+            startedAt={completedAttempt.started_at}
+            finishedAt={completedAttempt.finished_at}
+            active={false}
+            onClick={
+              onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
+            }
+          />
+        </span>
+      ) : null;
+
     return (
       <div
         data-tool-approval-card
         data-approval-status={approval.status}
         className="my-1.5"
       >
-        <button
-          type="button"
-          onClick={() => setExpandedHistory(true)}
-          className="inline-flex max-w-full items-center gap-2 rounded-xl border border-line/70 bg-muted/30 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60"
-        >
-          {isApproved ? (
-            <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-          ) : isSuperseded ? (
-            <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
-          )}
-          <span className="font-mono font-medium text-foreground">
-            {approval.tool_name}
-          </span>
-          <span className="shrink-0">
-            ·{" "}
-            {isApproved
-              ? t("已允许执行")
-              : isSuperseded
-                ? t("已失效（已有后续推进）")
-                : t("已拒绝执行")}
-          </span>
-          {approval.resolution_comment && (
-            <span className="truncate text-faint">
-              · {approval.resolution_comment}
+        <div className="inline-flex max-w-full items-center gap-1 rounded-xl border border-line/70 bg-muted/30 pr-2 text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60">
+          <button
+            type="button"
+            onClick={() => setExpandedHistory(true)}
+            className="inline-flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-1 text-left"
+          >
+            {isApproved ? (
+              <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : isSuperseded ? (
+              <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            )}
+            <span className="font-mono font-medium text-foreground">
+              {approval.tool_name}
             </span>
+            <span className="shrink-0">
+              ·{" "}
+              {isApproved
+                ? t("已允许执行")
+                : isSuperseded
+                  ? t("已失效（已有后续推进）")
+                  : t("已拒绝执行")}
+            </span>
+            {approval.resolution_comment && (
+              <span className="truncate text-faint">
+                · {approval.resolution_comment}
+              </span>
+            )}
+            <ChevronDown className="size-3.5 shrink-0 text-faint" />
+          </button>
+          {traceTrigger && (
+            <>
+              <span className="select-none text-[10px] text-muted-foreground/40">
+                •
+              </span>
+              {traceTrigger}
+            </>
           )}
-          <ChevronDown className="size-3.5 shrink-0 text-faint" />
-        </button>
+        </div>
       </div>
     );
   }
@@ -227,6 +259,16 @@ export function ToolApprovalCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
+          {completedAttempt && (
+            <RunDuration
+              startedAt={completedAttempt.started_at}
+              finishedAt={completedAttempt.finished_at}
+              active={false}
+              onClick={
+                onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
+              }
+            />
+          )}
           <span
             className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${riskMeta.className}`}
           >

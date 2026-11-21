@@ -693,8 +693,8 @@ test("输入框只保留一个主按钮，执行中空输入用于中止，输�
 
 test("取消和替代仍显示正文，状态与耗时只出现在气泡上方", () => {
   for (const [status, label] of [
-    ["cancelled", "已取消执行"],
-    ["superseded", "已被新要求替代"],
+    ["cancelled", "已停止生成"],
+    ["superseded", "已由新消息替代"],
   ]) {
     const html = render([comment, result], {
       ...attempt,
@@ -752,20 +752,43 @@ test("上一轮被替代的流式正文保留在新输入前，取消状态不�
   );
   assert.match(html, /尚未完成的长文/);
   assert.ok(html.indexOf("尚未完成的长文") < html.indexOf('id="event-next"'));
-  assert.match(html, /已被新要求替代/);
+  assert.match(html, /已由新消息替代/);
   assert.doesNotMatch(html, /消息未发送|border-l-2/);
 });
 
-test("没有正文的取消和替代也保留名称与气泡", () => {
-  for (const status of ["cancelled", "superseded"]) {
-    const html = render([comment], { ...attempt, status });
+test("没有正文的取消、替代、静默完成与排队展示为单行圆角小胶囊，不再出现假气泡", () => {
+  for (const [status, label] of [
+    ["cancelled", "已停止生成"],
+    ["superseded", "已由新消息替代"],
+    ["completed", "执行完成"],
+    ["queued", "等待执行"],
+  ]) {
+    const html = render([comment], {
+      ...attempt,
+      status,
+      can_retry: status === "cancelled",
+    });
     assert.doesNotMatch(html, /lucide-bot/);
-    assert.match(html, />Cycle</);
-    assert.match(html, /rounded-2xl bg-muted/);
-    assert.match(html, /暂无已保存的正文/);
+    assert.doesNotMatch(html, />Cycle</);
+    assert.doesNotMatch(html, /暂无已保存的正文/);
+    const statusChunk = html.slice(html.indexOf('data-execution-id="execution"'));
+    assert.doesNotMatch(statusChunk, /rounded-2xl bg-muted/);
+    assert.doesNotMatch(statusChunk, /group-hover:opacity-100/);
     assert.doesNotMatch(html, /border-l-2/);
+    assert.match(html, /rounded-full border border-line\/50 bg-muted\/20/);
+    assert.ok(html.includes(label));
+    assert.match(html, /0:12/);
     assert.equal((html.match(/data-execution-id=/g) || []).length, 1);
+    if (status === "cancelled") assert.match(html, /重试/);
   }
+
+  const humanRepliedHtml = render([comment], {
+    ...attempt,
+    status: "superseded",
+    error_summary: "superseded by human reply",
+  });
+  assert.match(humanRepliedHtml, /已收到回复/);
+  assert.doesNotMatch(humanRepliedHtml, /暂无已保存的正文/);
 });
 
 test("选择气泡正常完成并展示耗时，不占用等待状态", () => {
@@ -2004,4 +2027,149 @@ test("未启动的待办卡片空态展示一键开始执行按钮，且 createT
   assert.equal(calls[2].method, "POST");
   assert.equal(calls[2].headers["Idempotency-Key"], "start-card:card-1");
   assert.deepEqual(calls[2].body, { preferred_model_route_id: "route-1" });
+});
+
+test("工具守卫完成状态与气泡组首或审批卡片融合，不再另起一行执行完成", () => {
+  const approvalEvent = {
+    id: "ev-approval-1",
+    sequence: 2,
+    type: "tool_approval",
+    actor_kind: "system",
+    attempt_id: attempt.id,
+    created_at: "2026-10-29T00:00:05Z",
+    tool_approval: {
+      id: "ap-1",
+      tool_name: "exec_command",
+      arguments: { cmd: "dir" },
+      risk_level: "medium",
+      reversible: true,
+      reason: "检查目录",
+      status: "approved",
+      created_at: "2026-10-29T00:00:05Z",
+      resolved_at: "2026-10-29T00:00:08Z",
+    },
+  };
+  const processMsg = {
+    id: "ev-process-1",
+    sequence: 1,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: attempt.id,
+    content: "正在检查，请先允许工具执行。",
+    created_at: "2026-10-29T00:00:02Z",
+    message: {
+      type: "text",
+      content: "正在检查，请先允许工具执行。",
+      end_turn: false,
+    },
+  };
+
+  // 场景 1：无 end_turn 但前面有过程气泡时，完成状态与耗时归并到 Cycle 组首
+  const withProcessHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [comment, processMsg, approvalEvent],
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: attempt,
+      attemptHistory: [],
+      onRetryAttempt() {},
+      onOpenTrace() {},
+    }),
+  );
+  assert.match(withProcessHtml, /正在检查，请先允许工具执行/);
+  assert.match(withProcessHtml, /exec_command/);
+  assert.equal((withProcessHtml.match(/0:12/g) || []).length, 1);
+  assert.doesNotMatch(withProcessHtml, /data-execution-status="completed"/);
+
+  // 场景 2：无任何 Agent 回复气泡、仅有工具守卫卡片时，耗时/链路入口融合进工具守卫胶囊内
+  const approvalOnlyHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [comment, approvalEvent],
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: attempt,
+      attemptHistory: [],
+      onRetryAttempt() {},
+      onOpenTrace() {},
+    }),
+  );
+  assert.match(approvalOnlyHtml, /data-tool-approval-card/);
+  assert.match(approvalOnlyHtml, /0:12 ›/);
+  assert.doesNotMatch(approvalOnlyHtml, /执行完成/);
+  assert.doesNotMatch(approvalOnlyHtml, /data-execution-status="completed"/);
+});
+
+test("failed 与 expired 使用圆角浅红提示卡片，彻底淘汰 border-l-2 左竖杠", () => {
+  for (const [status, label] of [
+    ["failed", "执行失败"],
+    ["expired", "执行已过期"],
+  ]) {
+    const html = render([comment], {
+      ...attempt,
+      status,
+      can_retry: true,
+      error_summary: "连接节点超时",
+    });
+    assert.doesNotMatch(html, /border-l-2/);
+    assert.ok(html.includes(`data-execution-status="${status}"`));
+    assert.match(html, /rounded-2xl border border-rose-500\/35 bg-rose-500/);
+    assert.ok(html.includes(label));
+    assert.match(html, /0:12/);
+    assert.match(html, /重试/);
+    assert.match(html, /连接节点超时/);
+  }
+});
+
+test("status_change 穿插在同轮后续气泡之前，不再被挤到整轮末尾", () => {
+  const q1 = {
+    id: "q1",
+    sequence: 1,
+    type: "comment",
+    actor_kind: "human",
+    created_at: "2026-10-31T10:00:00Z",
+  };
+  const statusChange = {
+    id: "st1",
+    sequence: 2,
+    type: "status_change",
+    actor_kind: "system",
+    content: "todo -> working",
+    created_at: "2026-10-31T10:00:03Z",
+  };
+  const a1 = {
+    id: "a1",
+    sequence: 3,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: "att1",
+    content: "已经开始推进任务",
+    created_at: "2026-10-31T10:00:10Z",
+    message: { type: "text", content: "已经开始推进任务", end_turn: true },
+  };
+  const att1 = {
+    ...attempt,
+    id: "att1",
+    source_event_id: "q1",
+    created_at: "2026-10-31T10:00:00Z",
+    started_at: "2026-10-31T10:00:01Z",
+    finished_at: "2026-10-31T10:00:12Z",
+  };
+
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [q1, statusChange, a1],
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: att1,
+      attemptHistory: [],
+      onRetryAttempt() {},
+    }),
+  );
+  const qIdx = html.indexOf('id="event-q1"');
+  const stIdx = html.indexOf('id="event-st1"');
+  const aIdx = html.indexOf('id="event-a1"');
+  assert.ok(qIdx >= 0 && stIdx > qIdx && aIdx > stIdx);
 });

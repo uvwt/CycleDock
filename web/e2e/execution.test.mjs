@@ -386,3 +386,74 @@ test("本轮 end_turn 正式回复已落库但 Attempt 仍在收尾 running 时�
   assert.equal(grouped.running, null);
   assert.equal(grouped.statusByReply.get(finalMsg.id), runningAttempt);
 });
+
+test("同一轮中无 attempt_id 的 status_change 不被后续气泡反超挤到末尾", () => {
+  const q1 = {
+    id: "q1",
+    sequence: 1,
+    type: "comment",
+    actor_kind: "human",
+    created_at: "2026-10-31T10:00:00Z",
+  };
+  const statusChange = {
+    id: "st1",
+    sequence: 2,
+    type: "status_change",
+    actor_kind: "system",
+    content: "todo -> working",
+    created_at: "2026-10-31T10:00:03Z",
+  };
+  const a1 = {
+    id: "a1",
+    sequence: 3,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: "att1",
+    created_at: "2026-10-31T10:00:10Z",
+  };
+  const att1 = {
+    id: "att1",
+    source_event_id: "q1",
+    status: "completed",
+    created_at: "2026-10-31T10:00:00Z",
+    started_at: "2026-10-31T10:00:01Z",
+    finished_at: "2026-10-31T10:00:12Z",
+    attempt_number: 1,
+  };
+
+  const ordered = orderTimelineEvents([q1, statusChange, a1], [att1]);
+  assert.deepEqual(
+    ordered.map((e) => e.id),
+    ["q1", "st1", "a1"],
+  );
+});
+
+test("completed Attempt 无 end_turn 时优先归并到前序回复或融合进工具守卫卡片", () => {
+  const processMsg = {
+    id: "proc-1",
+    sequence: 2,
+    type: "message",
+    actor_kind: "cycle_agent",
+    attempt_id: attempt.id,
+    content: "先申请工具权限",
+    message: { type: "text", content: "先申请工具权限", end_turn: false },
+  };
+  const approvalEv = {
+    id: "ap-ev-1",
+    sequence: 3,
+    type: "tool_approval",
+    actor_kind: "system",
+    attempt_id: attempt.id,
+    content: "tool_approval",
+  };
+
+  const withReply = groupExecutionAttempts([comment, processMsg, approvalEv], attempt, []);
+  assert.equal(withReply.statusByReply.get(processMsg.id), attempt);
+  assert.equal(withReply.statusByToolApproval.size, 0);
+  assert.equal(withReply.byEvent.size, 0);
+
+  const approvalOnly = groupExecutionAttempts([comment, approvalEv], attempt, []);
+  assert.equal(approvalOnly.statusByReply.size, 0);
+  assert.equal(approvalOnly.statusByToolApproval.get(approvalEv.id), attempt);
+  assert.equal(approvalOnly.byEvent.size, 0);
+});

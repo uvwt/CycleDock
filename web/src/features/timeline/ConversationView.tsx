@@ -305,6 +305,7 @@ function EventRow({
   cardPreferredRouteID,
   attempts,
   headerAttempts,
+  toolApprovalAttempt,
   showSender,
   preview,
   previewStatus,
@@ -322,6 +323,7 @@ function EventRow({
   cardPreferredRouteID?: string | null;
   attempts: ExecutionAttempt[];
   headerAttempts: Attempt[];
+  toolApprovalAttempt?: Attempt;
   showSender: boolean;
   preview?: LiveReply;
   previewStatus?: string;
@@ -375,6 +377,8 @@ function EventRow({
           cardID={cardID}
           approval={event.tool_approval}
           fallbackContent={event.content}
+          completedAttempt={toolApprovalAttempt}
+          onOpenTrace={actions.onOpenTrace}
         />
         {attempts.length > 0 && (
           <div className="mt-3">
@@ -1268,7 +1272,7 @@ export function ConversationView({
     live?.replied && currentAttempt?.status === "running"
       ? null
       : currentAttempt;
-  const { byEvent, standalone, statusByReply, running } =
+  const { byEvent, standalone, statusByReply, statusByToolApproval, running } =
     groupExecutionAttempts(orderedEvents, effectiveAttempt, attemptHistory);
   const timelineItems = buildTimelineItems(rows, standalone, executions);
 
@@ -1724,6 +1728,7 @@ export function ConversationView({
                 showSender={!continuesGroup}
                 attempts={byEvent.get(event.id) || []}
                 headerAttempts={rowHeaderAttempts}
+                toolApprovalAttempt={statusByToolApproval.get(event.id)}
                 live={displayLive}
                 isLatest={!running && index === timelineItems.length - 1}
                 willTruncateFollowing={hasFollowingDialogue}
