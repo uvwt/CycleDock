@@ -51,6 +51,7 @@ var safeReadOnlyToolNames = map[string]bool{
 	"cycledock_send_card_message":      true,
 	"cycledock_inspect_card_session":   true,
 	"cycledock_read_artifact":          true,
+	"cycledock_read_attachment":        true,
 	"cycledock_search_session_history": true,
 	"read_file":                        true,
 	"list_dir":                         true,

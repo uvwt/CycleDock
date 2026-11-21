@@ -95,6 +95,29 @@ export function removeCachedCard(queryClient: QueryClient, card: Card) {
   );
 }
 
+function formatAttachmentOnlyPlaceholder(attachments?: AttachmentMeta[]): string {
+  if (!attachments || attachments.length === 0) return "";
+  const allText = attachments.every(
+    (att) =>
+      att.kind === "text" ||
+      (att.mime_type && !att.mime_type.toLowerCase().startsWith("image/")),
+  );
+  const allImage = attachments.every(
+    (att) =>
+      att.kind === "image" ||
+      (!att.kind && att.mime_type?.toLowerCase().startsWith("image/")),
+  );
+  if (attachments.length === 1) {
+    if (allText) {
+      return attachments[0].file_name ? `[文件: ${attachments[0].file_name}]` : "[文件]";
+    }
+    return "[图片]";
+  }
+  if (allText) return `[文件 x${attachments.length}]`;
+  if (allImage) return `[图片 x${attachments.length}]`;
+  return `[附件 x${attachments.length}]`;
+}
+
 // 发送消息接口返回成功后，立即把新消息或排队轮次写入本地时间线缓存，避免按钮等待后续 GET 请求转圈。
 export function applyOptimisticSentTurn(
   queryClient: QueryClient,
@@ -136,11 +159,7 @@ export function applyOptimisticSentTurn(
         source_event_id: params.eventID,
         content:
           params.content ||
-          (params.attachments && params.attachments.length > 0
-            ? params.attachments.length === 1
-              ? "[图片]"
-              : `[图片 x${params.attachments.length}]`
-            : ""),
+          formatAttachmentOnlyPlaceholder(params.attachments),
         device_node_id: params.deviceTarget?.node_id,
         device_name: params.deviceTarget?.name,
         created_at: now,

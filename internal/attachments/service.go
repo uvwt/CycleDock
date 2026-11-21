@@ -29,13 +29,14 @@ var (
 )
 
 type Config struct {
-	Dir             string
-	TTL             time.Duration
-	MaxTotalBytes   int64
-	MaxUploadBytes  int64
-	MaxDimension    int
-	CleanupInterval time.Duration
-	Logger          *slog.Logger
+	Dir                string
+	TTL                time.Duration
+	MaxTotalBytes      int64
+	MaxUploadBytes     int64
+	MaxTextUploadBytes int64
+	MaxDimension       int
+	CleanupInterval    time.Duration
+	Logger             *slog.Logger
 }
 
 type Attachment struct {
@@ -44,8 +45,13 @@ type Attachment struct {
 	CardID             *uuid.UUID `json:"card_id,omitempty"`
 	UploadedBySourceID uuid.UUID  `json:"-"`
 	URL                string     `json:"url"`
+	Kind               string     `json:"kind"`
+	FileName           string     `json:"file_name,omitempty"`
+	StorageEncoding    string     `json:"storage_encoding,omitempty"`
 	MimeType           string     `json:"mime_type"`
 	SizeBytes          int64      `json:"size_bytes"`
+	StoredSizeBytes    int64      `json:"stored_size_bytes,omitempty"`
+	LineCount          int        `json:"line_count,omitempty"`
 	Width              int        `json:"width"`
 	Height             int        `json:"height"`
 	SHA256             string     `json:"-"`
@@ -64,6 +70,7 @@ type UploadParams struct {
 	WorkspaceID        uuid.UUID
 	CardID             *uuid.UUID
 	UploadedBySourceID uuid.UUID
+	FileName           string
 	RawData            []byte
 }
 
@@ -74,17 +81,18 @@ type CleanupStats struct {
 	FreedBytes   int64
 }
 
-// Service 管理本地临时磁盘图片附件的压缩落盘、鉴权读取以及 TTL + 总容量上限双重自动清理。
+// Service 管理本地临时磁盘附件（图片及 gzip 压缩纯文本/日志/代码）的落盘、鉴权读取以及 TTL + 总容量上限双重自动清理。
 // 本地目录独立于 PostgreSQL 与云端 R2 备份，数据库仅保存轻量元数据行。
 type Service struct {
-	pool            *pgxpool.Pool
-	dir             string
-	ttl             time.Duration
-	maxTotalBytes   int64
-	maxUploadBytes  int64
-	maxDimension    int
-	cleanupInterval time.Duration
-	logger          *slog.Logger
+	pool               *pgxpool.Pool
+	dir                string
+	ttl                time.Duration
+	maxTotalBytes      int64
+	maxUploadBytes     int64
+	maxTextUploadBytes int64
+	maxDimension       int
+	cleanupInterval    time.Duration
+	logger             *slog.Logger
 }
 
 func DefaultUploadDir() string {
@@ -131,6 +139,10 @@ func New(pool *pgxpool.Pool, cfg Config) (*Service, error) {
 	if maxUpload <= 0 {
 		maxUpload = DefaultMaxUploadBytes
 	}
+	maxTextUpload := cfg.MaxTextUploadBytes
+	if maxTextUpload <= 0 {
+		maxTextUpload = DefaultMaxTextUploadBytes
+	}
 	maxDim := cfg.MaxDimension
 	if maxDim <= 0 {
 		maxDim = DefaultMaxDimension
@@ -144,21 +156,23 @@ func New(pool *pgxpool.Pool, cfg Config) (*Service, error) {
 		logger = slog.Default()
 	}
 	return &Service{
-		pool:            pool,
-		dir:             absDir,
-		ttl:             ttl,
-		maxTotalBytes:   maxTotal,
-		maxUploadBytes:  maxUpload,
-		maxDimension:    maxDim,
-		cleanupInterval: interval,
-		logger:          logger,
+		pool:               pool,
+		dir:                absDir,
+		ttl:                ttl,
+		maxTotalBytes:      maxTotal,
+		maxUploadBytes:     maxUpload,
+		maxTextUploadBytes: maxTextUpload,
+		maxDimension:       maxDim,
+		cleanupInterval:    interval,
+		logger:             logger,
 	}, nil
 }
 
-func (s *Service) Dir() string           { return s.dir }
-func (s *Service) MaxUploadBytes() int64 { return s.maxUploadBytes }
+func (s *Service) Dir() string               { return s.dir }
+func (s *Service) MaxUploadBytes() int64     { return s.maxUploadBytes }
+func (s *Service) MaxTextUploadBytes() int64 { return s.maxTextUploadBytes }
 
-// Upload 校验并压缩用户上传的图片，按 workspace_id/YYYY-MM/<id>.<ext> 落盘（同工作区内按 SHA-256 复用文件），
+// Upload 校验并压缩用户上传的图片或纯文本/日志/代码文件，按 workspace_id/YYYY-MM/<id>.<ext> 落盘（同工作区内按 SHA-256 复用文件），
 // 并在 workspace_attachments 中写入轻量元数据记录。
 func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error) {
 	if p.WorkspaceID == uuid.Nil || p.UploadedBySourceID == uuid.Nil {
@@ -181,9 +195,60 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 		}
 	}
 
-	processed, err := ProcessImage(p.RawData, s.maxDimension)
-	if err != nil {
-		return Attachment{}, err
+	var (
+		kind            string
+		fileName        string
+		storageEncoding string
+		mimeType        string
+		sizeBytes       int64
+		storedSizeBytes int64
+		lineCount       int
+		width           int
+		height          int
+		sha256Hex       string
+		fileExt         string
+		diskBytes       []byte
+	)
+
+	if _, _, isImg := DetectImageFormat(p.RawData); isImg {
+		processed, err := ProcessImage(p.RawData, s.maxDimension)
+		if err != nil {
+			return Attachment{}, err
+		}
+		kind = KindImage
+		fileName = SanitizeFileName(p.FileName)
+		storageEncoding = EncodingIdentity
+		mimeType = processed.MimeType
+		sizeBytes = processed.SizeBytes
+		storedSizeBytes = processed.SizeBytes
+		width = processed.Width
+		height = processed.Height
+		sha256Hex = processed.SHA256
+		fileExt = processed.Ext
+		diskBytes = processed.Data
+	} else if IsAllowedTextFileName(p.FileName) {
+		processed, err := ProcessTextFile(p.FileName, p.RawData, s.maxTextUploadBytes)
+		if err != nil {
+			return Attachment{}, err
+		}
+		kind = KindText
+		fileName = processed.FileName
+		storageEncoding = processed.StorageEncoding
+		mimeType = processed.MimeType
+		sizeBytes = processed.SizeBytes
+		storedSizeBytes = processed.StoredSizeBytes
+		lineCount = processed.LineCount
+		sha256Hex = processed.SHA256
+		fileExt = processed.Ext
+		diskBytes = processed.CompressedData
+	} else {
+		if len(p.RawData) == 0 {
+			return Attachment{}, ErrEmptyImage
+		}
+		return Attachment{}, fmt.Errorf(
+			"%w: only JPEG/PNG/WebP/GIF images and plain text/log/code files are allowed",
+			ErrUnsupportedFormat,
+		)
 	}
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -193,27 +258,33 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 	// 同工作区内按 SHA-256 去重：仅当复用目标磁盘文件真实存在时才共享 relative_path，绝不跨工作区共享。
 	var relPath string
 	var reusedFile bool
-	var existingPath, existingMime string
-	var existingSize int64
-	var existingW, existingH int
-	err = s.pool.QueryRow(ctx, `
-		SELECT relative_path, mime_type, size_bytes, width, height
+	var existingPath, existingMime, existingEncoding string
+	var existingSize, existingStoredSize int64
+	var existingLines, existingW, existingH int
+	err := s.pool.QueryRow(ctx, `
+		SELECT relative_path, mime_type, storage_encoding, size_bytes, stored_size_bytes, line_count, width, height
 		FROM workspace_attachments
 		WHERE workspace_id = $1
-		  AND sha256 = $2
+		  AND kind = $2
+		  AND sha256 = $3
 		  AND purged_at IS NULL
-		  AND expires_at > $3
+		  AND expires_at > $4
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, p.WorkspaceID, processed.SHA256, now).Scan(&existingPath, &existingMime, &existingSize, &existingW, &existingH)
+	`, p.WorkspaceID, kind, sha256Hex, now).Scan(
+		&existingPath, &existingMime, &existingEncoding, &existingSize, &existingStoredSize, &existingLines, &existingW, &existingH,
+	)
 	if err == nil && existingPath != "" {
 		if absPath, pathErr := s.resolveSafePath(existingPath); pathErr == nil {
 			if stat, statErr := os.Stat(absPath); statErr == nil && !stat.IsDir() && stat.Size() > 0 {
 				relPath = existingPath
-				processed.MimeType = existingMime
-				processed.SizeBytes = existingSize
-				processed.Width = existingW
-				processed.Height = existingH
+				mimeType = existingMime
+				storageEncoding = existingEncoding
+				sizeBytes = existingSize
+				storedSizeBytes = existingStoredSize
+				lineCount = existingLines
+				width = existingW
+				height = existingH
 				reusedFile = true
 			}
 		}
@@ -223,12 +294,12 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 
 	var writtenAbsPath string
 	if !reusedFile {
-		relPath = path.Join(p.WorkspaceID.String(), now.Format("2006-01"), id.String()+processed.Ext)
+		relPath = path.Join(p.WorkspaceID.String(), now.Format("2006-01"), id.String()+fileExt)
 		absPath, err := s.resolveSafePath(relPath)
 		if err != nil {
 			return Attachment{}, err
 		}
-		if err := writeAtomicFile(absPath, processed.Data); err != nil {
+		if err := writeAtomicFile(absPath, diskBytes); err != nil {
 			return Attachment{}, fmt.Errorf("store attachment file: %w", err)
 		}
 		writtenAbsPath = absPath
@@ -243,14 +314,16 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO workspace_attachments (
 			id, workspace_id, card_id, uploaded_by_source_id,
-			mime_type, size_bytes, width, height,
+			kind, file_name, storage_encoding,
+			mime_type, size_bytes, stored_size_bytes, line_count, width, height,
 			sha256, relative_path, created_at, expires_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`,
 		id, p.WorkspaceID, cardIDArg, p.UploadedBySourceID,
-		processed.MimeType, processed.SizeBytes, processed.Width, processed.Height,
-		processed.SHA256, relPath, now, expiresAt,
+		kind, fileName, storageEncoding,
+		mimeType, sizeBytes, storedSizeBytes, lineCount, width, height,
+		sha256Hex, relPath, now, expiresAt,
 	)
 	if err != nil {
 		if writtenAbsPath != "" {
@@ -265,11 +338,16 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 		CardID:             cardIDArg,
 		UploadedBySourceID: p.UploadedBySourceID,
 		URL:                AttachmentURL(p.WorkspaceID, id),
-		MimeType:           processed.MimeType,
-		SizeBytes:          processed.SizeBytes,
-		Width:              processed.Width,
-		Height:             processed.Height,
-		SHA256:             processed.SHA256,
+		Kind:               kind,
+		FileName:           fileName,
+		StorageEncoding:    storageEncoding,
+		MimeType:           mimeType,
+		SizeBytes:          sizeBytes,
+		StoredSizeBytes:    storedSizeBytes,
+		LineCount:          lineCount,
+		Width:              width,
+		Height:             height,
+		SHA256:             sha256Hex,
 		RelativePath:       relPath,
 		CreatedAt:          now,
 		ExpiresAt:          expiresAt,
@@ -286,13 +364,15 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			id, workspace_id, card_id, uploaded_by_source_id,
-			mime_type, size_bytes, width, height,
+			kind, file_name, storage_encoding,
+			mime_type, size_bytes, stored_size_bytes, line_count, width, height,
 			sha256, relative_path, created_at, expires_at, purged_at
 		FROM workspace_attachments
 		WHERE id = $1 AND workspace_id = $2
 	`, attachmentID, workspaceID).Scan(
 		&att.ID, &att.WorkspaceID, &att.CardID, &att.UploadedBySourceID,
-		&att.MimeType, &att.SizeBytes, &att.Width, &att.Height,
+		&att.Kind, &att.FileName, &att.StorageEncoding,
+		&att.MimeType, &att.SizeBytes, &att.StoredSizeBytes, &att.LineCount, &att.Width, &att.Height,
 		&att.SHA256, &att.RelativePath, &att.CreatedAt, &att.ExpiresAt, &att.PurgedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -305,12 +385,12 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 
 	now := time.Now().UTC()
 	if att.PurgedAt != nil || !att.ExpiresAt.After(now) {
-		return OpenedAttachment{}, ErrExpired
+		return OpenedAttachment{Attachment: att}, ErrExpired
 	}
 
 	absPath, err := s.resolveSafePath(att.RelativePath)
 	if err != nil {
-		return OpenedAttachment{}, ErrExpired
+		return OpenedAttachment{Attachment: att}, ErrExpired
 	}
 	file, err := os.Open(absPath)
 	if err != nil {
@@ -321,20 +401,28 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 				SET purged_at = COALESCE(purged_at, $3)
 				WHERE id = $1 AND workspace_id = $2
 			`, attachmentID, workspaceID, now)
-			return OpenedAttachment{}, ErrExpired
+			return OpenedAttachment{Attachment: att}, ErrExpired
 		}
 		return OpenedAttachment{}, fmt.Errorf("open attachment file: %w", err)
 	}
 	return OpenedAttachment{Attachment: att, File: file}, nil
 }
 
-// ReadBytes 供 Built-in Agent 发往多模态模型前按需从本地磁盘回填图片字节。
+// ReadBytes 按需从本地磁盘读取附件逻辑内容：图片返回落盘字节，gzip 文本附件透明解压为 UTF-8 原始字节。
 func (s *Service) ReadBytes(ctx context.Context, workspaceID, attachmentID uuid.UUID) (Attachment, []byte, error) {
 	opened, err := s.Open(ctx, workspaceID, attachmentID)
 	if err != nil {
-		return Attachment{}, nil, err
+		return opened.Attachment, nil, err
 	}
 	defer opened.File.Close()
+
+	if opened.StorageEncoding == EncodingGzip {
+		data, err := DecompressGzip(opened.File, s.maxTextUploadBytes)
+		if err != nil {
+			return opened.Attachment, nil, fmt.Errorf("read gzip attachment file: %w", err)
+		}
+		return opened.Attachment, data, nil
+	}
 
 	data, err := io.ReadAll(io.LimitReader(opened.File, s.maxUploadBytes+1))
 	if err != nil {
@@ -399,7 +487,7 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 		UPDATE workspace_attachments
 		SET purged_at = $1
 		WHERE purged_at IS NULL AND expires_at <= $1
-		RETURNING relative_path, size_bytes
+		RETURNING relative_path, stored_size_bytes
 	`, now)
 	if err != nil {
 		return stats, fmt.Errorf("purge expired attachments: %w", err)
@@ -449,7 +537,7 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 		var relPath string
 		var sizeBytes int64
 		err := s.pool.QueryRow(ctx, `
-			SELECT id, relative_path, size_bytes
+			SELECT id, relative_path, stored_size_bytes
 			FROM workspace_attachments
 			WHERE purged_at IS NULL
 			ORDER BY created_at ASC, id ASC
@@ -492,9 +580,9 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 func (s *Service) activeUniqueBytes(ctx context.Context) (int64, error) {
 	var total int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(size_bytes), 0)
+		SELECT COALESCE(SUM(stored_size_bytes), 0)
 		FROM (
-			SELECT DISTINCT ON (relative_path) relative_path, size_bytes
+			SELECT DISTINCT ON (relative_path) relative_path, stored_size_bytes
 			FROM workspace_attachments
 			WHERE purged_at IS NULL
 			ORDER BY relative_path, created_at DESC
