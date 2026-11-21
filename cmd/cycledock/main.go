@@ -222,12 +222,16 @@ func main() {
 	if pushSender != nil {
 		go httpapi.DeliverPushes(ctx, pool, dataStore, pushSender, logger)
 	}
+	dispatcherDone := make(chan struct{})
 	go func() {
+		defer close(dispatcherDone)
 		if err := dispatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("Cycle Agent dispatcher stopped", "error", err)
 		}
 	}()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -241,6 +245,14 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
+	}
+	// 等待 HTTP 服务关闭以及调度器完成运行中 Attempt 的优雅交接，
+	// 避免主函数提前 return 触发 pool.Close() 导致交接写库失败。
+	<-shutdownDone
+	select {
+	case <-dispatcherDone:
+	case <-time.After(15 * time.Second):
+		logger.Warn("timed out waiting for Cycle Agent dispatcher graceful shutdown")
 	}
 }
 

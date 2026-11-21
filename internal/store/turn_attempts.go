@@ -639,9 +639,21 @@ func (s *Store) FinishAttempt(
 	return tx.Commit(ctx)
 }
 
+const (
+	// AttemptErrorLeaseExpired 标记因进程崩溃/失联导致心跳超时的异常中断。
+	AttemptErrorLeaseExpired = "execution lease expired"
+	// AttemptErrorServerShutdown 标记因服务正常发版/优雅停机导致的非故障中断。
+	AttemptErrorServerShutdown = "interrupted by server shutdown"
+)
+
 type AttemptLeaseRecoveryResult struct {
 	Expired          int
 	RecoveryAttempts int
+}
+
+type ShutdownInterruptResult struct {
+	Interrupted     bool
+	RecoveryAttempt *TurnAttempt
 }
 
 // EditPendingTurn 只修改尚未被领取的人工输入，并同步其原 Comment Event。
@@ -998,8 +1010,9 @@ func (s *Store) ExpireAndRecoverBuiltInAttempts(
 	rows.Close()
 
 	var result AttemptLeaseRecoveryResult
+	var notifiedAny bool
 	for _, item := range candidates {
-		expired, recovered, err := s.expireAndRecoverBuiltInAttempt(
+		expired, recovered, notified, err := s.expireAndRecoverBuiltInAttempt(
 			ctx, workspaceID, item.cardID, item.attemptID, now,
 		)
 		if err != nil {
@@ -1011,8 +1024,11 @@ func (s *Store) ExpireAndRecoverBuiltInAttempts(
 		if recovered {
 			result.RecoveryAttempts++
 		}
+		if notified {
+			notifiedAny = true
+		}
 	}
-	if result.RecoveryAttempts > 0 {
+	if result.RecoveryAttempts > 0 || notifiedAny {
 		s.notifyWorkReady()
 	}
 	return result, nil
@@ -1022,18 +1038,18 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 	ctx context.Context,
 	workspaceID, cardID, attemptID uuid.UUID,
 	now time.Time,
-) (bool, bool, error) {
+) (expired bool, recovered bool, notified bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	defer tx.Rollback(ctx)
 
 	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			return false, false, nil
+			return false, false, false, nil
 		}
-		return false, false, err
+		return false, false, false, err
 	}
 
 	var attempt TurnAttempt
@@ -1069,66 +1085,35 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 		&cardKind, &discussionState, &todoState, &ongoingState,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, false, nil
+		return false, false, false, nil
 	}
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	if invocationID.Valid {
 		attempt.InvocationID = invocationID.String
 	}
 	if attempt.Status != domain.AttemptStatusRunning ||
 		attempt.LeaseExpiresAt == nil || attempt.LeaseExpiresAt.After(now) {
-		return false, false, tx.Commit(ctx)
+		return false, false, false, tx.Commit(ctx)
 	}
 
 	command, err := tx.Exec(ctx, `
 		UPDATE turn_attempts
 		SET status='expired',
-		    error_summary='execution lease expired',
+		    error_summary=$4,
 		    heartbeat_at=NULL,
 		    lease_expires_at=NULL,
-		    finished_at=$4,
-		    updated_at=$4
+		    finished_at=$5,
+		    updated_at=$5
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		  AND status='running'
-	`, workspaceID, cardID, attemptID, now)
+	`, workspaceID, cardID, attemptID, AttemptErrorLeaseExpired, now)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	if command.RowsAffected() != 1 {
-		return false, false, tx.Commit(ctx)
-	}
-	const leaseExpiredSummary = "execution lease expired"
-	decision, err := decideSupervisorFailure(ctx, tx, workspaceID, cardID, attempt.TurnID, leaseExpiredSummary)
-	if err != nil {
-		return false, false, err
-	}
-	if err := notifySupervisorFailure(
-		ctx, tx, workspaceID, cardID, attempt.TurnID, attemptID, attempt.RunnerSourceID,
-		domain.AttemptStatusExpired, leaseExpiredSummary, decision,
-	); err != nil {
-		return false, false, err
-	}
-	if decision.CircuitOpen {
-		if err := tx.Commit(ctx); err != nil {
-			return false, false, err
-		}
-		return true, false, nil
-	}
-
-	executable := cardKind == string(domain.CardKindDiscussion) &&
-		discussionState.Valid && discussionState.String == string(domain.DiscussionStateActive)
-	if cardKind == string(domain.CardKindTodo) {
-		executable = todoState.Valid && todoState.String != string(domain.TodoStateDone)
-	} else if cardKind == string(domain.CardKindOngoing) {
-		executable = ongoingState.Valid && ongoingState.String == string(domain.OngoingStateActive)
-	}
-	if sourceKind != string(domain.SourceKindCycleAgent) || !routeEnabled || !executable {
-		if err := tx.Commit(ctx); err != nil {
-			return false, false, err
-		}
-		return true, false, nil
+		return false, false, false, tx.Commit(ctx)
 	}
 
 	var existingID uuid.UUID
@@ -1139,12 +1124,167 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 	`, workspaceID, attemptID).Scan(&existingID)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
-			return false, false, err
+			return false, false, false, err
 		}
-		return true, false, nil
+		return true, false, false, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, false, err
+		return false, false, false, err
+	}
+
+	decision, err := decideSupervisorFailure(ctx, tx, workspaceID, cardID, attempt.TurnID, AttemptErrorLeaseExpired)
+	if err != nil {
+		return false, false, false, err
+	}
+
+	executable := cardExecutableForAttempt(cardKind, discussionState, todoState, ongoingState)
+	canRecover := !decision.CircuitOpen &&
+		sourceKind == string(domain.SourceKindCycleAgent) &&
+		routeEnabled &&
+		executable
+
+	// 自动恢复属于瞬时自愈，不向来源讨论发失败回调，避免主控重复插队消息；
+	// 仅在触发熔断、无可用模型路由或卡片已不可执行等终态时才通知来源讨论。
+	if canRecover {
+		recoveryID := uuid.New()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO turn_attempts (
+				id, workspace_id, card_id, turn_id, attempt_number, reason,
+				retry_of_attempt_id, runner_source_id, status
+			)
+			VALUES ($1,$2,$3,$4,$5,'recovery',$6,$7,'queued')
+		`, recoveryID, workspaceID, cardID, attempt.TurnID,
+			attempt.AttemptNumber+1, attempt.ID, attempt.RunnerSourceID)
+		if err != nil {
+			return false, false, false, mapConstraintError(err)
+		}
+		if err := supersedePendingToolApprovalsTx(
+			ctx, tx, workspaceID, cardID, "执行租约已超时并自动恢复，旧审批已自动失效",
+		); err != nil {
+			return false, false, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, false, false, err
+		}
+		return true, true, false, nil
+	}
+
+	if err := notifySupervisorFailure(
+		ctx, tx, workspaceID, cardID, attempt.TurnID, attemptID, attempt.RunnerSourceID,
+		domain.AttemptStatusExpired, AttemptErrorLeaseExpired, decision,
+	); err != nil {
+		return false, false, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, false, false, err
+	}
+	return true, false, true, nil
+}
+
+// InterruptAttemptForShutdown 在服务优雅停机（SIGTERM/SIGINT）时将运行中的内置 Attempt
+// 标记为非故障中断（superseded）并原子排队一条 recovery Attempt。
+// 新进程启动后可直接领取该 queued Attempt 无缝续跑，无需等待租约超时，
+// 且不触发来源讨论失败回调、不计入相同错误熔断、不消耗 5 次动态自愈预算。
+func (s *Store) InterruptAttemptForShutdown(
+	ctx context.Context,
+	workspaceID, cardID, attemptID uuid.UUID,
+	now time.Time,
+) (ShutdownInterruptResult, error) {
+	now = now.UTC()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ShutdownInterruptResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockCard(ctx, tx, workspaceID, cardID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return ShutdownInterruptResult{}, nil
+		}
+		return ShutdownInterruptResult{}, err
+	}
+
+	var attempt TurnAttempt
+	var invocationID pgtype.Text
+	var sourceKind, cardKind string
+	var routeEnabled bool
+	var discussionState, todoState, ongoingState pgtype.Text
+	err = tx.QueryRow(ctx, `
+		SELECT
+			a.id, a.workspace_id, a.card_id, a.turn_id, a.attempt_number, a.reason,
+			a.retry_of_attempt_id, a.runner_source_id, a.invocation_id, a.status,
+			a.started_at, a.lease_expires_at, a.finished_at,
+			src.kind,
+			EXISTS (
+				SELECT 1
+				FROM workspace_model_routes route
+				WHERE route.workspace_id=a.workspace_id AND route.enabled
+			),
+			c.kind, c.discussion_state, c.todo_state, c.ongoing_state
+		FROM turn_attempts a
+		JOIN sources src
+		  ON src.workspace_id=a.workspace_id AND src.id=a.runner_source_id
+		JOIN cards c
+		  ON c.workspace_id=a.workspace_id AND c.id=a.card_id
+		WHERE a.workspace_id=$1 AND a.card_id=$2 AND a.id=$3
+		FOR UPDATE OF a
+	`, workspaceID, cardID, attemptID).Scan(
+		&attempt.ID, &attempt.WorkspaceID, &attempt.CardID, &attempt.TurnID,
+		&attempt.AttemptNumber, &attempt.Reason, &attempt.RetryOfAttemptID,
+		&attempt.RunnerSourceID, &invocationID, &attempt.Status,
+		&attempt.StartedAt, &attempt.LeaseExpiresAt, &attempt.FinishedAt,
+		&sourceKind, &routeEnabled,
+		&cardKind, &discussionState, &todoState, &ongoingState,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ShutdownInterruptResult{}, nil
+	}
+	if err != nil {
+		return ShutdownInterruptResult{}, err
+	}
+	if attempt.Status != domain.AttemptStatusRunning || sourceKind != string(domain.SourceKindCycleAgent) {
+		return ShutdownInterruptResult{}, tx.Commit(ctx)
+	}
+
+	command, err := tx.Exec(ctx, `
+		UPDATE turn_attempts
+		SET status='superseded',
+		    error_summary=$4,
+		    heartbeat_at=NULL,
+		    lease_expires_at=NULL,
+		    finished_at=$5,
+		    updated_at=$5
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
+		  AND status='running'
+	`, workspaceID, cardID, attemptID, AttemptErrorServerShutdown, now)
+	if err != nil {
+		return ShutdownInterruptResult{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return ShutdownInterruptResult{}, tx.Commit(ctx)
+	}
+
+	var existingID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id
+		FROM turn_attempts
+		WHERE workspace_id=$1 AND retry_of_attempt_id=$2
+	`, workspaceID, attemptID).Scan(&existingID)
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return ShutdownInterruptResult{}, err
+		}
+		return ShutdownInterruptResult{Interrupted: true}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return ShutdownInterruptResult{}, err
+	}
+
+	if !routeEnabled || !cardExecutableForAttempt(cardKind, discussionState, todoState, ongoingState) {
+		if err := tx.Commit(ctx); err != nil {
+			return ShutdownInterruptResult{}, err
+		}
+		return ShutdownInterruptResult{Interrupted: true}, nil
 	}
 
 	recoveryID := uuid.New()
@@ -1157,12 +1297,47 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 	`, recoveryID, workspaceID, cardID, attempt.TurnID,
 		attempt.AttemptNumber+1, attempt.ID, attempt.RunnerSourceID)
 	if err != nil {
-		return false, false, mapConstraintError(err)
+		return ShutdownInterruptResult{}, mapConstraintError(err)
+	}
+	if err := supersedePendingToolApprovalsTx(
+		ctx, tx, workspaceID, cardID, "服务重启续跑，旧审批已自动失效",
+	); err != nil {
+		return ShutdownInterruptResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, false, err
+		return ShutdownInterruptResult{}, err
 	}
-	return true, true, nil
+	recovery := TurnAttempt{
+		ID:               recoveryID,
+		WorkspaceID:      workspaceID,
+		CardID:           cardID,
+		TurnID:           attempt.TurnID,
+		AttemptNumber:    attempt.AttemptNumber + 1,
+		Reason:           domain.AttemptReasonRecovery,
+		RetryOfAttemptID: uuid.NullUUID{UUID: attempt.ID, Valid: true},
+		RunnerSourceID:   attempt.RunnerSourceID,
+		Status:           domain.AttemptStatusQueued,
+	}
+	return ShutdownInterruptResult{
+		Interrupted:     true,
+		RecoveryAttempt: &recovery,
+	}, nil
+}
+
+func cardExecutableForAttempt(
+	cardKind string,
+	discussionState, todoState, ongoingState pgtype.Text,
+) bool {
+	switch cardKind {
+	case string(domain.CardKindDiscussion):
+		return discussionState.Valid && discussionState.String == string(domain.DiscussionStateActive)
+	case string(domain.CardKindTodo):
+		return todoState.Valid && todoState.String != string(domain.TodoStateDone)
+	case string(domain.CardKindOngoing):
+		return ongoingState.Valid && ongoingState.String == string(domain.OngoingStateActive)
+	default:
+		return false
+	}
 }
 
 func (s *Store) GetAttempt(

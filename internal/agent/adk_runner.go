@@ -282,6 +282,10 @@ func (r *Runner) RunAttempt(ctx context.Context, claim store.AttemptClaim) (runE
 	default:
 	}
 
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	attempt, err := r.store.GetAttempt(runCtx, cardContext.WorkspaceID, cardContext.AttemptID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.ErrAttemptNotCurrent

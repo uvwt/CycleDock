@@ -364,6 +364,8 @@ const en = {
   发送: "Send",
   加入队列: "Queue",
   已收到回复: "Reply received",
+  服务重启续跑: "Resuming after restart",
+  "服务重启中，已自动接续执行": "Server restarted; automatically resuming execution",
   执行完成: "Completed",
   "正在连接实时通道…": "Connecting to live updates…",
   "此讨论已归档，不能继续发送消息": "This discussion is archived",
