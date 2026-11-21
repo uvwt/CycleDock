@@ -1885,7 +1885,6 @@ test("用户评论附带图片与过期图片渲染，输入框支持纯图片�
   );
 });
 
-<<<<<<< HEAD
 test("Markdown 代码块渲染语法高亮、语言标签与独立复制按钮", () => {
   const markdown = [
     "下面是三段示例：",
@@ -1943,7 +1942,8 @@ test("Markdown 代码块渲染语法高亮、语言标签与独立复制按钮",
   // text 代码块保持纯文本不着色
   assert.match(html, /class="language-text"/);
   assert.match(html, /plain text output/);
-=======
+});
+
 test("未启动的待办卡片空态展示一键开始执行按钮，且 createTodo/startCard 透传参数", async (t) => {
   const emptyTodoHtml = renderToStaticMarkup(
     createElement(ConversationView, {
@@ -2004,5 +2004,4 @@ test("未启动的待办卡片空态展示一键开始执行按钮，且 createT
   assert.equal(calls[2].method, "POST");
   assert.equal(calls[2].headers["Idempotency-Key"], "start-card:card-1");
   assert.deepEqual(calls[2].body, { preferred_model_route_id: "route-1" });
->>>>>>> origin/feat/card-create-auto-start-option
 });
