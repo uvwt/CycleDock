@@ -522,3 +522,132 @@ test("导航分类状态点：静音定时卡按 approval > critical > warning �
     "approval",
   );
 });
+
+test("所有未归档的置顶卡片均进入焦点列表，按更高动态原因优先、纯置顶按置顶时间倒序，不触发额外状态点", () => {
+  const pinnedDiscussion = makeCard({
+    id: "disc-pinned-older",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T01:00:00Z",
+    updated_at: "2026-11-08T09:00:00Z",
+  });
+  const pinnedTodo = makeCard({
+    id: "todo-pinned-newer",
+    kind: "todo",
+    todo_state: "todo",
+    pinned_at: "2026-11-08T03:00:00Z",
+    updated_at: "2026-11-08T02:00:00Z",
+  });
+  const pinnedDone = makeCard({
+    id: "todo-pinned-done",
+    kind: "todo",
+    todo_state: "done",
+    pinned_at: "2026-11-08T02:00:00Z",
+    updated_at: "2026-11-08T08:00:00Z",
+  });
+  const pinnedOngoing = makeCard({
+    id: "ongoing-pinned-healthy",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "healthy",
+    pinned_at: "2026-11-08T04:00:00Z",
+    updated_at: "2026-11-08T01:00:00Z",
+  });
+  const pinnedWorking = makeCard({
+    id: "todo-pinned-working",
+    kind: "todo",
+    todo_state: "working",
+    pinned_at: "2026-11-08T00:30:00Z",
+    updated_at: "2026-11-08T01:00:00Z",
+  });
+  const unpinnedWorking = makeCard({
+    id: "todo-unpinned-working",
+    kind: "todo",
+    todo_state: "working",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const pinnedArchivedDiscussion = makeCard({
+    id: "disc-pinned-archived",
+    kind: "discussion",
+    discussion_state: "archived",
+    pinned_at: "2026-11-08T05:00:00Z",
+  });
+  const pinnedArchivedOngoing = makeCard({
+    id: "ongoing-pinned-archived",
+    kind: "ongoing",
+    ongoing_state: "archived",
+    pinned_at: "2026-11-08T06:00:00Z",
+  });
+
+  assert.equal(getCardFocusReason(pinnedDiscussion), "pinned");
+  assert.equal(getCardFocusReason(pinnedTodo), "pinned");
+  assert.equal(getCardFocusReason(pinnedDone), "pinned");
+  assert.equal(getCardFocusReason(pinnedOngoing), "pinned");
+  // 同时具备更高动态原因时保留更高原因，不降级为 pinned
+  assert.equal(getCardFocusReason(pinnedWorking), "working");
+  // 已归档卡片即使置顶也不进入日常焦点
+  assert.equal(getCardFocusReason(pinnedArchivedDiscussion), null);
+  assert.equal(getCardFocusReason(pinnedArchivedOngoing), null);
+
+  const summary = buildFocusSummary([
+    pinnedDiscussion,
+    pinnedTodo,
+    pinnedDone,
+    pinnedOngoing,
+    unpinnedWorking,
+    pinnedWorking,
+    pinnedArchivedDiscussion,
+    pinnedArchivedOngoing,
+  ]);
+
+  // 同为 working 时已置顶排在前面；其后纯 pinned 按 pinned_at 倒序
+  assert.deepEqual(
+    summary.cards.map((c) => c.id),
+    [
+      "todo-pinned-working",
+      "todo-unpinned-working",
+      "ongoing-pinned-healthy",
+      "todo-pinned-newer",
+      "todo-pinned-done",
+      "disc-pinned-older",
+    ],
+  );
+  assert.equal(summary.workingCount, 2);
+  assert.equal(summary.pinnedCount, 4);
+  // 纯置顶与进行中不触发呼吸/未读/告警视觉状态点
+  assert.equal(summary.highestVisualStatus, "idle");
+  assert.equal(getKindVisualStatus([pinnedDiscussion], "discussion"), "idle");
+  assert.equal(getKindVisualStatus([pinnedOngoing], "ongoing"), "idle");
+});
+
+test("已静音但被置顶的未归档卡片仍保留在焦点列表中（按 pinned 入列，不误报运行中/未读）", () => {
+  const mutedPinnedRunning = makeCard({
+    id: "disc-muted-pinned-running",
+    kind: "discussion",
+    discussion_state: "active",
+    current_attempt_status: "running",
+    unread: true,
+    notifications_muted: true,
+    pinned_at: "2026-11-08T04:00:00Z",
+  });
+  const mutedPinnedArchived = makeCard({
+    id: "disc-muted-pinned-archived",
+    kind: "discussion",
+    discussion_state: "archived",
+    notifications_muted: true,
+    pinned_at: "2026-11-08T05:00:00Z",
+  });
+
+  assert.equal(getCardFocusReason(mutedPinnedRunning), "pinned");
+  assert.equal(getCardFocusReason(mutedPinnedArchived), null);
+
+  const summary = buildFocusSummary([mutedPinnedRunning, mutedPinnedArchived]);
+  assert.deepEqual(
+    summary.cards.map((c) => c.id),
+    ["disc-muted-pinned-running"],
+  );
+  assert.equal(summary.pinnedCount, 1);
+  assert.equal(summary.answeringCount, 0);
+  assert.equal(summary.unreadCount, 0);
+  assert.equal(summary.highestVisualStatus, "idle");
+});
