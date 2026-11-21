@@ -48,6 +48,7 @@ var safeReadOnlyToolNames = map[string]bool{
 	"cycledock_generate_work":          true,
 	"cycledock_confirm_card":           true,
 	"cycledock_update_card":            true,
+	"cycledock_list_cards":             true,
 	"cycledock_send_card_message":      true,
 	"cycledock_inspect_card_session":   true,
 	"cycledock_read_artifact":          true,

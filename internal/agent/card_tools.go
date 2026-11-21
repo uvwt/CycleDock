@@ -121,3 +121,87 @@ func (r attemptToolRuntime) updateCardTool(ctx adkagent.Context, args map[string
 		"card":           cardToolView(result.Card),
 	}, nil
 }
+
+type listCardsToolInput struct {
+	Scope       string `json:"scope"`
+	Kind        string `json:"kind"`
+	State       string `json:"state"`
+	Health      string `json:"health"`
+	Query       string `json:"query"`
+	IncludeDone bool   `json:"include_done"`
+	Limit       *int   `json:"limit"`
+}
+
+func (r attemptToolRuntime) listCardsTool(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
+	// 与 cycledock_inspect_card_session 保持一致的自治隔离：仅 Discussion 会话可盘点工作区/项目卡片。
+	if r.context.CardKind != domain.CardKindDiscussion {
+		return nil, errors.New("only discussion cards can list workspace/project cards with cycledock_list_cards")
+	}
+	if r.store == nil {
+		return nil, errors.New("store is not configured")
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	var input listCardsToolInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, fmt.Errorf("invalid list_cards arguments: %w", err)
+	}
+
+	limit := 0
+	if input.Limit != nil {
+		if *input.Limit < 1 {
+			return nil, errors.New("limit must be between 1 and 200")
+		}
+		limit = *input.Limit
+	}
+
+	result, err := r.store.ListCardsForAgent(ctx, store.AgentListCardsParams{
+		WorkspaceID: r.context.WorkspaceID,
+		ProjectID:   r.context.ProjectID,
+		Scope:       input.Scope,
+		Kind:        input.Kind,
+		State:       input.State,
+		Health:      input.Health,
+		Query:       input.Query,
+		IncludeDone: input.IncludeDone,
+		Limit:       limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cards := make([]map[string]any, 0, len(result.Items))
+	for _, item := range result.Items {
+		updatedAt := ""
+		if !item.UpdatedAt.IsZero() {
+			updatedAt = item.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+		cards = append(cards, map[string]any{
+			"card_id":                     item.CardID.String(),
+			"project_id":                  item.ProjectID.String(),
+			"project_name":                item.ProjectName,
+			"kind":                        item.Kind,
+			"title":                       item.Title,
+			"description_summary":         item.DescriptionSummary,
+			"state":                       item.State,
+			"health":                      item.Health,
+			"current_attempt_status":      item.CurrentAttemptStatus,
+			"latest_attempt_status":       item.LatestAttemptStatus,
+			"pending_tool_approval_count": item.PendingToolApprovalCount,
+			"pinned":                      item.Pinned,
+			"notifications_muted":         item.NotificationsMuted,
+			"is_main_discussion":          item.IsMainDiscussion,
+			"updated_at":                  updatedAt,
+		})
+	}
+
+	return map[string]any{
+		"cards":         cards,
+		"count":         len(cards),
+		"total_matched": result.TotalMatched,
+		"truncated":     result.Truncated,
+	}, nil
+}
