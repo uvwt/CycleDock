@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -109,6 +110,92 @@ func (s *Store) CreateDiscussion(
 	return card, err
 }
 
+// CreateTodoCardWithOptions 创建人工待办卡片，并在 autoStart 为 true 时在同一事务内排入首轮系统执行。
+func (s *Store) CreateTodoCardWithOptions(
+	ctx context.Context,
+	workspaceID, projectID, sourceID uuid.UUID,
+	title, description string,
+	sourceDiscussionID uuid.NullUUID,
+	requiredConfirmations int32,
+	autoStart bool,
+) (db.Card, error) {
+	if requiredConfirmations <= 0 {
+		requiredConfirmations = 1
+	}
+	title, _ = agentdata.NormalizeText(strings.TrimSpace(title))
+	description, _ = agentdata.NormalizeText(strings.TrimSpace(description))
+
+	if !autoStart {
+		card, err := s.queries.CreateCard(ctx, db.CreateCardParams{
+			ID:                    uuid.New(),
+			WorkspaceID:           workspaceID,
+			ProjectID:             projectID,
+			Kind:                  string(domain.CardKindTodo),
+			Title:                 title,
+			Description:           description,
+			TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+			SourceDiscussionID:    sourceDiscussionID,
+			RequiredConfirmations: requiredConfirmations,
+			CreatedBySourceID:     sourceID,
+		})
+		if err == nil {
+			s.notifyWorkspaceChanged(workspaceID)
+		}
+		return card, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return db.Card{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	q := db.New(tx)
+	card, err := q.CreateCard(ctx, db.CreateCardParams{
+		ID:                    uuid.New(),
+		WorkspaceID:           workspaceID,
+		ProjectID:             projectID,
+		Kind:                  string(domain.CardKindTodo),
+		Title:                 title,
+		Description:           description,
+		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+		SourceDiscussionID:    sourceDiscussionID,
+		RequiredConfirmations: requiredConfirmations,
+		CreatedBySourceID:     sourceID,
+	})
+	if err != nil {
+		return db.Card{}, err
+	}
+
+	initialTurnContent := buildInitialWorkTurnContent(title, description)
+	turnRequestHash := stableRequestHash(
+		"manual_todo_initial_turn",
+		workspaceID.String(),
+		card.ID.String(),
+		sourceID.String(),
+		initialTurnContent,
+	)
+	if _, err := insertTurn(ctx, tx, insertTurnParams{
+		WorkspaceID:       workspaceID,
+		CardID:            card.ID,
+		Source:            domain.TurnSourceSystem,
+		Content:           initialTurnContent,
+		CreatedBySourceID: uuid.NullUUID{UUID: sourceID, Valid: true},
+		DispatchMode:      domain.DispatchModeEnqueue,
+		IdempotencyKey:    "manual-todo-start:" + card.ID.String(),
+		RequestHash:       turnRequestHash,
+	}); err != nil {
+		return db.Card{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return db.Card{}, err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	s.notifyWorkReady()
+	return card, nil
+}
+
 func (s *Store) CreateTodoCard(
 	ctx context.Context,
 	workspaceID, projectID, sourceID uuid.UUID,
@@ -116,25 +203,10 @@ func (s *Store) CreateTodoCard(
 	sourceDiscussionID uuid.NullUUID,
 	requiredConfirmations int32,
 ) (db.Card, error) {
-	if requiredConfirmations <= 0 {
-		requiredConfirmations = 1
-	}
-	card, err := s.queries.CreateCard(ctx, db.CreateCardParams{
-		ID:                    uuid.New(),
-		WorkspaceID:           workspaceID,
-		ProjectID:             projectID,
-		Kind:                  string(domain.CardKindTodo),
-		Title:                 strings.TrimSpace(title),
-		Description:           strings.TrimSpace(description),
-		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
-		SourceDiscussionID:    sourceDiscussionID,
-		RequiredConfirmations: requiredConfirmations,
-		CreatedBySourceID:     sourceID,
-	})
-	if err == nil {
-		s.notifyWorkspaceChanged(workspaceID)
-	}
-	return card, err
+	return s.CreateTodoCardWithOptions(
+		ctx, workspaceID, projectID, sourceID,
+		title, description, sourceDiscussionID, requiredConfirmations, false,
+	)
 }
 
 func (s *Store) CreateOngoingCard(

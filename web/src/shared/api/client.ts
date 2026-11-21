@@ -162,15 +162,46 @@ export const api = {
     project: string,
     title: string,
     description: string,
-    attachmentIDs?: string[],
-  ) =>
-    request<Card>(`/projects/${project}/todos`, "POST", {
+    attachmentIDsOrAutoStart?: string[] | boolean,
+    autoStartArg?: boolean,
+  ) => {
+    const attachmentIDs = Array.isArray(attachmentIDsOrAutoStart)
+      ? attachmentIDsOrAutoStart
+      : undefined;
+    const autoStart =
+      typeof attachmentIDsOrAutoStart === "boolean"
+        ? attachmentIDsOrAutoStart
+        : Boolean(autoStartArg);
+    return request<Card>(`/projects/${project}/todos`, "POST", {
       title,
       description,
       ...(attachmentIDs && attachmentIDs.length > 0
         ? { attachment_ids: attachmentIDs }
         : {}),
-    }),
+      auto_start: autoStart,
+    });
+  },
+  startCard: (
+    id: string,
+    options?: {
+      idempotencyKey?: string;
+      device_target?: DeviceTarget | null;
+      preferred_model_route_id?: string | null;
+    },
+  ) =>
+    request<{ turn_id: string; reused: boolean }>(
+      `/cards/${id}/start`,
+      "POST",
+      {
+        ...(options?.device_target
+          ? { device_target: options.device_target }
+          : {}),
+        ...(options?.preferred_model_route_id
+          ? { preferred_model_route_id: options.preferred_model_route_id }
+          : {}),
+      },
+      options?.idempotencyKey ?? true,
+    ),
   card: (id: string, limit?: number, all = false) => {
     const params = new URLSearchParams();
     if (limit !== undefined) params.set("limit", String(limit));

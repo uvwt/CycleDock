@@ -8,6 +8,7 @@ import {
   Copy,
   MoreHorizontal,
   Pencil,
+  Play,
   Reply,
   ClipboardCheck,
   AlertCircle,
@@ -261,6 +262,9 @@ type ExecutionActions = {
   canAcknowledgeCheckin?: boolean;
   acknowledgingCheckin?: boolean;
   onAcknowledgeCheckin?: () => void;
+  canStartCard?: boolean;
+  startingCard?: boolean;
+  onStartCard?: () => void;
 };
 
 function TimeSeparator({ value }: { value: string }) {
@@ -1461,11 +1465,36 @@ export function ConversationView({
                       </div>
                     )}
 
-                    <div className="flex items-center gap-2 border-t border-line/50 bg-muted/15 px-5 py-3 text-xs text-muted-foreground sm:px-6">
-                      <Bot className="size-4 shrink-0 text-faint" />
-                      <span>
-                        {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
-                      </span>
+                    <div className="flex flex-col gap-3 border-t border-line/50 bg-muted/15 px-5 py-3.5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Bot className="size-4 shrink-0 text-faint" />
+                        <span>
+                          {actions.canStartCard
+                            ? cardKind === "ongoing"
+                              ? t("当前定时任务尚未开始执行，点击即可立即启动首轮执行，或直接发送补充说明。")
+                              : t("当前待办尚未开始执行，点击即可由 Cycle 开始处理，或直接发送补充说明。")
+                            : t("你的消息、Agent 结果和任务状态都会出现在这里。")}
+                        </span>
+                      </div>
+                      {actions.canStartCard && actions.onStartCard && (
+                        <button
+                          type="button"
+                          disabled={actions.startingCard}
+                          onClick={actions.onStartCard}
+                          className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-primary px-3.5 text-xs font-medium text-primary-foreground shadow-xs transition hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-60"
+                        >
+                          {actions.startingCard ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Play className="size-3.5 fill-current" />
+                          )}
+                          <span>
+                            {actions.startingCard
+                              ? t("正在启动...")
+                              : t("开始执行")}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -1479,8 +1508,33 @@ export function ConversationView({
                         : t("开始协作")}
                     </h2>
                     <p className="mt-1.5 text-xs text-muted-foreground">
-                      {t("你的消息、Agent 结果和任务状态都会出现在这里。")}
+                      {actions.canStartCard
+                        ? cardKind === "ongoing"
+                          ? t("当前定时任务尚未开始执行，点击即可立即启动首轮执行，或直接发送补充说明。")
+                          : t("当前待办尚未开始执行，点击即可由 Cycle 开始处理，或直接发送补充说明。")
+                        : t("你的消息、Agent 结果和任务状态都会出现在这里。")}
                     </p>
+                    {actions.canStartCard && actions.onStartCard && (
+                      <div className="mt-4 flex justify-center">
+                        <button
+                          type="button"
+                          disabled={actions.startingCard}
+                          onClick={actions.onStartCard}
+                          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground shadow-xs transition hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-60"
+                        >
+                          {actions.startingCard ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Play className="size-3.5 fill-current" />
+                          )}
+                          <span>
+                            {actions.startingCard
+                              ? t("正在启动...")
+                              : t("开始执行")}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

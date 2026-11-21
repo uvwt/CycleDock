@@ -661,6 +661,33 @@ function CardPageContent({
       toast.error(error instanceof Error ? error.message : t("状态更新失败")),
   });
 
+  const startCard = useMutation({
+    mutationFn: () =>
+      api.startCard(cardID, {
+        idempotencyKey: `start-card:${cardID}`,
+        device_target: target,
+        preferred_model_route_id: card?.preferred_model_route_id ?? null,
+      }),
+    onSuccess: () => {
+      void sync();
+      toast.success(t("已开始执行"));
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : t("启动失败")),
+  });
+
+  const canStartCard = Boolean(
+    card &&
+      ((card.kind === "todo" && card.todo_state === "todo") ||
+        (card.kind === "ongoing" && card.ongoing_state === "active")) &&
+      !combinedTimeline.length &&
+      !combinedAttempts.length &&
+      !detail.data?.current_attempt &&
+      !detail.data?.pending_turns.length &&
+      !stream.live &&
+      !pendingInitialTurn,
+  );
+
   function submit() {
     const hasContent =
       Boolean(comment.trim()) || composerImages.readyAttachments.length > 0;
@@ -1022,6 +1049,9 @@ function CardPageContent({
                 }
                 acknowledgingCheckin={acknowledgeCheckin.isPending}
                 onAcknowledgeCheckin={() => acknowledgeCheckin.mutate()}
+                canStartCard={canStartCard}
+                startingCard={startCard.isPending}
+                onStartCard={() => startCard.mutate()}
                 onReply={(quote) => setReplyTo(quote)}
                 onEditMessage={
                   !blocked && card.todo_state !== "done"
