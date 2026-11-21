@@ -725,7 +725,7 @@ func newSupervisorPushTestEnv(t *testing.T) *supervisorPushTestEnv {
 		t.Fatal(err)
 	}
 	endpoint := "https://push.example.test/supervisor-dedupe"
-	if err := dataStore.SavePushSubscription(ctx, workspaceID, humanID, store.PushSubscription{
+	if _, err := dataStore.SavePushSubscription(ctx, workspaceID, humanID, store.PushSubscription{
 		Endpoint: endpoint, P256dh: "key", AuthSecret: "auth",
 	}); err != nil {
 		t.Fatal(err)
@@ -843,7 +843,7 @@ func TestPushDedupe_ReviewCallbackSilencesTodoAndNotifiesSupervisorOnce(t *testi
 	if sent := env.deliverAndDecode(t); len(sent) != 0 {
 		t.Fatalf("todo entering review with active supervisor must not push, got %+v", sent)
 	}
-	snapshots, err := env.store.ListPushCardSnapshots(env.ctx, env.workspaceID)
+	snapshots, err := env.store.ListWorkspacePushSubscriptionCardSnapshots(env.ctx, env.workspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
