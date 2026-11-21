@@ -521,10 +521,12 @@ const en = {
   "{{count}} 运行中": "{{count}} running",
   "{{count}} 未读": "{{count}} unread",
   "{{count}} 待验收": "{{count}} in review",
+  "{{count}} 置顶": "{{count}} pinned",
+  "{{count}} 个焦点事项": "{{count}} focus items",
   "全部 ({{count}})": "All ({{count}})",
   "查看全部 {{count}} 个焦点事项": "View all {{count}} focus items",
-  "当前没有待确认、正在运行、未读或待处理的事项":
-    "No items awaiting approval, running, unread, or pending right now",
+  "当前没有待确认、正在运行、未读、待处理或置顶的事项":
+    "No items awaiting approval, running, unread, pending, or pinned right now",
   "搜索卡片标题或描述...": "Search card title or description...",
   清空搜索: "Clear search",
   未找到匹配的卡片: "No matching cards found",

@@ -55,7 +55,7 @@ export interface QuickCardSwitcherTriggerProps {
 
 /**
  * 快速切换入口按钮
- * 仅负责渲染触发按钮与全局焦点（正在运行 / 未读回复 / 进行中 / 待验收）角标，
+ * 仅负责渲染触发按钮与全局焦点（待确认 / 巡检异常 / 正在运行 / 未读回复 / 待验收 / 进行中 / 已置顶）角标，
  * 支持在移动端顶栏、桌面端工具栏等不同布局区域多次复用，避免重复挂载底层 SheetPortal 与全局键盘监听。
  */
 export function QuickCardSwitcherTrigger({
@@ -220,7 +220,7 @@ export function QuickCardSwitcherModal({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const defaultTab = useMemo((): SwitcherTab => {
-    // 只要存在需要关注的焦点卡片（正在运行 / 未读回复 / 待验收 / 进行中），
+    // 只要存在需要关注的焦点卡片（待确认 / 巡检异常 / 正在运行 / 未读回复 / 待验收 / 进行中 / 已置顶），
     // 打开面板时默认定位到「焦点」Tab，让手机上滑或 ⌘K 首屏即可一眼扫完所有动态。
     if (focusCards.length > 0) {
       return "focus";
@@ -576,13 +576,20 @@ export function QuickCardSwitcherModal({
                     {t("{{count}} 未读", { count: focusSummary.unreadCount })}
                   </span>
                 )}
+                {focusSummary.pinnedCount > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                    <Pin className="size-2.5 fill-current" />
+                    {t("{{count}} 置顶", { count: focusSummary.pinnedCount })}
+                  </span>
+                )}
                 {focusSummary.answeringCount === 0 &&
                   focusSummary.approvalCount === 0 &&
                   focusSummary.criticalCount === 0 &&
                   focusSummary.warningCount === 0 &&
-                  focusSummary.unreadCount === 0 && (
+                  focusSummary.unreadCount === 0 &&
+                  focusSummary.pinnedCount === 0 && (
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                      {t("{{count}} 个活跃任务", { count: activeBadgeCount })}
+                      {t("{{count}} 个焦点事项", { count: activeBadgeCount })}
                     </span>
                   )}
               </div>
@@ -682,7 +689,7 @@ export function QuickCardSwitcherModal({
                 {searchQuery.trim()
                   ? t("未找到匹配的卡片")
                   : activeTab === "focus"
-                    ? t("当前没有待确认、正在运行、未读或待处理的事项")
+                    ? t("当前没有待确认、正在运行、未读、待处理或置顶的事项")
                     : t("该分类下暂无卡片")}
               </p>
             </div>
@@ -891,6 +898,11 @@ export function QuickCardSwitcherModal({
                         {focusReason === "working" && activeTab === "focus" && (
                           <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                             {t("进行中")}
+                          </span>
+                        )}
+                        {focusReason === "pinned" && activeTab === "focus" && (
+                          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            {t("已置顶")}
                           </span>
                         )}
                         {isActive && (

@@ -18,6 +18,7 @@ export type CardVisualStatus =
 // 5. unread: 有尚未阅读的新回复
 // 6. review: Todo 已由 Agent 推进到待人工验收
 // 7. working: Todo 处于进行中
+// 8. pinned: 用户主动置顶的常驻卡片（未归档，穿透静音，便于随时在焦点列表中直达）
 export type CardFocusReason =
   | "approval"
   | "critical"
@@ -25,7 +26,8 @@ export type CardFocusReason =
   | "answering"
   | "unread"
   | "review"
-  | "working";
+  | "working"
+  | "pinned";
 
 export interface FocusSummary {
   cards: Card[];
@@ -36,6 +38,7 @@ export interface FocusSummary {
   unreadCount: number;
   reviewCount: number;
   workingCount: number;
+  pinnedCount: number;
   highestVisualStatus: CardVisualStatus;
 }
 
@@ -49,6 +52,7 @@ type FocusCardFields = Pick<
   | "unread"
   | "pending_tool_approval_count"
   | "notifications_muted"
+  | "pinned_at"
 >;
 
 function isArchived(
@@ -131,8 +135,9 @@ export function getCardFocusReason(
   }
 
   // 已开启静音（关闭消息推送）的卡片视为免打扰，除待人工审批与定时巡检异常/需留意豁免外不再进入全局焦点。
+  // 若卡片已被用户主动置顶且未归档，仍保留 pinned 焦点入口，避免置顶项从焦点列表消失。
   if (card.notifications_muted) {
-    return null;
+    return card.pinned_at && !isArchived(card) ? "pinned" : null;
   }
 
   // 已归档的讨论或定时任务不再进入日常焦点流，除非其仍有正在运行的 Attempt
@@ -153,6 +158,10 @@ export function getCardFocusReason(
   if (card.kind === "todo" && card.todo_state === "working") {
     return "working";
   }
+  // 用户主动置顶的未归档卡片固定进入焦点列表，方便跨类型快速访问。
+  if (card.pinned_at) {
+    return "pinned";
+  }
   return null;
 }
 
@@ -164,6 +173,7 @@ const focusReasonPriority: Record<CardFocusReason, number> = {
   unread: 4,
   review: 5,
   working: 6,
+  pinned: 7,
 };
 
 /**
@@ -184,6 +194,7 @@ export function buildFocusSummary(
     unread: 0,
     review: 0,
     working: 0,
+    pinned: 0,
   };
 
   for (const card of cards) {
@@ -231,6 +242,7 @@ export function buildFocusSummary(
     unreadCount: counts.unread,
     reviewCount: counts.review,
     workingCount: counts.working,
+    pinnedCount: counts.pinned,
     highestVisualStatus,
   };
 }
