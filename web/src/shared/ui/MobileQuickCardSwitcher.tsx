@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Bell,
   BellOff,
   Layers,
   ListTodo,
@@ -13,11 +12,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   CalendarClock,
-  Pencil,
   Pin,
-  PinOff,
   Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -37,6 +33,10 @@ import {
 import { buildFocusSummary, getCardFocusReason } from "../lib/card-focus";
 import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
 import { useCardNotificationMute } from "../lib/useCardNotificationMute";
+import { activeCardAutoReadSuppression } from "../lib/card-read-state";
+import { useCardReadState } from "../lib/useCardReadState";
+import { CardRowActionSheet } from "../../features/cards/CardRowActionSheet";
+import { buildCardSwipeActions } from "../../features/cards/card-swipe-actions";
 import { ConfirmDialog } from "./components";
 import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
@@ -269,6 +269,15 @@ export function QuickCardSwitcherModal({
   }, [open]);
 
   const handleSelectCard = (targetCard: Card) => {
+    activeCardAutoReadSuppression.clearSuppressed(targetCard.id);
+    if (targetCard.id === activeCardID && targetCard.marked_unread) {
+      readStateMutation.mutate({
+        id: targetCard.id,
+        unread: false,
+        projectID: targetCard.project_id,
+        isActive: true,
+      });
+    }
     setSelectedTab(null);
     setSearchQuery("");
     onOpenChange(false);
@@ -284,6 +293,7 @@ export function QuickCardSwitcherModal({
   const queryClient = useQueryClient();
   const [deleteTarget, setDeleteTarget] = useState<Card | null>(null);
   const [editTarget, setEditTarget] = useState<Card | null>(null);
+  const [sheetTargetID, setSheetTargetID] = useState<string | null>(null);
 
   const mainDiscussion = useQuery({
     queryKey: keys.mainDiscussion(projectID),
@@ -315,6 +325,11 @@ export function QuickCardSwitcherModal({
   });
 
   const muteMutation = useCardNotificationMute();
+  const readStateMutation = useCardReadState();
+  const sheetTarget = useMemo(
+    () => cards.find((item) => item.id === sheetTargetID) || null,
+    [cards, sheetTargetID],
+  );
 
   const deleteMutation = useMutation({
     mutationFn: (card: Card) => api.deleteCard(card.id),
@@ -717,69 +732,47 @@ export function QuickCardSwitcherModal({
                       ? t("定时")
                       : t("任务");
 
-                const swipeActions = [
-                  {
-                    key: "mute",
-                    label: isMuted ? t("取消静音") : t("静音通知"),
-                    icon: isMuted ? (
-                      <Bell className="size-4" />
-                    ) : (
-                      <BellOff className="size-4" />
-                    ),
-                    variant: "secondary" as const,
-                    onClick: () => {
-                      muteMutation.mutate({
-                        id: card.id,
-                        muted: !isMuted,
-                        projectID: card.project_id,
-                      });
-                    },
+                const swipeActions = buildCardSwipeActions({
+                  card,
+                  isMain,
+                  isActive,
+                  t,
+                  onToggleRead: (nextUnread) => {
+                    readStateMutation.mutate({
+                      id: card.id,
+                      unread: nextUnread,
+                      projectID: card.project_id,
+                      isActive,
+                    });
                   },
-                  ...(!isMain
-                    ? [
-                        {
-                          key: "pin",
-                          label: isPinned ? t("取消置顶") : t("置顶"),
-                          icon: isPinned ? (
-                            <PinOff className="size-4" />
-                          ) : (
-                            <Pin className="size-4 rotate-45" />
-                          ),
-                          variant: "primary" as const,
-                          onClick: () => {
-                            pinMutation.mutate({
-                              id: card.id,
-                              pinned: !isPinned,
-                            });
-                          },
-                        },
-                        {
-                          key: "edit",
-                          label: t("编辑"),
-                          icon: <Pencil className="size-4" />,
-                          variant: "secondary" as const,
-                          onClick: () => {
-                            setEditTarget(card);
-                          },
-                        },
-                        {
-                          key: "delete",
-                          label: t("删除"),
-                          icon: <Trash2 className="size-4" />,
-                          variant: "danger" as const,
-                          onClick: () => {
-                            setDeleteTarget(card);
-                          },
-                        },
-                      ]
-                    : []),
-                ];
+                  onTogglePin: !isMain
+                    ? () => {
+                        pinMutation.mutate({
+                          id: card.id,
+                          pinned: !card.pinned_at,
+                        });
+                      }
+                    : undefined,
+                  onToggleMute: () => {
+                    muteMutation.mutate({
+                      id: card.id,
+                      muted: !isMuted,
+                      projectID: card.project_id,
+                    });
+                  },
+                  onDelete: !isMain
+                    ? () => {
+                        setDeleteTarget(card);
+                      }
+                    : undefined,
+                });
 
                 return (
                   <SwipeableRow
                     key={card.id}
                     id={card.id}
                     actions={swipeActions}
+                    onLongPress={() => setSheetTargetID(card.id)}
                     className="rounded-xl"
                   >
                     <div
@@ -882,7 +875,11 @@ export function QuickCardSwitcherModal({
                         )}
                         {focusReason === "unread" && (
                           <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300">
-                            {t("新消息")}
+                            {card.marked_unread &&
+                            (card.latest_message_sequence ?? 0) <=
+                              (card.last_read_message_sequence ?? 0)
+                              ? t("未读")
+                              : t("新消息")}
                           </span>
                         )}
                         {focusReason === "review" && (
@@ -933,6 +930,41 @@ export function QuickCardSwitcherModal({
           card={editTarget}
           open={Boolean(editTarget)}
           onOpenChange={(isOpen) => !isOpen && setEditTarget(null)}
+        />
+
+        <CardRowActionSheet
+          card={sheetTarget}
+          open={Boolean(sheetTarget)}
+          onOpenChange={(isOpen) => !isOpen && setSheetTargetID(null)}
+          preserve={Boolean(sheetTarget && sheetTarget.id === mainDiscussionID)}
+          isActive={Boolean(sheetTarget && sheetTarget.id === activeCardID)}
+          readPending={readStateMutation.isPending}
+          pinPending={pinMutation.isPending}
+          mutePending={muteMutation.isPending}
+          deletePending={deleteMutation.isPending}
+          onToggleRead={(target, nextUnread) => {
+            readStateMutation.mutate({
+              id: target.id,
+              unread: nextUnread,
+              projectID: target.project_id,
+              isActive: target.id === activeCardID,
+            });
+          }}
+          onTogglePin={(target) => {
+            pinMutation.mutate({
+              id: target.id,
+              pinned: !target.pinned_at,
+            });
+          }}
+          onToggleMute={(target) => {
+            muteMutation.mutate({
+              id: target.id,
+              muted: !target.notifications_muted,
+              projectID: target.project_id,
+            });
+          }}
+          onEdit={(target) => setEditTarget(target)}
+          onDelete={(target) => setDeleteTarget(target)}
         />
       </SheetContent>
     </UISheet>

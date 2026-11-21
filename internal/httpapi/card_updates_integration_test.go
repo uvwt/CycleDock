@@ -35,7 +35,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	api := &API{pool: pool}
 	revision := func() string {
 		t.Helper()
-		updates, err := api.cardUpdates(ctx, workspaceID)
+		updates, err := api.cardUpdatesForSource(ctx, workspaceID, sourceID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +114,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	updates, err := api.cardUpdates(ctx, workspaceID)
+	updates, err := api.cardUpdatesForSource(ctx, workspaceID, sourceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	updatesAfterProgress, err := api.cardUpdates(ctx, workspaceID)
+	updatesAfterProgress, err := api.cardUpdatesForSource(ctx, workspaceID, sourceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		updates, err := api.cardUpdates(ctx, workspaceID)
+		updates, err := api.cardUpdatesForSource(ctx, workspaceID, sourceID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +199,7 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}
 	ongoingRev := func() string {
 		t.Helper()
-		updates, err := api.cardUpdates(ctx, workspaceID)
+		updates, err := api.cardUpdatesForSource(ctx, workspaceID, sourceID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,6 +229,48 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}
 	if afterArchiveRev := ongoingRev(); afterArchiveRev == beforeArchiveRev {
 		t.Fatal("soft-archiving schedule did not change card update revision")
+	}
+
+	// 手动标记未读/已读只改变当前 human source 的 SSE read_revision，不污染工作空间级 Revision 与其他成员。
+	otherHuman, err := dataStore.CreateSource(ctx, workspaceID, domain.SourceKindHuman, "Other Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateForSource := func(srcID uuid.UUID) cardUpdate {
+		t.Helper()
+		updates, err := api.cardUpdatesForSource(ctx, workspaceID, srcID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range updates {
+			if candidate.ID == ongoingCard.ID.String() {
+				return candidate
+			}
+		}
+		t.Fatalf("ongoing card %s missing from updates for source %s", ongoingCard.ID, srcID)
+		return cardUpdate{}
+	}
+	beforeUnreadSelf := updateForSource(sourceID)
+	beforeUnreadOther := updateForSource(otherHuman.ID)
+	if _, err := dataStore.MarkCardUnread(ctx, workspaceID, ongoingCard.ID, sourceID); err != nil {
+		t.Fatalf("mark card unread: %v", err)
+	}
+	afterUnreadSelf := updateForSource(sourceID)
+	afterUnreadOther := updateForSource(otherHuman.ID)
+	if afterUnreadSelf.ReadRevision == beforeUnreadSelf.ReadRevision {
+		t.Fatal("marking card unread did not change self read_revision")
+	}
+	if afterUnreadSelf.Revision != beforeUnreadSelf.Revision {
+		t.Fatal("marking card unread should not mutate workspace-level revision")
+	}
+	if afterUnreadOther.ReadRevision != beforeUnreadOther.ReadRevision {
+		t.Fatal("marking card unread leaked read_revision change to another human source")
+	}
+	if _, err := dataStore.MarkCardRead(ctx, workspaceID, ongoingCard.ID, sourceID); err != nil {
+		t.Fatalf("mark card read: %v", err)
+	}
+	if afterReadSelf := updateForSource(sourceID); afterReadSelf.ReadRevision == afterUnreadSelf.ReadRevision {
+		t.Fatal("marking card read did not change self read_revision")
 	}
 }
 

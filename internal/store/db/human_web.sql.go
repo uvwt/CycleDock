@@ -487,7 +487,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -588,6 +594,7 @@ type ListProjectActiveCardSummariesRow struct {
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
 	LatestMessageSequence    int64              `json:"latest_message_sequence"`
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	MarkedUnread             bool               `json:"marked_unread"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 	AttachmentCount          int64              `json:"attachment_count"`
@@ -629,6 +636,7 @@ func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListPr
 			&i.LatestAttemptStatus,
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
+			&i.MarkedUnread,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
 			&i.AttachmentCount,
@@ -799,7 +807,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -899,6 +913,7 @@ type ListProjectCardSummariesRow struct {
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
 	LatestMessageSequence    int64              `json:"latest_message_sequence"`
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	MarkedUnread             bool               `json:"marked_unread"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 	AttachmentCount          int64              `json:"attachment_count"`
@@ -940,6 +955,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.LatestAttemptStatus,
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
+			&i.MarkedUnread,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
 			&i.AttachmentCount,
@@ -1016,7 +1032,13 @@ SELECT
     COALESCE(latest_attempt.status, '') AS latest_attempt_status,
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
-    COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread,
     COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
     COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
@@ -1121,6 +1143,7 @@ type ListProjectDoneCardsPagedRow struct {
 	LatestAttemptStatus      string             `json:"latest_attempt_status"`
 	LatestMessageSequence    int64              `json:"latest_message_sequence"`
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
+	MarkedUnread             bool               `json:"marked_unread"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
 	AttachmentCount          int64              `json:"attachment_count"`
@@ -1168,6 +1191,7 @@ func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProject
 			&i.LatestAttemptStatus,
 			&i.LatestMessageSequence,
 			&i.LastReadMessageSequence,
+			&i.MarkedUnread,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
 			&i.AttachmentCount,
@@ -1318,7 +1342,7 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 
 const markCardRead = `-- name: MarkCardRead :one
 INSERT INTO card_read_cursors (
-    workspace_id, source_id, card_id, last_read_message_sequence, updated_at
+    workspace_id, source_id, card_id, last_read_message_sequence, marked_unread, updated_at
 )
 SELECT
     c.workspace_id,
@@ -1331,6 +1355,7 @@ SELECT
           AND e.card_id = c.id
           AND e.event_type IN ('comment', 'message')
     ), 0),
+    false,
     now()
 FROM cards c
 JOIN sources s
@@ -1344,6 +1369,7 @@ SET last_read_message_sequence = GREATEST(
         card_read_cursors.last_read_message_sequence,
         EXCLUDED.last_read_message_sequence
     ),
+    marked_unread = false,
     updated_at = now()
 RETURNING last_read_message_sequence
 `
@@ -1356,6 +1382,43 @@ type MarkCardReadParams struct {
 
 func (q *Queries) MarkCardRead(ctx context.Context, arg MarkCardReadParams) (int64, error) {
 	row := q.db.QueryRow(ctx, markCardRead, arg.SourceID, arg.WorkspaceID, arg.CardID)
+	var last_read_message_sequence int64
+	err := row.Scan(&last_read_message_sequence)
+	return last_read_message_sequence, err
+}
+
+const markCardUnread = `-- name: MarkCardUnread :one
+INSERT INTO card_read_cursors (
+    workspace_id, source_id, card_id, last_read_message_sequence, marked_unread, updated_at
+)
+SELECT
+    c.workspace_id,
+    s.id,
+    c.id,
+    0,
+    true,
+    now()
+FROM cards c
+JOIN sources s
+  ON s.workspace_id = c.workspace_id
+ AND s.id = $1
+ AND s.kind = 'human'
+WHERE c.workspace_id = $2
+  AND c.id = $3
+ON CONFLICT (workspace_id, source_id, card_id) DO UPDATE
+SET marked_unread = true,
+    updated_at = now()
+RETURNING last_read_message_sequence
+`
+
+type MarkCardUnreadParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+func (q *Queries) MarkCardUnread(ctx context.Context, arg MarkCardUnreadParams) (int64, error) {
+	row := q.db.QueryRow(ctx, markCardUnread, arg.SourceID, arg.WorkspaceID, arg.CardID)
 	var last_read_message_sequence int64
 	err := row.Scan(&last_read_message_sequence)
 	return last_read_message_sequence, err

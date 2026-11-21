@@ -8,6 +8,11 @@ import React, {
   useState,
 } from "react";
 import { useDrag } from "@use-gesture/react";
+import {
+  createLongPressMachine,
+  DEFAULT_LONG_PRESS_DELAY_MS,
+  DEFAULT_LONG_PRESS_MOVE_TOLERANCE_PX,
+} from "../lib/swipe-long-press";
 import { cn } from "../lib/utils";
 
 interface SwipeActionGroupContextValue {
@@ -82,6 +87,14 @@ export interface SwipeableRowProps {
    * 展开或收起状态变更回调
    */
   onOpenChange?: (open: boolean) => void;
+  /**
+   * 触摸长按整行回调（约 460ms，滑动超阈值自动取消，用于弹出移动端完整底部菜单）
+   */
+  onLongPress?: () => void;
+  /**
+   * 长按判定毫秒数（默认 460ms）
+   */
+  longPressDelayMs?: number;
 }
 
 export function SwipeableRow({
@@ -93,6 +106,8 @@ export function SwipeableRow({
   contentClassName,
   threshold = 0.35,
   onOpenChange,
+  onLongPress,
+  longPressDelayMs = DEFAULT_LONG_PRESS_DELAY_MS,
 }: SwipeableRowProps) {
   const autoId = useId();
   const itemId = propId || autoId;
@@ -119,8 +134,8 @@ export function SwipeableRow({
   }, [isOpen]);
 
   const getActionsWidth = useCallback(() => {
-    // 纯图标模式下每个操作按钮固定 44px 宽
-    return Math.max(actions.length * 44, 44);
+    // 最多 3 个高频图标按钮，每个按钮 52px 宽，保持触控热区宽裕不拥挤
+    return Math.max(actions.length * 52, 52);
   }, [actions.length]);
 
   const actionsWidth = getActionsWidth();
@@ -204,16 +219,105 @@ export function SwipeableRow({
     };
   }, [close, isOpen]);
 
+  const onLongPressRef = useRef(onLongPress);
+  useEffect(() => {
+    onLongPressRef.current = onLongPress;
+  }, [onLongPress]);
+
+  const longPressMachineRef = useRef<ReturnType<
+    typeof createLongPressMachine
+  > | null>(null);
+  const getLongPressMachine = useCallback(() => {
+    if (!longPressMachineRef.current) {
+      longPressMachineRef.current = createLongPressMachine({
+        delayMs: longPressDelayMs,
+        moveTolerancePx: DEFAULT_LONG_PRESS_MOVE_TOLERANCE_PX,
+        onLongPress: () => {
+          if (!onLongPressRef.current) return;
+          try {
+            if (typeof navigator !== "undefined") {
+              navigator.vibrate?.(10);
+            }
+          } catch {
+            // 忽略部分浏览器禁止振动权限异常
+          }
+          onLongPressRef.current();
+        },
+      });
+    }
+    return longPressMachineRef.current;
+  }, [longPressDelayMs]);
+
+  useEffect(() => {
+    const machine = longPressMachineRef.current;
+    return () => {
+      machine?.cancel();
+    };
+  }, []);
+
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent<HTMLDivElement>) => {
+      if (!onLongPressRef.current || disabled) return;
+      if (e.touches.length !== 1) {
+        longPressMachineRef.current?.cancel();
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-no-long-press='true']")) {
+        return;
+      }
+      const touch = e.touches[0];
+      getLongPressMachine().start(
+        { x: touch.clientX, y: touch.clientY },
+        { disabled, isSwipeOpen: isOpenRef.current },
+      );
+    },
+    [disabled, getLongPressMachine],
+  );
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length !== 1) {
+      longPressMachineRef.current?.cancel();
+      return;
+    }
+    const touch = e.touches[0];
+    longPressMachineRef.current?.move({
+      x: touch.clientX,
+      y: touch.clientY,
+    });
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const result = longPressMachineRef.current?.end();
+    if (result?.wasTriggered && e.cancelable) {
+      e.preventDefault();
+    }
+  }, []);
+
+  const handleTouchCancel = useCallback(() => {
+    longPressMachineRef.current?.cancel();
+  }, []);
+
   // 使用 @use-gesture/react 统一管理手势
   const bind = useDrag(
     ({
       down,
+      tap,
       movement: [mx],
       velocity: [vx],
       direction: [dx],
       memo,
     }) => {
       if (disabled || !actions.length) return;
+      if (Math.abs(mx) > DEFAULT_LONG_PRESS_MOVE_TOLERANCE_PX) {
+        longPressMachineRef.current?.cancel();
+      }
+      // 轻点或长按未移动松手时（tap === true），不要在 pointerup 阶段提前清空 isOpen，
+      // 交由紧随其后的 onClickCapture 判断是拦截长按误触还是收起已展开抽屉。
+      if (tap) {
+        setIsSwiping(false);
+        return;
+      }
 
       const actionsWidth = getActionsWidth();
 
@@ -288,9 +392,36 @@ export function SwipeableRow({
     },
   );
 
-  // 如果无 actions 或被禁用，则退化为普通渲染
+  const gestureProps = bind();
+
+  // 如果无 actions 或被禁用，则退化为普通渲染（若有 onLongPress 且未禁用，仍支持长按菜单）
   if (!actions.length || disabled) {
-    return <div className={cn("relative", className)}>{children}</div>;
+    return (
+      <div
+        onTouchStart={!disabled && onLongPress ? handleTouchStart : undefined}
+        onTouchMove={!disabled && onLongPress ? handleTouchMove : undefined}
+        onTouchEnd={!disabled && onLongPress ? handleTouchEnd : undefined}
+        onTouchCancel={!disabled && onLongPress ? handleTouchCancel : undefined}
+        onClickCapture={(e) => {
+          if (longPressMachineRef.current?.consumeClickSuppression()) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        }}
+        onContextMenu={(e) => {
+          if (longPressMachineRef.current?.shouldPreventContextMenu()) {
+            e.preventDefault();
+          }
+        }}
+        className={cn(
+          "relative",
+          !disabled && onLongPress && "select-none [-webkit-touch-callout:none]",
+          className,
+        )}
+      >
+        {children}
+      </div>
+    );
   }
 
   // 关键：底层操作区在未拖拽且未展开时必须严格隐藏，避免任何透明背景穿透
@@ -301,7 +432,7 @@ export function SwipeableRow({
       ref={containerRef}
       data-swipe-open={isOpen ? "true" : undefined}
       className={cn(
-        "group/swipe relative select-none",
+        "group/swipe relative overflow-hidden select-none",
         className,
       )}
     >
@@ -366,7 +497,28 @@ export function SwipeableRow({
 
       {/* 滑动卡片主体（整体随手势向左平移，露出底层操作按钮） */}
       <div
-        {...bind()}
+        {...gestureProps}
+        onTouchStart={(e) => {
+          gestureProps.onTouchStart?.(e);
+          handleTouchStart(e);
+        }}
+        onTouchMove={(e) => {
+          gestureProps.onTouchMove?.(e);
+          handleTouchMove(e);
+        }}
+        onTouchEnd={(e) => {
+          gestureProps.onTouchEnd?.(e);
+          handleTouchEnd(e);
+        }}
+        onTouchCancel={(e) => {
+          gestureProps.onTouchCancel?.(e);
+          handleTouchCancel();
+        }}
+        onContextMenu={(e) => {
+          if (longPressMachineRef.current?.shouldPreventContextMenu()) {
+            e.preventDefault();
+          }
+        }}
         style={{
           transform: `translateX(${offset}px)`,
           transition: isSwiping
@@ -374,6 +526,11 @@ export function SwipeableRow({
             : "transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1)",
         }}
         onClickCapture={(e) => {
+          if (longPressMachineRef.current?.consumeClickSuppression()) {
+            e.stopPropagation();
+            e.preventDefault();
+            return;
+          }
           // 如果当前处于展开状态，点击主体应拦截默认行为并收起展开项
           if (isOpen && offset !== 0) {
             e.stopPropagation();
@@ -382,7 +539,7 @@ export function SwipeableRow({
           }
         }}
         className={cn(
-          "relative z-10 w-full overflow-hidden bg-surface rounded-xl transition-[border-radius] touch-pan-y",
+          "relative z-10 w-full overflow-hidden bg-surface rounded-xl transition-[border-radius] touch-pan-y select-none [-webkit-touch-callout:none]",
           offset < -2
             ? "rounded-r-none [&_*]:rounded-r-none"
             : "",

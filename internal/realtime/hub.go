@@ -348,3 +348,19 @@ func (h *Hub) NotifyWorkspace(workspaceID uuid.UUID) {
 		}
 	}
 }
+
+// NotifyWorkspaceSSE 仅唤醒指定工作区的浏览器 SSE 卡片快照订阅者（用于已读/标未读状态同步），不惊醒 Web Push 调度器。
+func (h *Hub) NotifyWorkspaceSSE(workspaceID uuid.UUID) {
+	if h == nil || workspaceID == uuid.Nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for ch := range h.workspaceSubscribers[workspaceID] {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}

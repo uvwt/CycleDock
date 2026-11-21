@@ -32,6 +32,7 @@ import {
   applyOptimisticSentTurn,
   patchCachedCard,
 } from "../../shared/lib/card-cache";
+import { activeCardAutoReadSuppression } from "../../shared/lib/card-read-state";
 import {
   ConversationView,
   type QuotedMessage,
@@ -112,6 +113,7 @@ export default function CardPage() {
   );
 
   function openDiscussion(item: Card) {
+    activeCardAutoReadSuppression.clearSuppressed(item.id);
     setContextSidebarOpen(false);
     navigate(`/chat/${item.project_id}/${item.id}`);
   }
@@ -122,6 +124,7 @@ export default function CardPage() {
   }
 
   function openWork(item: Card) {
+    activeCardAutoReadSuppression.clearSuppressed(item.id);
     setContextSidebarOpen(false);
     navigate(
       `/${item.kind === "ongoing" ? "plans" : "cards"}/${item.project_id}/${item.id}`,
@@ -455,37 +458,61 @@ function CardPageContent({
     [detail.data?.timeline],
   );
 
-  // 打开卡片详情或可见消息推进时更新服务端已读游标
+  // 切换到新卡片时，清理其他卡片遗留的手动未读自动已读抑制标记
+  useEffect(() => {
+    activeCardAutoReadSuppression.clearAllExcept(cardID);
+  }, [cardID]);
+
+  const markCurrentCardRead = useCallback(
+    (targetCardID: string, targetProjectID: string) => {
+      void api
+        .markCardRead(targetCardID)
+        .then((result) => {
+          patchCachedCard(queryClient, targetCardID, targetProjectID, {
+            last_read_message_sequence: result.last_read_message_sequence,
+            unread: false,
+            marked_unread: false,
+          });
+          return Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: keys.cards(targetProjectID),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: keys.mainDiscussion(targetProjectID),
+            }),
+          ]);
+        })
+        .catch(() => {
+          // 读状态失败不影响卡片展示本身
+        });
+    },
+    [],
+  );
+
+  // 打开卡片详情或可见消息推进时更新服务端已读游标；
+  // 若用户在列表里手动将当前打开卡片标为未读，则抑制自动已读，直到重新点进该卡片或收到/发送新消息。
   useEffect(() => {
     if (!card?.id) return;
-    void api
-      .markCardRead(card.id)
-      .then((result) => {
-        queryClient.setQueryData<Card[]>(
-          keys.cards(card.project_id),
-          (currentCards) =>
-            currentCards?.map((item) => {
-              if (item.id !== card.id) return item;
-              const nextReadSeq = Math.max(
-                item.last_read_message_sequence ?? 0,
-                result.last_read_message_sequence,
-              );
-              const latestSeq = item.latest_message_sequence ?? 0;
-              return {
-                ...item,
-                last_read_message_sequence: nextReadSeq,
-                unread: latestSeq > nextReadSeq,
-              };
-            }),
-        );
-        return queryClient.invalidateQueries({
-          queryKey: keys.cards(card.project_id),
-        });
-      })
-      .catch(() => {
-        // 读状态失败不影响卡片展示本身
-      });
-  }, [card?.id, card?.project_id, latestVisibleMessageSequence]);
+    const effectiveLatestSeq = Math.max(
+      latestVisibleMessageSequence,
+      card.latest_message_sequence ?? 0,
+    );
+    if (
+      activeCardAutoReadSuppression.shouldSuppressAutoRead(
+        card.id,
+        effectiveLatestSeq,
+      )
+    ) {
+      return;
+    }
+    markCurrentCardRead(card.id, card.project_id);
+  }, [
+    card?.id,
+    card?.project_id,
+    card?.latest_message_sequence,
+    latestVisibleMessageSequence,
+    markCurrentCardRead,
+  ]);
 
   const sync = async () => {
     await Promise.all([
@@ -518,6 +545,10 @@ function CardPageContent({
       return { ...result, content, attachments, deviceTarget };
     },
     onSuccess: (result) => {
+      activeCardAutoReadSuppression.clearSuppressed(cardID);
+      if (card?.project_id) {
+        markCurrentCardRead(cardID, card.project_id);
+      }
       setComment("");
       setReplyTo(null);
       composerImages.clear();

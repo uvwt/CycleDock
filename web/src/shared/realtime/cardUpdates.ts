@@ -11,6 +11,7 @@ export type CardUpdate = {
   kind: string;
   title: string;
   revision: string;
+  read_revision?: string;
   event_sequence: string;
   message_preview: string;
   notification_kind?: string;
@@ -19,6 +20,15 @@ export type CardUpdate = {
   notifications_muted?: boolean;
   notification_suppressed?: boolean;
 };
+
+export function hasCardSnapshotChanged(
+  card: Pick<CardUpdate, "revision" | "read_revision">,
+  previous: Pick<CardUpdate, "revision" | "read_revision"> | undefined,
+): boolean {
+  if (!previous) return true;
+  if (card.revision !== previous.revision) return true;
+  return (card.read_revision || "") !== (previous.read_revision || "");
+}
 
 // 只有新的模型回复或待人工审批工具调用、且未被静音或监督回调静默收口时才触发浏览器/气泡通知。
 // 置顶、静音切换、标题和执行状态会改变 revision，用于刷新页面缓存，但不会弹窗通知。
