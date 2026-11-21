@@ -41,19 +41,28 @@ func notifySupervisorReview(ctx context.Context, tx pgx.Tx, workspaceID, cardID,
 	return enqueueSupervisorCallback(ctx, tx, workspaceID, target, actorSourceID, "review:"+cardID.String(), content)
 }
 
+// decideSupervisorFailure 基于同一 Turn 下真实故障（failed / expired）的记录计算
+// 动态自愈预算与连续相同错误次数。正常服务重启/优雅停机中断（superseded）或人工取消
+// 不计入真实故障，避免发版重启误耗尽 5 次预算或误触发相同错误熔断。
 func decideSupervisorFailure(ctx context.Context, tx pgx.Tx, workspaceID, cardID, turnID uuid.UUID, summary string) (supervisorDecision, error) {
 	summary, _ = agentdata.NormalizeText(strings.TrimSpace(summary))
-	var attemptNumber int
+	var failureCount int
 	var previous string
 	err := tx.QueryRow(ctx, `
-		SELECT a.attempt_number, COALESCE(prev.error_summary, '')
-		FROM turn_attempts a
-		LEFT JOIN turn_attempts prev
-		  ON prev.workspace_id=a.workspace_id AND prev.id=a.retry_of_attempt_id
-		WHERE a.workspace_id=$1 AND a.card_id=$2 AND a.turn_id=$3
-		ORDER BY a.attempt_number DESC
-		LIMIT 1
-	`, workspaceID, cardID, turnID).Scan(&attemptNumber, &previous)
+		SELECT
+			count(*),
+			COALESCE((
+				SELECT prev.error_summary
+				FROM turn_attempts prev
+				WHERE prev.workspace_id=$1 AND prev.card_id=$2 AND prev.turn_id=$3
+				  AND prev.status IN ('failed', 'expired')
+				ORDER BY prev.attempt_number DESC
+				OFFSET 1 LIMIT 1
+			), '')
+		FROM turn_attempts
+		WHERE workspace_id=$1 AND card_id=$2 AND turn_id=$3
+		  AND status IN ('failed', 'expired')
+	`, workspaceID, cardID, turnID).Scan(&failureCount, &previous)
 	if err != nil {
 		return supervisorDecision{}, err
 	}
@@ -63,8 +72,8 @@ func decideSupervisorFailure(ctx context.Context, tx pgx.Tx, workspaceID, cardID
 	}
 	return supervisorDecision{
 		Callback:      true,
-		CircuitOpen:   sameCount >= 2 || attemptNumber >= supervisorProgressBudget,
-		AttemptNumber: attemptNumber,
+		CircuitOpen:   sameCount >= 2 || failureCount >= supervisorProgressBudget,
+		AttemptNumber: failureCount,
 		SameCount:     sameCount,
 	}, nil
 }

@@ -558,3 +558,73 @@ func TestHeartbeatAndConcurrentLeaseRecoveryStayOnSameTurn(t *testing.T) {
 		t.Fatalf("recovery claim=%+v original=%+v", recovery, claim)
 	}
 }
+
+func TestInterruptAttemptForShutdownImmediatelyQueuesRecoveryAndIsIdempotent(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+
+	if _, err := s.SaveAgentSettings(
+		ctx, f.WorkspaceID, testAgentSettings("http://127.0.0.1:1/v1", "test-model", ""),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	turn, err := s.CreateHumanTurn(
+		ctx, f.WorkspaceID, f.CardID, f.HumanID,
+		"work across restart", "shutdown-resume-1", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 10, 25, 2, 0, 0, 0, time.UTC)
+	claim, err := s.ClaimNextBuiltInAttempt(ctx, 1, started, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 即使距离租约过期还有 4 分多钟，优雅停机交接后新进程也能立即领取恢复 attempt。
+	res, err := s.InterruptAttemptForShutdown(
+		ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, started.Add(15*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Interrupted || res.RecoveryAttempt == nil {
+		t.Fatalf("shutdown interrupt=%+v, want interrupted with recovery", res)
+	}
+
+	// 重复调用应安全幂等，不重复建 recovery。
+	replay, err := s.InterruptAttemptForShutdown(
+		ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, started.Add(16*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Interrupted || replay.RecoveryAttempt != nil {
+		t.Fatalf("replayed shutdown interrupt=%+v, want no-op", replay)
+	}
+
+	oldAttempt, err := s.GetAttempt(ctx, f.WorkspaceID, claim.Attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldAttempt.Status != domain.AttemptStatusSuperseded ||
+		oldAttempt.ErrorSummary != AttemptErrorServerShutdown ||
+		oldAttempt.FinishedAt == nil {
+		t.Fatalf("old attempt=%+v", oldAttempt)
+	}
+
+	resumed, err := s.ClaimNextBuiltInAttempt(ctx, 1, started.Add(20*time.Second), 5*time.Minute)
+	if err != nil {
+		t.Fatalf("new process should immediately claim recovery attempt: %v", err)
+	}
+	if resumed.Turn.ID != turn.Turn.ID ||
+		resumed.Attempt.ID != res.RecoveryAttempt.ID ||
+		resumed.Attempt.AttemptNumber != 2 ||
+		resumed.Attempt.Reason != domain.AttemptReasonRecovery ||
+		!resumed.Attempt.RetryOfAttemptID.Valid ||
+		resumed.Attempt.RetryOfAttemptID.UUID != claim.Attempt.ID {
+		t.Fatalf("resumed claim=%+v original=%+v", resumed, claim)
+	}
+}

@@ -188,6 +188,9 @@ func TestSupervisorTimeoutDoesNotAutoRecoverWhenCircuitOpens(t *testing.T) {
 	if expired.Expired != 1 || expired.RecoveryAttempts != 1 {
 		t.Fatalf("first timeout=%+v", expired)
 	}
+	if count := supervisorTurnCount(t, s, mainChat.ID); count != 0 {
+		t.Fatalf("auto recovery should suppress supervisor failure callback, got count=%d", count)
+	}
 	second, err := s.ClaimNextBuiltInAttempt(ctx, 1, started.Add(3*time.Minute), time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -202,6 +205,9 @@ func TestSupervisorTimeoutDoesNotAutoRecoverWhenCircuitOpens(t *testing.T) {
 	if repeated.Expired != 1 || repeated.RecoveryAttempts != 0 {
 		t.Fatalf("repeated timeout=%+v", repeated)
 	}
+	if count := supervisorTurnCount(t, s, mainChat.ID); count != 1 {
+		t.Fatalf("terminal timeout should emit exactly one supervisor callback, got count=%d", count)
+	}
 	content := latestSupervisorTurn(t, s, mainChat.ID)
 	if !strings.Contains(content, "outcome=expired") || !strings.Contains(content, "熔断") {
 		t.Fatalf("timeout callback=%q", content)
@@ -215,6 +221,147 @@ func TestSupervisorTimeoutDoesNotAutoRecoverWhenCircuitOpens(t *testing.T) {
 	}
 	if nextClaim.Attempt.CardID != mainChat.ID {
 		t.Fatalf("claimed card=%s, want supervisor mainChat %s", nextClaim.Attempt.CardID, mainChat.ID)
+	}
+}
+
+func TestSupervisorTimeoutNotifiesWhenAutoRecoveryUnavailable(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+	mainChat, _, err := s.EnsureMainDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 不启用任何模型路由时，租约超时无法自动创建 recovery attempt，应立即向来源讨论发失败回调。
+	if _, err := s.CreateHumanTurn(
+		ctx, f.WorkspaceID, f.CardID, f.HumanID,
+		"work without enabled route", "supervisor-timeout-no-route", domain.DispatchModeEnqueue,
+	); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 10, 26, 4, 0, 0, 0, time.UTC)
+	claim, err := s.ClaimNextTurnAttempt(ctx, f.WorkspaceID, f.AgentID, started, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := s.ExpireAndRecoverBuiltInAttempts(ctx, f.WorkspaceID, started.Add(2*time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Expired != 1 || res.RecoveryAttempts != 0 {
+		t.Fatalf("timeout without route=%+v, want expired=1 recovered=0", res)
+	}
+	if count := supervisorTurnCount(t, s, mainChat.ID); count != 1 {
+		t.Fatalf("supervisor callbacks=%d, want 1", count)
+	}
+	content := latestSupervisorTurn(t, s, mainChat.ID)
+	if !strings.Contains(content, "outcome=expired") {
+		t.Fatalf("timeout callback=%q", content)
+	}
+	if latestAttempt := latestAttemptNumber(t, s, claim.Attempt.TurnID); latestAttempt != claim.Attempt.AttemptNumber {
+		t.Fatalf("unexpected recovery attempt queued: got %d want %d", latestAttempt, claim.Attempt.AttemptNumber)
+	}
+}
+
+func TestGracefulShutdownInterruptsDoNotTriggerCallbackOrCircuitBreaker(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+	mainChat, _, err := s.EnsureMainDiscussion(ctx, f.WorkspaceID, f.ProjectID, f.HumanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveAgentSettings(
+		ctx, f.WorkspaceID, testAgentSettings("http://127.0.0.1:1/v1", "test-model", ""),
+	); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.CreateHumanTurn(
+		ctx, f.WorkspaceID, f.CardID, f.HumanID,
+		"deploy resilient work", "graceful-restart-turn", domain.DispatchModeEnqueue,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 26, 5, 0, 0, 0, time.UTC)
+
+	// 连续模拟 3 次发版优雅停机中断，每次都应立即排队 recovery，不发讨论回调、不触发熔断。
+	var current *AttemptClaim
+	for i := range 3 {
+		claim, err := s.ClaimNextBuiltInAttempt(ctx, 1, now.Add(time.Duration(i)*time.Minute), time.Minute)
+		if err != nil {
+			t.Fatalf("claim #%d: %v", i+1, err)
+		}
+		if claim.Attempt.TurnID != turn.Turn.ID || claim.Attempt.AttemptNumber != i+1 {
+			t.Fatalf("claim #%d got attempt=%+v", i+1, claim.Attempt)
+		}
+		res, err := s.InterruptAttemptForShutdown(
+			ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID,
+			now.Add(time.Duration(i)*time.Minute+10*time.Second),
+		)
+		if err != nil {
+			t.Fatalf("shutdown interrupt #%d: %v", i+1, err)
+		}
+		if !res.Interrupted || res.RecoveryAttempt == nil {
+			t.Fatalf("shutdown interrupt #%d result=%+v, want interrupted with recovery", i+1, res)
+		}
+		if res.RecoveryAttempt.AttemptNumber != i+2 || res.RecoveryAttempt.Reason != domain.AttemptReasonRecovery {
+			t.Fatalf("shutdown recovery #%d=%+v", i+1, res.RecoveryAttempt)
+		}
+		oldAttempt, err := s.GetAttempt(ctx, f.WorkspaceID, claim.Attempt.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if oldAttempt.Status != domain.AttemptStatusSuperseded || oldAttempt.ErrorSummary != AttemptErrorServerShutdown {
+			t.Fatalf("old attempt #%d=%+v", i+1, oldAttempt)
+		}
+		if count := supervisorTurnCount(t, s, mainChat.ID); count != 0 {
+			t.Fatalf("graceful shutdown #%d emitted supervisor callback count=%d", i+1, count)
+		}
+		current = claim
+	}
+	_ = current
+
+	// 第 4 次领取续跑后，即使出现一次真实超时，也只算第 1 次真实故障，应能继续自动恢复而不是误熔断。
+	resumed, err := s.ClaimNextBuiltInAttempt(ctx, 1, now.Add(4*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Attempt.AttemptNumber != 4 {
+		t.Fatalf("resumed attempt number=%d, want 4", resumed.Attempt.AttemptNumber)
+	}
+	expiredOnce, err := s.ExpireAndRecoverBuiltInAttempts(ctx, f.WorkspaceID, now.Add(6*time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiredOnce.Expired != 1 || expiredOnce.RecoveryAttempts != 1 {
+		t.Fatalf("first real timeout after 3 graceful restarts=%+v, want expired=1 recovered=1", expiredOnce)
+	}
+	if count := supervisorTurnCount(t, s, mainChat.ID); count != 0 {
+		t.Fatalf("first real timeout with auto recovery should not notify supervisor, got count=%d", count)
+	}
+
+	// 再次真实超时（第 2 次相同故障）才应熔断并回调来源讨论。
+	fifth, err := s.ClaimNextBuiltInAttempt(ctx, 1, now.Add(7*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fifth.Attempt.AttemptNumber != 5 {
+		t.Fatalf("fifth attempt number=%d, want 5", fifth.Attempt.AttemptNumber)
+	}
+	expiredTwice, err := s.ExpireAndRecoverBuiltInAttempts(ctx, f.WorkspaceID, now.Add(9*time.Minute), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiredTwice.Expired != 1 || expiredTwice.RecoveryAttempts != 0 {
+		t.Fatalf("second real timeout=%+v, want expired=1 recovered=0", expiredTwice)
+	}
+	if count := supervisorTurnCount(t, s, mainChat.ID); count != 1 {
+		t.Fatalf("expected 1 terminal supervisor callback after 2nd real timeout, got %d", count)
+	}
+	content := latestSupervisorTurn(t, s, mainChat.ID)
+	if !strings.Contains(content, "outcome=expired") || !strings.Contains(content, "identical_error_count=2") {
+		t.Fatalf("terminal callback=%q", content)
 	}
 }
 

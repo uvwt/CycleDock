@@ -96,6 +96,9 @@ export function AttemptMetadata({
   const humanReplied =
     attempt.status === "superseded" &&
     attempt.error_summary === "superseded by human reply";
+  const serverRestarted =
+    attempt.status === "superseded" &&
+    attempt.error_summary === "interrupted by server shutdown";
   const isRunning = attempt.status === "running";
   return (
     <span
@@ -106,7 +109,9 @@ export function AttemptMetadata({
         t(
           humanReplied
             ? "已收到回复"
-            : attemptLabels[attempt.status] || attempt.status,
+            : serverRestarted
+              ? "服务重启续跑"
+              : attemptLabels[attempt.status] || attempt.status,
         )}
       <RunDuration
         startedAt={attempt.started_at}
@@ -184,6 +189,9 @@ function AgentAttempt({
       : showSender || retried || Boolean(runningStartedAt);
 
   if (["cancelled", "superseded"].includes(status) && execution) {
+    const serverRestarted =
+      status === "superseded" &&
+      execution.error_summary === "interrupted by server shutdown";
     return (
       <article className="group flex min-w-0">
         <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
@@ -203,7 +211,7 @@ function AgentAttempt({
           </div>
           <div className="w-fit max-w-full rounded-2xl bg-muted px-4 py-2.5">
             <p className="text-sm text-muted-foreground">
-              {t("暂无已保存的正文")}
+              {t(serverRestarted ? "服务重启中，已自动接续执行" : "暂无已保存的正文")}
             </p>
           </div>
         </div>
