@@ -1453,7 +1453,7 @@ export function ConversationView({
                         data-testid="card-attachments-empty-section"
                       >
                         <div className="text-[11px] font-medium text-muted-foreground">
-                          {t("附带图片（{{count}}）", {
+                          {t("附带附件（{{count}}）", {
                             count: card.attachments.length,
                           })}
                         </div>

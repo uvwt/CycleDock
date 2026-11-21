@@ -159,11 +159,17 @@ func main() {
 		logger.Error("configure upload max size", "error", err)
 		os.Exit(1)
 	}
+	uploadTextMaxKB, err := envPositiveInt("CYCLEDOCK_UPLOAD_TEXT_MAX_KB", int(attachments.DefaultMaxTextUploadBytes>>10))
+	if err != nil {
+		logger.Error("configure upload text max size", "error", err)
+		os.Exit(1)
+	}
 	attachmentsService, err := attachments.New(pool, attachments.Config{
-		Dir:           os.Getenv("CYCLEDOCK_UPLOAD_DIR"),
-		TTL:           time.Duration(uploadTTLHours) * time.Hour,
-		MaxTotalBytes: int64(uploadMaxMB) << 20,
-		Logger:        logger,
+		Dir:                os.Getenv("CYCLEDOCK_UPLOAD_DIR"),
+		TTL:                time.Duration(uploadTTLHours) * time.Hour,
+		MaxTotalBytes:      int64(uploadMaxMB) << 20,
+		MaxTextUploadBytes: int64(uploadTextMaxKB) << 10,
+		Logger:             logger,
 	})
 	if err != nil {
 		logger.Error("configure attachment storage", "error", err)

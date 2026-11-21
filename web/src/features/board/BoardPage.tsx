@@ -39,6 +39,7 @@ import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
 import type { Card, Project, TodoState } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import {
+  COMPOSER_FILE_ACCEPT,
   MAX_COMPOSER_IMAGES,
   useComposerImages,
 } from "../cards/useComposerImages";
@@ -257,7 +258,7 @@ function TaskCard({
               {attachmentCount > 0 && (
                 <span
                   className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground"
-                  title={t("附带 {{count}} 张图片", { count: attachmentCount })}
+                  title={t("附带 {{count}} 个附件", { count: attachmentCount })}
                 >
                   <ImagePlus className="size-2.5" />
                   <span>{attachmentCount}</span>
@@ -828,16 +829,16 @@ export default function BoardPage() {
             createTodo.mutate();
           }}
           onPaste={(e) => {
-            const pastedImages: File[] = [];
+            const pastedFiles: File[] = [];
             for (const item of Array.from(e.clipboardData?.items || [])) {
-              if (item.kind === "file" && item.type.startsWith("image/")) {
+              if (item.kind === "file") {
                 const file = item.getAsFile();
-                if (file) pastedImages.push(file);
+                if (file) pastedFiles.push(file);
               }
             }
-            if (pastedImages.length > 0) {
+            if (pastedFiles.length > 0) {
               e.preventDefault();
-              void todoImages.addFiles(pastedImages);
+              void todoImages.addFiles(pastedFiles);
             }
           }}
           className="space-y-4"
@@ -860,8 +861,8 @@ export default function BoardPage() {
             />
           </Field>
           <Field
-            label={t("附带图片（可选）")}
-            hint={t("支持点击上传、拖拽或粘贴图片，最多 {{max}} 张。", {
+            label={t("附带附件（可选）")}
+            hint={t("支持图片及纯文本/日志/代码文件（单文件 ≤ 2 MB），支持点击、拖拽或粘贴，最多 {{max}} 个。", {
               max: MAX_COMPOSER_IMAGES,
             })}
           >
@@ -895,7 +896,7 @@ export default function BoardPage() {
               <input
                 ref={todoImageInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
+                accept={COMPOSER_FILE_ACCEPT}
                 multiple
                 data-testid="todo-image-input"
                 className="hidden"
@@ -922,11 +923,11 @@ export default function BoardPage() {
                   className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ImagePlus className="size-3.5 text-muted-foreground" />
-                  <span>{t("添加图片")}</span>
+                  <span>{t("添加图片 / 文件")}</span>
                 </button>
                 <span className="text-[11px] tabular-nums text-muted-foreground">
                   {todoImages.uploading
-                    ? t("图片上传中...")
+                    ? t("附件上传中...")
                     : `${todoImages.items.length}/${MAX_COMPOSER_IMAGES}`}
                 </span>
               </div>

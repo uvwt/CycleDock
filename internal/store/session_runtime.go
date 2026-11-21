@@ -156,12 +156,16 @@ func (s *Store) LoadAgentCardContext(
 		refs := make([]CommentAttachmentRef, 0, len(cardAttachments))
 		for _, att := range cardAttachments {
 			refs = append(refs, CommentAttachmentRef{
-				ID:        att.ID,
-				URL:       att.URL,
-				MimeType:  att.MimeType,
-				Width:     att.Width,
-				Height:    att.Height,
-				SizeBytes: att.SizeBytes,
+				ID:              att.ID,
+				URL:             att.URL,
+				Kind:            att.Kind,
+				FileName:        att.FileName,
+				MimeType:        att.MimeType,
+				Width:           att.Width,
+				Height:          att.Height,
+				SizeBytes:       att.SizeBytes,
+				StoredSizeBytes: att.StoredSizeBytes,
+				LineCount:       att.LineCount,
 			})
 		}
 		out.CardAttachments = refs

@@ -14,20 +14,24 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-// CardAttachmentMeta 表示卡片本身（如新建待办时）附带的图片元数据。
-// 仅暴露轻量元数据与鉴权访问 URL，绝不包含图片二进制或 base64。
+// CardAttachmentMeta 表示卡片本身（如新建待办时）附带的附件元数据（图片或纯文本/日志/代码）。
+// 仅暴露轻量元数据与鉴权访问 URL，绝不包含原始二进制或 base64。
 type CardAttachmentMeta struct {
-	ID          uuid.UUID `json:"id"`
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	CardID      uuid.UUID `json:"card_id"`
-	URL         string    `json:"url"`
-	MimeType    string    `json:"mime_type"`
-	SizeBytes   int64     `json:"size_bytes"`
-	Width       int       `json:"width"`
-	Height      int       `json:"height"`
-	Status      string    `json:"status"` // active | expired | purged
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ID              uuid.UUID `json:"id"`
+	WorkspaceID     uuid.UUID `json:"workspace_id"`
+	CardID          uuid.UUID `json:"card_id"`
+	URL             string    `json:"url"`
+	Kind            string    `json:"kind"`
+	FileName        string    `json:"file_name,omitempty"`
+	MimeType        string    `json:"mime_type"`
+	SizeBytes       int64     `json:"size_bytes"`
+	StoredSizeBytes int64     `json:"stored_size_bytes,omitempty"`
+	LineCount       int       `json:"line_count,omitempty"`
+	Width           int       `json:"width"`
+	Height          int       `json:"height"`
+	Status          string    `json:"status"` // active | expired | purged
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
 }
 
 // CreateTodoCardWithAttachments 在单个事务内创建待办卡片，并对传入的 attachmentIDs
@@ -120,8 +124,12 @@ func listCardAttachmentsTx(
 			wa.id,
 			wa.workspace_id,
 			ca.card_id,
+			wa.kind,
+			wa.file_name,
 			wa.mime_type,
 			wa.size_bytes,
+			wa.stored_size_bytes,
+			wa.line_count,
 			wa.width,
 			wa.height,
 			wa.created_at,
@@ -149,8 +157,12 @@ func listCardAttachmentsTx(
 			&item.ID,
 			&item.WorkspaceID,
 			&item.CardID,
+			&item.Kind,
+			&item.FileName,
 			&item.MimeType,
 			&item.SizeBytes,
+			&item.StoredSizeBytes,
+			&item.LineCount,
 			&item.Width,
 			&item.Height,
 			&item.CreatedAt,
@@ -169,6 +181,51 @@ func listCardAttachmentsTx(
 			item.Status = "active"
 		}
 		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AttachmentStatuses 批量查询同工作区内指定附件 ID 的实时状态（active / expired / purged），
+// 供时间线消息展示精准渲染过期占位，避免客户端对已清理文本附件发起无效下载。
+func (s *Store) AttachmentStatuses(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	ids []uuid.UUID,
+) (map[uuid.UUID]string, error) {
+	out := make(map[uuid.UUID]string, len(ids))
+	if workspaceID == uuid.Nil || len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, expires_at, purged_at
+		FROM workspace_attachments
+		WHERE workspace_id = $1
+		  AND id = ANY($2::uuid[])
+	`, workspaceID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load attachment statuses: %w", err)
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	for rows.Next() {
+		var id uuid.UUID
+		var expiresAt time.Time
+		var purgedAt *time.Time
+		if err := rows.Scan(&id, &expiresAt, &purgedAt); err != nil {
+			return nil, fmt.Errorf("scan attachment status: %w", err)
+		}
+		switch {
+		case purgedAt != nil:
+			out[id] = "purged"
+		case !expiresAt.After(now):
+			out[id] = "expired"
+		default:
+			out[id] = "active"
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

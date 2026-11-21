@@ -17,14 +17,19 @@ import (
 
 const MaxCommentAttachments = 8
 
-// CommentAttachmentRef 是写入 events.message 的轻量图片引用元数据，严禁包含图片二进制或 base64。
+// CommentAttachmentRef 是写入 events.message 的轻量附件引用元数据（图片或纯文本/日志/代码），严禁包含原始文件二进制或 base64。
 type CommentAttachmentRef struct {
-	ID        uuid.UUID `json:"id"`
-	URL       string    `json:"url"`
-	MimeType  string    `json:"mime_type"`
-	Width     int       `json:"width"`
-	Height    int       `json:"height"`
-	SizeBytes int64     `json:"size_bytes"`
+	ID              uuid.UUID `json:"id"`
+	URL             string    `json:"url"`
+	Kind            string    `json:"kind,omitempty"`
+	FileName        string    `json:"file_name,omitempty"`
+	MimeType        string    `json:"mime_type"`
+	Width           int       `json:"width"`
+	Height          int       `json:"height"`
+	SizeBytes       int64     `json:"size_bytes"`
+	StoredSizeBytes int64     `json:"stored_size_bytes,omitempty"`
+	LineCount       int       `json:"line_count,omitempty"`
+	Status          string    `json:"status,omitempty"`
 }
 
 // CommentMessagePayload 是人类 comment 事件可选的轻量结构化载荷（仅存附件引用）。
@@ -32,11 +37,34 @@ type CommentMessagePayload struct {
 	Attachments []CommentAttachmentRef `json:"attachments,omitempty"`
 }
 
-func formatImageOnlyTurnContent(count int) string {
-	if count <= 1 {
-		return "[图片]"
+func formatAttachmentOnlyTurnContent(refs []CommentAttachmentRef) string {
+	if len(refs) == 0 {
+		return ""
 	}
-	return fmt.Sprintf("[图片 x%d]", count)
+	var imageCount, textCount int
+	for _, ref := range refs {
+		if ref.Kind == "text" {
+			textCount++
+		} else {
+			imageCount++
+		}
+	}
+	if textCount == 0 {
+		if imageCount <= 1 {
+			return "[图片]"
+		}
+		return fmt.Sprintf("[图片 x%d]", imageCount)
+	}
+	if imageCount == 0 {
+		if textCount == 1 && strings.TrimSpace(refs[0].FileName) != "" {
+			return fmt.Sprintf("[文件: %s]", strings.TrimSpace(refs[0].FileName))
+		}
+		if textCount == 1 {
+			return "[文件]"
+		}
+		return fmt.Sprintf("[文件 x%d]", textCount)
+	}
+	return fmt.Sprintf("[附件 x%d]", len(refs))
 }
 
 func normalizeCommentAttachmentIDs(ids []uuid.UUID) ([]uuid.UUID, error) {
@@ -56,7 +84,7 @@ func normalizeCommentAttachmentIDs(ids []uuid.UUID) ([]uuid.UUID, error) {
 		out = append(out, id)
 	}
 	if len(out) > MaxCommentAttachments {
-		return nil, fmt.Errorf("%w: at most %d image attachments are allowed per message", domain.ErrConflict, MaxCommentAttachments)
+		return nil, fmt.Errorf("%w: at most %d attachments are allowed per message", domain.ErrConflict, MaxCommentAttachments)
 	}
 	return out, nil
 }
@@ -600,7 +628,7 @@ func (s *Store) submitSessionComment(
 
 	turnContent := p.Content
 	if turnContent == "" {
-		turnContent = formatImageOnlyTurnContent(len(attachmentRefs))
+		turnContent = formatAttachmentOnlyTurnContent(attachmentRefs)
 	}
 
 	turn, err := insertTurn(ctx, tx, insertTurnParams{
@@ -682,7 +710,7 @@ func resolveAndBindCommentAttachmentsTx(
 ) ([]CommentAttachmentRef, error) {
 	now := time.Now().UTC()
 	rows, err := tx.Query(ctx, `
-		SELECT id, card_id, mime_type, size_bytes, width, height, expires_at, purged_at
+		SELECT id, card_id, kind, file_name, mime_type, size_bytes, stored_size_bytes, line_count, width, height, expires_at, purged_at
 		FROM workspace_attachments
 		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
 		FOR UPDATE
@@ -697,30 +725,36 @@ func resolveAndBindCommentAttachmentsTx(
 	for rows.Next() {
 		var id uuid.UUID
 		var boundCardID uuid.NullUUID
+		var kind string
+		var fileName string
 		var mimeType string
-		var sizeBytes int64
-		var width, height int
+		var sizeBytes, storedSizeBytes int64
+		var lineCount, width, height int
 		var expiresAt time.Time
 		var purgedAt *time.Time
-		if err := rows.Scan(&id, &boundCardID, &mimeType, &sizeBytes, &width, &height, &expiresAt, &purgedAt); err != nil {
+		if err := rows.Scan(&id, &boundCardID, &kind, &fileName, &mimeType, &sizeBytes, &storedSizeBytes, &lineCount, &width, &height, &expiresAt, &purgedAt); err != nil {
 			return nil, fmt.Errorf("scan comment attachment: %w", err)
 		}
 		if purgedAt != nil || !expiresAt.After(now) {
-			return nil, fmt.Errorf("%w: image attachment has expired", domain.ErrConflict)
+			return nil, fmt.Errorf("%w: attachment has expired", domain.ErrConflict)
 		}
 		if boundCardID.Valid && boundCardID.UUID != cardID {
-			return nil, fmt.Errorf("%w: image attachment belongs to another card", domain.ErrConflict)
+			return nil, fmt.Errorf("%w: attachment belongs to another card", domain.ErrConflict)
 		}
 		if !boundCardID.Valid {
 			unbindableIDs = append(unbindableIDs, id)
 		}
 		byID[id] = CommentAttachmentRef{
-			ID:        id,
-			URL:       fmt.Sprintf("/api/v1/workspaces/%s/attachments/%s", workspaceID.String(), id.String()),
-			MimeType:  mimeType,
-			Width:     width,
-			Height:    height,
-			SizeBytes: sizeBytes,
+			ID:              id,
+			URL:             fmt.Sprintf("/api/v1/workspaces/%s/attachments/%s", workspaceID.String(), id.String()),
+			Kind:            kind,
+			FileName:        fileName,
+			MimeType:        mimeType,
+			Width:           width,
+			Height:          height,
+			SizeBytes:       sizeBytes,
+			StoredSizeBytes: storedSizeBytes,
+			LineCount:       lineCount,
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -728,7 +762,7 @@ func resolveAndBindCommentAttachmentsTx(
 	}
 
 	if len(byID) != len(attachmentIDs) {
-		return nil, fmt.Errorf("%w: one or more image attachments were not found", domain.ErrConflict)
+		return nil, fmt.Errorf("%w: one or more attachments were not found", domain.ErrConflict)
 	}
 
 	if len(unbindableIDs) > 0 {

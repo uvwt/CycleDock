@@ -195,11 +195,11 @@ export function CardHeaderInfoCard({
         <CardDescriptionCollapsible description={card.description.trim()} />
       ) : null}
 
-      {/* 卡片自身附带的图片（如新建待办时附带的参考图） */}
+      {/* 卡片自身附带的附件（如新建待办时附带的图片或纯文本/日志/代码文件） */}
       {card.attachments && card.attachments.length > 0 ? (
         <div className="space-y-1.5" data-testid="card-header-attachments">
           <div className="text-[11px] font-medium text-muted-foreground">
-            {t("附带图片（{{count}}）", { count: card.attachments.length })}
+            {t("附带附件（{{count}}）", { count: card.attachments.length })}
           </div>
           <MessageAttachmentGrid attachments={card.attachments} />
         </div>

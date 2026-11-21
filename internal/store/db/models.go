@@ -477,8 +477,13 @@ type WorkspaceAttachment struct {
 	WorkspaceID        uuid.UUID          `json:"workspace_id"`
 	CardID             uuid.NullUUID      `json:"card_id"`
 	UploadedBySourceID uuid.UUID          `json:"uploaded_by_source_id"`
+	Kind               string             `json:"kind"`
+	FileName           string             `json:"file_name"`
+	StorageEncoding    string             `json:"storage_encoding"`
 	MimeType           string             `json:"mime_type"`
 	SizeBytes          int64              `json:"size_bytes"`
+	StoredSizeBytes    int64              `json:"stored_size_bytes"`
+	LineCount          int32              `json:"line_count"`
 	Width              int32              `json:"width"`
 	Height             int32              `json:"height"`
 	Sha256             string             `json:"sha256"`
