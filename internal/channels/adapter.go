@@ -1,0 +1,204 @@
+package channels
+
+import (
+	"context"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/store"
+)
+
+// InboundMessage 表示从外部 IM 平台接收并已做协议归一化的一条消息。
+type InboundMessage struct {
+	ExternalMessageID string
+	SenderID          string
+	ChatID            string
+	ChatType          string // "direct" 或 "group"
+	ThreadID          string
+	Content           string
+	Mentioned         bool
+	SessionWebhook    string
+	ContextToken      string
+	Timestamp         time.Time
+}
+
+// OutboundMessage 表示发往外部 IM 平台的一条终态或定时推送消息。
+type OutboundMessage struct {
+	ChatID         string
+	ChatType       string
+	ThreadID       string
+	Text           string
+	SessionWebhook string
+	ContextToken   string
+	CardURL        string
+}
+
+// InboundHandler 处理单条外部入站消息。
+type InboundHandler func(ctx context.Context, msg InboundMessage) error
+
+// StatusReporter 用于适配器上报实时运行状态、心跳和最近错误。
+type StatusReporter func(ctx context.Context, status domain.ChannelRuntimeStatus, lastErr string, heartbeat bool)
+
+// StatePersister 用于适配器持久化增量游标与会话定位（如 get_updates_buf / telegram_offset）。
+type StatePersister func(ctx context.Context, mutate func(*store.RemoteChannelRuntimeState)) error
+
+// AdapterRuntime 是传给各个平台适配器的受控运行时回调。
+type AdapterRuntime struct {
+	OnInbound InboundHandler
+	OnStatus  StatusReporter
+	SaveState StatePersister
+}
+
+// Adapter 是 6 大 IM 平台的统一协议抽象。
+// 长连接/长轮询通道通过 Run 阻塞运行并在 ctx 取消时优雅退出；
+// 轻量化 Webhook 通道的 Run 直接标记 ready 并在 ctx 结束时返回。
+type Adapter interface {
+	Platform() domain.ChannelPlatform
+	Run(ctx context.Context, rt AdapterRuntime) error
+	Send(ctx context.Context, msg OutboundMessage) error
+	Test(ctx context.Context, testText string) error
+}
+
+// PolicyAllows 检查一条入站消息是否满足通道的白名单与群聊策略。
+func PolicyAllows(ch store.RemoteChannel, msg InboundMessage) bool {
+	if ch.Role != domain.ChannelRoleMainChat {
+		return false
+	}
+	if strings.TrimSpace(msg.Content) == "" {
+		return false
+	}
+	isGroup := strings.EqualFold(strings.TrimSpace(msg.ChatType), "group")
+	allowedByList := matchesAllowFrom(ch.AllowFrom, msg.SenderID, msg.ChatID)
+
+	if !isGroup {
+		if len(ch.AllowFrom) == 0 {
+			return true
+		}
+		return allowedByList
+	}
+
+	switch ch.GroupPolicy {
+	case domain.ChannelGroupPolicyAll:
+		if len(ch.AllowFrom) == 0 {
+			return true
+		}
+		return allowedByList
+	case domain.ChannelGroupPolicyAllowlist:
+		return len(ch.AllowFrom) > 0 && allowedByList
+	default: // mention_only
+		if !msg.Mentioned {
+			return false
+		}
+		if len(ch.AllowFrom) == 0 {
+			return true
+		}
+		return allowedByList
+	}
+}
+
+func matchesAllowFrom(allowFrom []string, senderID, chatID string) bool {
+	if len(allowFrom) == 0 {
+		return false
+	}
+	sender := strings.TrimSpace(senderID)
+	chat := strings.TrimSpace(chatID)
+	for _, raw := range allowFrom {
+		rule := strings.TrimSpace(raw)
+		if rule == "" {
+			continue
+		}
+		if rule == "*" {
+			return true
+		}
+		if sender != "" && strings.EqualFold(rule, sender) {
+			return true
+		}
+		if chat != "" && strings.EqualFold(rule, chat) {
+			return true
+		}
+	}
+	return false
+}
+
+// SplitMessage 按平台最大字符长度安全切分长文本，尽量在段落、换行或标点处断句。
+func SplitMessage(text string, maxRunes int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if maxRunes <= 0 || utf8.RuneCountInString(text) <= maxRunes {
+		return []string{text}
+	}
+	runes := []rune(text)
+	chunks := make([]string, 0, len(runes)/maxRunes+1)
+	for len(runes) > 0 {
+		if len(runes) <= maxRunes {
+			chunks = append(chunks, strings.TrimSpace(string(runes)))
+			break
+		}
+		cut := findSplitPoint(runes[:maxRunes])
+		piece := strings.TrimSpace(string(runes[:cut]))
+		if piece != "" {
+			chunks = append(chunks, piece)
+		}
+		runes = []rune(strings.TrimLeft(string(runes[cut:]), " \t\r\n"))
+	}
+	return chunks
+}
+
+func findSplitPoint(window []rune) int {
+	n := len(window)
+	minCut := n / 2
+	// 优先在空行段落边界切分
+	for i := n - 1; i >= minCut; i-- {
+		if i > 0 && window[i] == '\n' && window[i-1] == '\n' {
+			return i
+		}
+	}
+	// 其次在单换行切分
+	for i := n - 1; i >= minCut; i-- {
+		if window[i] == '\n' {
+			return i
+		}
+	}
+	// 最后在常见中英文句末标点切分
+	for i := n - 1; i >= minCut; i-- {
+		switch window[i] {
+		case '。', '！', '？', '；', '.', '!', '?', ';', ' ':
+			return i + 1
+		}
+	}
+	return n
+}
+
+// FormatOutboundWithLink 统一将卡片直达链接附在消息末尾，避免重复拼接。
+func FormatOutboundWithLink(text, cardURL string) string {
+	text = strings.TrimSpace(text)
+	cardURL = strings.TrimSpace(cardURL)
+	if cardURL == "" {
+		return text
+	}
+	if strings.Contains(text, cardURL) {
+		return text
+	}
+	if text == "" {
+		return "查看卡片：" + cardURL
+	}
+	return text + "\n\n查看卡片：" + cardURL
+}
+
+// ChannelCardURL 构造 CycleDock 卡片直达链接。
+func ChannelCardURL(baseURL string, projectID, cardID uuid.UUID) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" || cardID == uuid.Nil {
+		return ""
+	}
+	if projectID != uuid.Nil {
+		return base + "/projects/" + projectID.String() + "/cards/" + cardID.String()
+	}
+	return base + "/cards/" + cardID.String()
+}

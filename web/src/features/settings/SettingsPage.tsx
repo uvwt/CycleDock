@@ -1,6 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { NavLink, Navigate, useLocation } from "react-router-dom";
-import { Bot, BrainCircuit, LogOut, Plug, Settings, ShieldAlert, Webhook } from "lucide-react";
+import {
+  Bot,
+  BrainCircuit,
+  LogOut,
+  MessageSquare,
+  Plug,
+  Settings,
+  ShieldAlert,
+  Webhook,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -25,6 +34,7 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ToolGuardSettings } from "./ToolGuardSettings";
 import { MCPSettings } from "./ConnectionsSettings";
 import { TriggersSettings } from "./TriggersSettings";
+import { RemoteChannelsSettings } from "./RemoteChannelsSettings";
 import { AuthorizedClientsSettings } from "./AuthorizedClientsSettings";
 
 const menus = [
@@ -43,6 +53,7 @@ const menus = [
     group: "外部连接",
     items: [
       { id: "triggers", title: "触发器", icon: Webhook },
+      { id: "channels", title: "远程通道", icon: MessageSquare },
       { id: "mcp", title: "MCP 服务", icon: Plug },
       { id: "clients", title: "AI 客户端", icon: Bot },
     ],
@@ -191,7 +202,7 @@ export default function SettingsPage({ role }: { role: string }) {
             </>
           )}
 
-          {["models", "tool-guard", "mcp"].includes(tab) && !isOwner && (
+          {["models", "tool-guard", "channels", "mcp"].includes(tab) && !isOwner && (
             <Section title={t("需要所有者权限")}>
               <p className="text-sm text-muted-foreground">
                 {t("这些设置只允许 Workspace owner 修改。")}
@@ -201,6 +212,7 @@ export default function SettingsPage({ role }: { role: string }) {
           {tab === "models" && isOwner && <ModelsSettings />}
           {tab === "tool-guard" && isOwner && <ToolGuardSettings />}
           {tab === "triggers" && <TriggersSettings />}
+          {tab === "channels" && isOwner && <RemoteChannelsSettings />}
           {tab === "mcp" && isOwner && <MCPSettings />}
           {tab === "clients" && <AuthorizedClientsSettings />}
 

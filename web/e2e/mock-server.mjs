@@ -28,6 +28,100 @@ let nexusConnected = true;
 const now = () => new Date().toISOString();
 const hoursAgo = (hours) =>
   new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+let remoteChannels = [
+  {
+    id: "ch-feishu-main",
+    workspace_id: "demo-workspace",
+    name: "运维主聊天 · 飞书机器人",
+    platform: "feishu",
+    role: "main_chat",
+    transport: "websocket",
+    enabled: true,
+    project_id: project.id,
+    target_card_id: null,
+    push_filter: "all",
+    mirror_web_messages: true,
+    group_policy: "mention_only",
+    allow_from: ["ou_ops_lead", "oc_ops_group"],
+    config: { domain: "feishu", app_id: "cli_a8f92e10", target_chat_id: "oc_ops_group" },
+    has_secrets: true,
+    secret_hints: { app_secret: "fs_****9a21" },
+    runtime_status: "connected",
+    last_error: "",
+    last_heartbeat_at: now(),
+    created_at: hoursAgo(12),
+    updated_at: now(),
+  },
+  {
+    id: "ch-wecom-scheduled",
+    workspace_id: "demo-workspace",
+    name: "企微值班群 · 定时巡检独立推送",
+    platform: "wecom",
+    role: "scheduled_push",
+    transport: "webhook",
+    enabled: true,
+    project_id: project.id,
+    target_card_id: null,
+    push_filter: "warnings_only",
+    mirror_web_messages: false,
+    group_policy: "mention_only",
+    allow_from: [],
+    config: {},
+    has_secrets: true,
+    secret_hints: { webhook_url: "https://qyapi.weixin.qq.com/****8b3c" },
+    runtime_status: "connected",
+    last_error: "",
+    last_heartbeat_at: now(),
+    created_at: hoursAgo(8),
+    updated_at: now(),
+  },
+  {
+    id: "ch-weixin-main",
+    workspace_id: "demo-workspace",
+    name: "个人微信 · 随身助手",
+    platform: "weixin",
+    role: "main_chat",
+    transport: "long_poll",
+    enabled: true,
+    project_id: secondProject.id,
+    target_card_id: null,
+    push_filter: "all",
+    mirror_web_messages: false,
+    group_policy: "mention_only",
+    allow_from: [],
+    config: { base_url: "https://ilinkai.weixin.qq.com" },
+    has_secrets: false,
+    secret_hints: {},
+    runtime_status: "starting",
+    last_error: "等待扫码绑定微信账号",
+    created_at: hoursAgo(2),
+    updated_at: now(),
+  },
+  {
+    id: "ch-tg-topics",
+    workspace_id: "demo-workspace",
+    name: "Telegram 巡检 Topic",
+    platform: "telegram",
+    role: "scheduled_push",
+    transport: "long_poll",
+    enabled: true,
+    project_id: secondProject.id,
+    target_card_id: null,
+    push_filter: "all",
+    mirror_web_messages: false,
+    group_policy: "mention_only",
+    allow_from: [],
+    config: { target_chat_id: "-100238901234", message_thread_id: 42 },
+    has_secrets: true,
+    secret_hints: { bot_token: "7412****x9Qf" },
+    runtime_status: "connected",
+    last_error: "",
+    last_heartbeat_at: now(),
+    created_at: hoursAgo(5),
+    updated_at: now(),
+  },
+];
+const wxLoginSessions = new Map();
 let deviceToolGuards = [
   {
     id: "guard-rn",
@@ -1561,6 +1655,109 @@ http
             duration_ms: 52,
             tool_count: 2,
           });
+        if (route === "/channels" && req.method === "GET")
+          return data(res, { channels: remoteChannels });
+        if (route === "/channels" && req.method === "POST") {
+          const input = await body(req);
+          const created = {
+            id: "ch-" + Date.now(),
+            workspace_id: "demo-workspace",
+            name: input.name || "新建通道",
+            platform: input.platform,
+            role: input.role,
+            transport: input.transport,
+            enabled: input.enabled ?? true,
+            project_id: input.project_id,
+            target_card_id: input.target_card_id || null,
+            push_filter: input.push_filter || "all",
+            mirror_web_messages: Boolean(input.mirror_web_messages),
+            group_policy: input.group_policy || "mention_only",
+            allow_from: input.allow_from || [],
+            config: input.config || {},
+            has_secrets: Boolean(
+              input.secrets && Object.values(input.secrets).some(Boolean),
+            ),
+            secret_hints: input.secrets
+              ? Object.fromEntries(
+                  Object.entries(input.secrets)
+                    .filter(([, v]) => Boolean(v))
+                    .map(([k]) => [k, "****configured"]),
+                )
+              : {},
+            runtime_status: input.enabled === false ? "disabled" : "connected",
+            last_error: "",
+            created_at: now(),
+            updated_at: now(),
+          };
+          remoteChannels = [created, ...remoteChannels];
+          return data(res, { channel: created }, 201);
+        }
+        if (route === "/channels/weixin/login/start" && req.method === "POST") {
+          const input = await body(req);
+          const sid = "wx-sess-" + Date.now();
+          const sess = {
+            session_id: sid,
+            channel_id: input.channel_id || "",
+            qrcode_id: "qr-" + sid,
+            qrcode_content: "https://ilinkai.weixin.qq.com/qr/demo-cycledock-" + sid,
+            status: "wait",
+            base_url: input.base_url || "https://ilinkai.weixin.qq.com",
+            expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+            created_at: now(),
+            updated_at: now(),
+          };
+          wxLoginSessions.set(sid, sess);
+          return data(res, { session: sess }, 201);
+        }
+        const wxPollMatch = route.match(/^\/channels\/weixin\/login\/([^/]+)$/);
+        if (wxPollMatch && req.method === "GET") {
+          const sess = wxLoginSessions.get(wxPollMatch[1]);
+          if (!sess) return failure(res);
+          return data(res, { session: sess });
+        }
+        const chTestMatch = route.match(/^\/channels\/([^/]+)\/test$/);
+        if (chTestMatch && req.method === "POST") {
+          const item = remoteChannels.find((c) => c.id === chTestMatch[1]);
+          if (!item) return failure(res);
+          return data(res, { ok: true, message: "测试消息已成功发送", channel: item });
+        }
+        const chToggleMatch = route.match(/^\/channels\/([^/]+)\/enabled$/);
+        if (chToggleMatch && req.method === "POST") {
+          const item = remoteChannels.find((c) => c.id === chToggleMatch[1]);
+          if (!item) return failure(res);
+          const input = await body(req);
+          item.enabled = Boolean(input.enabled);
+          item.runtime_status = item.enabled ? "connected" : "disabled";
+          item.updated_at = now();
+          return data(res, { channel: item });
+        }
+        const chMatch = route.match(/^\/channels\/([^/]+)$/);
+        if (chMatch) {
+          const idx = remoteChannels.findIndex((c) => c.id === chMatch[1]);
+          if (idx === -1) return failure(res);
+          if (req.method === "DELETE") {
+            remoteChannels.splice(idx, 1);
+            return data(res, { deleted: true, id: chMatch[1] });
+          }
+          if (req.method === "PUT") {
+            const input = await body(req);
+            Object.assign(remoteChannels[idx], {
+              name: input.name,
+              role: input.role,
+              transport: input.transport,
+              enabled: input.enabled ?? remoteChannels[idx].enabled,
+              project_id: input.project_id,
+              target_card_id: input.target_card_id || null,
+              push_filter: input.push_filter || "all",
+              mirror_web_messages: Boolean(input.mirror_web_messages),
+              group_policy: input.group_policy || "mention_only",
+              allow_from: input.allow_from || [],
+              config: input.config || {},
+              updated_at: now(),
+            });
+            return data(res, { channel: remoteChannels[idx] });
+          }
+        }
         if (route === "/notifications/push" && req.method === "GET")
           return data(res, { public_key: "" });
         if (route === "/triggers" && req.method === "GET") {

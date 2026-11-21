@@ -180,6 +180,57 @@ const (
 	ScheduleInterval ScheduleFrequency = "interval"
 )
 
+type ChannelPlatform string
+
+const (
+	ChannelPlatformWeixin   ChannelPlatform = "weixin"
+	ChannelPlatformWeCom    ChannelPlatform = "wecom"
+	ChannelPlatformFeishu   ChannelPlatform = "feishu"
+	ChannelPlatformDingTalk ChannelPlatform = "dingtalk"
+	ChannelPlatformQQ       ChannelPlatform = "qq"
+	ChannelPlatformTelegram ChannelPlatform = "telegram"
+)
+
+type ChannelRole string
+
+const (
+	ChannelRoleMainChat      ChannelRole = "main_chat"
+	ChannelRoleScheduledPush ChannelRole = "scheduled_push"
+)
+
+type ChannelTransport string
+
+const (
+	ChannelTransportLongPoll  ChannelTransport = "long_poll"
+	ChannelTransportWebSocket ChannelTransport = "websocket"
+	ChannelTransportStream    ChannelTransport = "stream"
+	ChannelTransportWebhook   ChannelTransport = "webhook"
+)
+
+type ChannelPushFilter string
+
+const (
+	ChannelPushFilterAll          ChannelPushFilter = "all"
+	ChannelPushFilterWarningsOnly ChannelPushFilter = "warnings_only"
+)
+
+type ChannelGroupPolicy string
+
+const (
+	ChannelGroupPolicyMentionOnly ChannelGroupPolicy = "mention_only"
+	ChannelGroupPolicyAllowlist   ChannelGroupPolicy = "allowlist"
+	ChannelGroupPolicyAll         ChannelGroupPolicy = "all"
+)
+
+type ChannelRuntimeStatus string
+
+const (
+	ChannelRuntimeDisconnected ChannelRuntimeStatus = "disconnected"
+	ChannelRuntimeConnecting   ChannelRuntimeStatus = "connecting"
+	ChannelRuntimeConnected    ChannelRuntimeStatus = "connected"
+	ChannelRuntimeError        ChannelRuntimeStatus = "error"
+)
+
 var (
 	ErrNotFound            = errors.New("not found")
 	ErrConflict            = errors.New("conflict")

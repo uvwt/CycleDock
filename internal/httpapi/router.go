@@ -16,6 +16,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/channels"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/nexusdock"
@@ -25,33 +26,38 @@ import (
 )
 
 type Config struct {
-	SecureCookie bool
-	WebDir       string
-	Logger       *slog.Logger
-	OAuth        *oauth.Service
-	MCP          http.Handler
-	MCPMetadata  http.Handler
-	ModelAuth    *modelauth.Service
-	ModelClient  *modelclient.Client
-	NexusDock    *nexusdock.Service
-	Attachments  *attachments.Service
-	Live         *realtime.Hub
-	Push         pushSender
+	SecureCookie   bool
+	WebDir         string
+	PublicURL      string
+	Logger         *slog.Logger
+	OAuth          *oauth.Service
+	MCP            http.Handler
+	MCPMetadata    http.Handler
+	ModelAuth      *modelauth.Service
+	ModelClient    *modelclient.Client
+	NexusDock      *nexusdock.Service
+	Attachments    *attachments.Service
+	Live           *realtime.Hub
+	Push           pushSender
+	ChannelManager *channels.Manager
 }
 
 type API struct {
-	pool         *pgxpool.Pool
-	store        *store.Store
-	auth         *auth.Service
-	oauth        *oauth.Service
-	modelAuth    *modelauth.Service
-	model        *modelclient.Client
-	nexusDock    *nexusdock.Service
-	attachments  *attachments.Service
-	live         *realtime.Hub
-	push         pushSender
-	secureCookie bool
-	logger       *slog.Logger
+	pool               *pgxpool.Pool
+	store              *store.Store
+	auth               *auth.Service
+	oauth              *oauth.Service
+	modelAuth          *modelauth.Service
+	model              *modelclient.Client
+	nexusDock          *nexusdock.Service
+	attachments        *attachments.Service
+	live               *realtime.Hub
+	push               pushSender
+	channelManager     *channels.Manager
+	fallbackWeixinAuth *channels.WeixinLoginStore
+	publicBaseURL      string
+	secureCookie       bool
+	logger             *slog.Logger
 }
 
 func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Service, config Config) http.Handler {
@@ -66,8 +72,10 @@ func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Ser
 	api := &API{
 		pool: pool, store: dataStore, auth: authService,
 		oauth: config.OAuth, modelAuth: config.ModelAuth, model: model, nexusDock: config.NexusDock,
-		attachments:  config.Attachments,
-		secureCookie: config.SecureCookie, logger: logger, live: config.Live, push: config.Push,
+		attachments:    config.Attachments,
+		channelManager: config.ChannelManager,
+		publicBaseURL:  strings.TrimRight(strings.TrimSpace(config.PublicURL), "/"),
+		secureCookie:   config.SecureCookie, logger: logger, live: config.Live, push: config.Push,
 	}
 
 	router := chi.NewRouter()

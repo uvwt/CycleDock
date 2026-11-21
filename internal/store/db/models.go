@@ -382,6 +382,61 @@ type PushSubscriptionCardRevision struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RemoteChannel struct {
+	ID                uuid.UUID          `json:"id"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	Name              string             `json:"name"`
+	Platform          string             `json:"platform"`
+	Role              string             `json:"role"`
+	Transport         string             `json:"transport"`
+	Enabled           bool               `json:"enabled"`
+	ProjectID         uuid.UUID          `json:"project_id"`
+	TargetCardID      uuid.NullUUID      `json:"target_card_id"`
+	PushFilter        string             `json:"push_filter"`
+	MirrorWebMessages bool               `json:"mirror_web_messages"`
+	GroupPolicy       string             `json:"group_policy"`
+	AllowFrom         []string           `json:"allow_from"`
+	ConfigJson        []byte             `json:"config_json"`
+	SecretCiphertext  []byte             `json:"secret_ciphertext"`
+	SecretHints       []byte             `json:"secret_hints"`
+	RuntimeStatus     string             `json:"runtime_status"`
+	LastError         string             `json:"last_error"`
+	LastHeartbeatAt   pgtype.Timestamptz `json:"last_heartbeat_at"`
+	LastInboundAt     pgtype.Timestamptz `json:"last_inbound_at"`
+	LastOutboundAt    pgtype.Timestamptz `json:"last_outbound_at"`
+	RuntimeStateJson  []byte             `json:"runtime_state_json"`
+	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RemoteChannelInboundDedup struct {
+	ID                uuid.UUID          `json:"id"`
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	ChannelID         uuid.UUID          `json:"channel_id"`
+	ExternalMessageID string             `json:"external_message_id"`
+	SenderID          string             `json:"sender_id"`
+	ChatID            string             `json:"chat_id"`
+	CardID            uuid.NullUUID      `json:"card_id"`
+	EventID           uuid.NullUUID      `json:"event_id"`
+	TurnID            uuid.NullUUID      `json:"turn_id"`
+	ReceivedAt        pgtype.Timestamptz `json:"received_at"`
+}
+
+type RemoteChannelOutboundCursor struct {
+	WorkspaceID       uuid.UUID          `json:"workspace_id"`
+	ChannelID         uuid.UUID          `json:"channel_id"`
+	CardID            uuid.UUID          `json:"card_id"`
+	LastMessageSeq    int64              `json:"last_message_seq"`
+	LastCommentSeq    int64              `json:"last_comment_seq"`
+	LastCheckinSeq    int64              `json:"last_checkin_seq"`
+	LastStatusSeq     int64              `json:"last_status_seq"`
+	LastAttemptID     uuid.NullUUID      `json:"last_attempt_id"`
+	LastAttemptStatus string             `json:"last_attempt_status"`
+	LastApprovalID    uuid.NullUUID      `json:"last_approval_id"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Source struct {
 	ID          uuid.UUID          `json:"id"`
 	WorkspaceID uuid.UUID          `json:"workspace_id"`
