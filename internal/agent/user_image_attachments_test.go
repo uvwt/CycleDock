@@ -60,18 +60,21 @@ func TestBuildUserTurnContentPersistsReferenceOnlyNoInlineBytes(t *testing.T) {
 }
 
 func TestBuildUserTurnContentIncludesCardAttachmentsOnFirstTurnOnly(t *testing.T) {
-	cardAttID := uuid.New()
+	cardImageID := uuid.New()
+	cardTextID := uuid.New()
 	turnAttID := uuid.New()
 
-	// 首轮（TurnSequence == 1）：同时携带卡片附带图片与当前消息图片，且仅存轻量 FileData URI。
+	// 生产环境下全局自增 TurnSequence 通常远大于 1，首轮判定必须依赖卡片内轮次 CardTurnNumber == 1。
 	firstTurn := buildUserTurnContent(store.AgentCardContext{
-		TurnSequence: 1,
-		TurnContent:  "开始处理这个待办",
+		TurnSequence:   42,
+		CardTurnNumber: 1,
+		TurnContent:    "开始处理这个待办",
 		CardAttachments: []store.CommentAttachmentRef{
-			{ID: cardAttID, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+			{ID: cardImageID, Kind: attachments.KindImage, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+			{ID: cardTextID, Kind: attachments.KindText, FileName: "spec.md", MimeType: attachments.TextMimeType, SizeBytes: 256, LineCount: 8},
 		},
 		TurnAttachments: []store.CommentAttachmentRef{
-			{ID: turnAttID, MimeType: "image/jpeg", Width: 800, Height: 600, SizeBytes: 8192},
+			{ID: turnAttID, Kind: attachments.KindImage, MimeType: "image/jpeg", Width: 800, Height: 600, SizeBytes: 8192},
 		},
 	})
 	rawFirst, err := json.Marshal(firstTurn)
@@ -82,27 +85,74 @@ func TestBuildUserTurnContentIncludesCardAttachmentsOnFirstTurnOnly(t *testing.T
 	if strings.Contains(firstStr, "inlineData") || strings.Contains(firstStr, "data:image/") {
 		t.Fatalf("first turn must never persist inline image bytes/base64, got %s", firstStr)
 	}
-	if !strings.Contains(firstStr, userAttachmentURI(cardAttID)) {
-		t.Fatalf("expected card attachment URI %q on first turn, got %s", userAttachmentURI(cardAttID), firstStr)
+	if !strings.Contains(firstStr, userAttachmentURI(cardImageID)) {
+		t.Fatalf("expected card image attachment URI %q on first turn even when TurnSequence > 1, got %s", userAttachmentURI(cardImageID), firstStr)
+	}
+	if !strings.Contains(firstStr, userAttachmentURI(cardTextID)) {
+		t.Fatalf("expected card text attachment URI %q on first turn even when TurnSequence > 1, got %s", userAttachmentURI(cardTextID), firstStr)
 	}
 	if !strings.Contains(firstStr, userAttachmentURI(turnAttID)) {
 		t.Fatalf("expected turn attachment URI %q on first turn, got %s", userAttachmentURI(turnAttID), firstStr)
 	}
 
-	// 后续轮次（TurnSequence == 2）：不再重复注入卡片初始附件，避免会话重复膨胀。
+	// 后续轮次（CardTurnNumber == 2）：不再重复注入卡片初始附件，避免会话重复膨胀。
 	secondTurn := buildUserTurnContent(store.AgentCardContext{
-		TurnSequence: 2,
-		TurnContent:  "继续补充一下",
+		TurnSequence:   43,
+		CardTurnNumber: 2,
+		TurnContent:    "继续补充一下",
 		CardAttachments: []store.CommentAttachmentRef{
-			{ID: cardAttID, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+			{ID: cardImageID, Kind: attachments.KindImage, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+			{ID: cardTextID, Kind: attachments.KindText, FileName: "spec.md", MimeType: attachments.TextMimeType, SizeBytes: 256, LineCount: 8},
 		},
 	})
 	rawSecond, err := json.Marshal(secondTurn)
 	if err != nil {
 		t.Fatalf("marshal second turn: %v", err)
 	}
-	if strings.Contains(string(rawSecond), userAttachmentURI(cardAttID)) {
-		t.Fatalf("second turn should not duplicate card attachment URI, got %s", string(rawSecond))
+	if strings.Contains(string(rawSecond), userAttachmentURI(cardImageID)) || strings.Contains(string(rawSecond), userAttachmentURI(cardTextID)) {
+		t.Fatalf("second turn should not duplicate card attachment URIs, got %s", string(rawSecond))
+	}
+}
+
+func TestSelectRecentUserAttachmentTargetsDeduplicatesRetries(t *testing.T) {
+	imgID := uuid.New()
+	txtID := uuid.New()
+	otherImgID := uuid.New()
+
+	// 模拟首轮 Turn 发生失败重试：Attempt #1 和 Attempt #2 都在会话历史中留下了相同的附件引用。
+	contents := []*genai.Content{
+		genai.NewContentFromParts([]*genai.Part{
+			genai.NewPartFromText("其他历史图"),
+			genai.NewPartFromURI(userAttachmentURI(otherImgID), "image/png"),
+		}, genai.RoleUser),
+		genai.NewContentFromParts([]*genai.Part{
+			genai.NewPartFromText("首轮 Attempt #1"),
+			genai.NewPartFromURI(userAttachmentURI(imgID), "image/png"),
+			genai.NewPartFromURI(userAttachmentURI(txtID), attachments.TextMimeType),
+		}, genai.RoleUser),
+		genai.NewContentFromParts([]*genai.Part{
+			genai.NewPartFromText("首轮 Attempt #2 重试"),
+			genai.NewPartFromURI(userAttachmentURI(imgID), "image/png"),
+			genai.NewPartFromURI(userAttachmentURI(txtID), attachments.TextMimeType),
+		}, genai.RoleUser),
+	}
+
+	// 图片配额设为 2：由于 imgID 去重只占 1 个配额，更早的 otherImgID 依然能够获得水合配额。
+	selectedImages, selectedTexts := selectRecentUserAttachmentTargets(contents, 2, 1)
+	if len(selectedImages) != 2 {
+		t.Fatalf("expected 2 unique images selected, got %d (%v)", len(selectedImages), selectedImages)
+	}
+	if !selectedImages[toolPartKey{contentIdx: 2, partIdx: 1}] {
+		t.Fatalf("expected latest attempt image to be selected, got %v", selectedImages)
+	}
+	if selectedImages[toolPartKey{contentIdx: 1, partIdx: 1}] {
+		t.Fatalf("expected duplicate image from failed attempt to be folded, got %v", selectedImages)
+	}
+	if !selectedImages[toolPartKey{contentIdx: 0, partIdx: 1}] {
+		t.Fatalf("expected distinct older image to retain quota after dedupe, got %v", selectedImages)
+	}
+	if len(selectedTexts) != 1 || !selectedTexts[toolPartKey{contentIdx: 2, partIdx: 2}] {
+		t.Fatalf("expected only latest attempt text attachment selected, got %v", selectedTexts)
 	}
 }
 

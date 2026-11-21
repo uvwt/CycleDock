@@ -91,8 +91,8 @@ func TestBuiltInProactiveRunAttempt_调用设备SkillMCP且只发送一条气泡
 				t.Errorf("built-in proactive turn must not expose mutating tool %s", forbidden)
 			}
 		}
-		if !requestIncludesTool(body, "reply_message") || !requestIncludesTool(body, "call_mcp_tool") {
-			t.Errorf("expected reply_message and call_mcp_tool tools, got %+v", body.Tools)
+		if !requestIncludesTool(body, "reply_message") || !requestIncludesTool(body, "call_mcp_tool") || !requestIncludesTool(body, "cycledock_list_cards") {
+			t.Errorf("expected reply_message, call_mcp_tool and cycledock_list_cards tools, got %+v", body.Tools)
 		}
 
 		modelMu.Lock()

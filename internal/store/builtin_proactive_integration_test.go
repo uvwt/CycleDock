@@ -184,3 +184,159 @@ func TestProcessBuiltInProactiveTurns_三时段触发且不在前端展示队列
 		t.Fatalf("3 个时段执行后主聊天时间线应只有 3 条最终回复气泡（不含触发提示词），实际 %d 条: %+v", len(timeline), timeline)
 	}
 }
+
+func TestProcessBuiltInProactiveTurns_活跃事项带CardID健康状态且异常与待验收优先(t *testing.T) {
+	s := requireIntegration(t)
+	ctx := context.Background()
+	f := newFixture(t, s, domain.CardKindTodo)
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseDay := time.Date(2026, 11, 2, 7, 0, 0, 0, loc)
+	if _, err := s.pool.Exec(ctx, `UPDATE projects SET created_at = $3 WHERE workspace_id = $1 AND id = $2`,
+		f.WorkspaceID, f.ProjectID, baseDay.UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveAgentSettings(ctx, f.WorkspaceID, AgentSettingsInput{
+		Routes: []ModelRouteInput{{
+			Enabled:         true,
+			ProviderType:    "openai_compatible",
+			ProviderBaseURL: "https://example.com/v1",
+			Model:           "gpt-test",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 写入至少一条 human 消息使项目满足内置主动触达条件
+	comment, err := s.SubmitSessionComment(ctx, SubmitSessionCommentParams{
+		WorkspaceID:    f.WorkspaceID,
+		CardID:         f.CardID,
+		AuthorSourceID: f.HumanID,
+		Content:        "帮我盯一下今天的巡检与待验收卡片",
+		IdempotencyKey: "seed-proactive-order-msg",
+		DispatchMode:   domain.DispatchModeEnqueue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimSeed, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, f.CardID, f.AgentID, baseDay.Add(2*time.Minute).UTC(), time.Minute)
+	if err != nil || claimSeed.Turn.ID != comment.TurnID {
+		t.Fatalf("claim seed: %+v err=%v", claimSeed, err)
+	}
+	if err := s.FinishAttempt(ctx, f.WorkspaceID, f.CardID, claimSeed.Attempt.ID, domain.AttemptStatusCompleted, "", baseDay.Add(3*time.Minute).UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 创建多张普通 todo（超过原来的 8 条上限，验证放宽到 12 条且高优卡片排在最前）
+	for i := 0; i < 10; i++ {
+		if _, err := s.CreateTodoCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "普通待办-"+string(rune('A'+i)), "", uuid.NullUUID{}, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 待验收 Todo（review）
+	reviewCard, err := s.CreateTodoCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "待验收功能卡", "等待验收", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MoveTodo(ctx, f.WorkspaceID, reviewCard.ID, f.HumanID, domain.TodoStateWorking); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MoveTodo(ctx, f.WorkspaceID, reviewCard.ID, f.HumanID, domain.TodoStateReview); err != nil {
+		t.Fatal(err)
+	}
+
+	// 告警与严重异常 Ongoing 卡片
+	warnCard, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "告警巡检卡", "CPU 升高", uuid.NullUUID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	critCard, err := s.CreateOngoingCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID, "严重异常巡检卡", "服务宕机", uuid.NullUUID{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recordCheckin := func(cardID uuid.UUID, status domain.CheckinStatus, key string) {
+		t.Helper()
+		if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, cardID, f.HumanID, "巡检", "t-"+key, domain.DispatchModeEnqueue); err != nil {
+			t.Fatal(err)
+		}
+		claim, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, cardID, f.AgentID, baseDay.Add(4*time.Minute).UTC(), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.AddAttemptEvent(ctx, AttemptEventParams{
+			WorkspaceID:    f.WorkspaceID,
+			CardID:         cardID,
+			AttemptID:      claim.Attempt.ID,
+			RunnerSourceID: f.AgentID,
+			Type:           domain.EventTypeCheckin,
+			Content:        string(status),
+			Checkin:        &status,
+			IdempotencyKey: "c-" + key,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CompleteAttempt(ctx, f.WorkspaceID, cardID, claim.Attempt.ID, f.AgentID, baseDay.Add(5*time.Minute).UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recordCheckin(warnCard.ID, domain.CheckinWarning, "proactive-warn")
+	recordCheckin(critCard.ID, domain.CheckinCritical, "proactive-crit")
+
+	// 触发当天第一个内置主动时段
+	slot := BuiltInProactiveSlots()[0]
+	triggerAt, _, _, err := BuiltInProactiveTriggerWindow(f.ProjectID, baseDay, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dueNow := triggerAt.Add(time.Minute)
+	created, err := s.ProcessBuiltInProactiveTurns(ctx, f.WorkspaceID, dueNow)
+	if err != nil || len(created) != 1 {
+		t.Fatalf("expected 1 proactive turn, got %v err=%v", created, err)
+	}
+	claim, err := s.ClaimNextTurnAttempt(ctx, f.WorkspaceID, f.AgentID, dueNow, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := claim.Turn.Content
+	// 必须包含 card_id、health 与 attempt 标记
+	for _, want := range []string{
+		"card_id=" + critCard.ID.String(),
+		"health=critical",
+		"attempt=completed",
+		"card_id=" + warnCard.ID.String(),
+		"health=warning",
+		"card_id=" + reviewCard.ID.String(),
+		"todo/review",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("proactive prompt missing %q:\n%s", want, content)
+		}
+	}
+
+	// 验证排序：critical 必须在 warning 前，warning 必须在 review 前，review 必须在普通待办前
+	critPos := strings.Index(content, critCard.ID.String())
+	warnPos := strings.Index(content, warnCard.ID.String())
+	reviewPos := strings.Index(content, reviewCard.ID.String())
+	normalPos := strings.Index(content, "普通待办-")
+	if !(critPos < warnPos && warnPos < reviewPos && reviewPos < normalPos) {
+		t.Fatalf("unexpected active card ordering (crit=%d warn=%d review=%d normal=%d):\n%s",
+			critPos, warnPos, reviewPos, normalPos, content)
+	}
+
+	// 验证条数上限已放宽至 12 条（共创建了 14 张非主聊天活跃卡，应截断到 12 条）
+	sectionStart := strings.Index(content, "项目当前活跃事项：\n")
+	sectionEnd := strings.Index(content, "\n\n请按以下要求执行：")
+	if sectionStart < 0 || sectionEnd <= sectionStart {
+		t.Fatalf("cannot locate active cards section in prompt:\n%s", content)
+	}
+	lines := strings.Split(strings.TrimSpace(content[sectionStart+len("项目当前活跃事项：\n"):sectionEnd]), "\n")
+	if len(lines) != 12 {
+		t.Fatalf("expected 12 active cards in proactive prompt, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}

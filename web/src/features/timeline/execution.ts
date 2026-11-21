@@ -41,6 +41,18 @@ function getAttemptTime(attempt: Attempt): number | null {
   return parseTimestamp(attempt.started_at) ?? parseTimestamp(attempt.created_at);
 }
 
+function getEventExecutionTime(
+  event: TimelineEvent,
+  executionAttempt: Attempt,
+): number | null {
+  const attemptTime = getAttemptTime(executionAttempt);
+  const eventTime = parseTimestamp(event.created_at);
+  if (attemptTime !== null && eventTime !== null) {
+    return Math.max(attemptTime, eventTime);
+  }
+  return attemptTime;
+}
+
 function compareAttempts(a: Attempt, b: Attempt): number {
   const timeA = getAttemptTime(a) ?? Number.MAX_SAFE_INTEGER;
   const timeB = getAttemptTime(b) ?? Number.MAX_SAFE_INTEGER;
@@ -48,16 +60,18 @@ function compareAttempts(a: Attempt, b: Attempt): number {
   const createdA = parseTimestamp(a.created_at) ?? Number.MAX_SAFE_INTEGER;
   const createdB = parseTimestamp(b.created_at) ?? Number.MAX_SAFE_INTEGER;
   if (createdA !== createdB) return createdA - createdB;
-  return a.attempt_number - b.attempt_number;
+  return (a.attempt_number || 0) - (b.attempt_number || 0);
 }
 
 function buildAttemptLookup(attempts?: Attempt[]) {
   const sortedAttempts = [...(attempts || [])].sort(compareAttempts);
   const attemptByID = new Map<string, Attempt>();
+  const attemptOrderByID = new Map<string, number>();
   const promptAttemptBySourceEventID = new Map<string, Attempt>();
 
-  for (const attempt of sortedAttempts) {
+  for (const [index, attempt] of sortedAttempts.entries()) {
     attemptByID.set(attempt.id, attempt);
+    attemptOrderByID.set(attempt.id, index);
     if (
       attempt.source_event_id &&
       !promptAttemptBySourceEventID.has(attempt.source_event_id)
@@ -66,7 +80,7 @@ function buildAttemptLookup(attempts?: Attempt[]) {
     }
   }
 
-  return { attemptByID, promptAttemptBySourceEventID };
+  return { attemptByID, attemptOrderByID, promptAttemptBySourceEventID };
 }
 
 export function groupExecutionAttempts(
@@ -78,8 +92,12 @@ export function groupExecutionAttempts(
   const lastEventByAttempt = new Map<string, string>();
   const resultEventByAttempt = new Map<string, string>();
   const replyEventByAttempt = new Map<string, string>();
+  const toolApprovalEventByAttempt = new Map<string, string>();
   for (const event of events) {
     if (event.attempt_id) lastEventByAttempt.set(event.attempt_id, event.id);
+    if (event.attempt_id && event.type === "tool_approval") {
+      toolApprovalEventByAttempt.set(event.attempt_id, event.id);
+    }
     if (
       event.attempt_id &&
       event.actor_kind !== "human" &&
@@ -96,6 +114,7 @@ export function groupExecutionAttempts(
     }
   }
   const statusByReply = new Map<string, Attempt>();
+  const statusByToolApproval = new Map<string, Attempt>();
   const byEvent = new Map<string, ExecutionAttempt[]>();
   const standalone: ExecutionAttempt[] = [];
   // 正在执行的状态始终放在可见消息末尾，避免被迟到的上一轮回复压到上方。
@@ -130,14 +149,28 @@ export function groupExecutionAttempts(
   for (const attempt of attempts) {
     const execution = attempt.value;
     // 终态执行的状态沿用对应回复，不为普通提问创建等待状态。
-    const resultID =
-      execution.status === "completed"
-        ? resultEventByAttempt.get(execution.id)
-        : ["cancelled", "superseded"].includes(execution.status)
-          ? replyEventByAttempt.get(execution.id)
-          : execution.status === "running"
-            ? runningReply?.id || finalReply?.id
-            : undefined;
+    // 若已完成但未发 end_turn 正式回复（如在工具守卫处挂起），优先归并到本轮回复组首；
+    // 否则若存在工具守卫卡片，则直接融合进该工具守卫卡片，不在下方另起"执行完成"。
+    if (execution.status === "completed") {
+      const replyTargetID =
+        resultEventByAttempt.get(execution.id) ||
+        replyEventByAttempt.get(execution.id);
+      if (replyTargetID) {
+        statusByReply.set(replyTargetID, execution);
+        continue;
+      }
+      const approvalEventID = toolApprovalEventByAttempt.get(execution.id);
+      if (approvalEventID) {
+        statusByToolApproval.set(approvalEventID, execution);
+        continue;
+      }
+    }
+
+    const resultID = ["cancelled", "superseded"].includes(execution.status)
+      ? replyEventByAttempt.get(execution.id)
+      : execution.status === "running"
+        ? runningReply?.id || finalReply?.id
+        : undefined;
     if (resultID) {
       statusByReply.set(resultID, attempt.value);
       continue;
@@ -154,7 +187,7 @@ export function groupExecutionAttempts(
     existing.push(attempt);
     byEvent.set(source, existing);
   }
-  return { byEvent, standalone, statusByReply, running };
+  return { byEvent, standalone, statusByReply, statusByToolApproval, running };
 }
 
 /** 按持久事件与执行轮次顺序展示，保留人工输入与 Agent 多条回复的真实交错（一问一答）。 */
@@ -166,24 +199,31 @@ export function orderTimelineEvents(
     return [...events].sort((a, b) => a.sequence - b.sequence);
   }
 
-  const { attemptByID, promptAttemptBySourceEventID } =
+  const { attemptByID, attemptOrderByID, promptAttemptBySourceEventID } =
     buildAttemptLookup(attempts);
 
   // 为每个事件计算排序关键元组：
-  // - groupTime: 归属 Attempt 的执行基准时间（若是独立事件则为自身时间）
-  // - role: 0 为本轮人工提问（置于该 Attempt 所有回复之前），1 为 Attempt 执行产生的回复或事件
-  // - sequence: 同角色或同 Attempt 内保持原有递增 sequence
+  // - groupTime: 排队人工提问沿用认领时间保持一问一答；执行内事件取 max(attempt开始时间, 事件自身created_at)
+  //   以防止同一轮中无 attempt_id 的 status_change 被后续气泡反超挤到末尾
+  // - attemptOrder / role: 同时间下按轮次序号对齐一问一答，提问(0)在回复(1)之前
+  // - sequence: 同组或独立事件兜底保持单调递增 sequence
   type EventKey = {
     groupTime: number;
+    attemptOrder: number | null;
     role: number;
     sequence: number;
   };
 
+  // 兼容：若历史或测试数据中的 Attempt 与事件本身均未带时间戳（groupTime === 0），
+  // 保持原有“同源提问与运行中/迟到回复按 sequence”对比；
+  // 仅当两个事件在时间上相同且均无各自明确的时间差时，按轮次序号/角色兜底。
   const getEventKey = (event: TimelineEvent): EventKey => {
     const promptAttempt = promptAttemptBySourceEventID.get(event.id);
     if (promptAttempt) {
       return {
-        groupTime: getAttemptTime(promptAttempt) ?? 0,
+        groupTime:
+          getAttemptTime(promptAttempt) ?? parseTimestamp(event.created_at) ?? 0,
+        attemptOrder: attemptOrderByID.get(promptAttempt.id) ?? null,
         role: 0,
         sequence: event.sequence,
       };
@@ -193,7 +233,8 @@ export function orderTimelineEvents(
       const executionAttempt = attemptByID.get(event.attempt_id);
       if (executionAttempt) {
         return {
-          groupTime: getAttemptTime(executionAttempt) ?? 0,
+          groupTime: getEventExecutionTime(event, executionAttempt) ?? 0,
+          attemptOrder: attemptOrderByID.get(executionAttempt.id) ?? null,
           role: 1,
           sequence: event.sequence,
         };
@@ -203,6 +244,7 @@ export function orderTimelineEvents(
     // 独立事件（如卡片状态变更、未关联 Attempt 的事件等）
     return {
       groupTime: parseTimestamp(event.created_at) ?? 0,
+      attemptOrder: null,
       role: 0,
       sequence: event.sequence,
     };
@@ -215,8 +257,19 @@ export function orderTimelineEvents(
     if (keyA.groupTime !== keyB.groupTime) {
       return keyA.groupTime - keyB.groupTime;
     }
-    if (keyA.role !== keyB.role) {
-      return keyA.role - keyB.role;
+    if (keyA.attemptOrder !== null && keyB.attemptOrder !== null) {
+      if (keyA.attemptOrder === keyB.attemptOrder && keyA.role !== keyB.role) {
+        return keyA.role - keyB.role;
+      }
+      if (keyA.sequence !== keyB.sequence) {
+        return keyA.sequence - keyB.sequence;
+      }
+      if (keyA.attemptOrder !== keyB.attemptOrder) {
+        return keyA.attemptOrder - keyB.attemptOrder;
+      }
+      if (keyA.role !== keyB.role) {
+        return keyA.role - keyB.role;
+      }
     }
     return keyA.sequence - keyB.sequence;
   });
@@ -250,7 +303,8 @@ export function buildTimelineItems<TRow extends TimelineRowLike>(
       const executionAttempt = attemptByID.get(event.attempt_id);
       if (executionAttempt) {
         return (
-          getAttemptTime(executionAttempt) ?? parseTimestamp(event.created_at)
+          getEventExecutionTime(event, executionAttempt) ??
+          parseTimestamp(event.created_at)
         );
       }
     }
@@ -258,6 +312,7 @@ export function buildTimelineItems<TRow extends TimelineRowLike>(
   };
 
   const items: TimelineItem<TRow>[] = [];
+  const seenEventIDs = new Set<string>();
   const pushStandalone = (attempt: ExecutionAttempt) => {
     const time = getAttemptTime(attempt.value);
     const timestampValue =
@@ -293,6 +348,10 @@ export function buildTimelineItems<TRow extends TimelineRowLike>(
     // 尚未拿到时间戳的实时预览默认视为当前末尾，防止历史系统失败记录被压到实时回复之后。
     const effectiveOrderTime =
       rawOrderTime ?? (row.preview ? Number.MAX_SAFE_INTEGER : null);
+    const rowAttempt = row.event.attempt_id
+      ? attemptByID.get(row.event.attempt_id)
+      : undefined;
+    const rowAttemptStart = rowAttempt ? getAttemptTime(rowAttempt) : null;
 
     if (effectiveOrderTime !== null) {
       while (standaloneIndex < sortedStandalone.length) {
@@ -301,11 +360,21 @@ export function buildTimelineItems<TRow extends TimelineRowLike>(
         if (candidateTime === null || candidateTime >= effectiveOrderTime) {
           break;
         }
+        // 与当前轮次同开始时间戳的系统触发，不拆散同一轮次的一问一答。
+        if (
+          rowAttemptStart !== null &&
+          rowAttempt?.source_event_id &&
+          seenEventIDs.has(rowAttempt.source_event_id) &&
+          candidateTime <= rowAttemptStart
+        ) {
+          break;
+        }
         pushStandalone(candidate);
         standaloneIndex += 1;
       }
     }
 
+    seenEventIDs.add(row.event.id);
     items.push({
       kind: "event",
       key: row.key,

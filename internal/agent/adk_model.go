@@ -832,6 +832,7 @@ func selectRecentUserAttachmentTargets(
 ) (map[toolPartKey]bool, map[toolPartKey]bool) {
 	selectedImages := make(map[toolPartKey]bool)
 	selectedTexts := make(map[toolPartKey]bool)
+	seenAttachmentIDs := make(map[uuid.UUID]struct{})
 	remImages := maxImages
 	remTexts := maxTexts
 	for cIdx := len(contents) - 1; cIdx >= 0 && (remImages > 0 || remTexts > 0); cIdx-- {
@@ -844,9 +845,16 @@ func selectRecentUserAttachmentTargets(
 			if part == nil || part.Thought || part.FileData == nil {
 				continue
 			}
-			if !isUserAttachmentURI(part.FileData.FileURI) {
+			id, ok := parseUserAttachmentURI(part.FileData.FileURI)
+			if !ok {
 				continue
 			}
+			// 同一附件在会话历史中若因失败重试等原因出现多次，只水合最新一条，
+			// 更早的重复引用自动折叠为轻量占位，避免重复回填原图/文本与重复占用配额。
+			if _, dup := seenAttachmentIDs[id]; dup {
+				continue
+			}
+			seenAttachmentIDs[id] = struct{}{}
 			key := toolPartKey{contentIdx: cIdx, partIdx: pIdx}
 			if isUserTextAttachmentFileData(part.FileData) {
 				if remTexts > 0 {

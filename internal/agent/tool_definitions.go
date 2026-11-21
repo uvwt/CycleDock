@@ -72,7 +72,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_generate_work",
-				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. By default auto_start is true and immediately queues the initial Turn for the generated Card; when the user explicitly asks to archive/schedule the work in the backlog without starting execution now, pass auto_start=false. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) so the UI displays an interactive card widget with direct navigation.",
+				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. By default auto_start is true and immediately queues the initial Turn for the generated Card; when the user explicitly asks to archive/schedule the work in the backlog without starting execution now, pass auto_start=false. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) because the UI renders it as a standalone full-width block card widget with live status and direct navigation. Place the card reference on its own standalone line/paragraph (with blank lines around it); never embed it inline in a sentence or attach colons, commas, periods, semicolons, dashes, or parenthetical status notes directly before or after it.",
 				Parameters: object(map[string]any{
 					"kind":                   map[string]any{"type": "string", "enum": []string{"todo", "ongoing"}},
 					"title":                  stringField("Concise generated work title."),
@@ -90,7 +90,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Choice messages also complete this Turn; the human answer starts a new Turn. Do not send a second final answer.",
 				Parameters: object(map[string]any{
 					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
-					"content": stringField("Markdown content. Required for text."),
+					"content": stringField("Markdown content. Required for text. Any [Card Title](cycledock://card/<card_id>) reference renders as a standalone block card with live status, so put it on its own line with blank lines around it and never attach adjacent punctuation or parenthetical notes."),
 					"url":     stringField("HTTPS attachment URL, for attachment."),
 					"alt":     stringField("Attachment description."),
 					"images":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 8},
@@ -180,6 +180,46 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 						"type":        "integer",
 						"minimum":     1,
 						"description": "Allowed only for Todo cards not yet in review/done: confirmation threshold (>= 1) required to enter review.",
+					},
+				}),
+			},
+		},
+		{
+			Type: "function",
+			Function: modelclient.ToolDefinitionFunc{
+				Name:        "cycledock_list_cards",
+				Description: "Read-only query to list cards in the current Project (default) or across the entire Workspace. Exclusively available to Discussion cards (including built-in proactive main chat turns). Useful for reviewing active work, finding abnormal ongoing checks (health=abnormal), or locating card_ids outside recent context. Results are strictly scoped to the current Workspace and sorted by abnormal/pending-approval priority, pinned status, and most recently updated.",
+				Parameters: object(map[string]any{
+					"scope": map[string]any{
+						"type":        "string",
+						"enum":        []string{"project", "workspace"},
+						"description": "Query scope: 'project' (default, current Project only) or 'workspace' (all Projects in the current Workspace).",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"enum":        []string{"all", "todo", "ongoing", "discussion"},
+						"description": "Filter by card kind: 'all' (default), 'todo', 'ongoing', or 'discussion'.",
+					},
+					"state": map[string]any{
+						"type":        "string",
+						"enum":        []string{"todo", "working", "review", "done", "active", "paused", "archived"},
+						"description": "Optional lifecycle state filter. Specifying 'done' or 'archived' automatically includes completed/archived cards.",
+					},
+					"health": map[string]any{
+						"type":        "string",
+						"enum":        []string{"healthy", "warning", "critical", "acknowledged", "unknown", "abnormal"},
+						"description": "Optional Ongoing health filter (applies only to ongoing cards). 'abnormal' matches both 'warning' and 'critical'.",
+					},
+					"query": stringField("Optional case-insensitive substring match against card titles."),
+					"include_done": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to include done and archived cards. Defaults to false unless state is explicitly 'done' or 'archived'.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"minimum":     1,
+						"maximum":     200,
+						"description": "Maximum number of cards to return (1-200). Defaults to 50.",
 					},
 				}),
 			},

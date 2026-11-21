@@ -47,7 +47,8 @@ type AgentCardContext struct {
 	RequiredConfirmations int32
 
 	TurnID             uuid.UUID
-	TurnSequence       int64
+	TurnSequence       int64 // 全库全局自增序列，仅用于相对先后排序与游标比较，切勿当作卡片内轮次号
+	CardTurnNumber     int64 // 当前 Turn 在本卡片内的 1-based 有效轮次号（忽略已取消的排队 Turn）
 	TurnSource         domain.TurnSource
 	TurnContent        string
 	TurnAttachments    []CommentAttachmentRef
@@ -88,7 +89,16 @@ func (s *Store) LoadAgentCardContext(
 			c.id, c.kind, c.title, c.description, COALESCE(p.main_discussion_id = c.id, false),
 			c.discussion_state, c.todo_state, c.ongoing_state,
 			c.required_confirmations,
-			t.id, t.sequence, t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
+			t.id, t.sequence,
+			(
+				SELECT count(*) + 1
+				FROM card_turns earlier
+				WHERE earlier.workspace_id=c.workspace_id
+				  AND earlier.card_id=c.id
+				  AND earlier.cancelled_at IS NULL
+				  AND earlier.sequence < t.sequence
+			),
+			t.source, t.content, t.dispatch_mode, t.created_at, t.device_node_id, t.device_name, COALESCE(t.idempotency_key, ''), COALESCE(t.preferred_model_route_id, c.preferred_model_route_id),
 			se.message,
 			a.id, a.attempt_number, a.reason, a.runner_source_id,
 			(
@@ -129,7 +139,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.ProjectID, &out.ProjectName, &out.ProjectDescription,
 		&out.CardID, &out.CardKind, &out.CardTitle, &out.CardDescription, &out.IsMainDiscussion,
 		&discussionState, &todoState, &ongoingState, &out.RequiredConfirmations,
-		&out.TurnID, &out.TurnSequence, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
+		&out.TurnID, &out.TurnSequence, &out.CardTurnNumber, &turnSource, &out.TurnContent, &dispatchMode, &createdAt, &out.DeviceNodeID, &out.DeviceName, &turnIdempotencyKey, &out.PreferredModelRouteID,
 		&sourceEventMessage,
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,

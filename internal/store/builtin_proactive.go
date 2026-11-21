@@ -349,11 +349,57 @@ func loadProjectUserInterestsTx(
 	}
 
 	cardRows, err := tx.Query(ctx, `
-		SELECT c.kind, COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, ''), c.title, c.description
+		SELECT
+			c.id,
+			c.kind,
+			COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, '')::text AS state,
+			CASE
+				WHEN c.kind = 'ongoing' THEN COALESCE(latest_checkin.checkin_status, 'unknown')
+				ELSE ''
+			END::text AS health,
+			COALESCE(current_attempt.status, latest_attempt.status, '')::text AS attempt_status,
+			c.title,
+			c.description
 		FROM cards c
 		JOIN projects p
 		  ON p.workspace_id = c.workspace_id
 		 AND p.id = c.project_id
+		LEFT JOIN LATERAL (
+			SELECT
+				CASE
+					WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+						SELECT 1 FROM events ack
+						WHERE ack.workspace_id = e.workspace_id
+						  AND ack.card_id = e.card_id
+						  AND ack.event_type = 'checkin_ack'
+						  AND ack.sequence > e.sequence
+					) THEN 'acknowledged'
+					ELSE e.checkin_status
+				END::text AS checkin_status
+			FROM events e
+			WHERE e.workspace_id = c.workspace_id
+			  AND e.card_id = c.id
+			  AND e.event_type = 'checkin'
+			ORDER BY e.sequence DESC
+			LIMIT 1
+		) latest_checkin ON true
+		LEFT JOIN LATERAL (
+			SELECT a.status
+			FROM turn_attempts a
+			WHERE a.workspace_id = c.workspace_id
+			  AND a.card_id = c.id
+			  AND a.status IN ('queued', 'running')
+			ORDER BY a.created_at DESC, a.attempt_number DESC
+			LIMIT 1
+		) current_attempt ON true
+		LEFT JOIN LATERAL (
+			SELECT a.status
+			FROM turn_attempts a
+			WHERE a.workspace_id = c.workspace_id
+			  AND a.card_id = c.id
+			ORDER BY a.created_at DESC, a.attempt_number DESC
+			LIMIT 1
+		) latest_attempt ON true
 		WHERE c.workspace_id = $1
 		  AND c.project_id = $2
 		  AND (p.main_discussion_id IS NULL OR c.id <> p.main_discussion_id)
@@ -362,19 +408,36 @@ func loadProjectUserInterestsTx(
 			OR (c.kind = 'ongoing' AND c.ongoing_state = 'active')
 			OR (c.kind = 'discussion' AND c.discussion_state = 'active' AND btrim(c.title) <> '')
 		  )
-		ORDER BY c.updated_at DESC, c.id
-		LIMIT 8
+		ORDER BY
+			CASE
+				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'critical' THEN 0
+				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'warning' THEN 1
+				WHEN c.kind = 'todo' AND c.todo_state = 'review' THEN 2
+				ELSE 3
+			END ASC,
+			c.pinned_at DESC NULLS LAST,
+			c.updated_at DESC,
+			c.id ASC
+		LIMIT 12
 	`, workspaceID, projectID)
 	if err != nil {
 		return projectUserInterests{}, err
 	}
 	for cardRows.Next() {
-		var kind, state, title, description string
-		if err := cardRows.Scan(&kind, &state, &title, &description); err != nil {
+		var cardID uuid.UUID
+		var kind, state, health, attemptStatus, title, description string
+		if err := cardRows.Scan(&cardID, &kind, &state, &health, &attemptStatus, &title, &description); err != nil {
 			cardRows.Close()
 			return projectUserInterests{}, err
 		}
-		line := fmt.Sprintf("[%s/%s] %s", kind, state, compactSnippet(title, 60))
+		meta := kind + "/" + state
+		if health != "" {
+			meta += "|health=" + health
+		}
+		if attemptStatus != "" {
+			meta += "|attempt=" + attemptStatus
+		}
+		line := fmt.Sprintf("[%s] %s (card_id=%s)", meta, compactSnippet(title, 60), cardID)
 		if desc := compactSnippet(description, 160); desc != "" {
 			line += "：" + desc
 		}
@@ -421,9 +484,10 @@ func buildBuiltInProactivePrompt(
 		b.WriteString("\n")
 	}
 	b.WriteString("请按以下要求执行：\n")
-	b.WriteString("1. 结合用户最近可能感兴趣的消息、主聊天上下文以及 Recall 长期记忆（如有 recall_search / recall_read 可主动检索），挑选一个用户当下可能关心或觉得有用的话题（避免与主聊天上一条主动消息完全重复）。\n")
+	b.WriteString("1. 结合用户最近可能感兴趣的消息、项目当前活跃事项、主聊天上下文以及 Recall 长期记忆（如有 recall_search / recall_read 可主动检索），挑选一个用户当下可能关心或觉得有用的话题（避免与主聊天上一条主动消息完全重复）。如需进一步盘点当前项目或跨项目卡片状态，可调用只读的 cycledock_list_cards；回复中提及具体卡片时使用 [卡片标题](cycledock://card/<card_id>)。\n")
 	b.WriteString("2. 如果已连接设备（NexusDock）或 MCP 工具，主动调用不具破坏性（只读、查询类、无副作用）的设备 Skill 或 MCP 工具获取最新真实信息或状态；严禁执行修改文件、删除数据、重启服务、改写配置等任何破坏性操作。\n")
-	b.WriteString("3. 禁止发送任何中间进度气泡（严禁调用 end_turn=false 的 reply_message）。完成所有只读查询后，将最终内容整理成自然、简短的一段话，只调用 1 次 reply_message（type=\"text\", end_turn=true）发送 1 条气泡到主聊天。")
+	b.WriteString("3. 禁止发送任何中间进度气泡（严禁调用 end_turn=false 的 reply_message）。完成所有只读查询后，将最终内容整理成自然、简短的一段话，只调用 1 次 reply_message（type=\"text\", end_turn=true）发送 1 条气泡到主聊天。\n")
+	b.WriteString("4. 若回复中提及具体卡片，请使用 [卡片标题](cycledock://card/<card_id>) 并将其单独成行/成段（前后留空行）。该标记在前端会渲染为独占一行的块级卡片组件并自动展示实时状态，严禁把卡片嵌在句子中间，也严禁在前后紧跟冒号、逗号、顿号、句号、分号、破折号或括号状态说明。")
 	return b.String()
 }
 
