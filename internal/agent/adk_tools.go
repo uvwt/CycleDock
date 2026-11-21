@@ -84,23 +84,26 @@ type replyState struct {
 
 func buildADKTools(runtime attemptToolRuntime) ([]tool.Tool, error) {
 	definitions := internalToolDefinitions()
-	// cycledock_inspect_card_session 仅供 Discussion（主聊天/全局协调）会话挂载。
-	// Todo 与 Ongoing 等具体工作卡片相互自治，禁止翻阅彼此底层会话，协作必须通过 cycledock_send_card_message 显式委派。
+	// cycledock_list_cards 与 cycledock_inspect_card_session 仅供 Discussion（主聊天/全局协调）会话挂载。
+	// Todo 与 Ongoing 等具体工作卡片相互自治，禁止全局盘点与翻阅彼此底层会话，协作必须通过 cycledock_send_card_message 显式委派。
 	if runtime.context.CardKind != domain.CardKindDiscussion {
 		filtered := make([]modelclient.ToolDefinition, 0, len(definitions))
 		for _, definition := range definitions {
-			if definition.Function.Name != "cycledock_inspect_card_session" {
+			switch definition.Function.Name {
+			case "cycledock_list_cards", "cycledock_inspect_card_session":
+				continue
+			default:
 				filtered = append(filtered, definition)
 			}
 		}
 		definitions = filtered
 	}
 	if runtime.context.IsBuiltInProactive {
-		// 内置定时主动任务只允许查询信息并最终向主聊天发送 1 条气泡，不挂载建卡或改日程等写工具。
-		filtered := make([]modelclient.ToolDefinition, 0, 3)
+		// 内置定时主动任务只允许只读查询（含项目/工作区卡片盘点）并最终向主聊天发送 1 条气泡，不挂载建卡或改日程等写工具。
+		filtered := make([]modelclient.ToolDefinition, 0, 4)
 		for _, definition := range definitions {
 			switch definition.Function.Name {
-			case "reply_message", "search_mcp_tools", "call_mcp_tool":
+			case "reply_message", "cycledock_list_cards", "search_mcp_tools", "call_mcp_tool":
 				filtered = append(filtered, definition)
 			}
 		}
@@ -208,6 +211,8 @@ func (r attemptToolRuntime) internalHandler(
 		return r.deleteScheduleTool, nil
 	case "cycledock_update_card":
 		return r.updateCardTool, nil
+	case "cycledock_list_cards":
+		return r.listCardsTool, nil
 	case "cycledock_watch_event":
 		return r.watchEventTool, nil
 	case "cycledock_schedule_wakeup":

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Monitor } from "lucide-react";
+import { AlertCircle, Clock, Monitor } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Attempt, CardKind } from "../../shared/api/types";
 import type { LiveAttempt } from "../../shared/realtime/useCardStream";
@@ -14,10 +14,26 @@ const attemptLabels: Record<string, string> = {
   running: "正在执行",
   completed: "执行完成",
   failed: "执行失败",
-  superseded: "已被新要求替代",
+  superseded: "已由新消息替代",
   expired: "执行已过期",
-  cancelled: "已取消执行",
+  cancelled: "已停止生成",
 };
+
+function resolveAttemptStatusLabel(attempt: Attempt): string {
+  if (
+    attempt.status === "superseded" &&
+    attempt.error_summary === "superseded by human reply"
+  ) {
+    return "已收到回复";
+  }
+  if (
+    attempt.status === "superseded" &&
+    attempt.error_summary === "interrupted by server shutdown"
+  ) {
+    return "服务重启续跑";
+  }
+  return attemptLabels[attempt.status] || attempt.status;
+}
 
 export function RunDuration({
   startedAt,
@@ -101,26 +117,13 @@ export function AttemptMetadata({
   onOpenTrace?: (attemptID: string) => void;
 }) {
   const { t } = useTranslation();
-  const humanReplied =
-    attempt.status === "superseded" &&
-    attempt.error_summary === "superseded by human reply";
-  const serverRestarted =
-    attempt.status === "superseded" &&
-    attempt.error_summary === "interrupted by server shutdown";
   const isRunning = attempt.status === "running";
   return (
     <span
       data-execution-id={attempt.id}
       className="inline-flex items-center gap-2 text-[11px] font-normal text-faint"
     >
-      {!isRunning &&
-        t(
-          humanReplied
-            ? "已收到回复"
-            : serverRestarted
-              ? "服务重启续跑"
-              : attemptLabels[attempt.status] || attempt.status,
-        )}
+      {!isRunning && t(resolveAttemptStatusLabel(attempt))}
       <RunDuration
         startedAt={attempt.started_at}
         finishedAt={attempt.finished_at}
@@ -208,153 +211,176 @@ function AgentAttempt({
     !live.finished,
   );
   // 续在上一条气泡后面时，执行耗时挂在组首（第一个气泡），本气泡不单独展示孤立时间行。
-  const showRunningHeader =
-    status === "running"
-      ? showSender
-      : showSender || retried || Boolean(runningStartedAt);
+  const showRunningHeader = status === "running" && showSender;
 
-  if (["cancelled", "superseded"].includes(status) && execution) {
-    const serverRestarted =
-      status === "superseded" &&
-      execution.error_summary === "interrupted by server shutdown";
+  if (status === "running") {
     return (
-      <article className="group flex min-w-0">
-        <div className="min-w-0 max-w-[92%] sm:max-w-[78%]">
-          <div className="mb-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground/80">Cycle</span>
-            <div className="inline-flex items-center gap-x-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+      <article className="flex min-w-0" data-execution-id={id}>
+        <div className="min-w-0 flex-1">
+          {showRunningHeader && (
+            <div className="flex flex-wrap items-center gap-x-2 text-xs font-medium text-sky-700">
+              <span className="font-semibold text-muted-foreground">Cycle</span>
               <span className="select-none text-[10px] text-muted-foreground/40">
                 •
               </span>
-              <AttemptMetadata
-                attempt={execution}
-                cardKind={cardKind}
-                cardPreferredRouteID={cardPreferredRouteID}
-                retryingAttemptID={retryingAttemptID}
-                onRetryAttempt={onRetryAttempt}
-                onOpenTrace={onOpenTrace}
-              />
+              {retried ? <span> · {t("重试")}</span> : null}
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-normal text-faint">
+                <RunDuration
+                  startedAt={runningStartedAt}
+                  finishedAt={execution?.finished_at}
+                  active
+                  onClick={onOpenTrace && id ? () => onOpenTrace(id) : undefined}
+                />
+              </span>
             </div>
-          </div>
-          <div className="w-fit max-w-full rounded-2xl bg-muted px-4 py-2.5">
-            <p className="text-sm text-muted-foreground">
-              {t(serverRestarted ? "服务重启中，已自动接续执行" : "暂无已保存的正文")}
-            </p>
+          )}
+          <div
+            className={`${showRunningHeader ? "mt-1.5 " : ""}flex flex-wrap items-end gap-2.5`}
+          >
+            <ChatBubbleMessage variant="received" className="w-fit max-w-full">
+              <MessageLoading />
+              {summary && (
+                <div className="mt-1.5 border-t border-line/60 pt-1.5 text-sm leading-relaxed text-secondary-foreground">
+                  <RichText content={summary} />
+                </div>
+              )}
+            </ChatBubbleMessage>
+            {showRunningDevice && live?.deviceName && (
+              <div className="self-end pb-1 shrink-0">
+                <OperatingDevice name={live.deviceName} />
+              </div>
+            )}
           </div>
         </div>
       </article>
     );
   }
 
-  return (
-    <>
+  if (failed) {
+    return (
       <article
-        className={
-          status === "running"
-            ? "flex min-w-0"
-            : "min-w-0 border-l-2 border-line py-1 pl-3"
-        }
+        className="my-1.5 w-full max-w-2xl overflow-hidden rounded-2xl border border-rose-500/35 bg-rose-500/[0.04] px-3.5 py-2.5 shadow-2xs dark:border-rose-500/30 dark:bg-rose-950/20"
         data-execution-id={id}
+        data-execution-status={status}
       >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              {showRunningHeader && (
-                <div
-                  className={`flex flex-wrap items-center gap-x-2 text-xs font-medium ${
-                    failed
-                      ? "text-danger"
-                      : status === "running"
-                        ? "text-sky-700"
-                        : "text-secondary-foreground"
-                  }`}
-                >
-                  {status === "running" ? (
-                    showSender ? (
-                      <>
-                        <span className="font-semibold text-muted-foreground">
-                          Cycle
-                        </span>
-                        <span className="select-none text-[10px] text-muted-foreground/40">
-                          •
-                        </span>
-                      </>
-                    ) : null
-                  ) : (
-                    <span>{t(attemptLabels[status] || status)}</span>
-                  )}
-                  {retried ? <span> · {t("重试")}</span> : null}
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-normal text-faint">
-                    <RunDuration
-                      startedAt={runningStartedAt}
-                      finishedAt={execution?.finished_at}
-                      active={status === "running"}
-                      onClick={onOpenTrace && id ? () => onOpenTrace(id) : undefined}
-                    />
-                  </span>
-                </div>
-              )}
-              {status === "running" ? (
-                <div
-                  className={`${showRunningHeader ? "mt-1.5 " : ""}flex flex-wrap items-end gap-2.5`}
-                >
-                  <ChatBubbleMessage
-                    variant="received"
-                    className="w-fit max-w-full"
-                  >
-                    <MessageLoading />
-                    {summary && (
-                      <div className="mt-1.5 border-t border-line/60 pt-1.5 text-sm leading-relaxed text-secondary-foreground">
-                        <RichText content={summary} />
-                      </div>
-                    )}
-                  </ChatBubbleMessage>
-                  {showRunningDevice && live?.deviceName && (
-                    <div className="self-end pb-1 shrink-0">
-                      <OperatingDevice name={live.deviceName} />
-                    </div>
-                  )}
-                </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+            <span className="grid size-5 shrink-0 place-items-center rounded-full bg-rose-500/15 text-rose-600 dark:bg-rose-500/25 dark:text-rose-400">
+              {status === "expired" ? (
+                <Clock className="size-3.5" />
               ) : (
-                summary && (
-                  <div className="mt-1 text-sm leading-6 text-secondary-foreground">
-                    <RichText content={summary} />
-                  </div>
-                )
+                <AlertCircle className="size-3.5" />
               )}
-            </div>
-            {history?.can_retry && (
-              <BubbleRetryMenu
-                replyModel={history.model}
-                cardKind={cardKind}
-                cardPreferredRouteID={cardPreferredRouteID}
-                align="end"
-                loading={retryingAttemptID === history.id}
-                disabled={Boolean(
-                  retryingAttemptID && retryingAttemptID !== history.id,
-                )}
-                onConfirmRetry={(preferredModelRouteID) =>
-                  onRetryAttempt(history.id, preferredModelRouteID)
-                }
-                renderTrigger={({ onClick, disabled, title, icon }) => (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={disabled}
-                    title={title}
-                    onClick={onClick}
-                    className="text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/40"
-                  >
-                    <span className="[&>svg]:size-3">{icon}</span>
-                    {t("重试")}
-                  </Button>
-                )}
-              />
+            </span>
+            <span className="font-semibold text-rose-700 dark:text-rose-300">
+              {t(attemptLabels[status] || status)}
+            </span>
+            {retried && (
+              <span className="text-[11px] font-normal text-rose-600/80 dark:text-rose-300/80">
+                · {t("重试")}
+              </span>
             )}
+            <RunDuration
+              startedAt={runningStartedAt}
+              finishedAt={execution?.finished_at}
+              active={false}
+              onClick={onOpenTrace && id ? () => onOpenTrace(id) : undefined}
+            />
           </div>
+          {execution?.can_retry && execution.id && (
+            <BubbleRetryMenu
+              replyModel={execution.model}
+              cardKind={cardKind}
+              cardPreferredRouteID={cardPreferredRouteID}
+              align="end"
+              loading={retryingAttemptID === execution.id}
+              disabled={Boolean(
+                retryingAttemptID && retryingAttemptID !== execution.id,
+              )}
+              onConfirmRetry={(preferredModelRouteID) =>
+                onRetryAttempt(execution.id, preferredModelRouteID)
+              }
+              renderTrigger={({ onClick, disabled, title, icon }) => (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={disabled}
+                  title={title}
+                  onClick={onClick}
+                  className="h-6 text-rose-700 hover:bg-rose-500/10 hover:text-rose-800 dark:text-rose-300 dark:hover:bg-rose-500/20"
+                >
+                  <span className="[&>svg]:size-3">{icon}</span>
+                  {t("重试")}
+                </Button>
+              )}
+            />
+          )}
         </div>
+        {summary && (
+          <div className="mt-2 border-t border-rose-500/15 pt-2 text-xs leading-relaxed text-secondary-foreground dark:border-rose-500/20">
+            <RichText content={summary} />
+          </div>
+        )}
       </article>
-    </>
+    );
+  }
+
+  // 无正文的 cancelled / superseded，以及静默 completed / queued，统一渲染为单行浅灰圆角小胶囊。
+  const capsuleLabel = execution
+    ? t(resolveAttemptStatusLabel(execution))
+    : t(attemptLabels[status] || status);
+  const dotClass =
+    status === "completed"
+      ? "bg-emerald-500"
+      : status === "queued"
+        ? "bg-sky-500"
+        : "bg-slate-400 dark:bg-slate-500";
+
+  return (
+    <div
+      className="flex justify-center py-0.5 text-xs"
+      data-execution-id={id}
+      data-execution-status={status}
+    >
+      <span className="inline-flex max-w-[92%] flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-full border border-line/50 bg-muted/20 px-2.5 py-0.5 text-[11px] text-muted-foreground dark:bg-muted/10">
+        <span className={`size-1.5 shrink-0 rounded-full ${dotClass}`} />
+        <span>{capsuleLabel}</span>
+        {retried && <span>· {t("重试")}</span>}
+        <RunDuration
+          startedAt={runningStartedAt}
+          finishedAt={execution?.finished_at}
+          active={false}
+          onClick={onOpenTrace && id ? () => onOpenTrace(id) : undefined}
+        />
+        {execution?.can_retry && execution.id && (
+          <BubbleRetryMenu
+            replyModel={execution.model}
+            cardKind={cardKind}
+            cardPreferredRouteID={cardPreferredRouteID}
+            align="end"
+            loading={retryingAttemptID === execution.id}
+            disabled={Boolean(
+              retryingAttemptID && retryingAttemptID !== execution.id,
+            )}
+            onConfirmRetry={(preferredModelRouteID) =>
+              onRetryAttempt(execution.id, preferredModelRouteID)
+            }
+            renderTrigger={({ onClick, disabled, title, icon }) => (
+              <button
+                type="button"
+                disabled={disabled}
+                title={title}
+                onClick={onClick}
+                className="inline-flex cursor-pointer items-center gap-1 font-medium text-sky-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-sky-400"
+              >
+                <span className="[&>svg]:size-3">{icon}</span>
+                {t("重试")}
+              </button>
+            )}
+          />
+        )}
+      </span>
+    </div>
   );
 }
 

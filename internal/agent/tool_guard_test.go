@@ -22,9 +22,12 @@ func TestToolGuard_StaticReadOnlyAndDestructive(t *testing.T) {
 	settings := store.AgentSettings{}
 
 	// 1. 第一层：只读工具与内置 cycledock_* 协同工具应直接放行（0 延迟、0 Token 消耗）
+	if !safeReadOnlyToolNames["cycledock_list_cards"] {
+		t.Fatal("expected cycledock_list_cards to be explicitly registered in safeReadOnlyToolNames")
+	}
 	safeTools := []string{
 		"read_file", "list_dir", "search_text", "recall_search", "session_observe", "reply_message",
-		"cycledock_confirm_card", "cycledock_update_card", "cycledock_check_in", "cycledock_create_schedule", "cycledock_send_card_message",
+		"cycledock_confirm_card", "cycledock_update_card", "cycledock_list_cards", "cycledock_check_in", "cycledock_create_schedule", "cycledock_send_card_message",
 	}
 	for _, name := range safeTools {
 		if !isSafeReadOnlyTool(name, nil) {
