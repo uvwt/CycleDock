@@ -151,10 +151,18 @@ export const api = {
   },
   openMainDiscussion: (project: string) =>
     request<Card>(`/projects/${project}/main-discussion`, "POST", {}),
-  createTodo: (project: string, title: string, description: string) =>
+  createTodo: (
+    project: string,
+    title: string,
+    description: string,
+    attachmentIDs?: string[],
+  ) =>
     request<Card>(`/projects/${project}/todos`, "POST", {
       title,
       description,
+      ...(attachmentIDs && attachmentIDs.length > 0
+        ? { attachment_ids: attachmentIDs }
+        : {}),
     }),
   card: (id: string, limit?: number, all = false) => {
     const params = new URLSearchParams();

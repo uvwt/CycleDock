@@ -269,3 +269,137 @@ func TestAttachmentsHTTPFlowAndGoneDegradation(t *testing.T) {
 		t.Fatalf("expected 410 Gone for purged attachment, got %d body=%s", goneResp.Code, goneResp.Body.String())
 	}
 }
+
+func TestCreateTodoWithImageAttachmentsEndToEnd(t *testing.T) {
+	handler, pool, _, attSvc := newHTTPIntegrationWithAttachments(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+	var me identityResponse
+	decodeRecorder(t, login, &me)
+
+	projectsRec := doJSON(t, handler, http.MethodGet, "/api/v1/projects", nil, cookie, nil)
+	var projects []projectResponse
+	decodeRecorder(t, projectsRec, &projects)
+	if len(projects) == 0 {
+		t.Fatalf("expected default project")
+	}
+	projectID := projects[0].ID
+
+	uploadImage := func(w, h int) attachments.Attachment {
+		t.Helper()
+		rec := doMultipartUpload(
+			t, handler,
+			"/api/v1/workspaces/"+me.Workspace.ID+"/attachments",
+			"file", "todo.png", makeHTTPTestPNG(t, w, h), cookie,
+		)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("upload status = %d body = %s", rec.Code, rec.Body.String())
+		}
+		var uploaded attachments.Attachment
+		decodeRecorder(t, rec, &uploaded)
+		return uploaded
+	}
+
+	// 1. 先预上传两张图片（无 card_id），再携带 attachment_ids 创建待办。
+	first := uploadImage(120, 80)
+	second := uploadImage(90, 90)
+
+	createRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":          "带参考图的待办",
+		"description":    "请按截图修复布局问题",
+		"attachment_ids": []string{first.ID.String(), second.ID.String()},
+	}, cookie, nil)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create todo status = %d body = %s", createRec.Code, createRec.Body.String())
+	}
+	var created cardResponse
+	decodeRecorder(t, createRec, &created)
+	if created.AttachmentCount == nil || *created.AttachmentCount != 2 {
+		t.Fatalf("expected attachment_count=2 on created todo, got %#v", created.AttachmentCount)
+	}
+	if len(created.Attachments) != 2 || created.Attachments[0].ID != first.ID || created.Attachments[1].ID != second.ID {
+		t.Fatalf("expected ordered todo attachments [%s, %s], got %#v", first.ID, second.ID, created.Attachments)
+	}
+	if created.Attachments[0].Status != "active" {
+		t.Fatalf("expected active attachment status, got %q", created.Attachments[0].Status)
+	}
+
+	// 2. GET /cards/{cardID} 稳定返回附件元数据。
+	detailRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+created.ID, nil, cookie, nil)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("get card status = %d body = %s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail cardDetailResponse
+	decodeRecorder(t, detailRec, &detail)
+	if len(detail.Card.Attachments) != 2 || detail.Card.Attachments[0].URL != first.URL {
+		t.Fatalf("expected 2 card attachments on GET /cards/{id}, got %#v", detail.Card.Attachments)
+	}
+
+	// 3. 项目卡片列表摘要返回 attachment_count=2。
+	listRec := doJSON(t, handler, http.MethodGet, "/api/v1/projects/"+projectID+"/cards", nil, cookie, nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list cards status = %d body = %s", listRec.Code, listRec.Body.String())
+	}
+	var list []cardResponse
+	decodeRecorder(t, listRec, &list)
+	found := false
+	for _, item := range list {
+		if item.ID == created.ID {
+			found = true
+			if item.AttachmentCount == nil || *item.AttachmentCount != 2 {
+				t.Fatalf("expected attachment_count=2 in project cards summary, got %#v", item.AttachmentCount)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("created todo %s not found in project cards list", created.ID)
+	}
+
+	// 4. 校验禁止跨卡片重复绑定已被绑定到其他待办的图片。
+	reuseRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":          "重复绑定应失败",
+		"attachment_ids": []string{first.ID.String()},
+	}, cookie, nil)
+	if reuseRec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict when reusing bound attachment on another todo, got %d body=%s", reuseRec.Code, reuseRec.Body.String())
+	}
+
+	// 5. 超过 8 张附件应返回 400 Bad Request。
+	tooMany := make([]string, 0, attachments.MaxAttachmentsPerTurn+1)
+	for i := 0; i < attachments.MaxAttachmentsPerTurn+1; i++ {
+		tooMany = append(tooMany, uuid.NewString())
+	}
+	tooManyRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":          "超限测试",
+		"attachment_ids": tooMany,
+	}, cookie, nil)
+	if tooManyRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when attachment_ids exceeds limit, got %d body=%s", tooManyRec.Code, tooManyRec.Body.String())
+	}
+
+	// 6. 过期并清理后，GET /cards/{cardID} 中对应附件状态切换为 purged，且下载返回 410 Gone。
+	if _, err := pool.Exec(context.Background(), `UPDATE workspace_attachments SET expires_at = now() - interval '1 hour' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("expire first attachment: %v", err)
+	}
+	if _, err := attSvc.RunCleanup(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("RunCleanup: %v", err)
+	}
+	detailAfterPurgeRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+created.ID, nil, cookie, nil)
+	if detailAfterPurgeRec.Code != http.StatusOK {
+		t.Fatalf("get card after purge status = %d body = %s", detailAfterPurgeRec.Code, detailAfterPurgeRec.Body.String())
+	}
+	var detailAfterPurge cardDetailResponse
+	decodeRecorder(t, detailAfterPurgeRec, &detailAfterPurge)
+	if len(detailAfterPurge.Card.Attachments) != 2 || detailAfterPurge.Card.Attachments[0].Status != "purged" || detailAfterPurge.Card.Attachments[1].Status != "active" {
+		t.Fatalf("expected first=purged second=active, got %#v", detailAfterPurge.Card.Attachments)
+	}
+	goneRec := doJSON(t, handler, http.MethodGet, first.URL, nil, cookie, nil)
+	if goneRec.Code != http.StatusGone {
+		t.Fatalf("expected 410 Gone for purged todo attachment, got %d", goneRec.Code)
+	}
+}

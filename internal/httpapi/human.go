@@ -152,6 +152,9 @@ type cardResponse struct {
 
 	// 只在列表摘要中返回：被安全守卫挂起、等待人工确认的工具调用数量。
 	PendingToolApprovalCount *int64 `json:"pending_tool_approval_count,omitempty"`
+	// 列表摘要与创建/详情接口返回：卡片自身附带的图片数量及详情元数据。
+	AttachmentCount *int64                     `json:"attachment_count,omitempty"`
+	Attachments     []store.CardAttachmentMeta `json:"attachments,omitempty"`
 }
 
 type cardReadResponse struct {
@@ -698,8 +701,9 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
+		Title         string   `json:"title"`
+		Description   string   `json:"description"`
+		AttachmentIDs []string `json:"attachment_ids,omitempty"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -709,13 +713,17 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_title", "todo title is required")
 		return
 	}
+	attachmentIDs, ok := parseAttachmentIDs(w, request.AttachmentIDs)
+	if !ok {
+		return
+	}
 
 	identity := identityFromRequest(r)
 	if _, err := api.store.GetProject(r.Context(), identity.WorkspaceID, projectID); err != nil {
 		api.handleError(w, err)
 		return
 	}
-	card, err := api.store.CreateTodoCard(
+	card, cardAttachments, err := api.store.CreateTodoCardWithAttachments(
 		r.Context(),
 		identity.WorkspaceID,
 		projectID,
@@ -724,12 +732,19 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(request.Description),
 		uuid.NullUUID{},
 		1,
+		attachmentIDs,
 	)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, cardToResponse(card))
+	resp := cardToResponse(card)
+	if len(cardAttachments) > 0 {
+		count := int64(len(cardAttachments))
+		resp.AttachmentCount = &count
+		resp.Attachments = cardAttachments
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
@@ -754,6 +769,7 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		schedules      []db.CardSchedule
 		lastCheckin    *db.Event
 		health         domain.CheckinStatus = domain.CheckinUnknown
+		cardAttachments []store.CardAttachmentMeta
 	)
 
 	isOngoing := card.Kind == string(domain.CardKindOngoing)
@@ -818,6 +834,16 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	// 3.5. CardAttachments（新建待办等场景下直接挂在卡片上的图片）
+	g.Go(func() error {
+		atts, err := api.store.ListCardAttachments(gctx, identity.WorkspaceID, cardID)
+		if err != nil {
+			return fmt.Errorf("card attachments: %w", err)
+		}
+		cardAttachments = atts
+		return nil
+	})
+
 	// 4 & 5. Ongoing specific queries
 	if isOngoing {
 		g.Go(func() error {
@@ -870,6 +896,11 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		AttemptHistory: attemptsToResponse(attemptHistory),
 		Schedules:      schedulesToResponse(schedules),
 		Health:         string(health),
+	}
+	if len(cardAttachments) > 0 {
+		count := int64(len(cardAttachments))
+		response.Card.AttachmentCount = &count
+		response.Card.Attachments = cardAttachments
 	}
 	if currentAttempt != nil {
 		attempt := attemptToResponse(*currentAttempt)
@@ -1688,6 +1719,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
+	attachmentCount := card.AttachmentCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
@@ -1697,6 +1729,7 @@ func cardSummaryToResponse(card db.ListProjectCardSummariesRow) cardResponse {
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
+		AttachmentCount:          &attachmentCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String
@@ -1732,6 +1765,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
+	attachmentCount := card.AttachmentCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
@@ -1741,6 +1775,7 @@ func activeCardSummaryToResponse(card db.ListProjectActiveCardSummariesRow) card
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
+		AttachmentCount:          &attachmentCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String
@@ -1776,6 +1811,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 	lastReadMessageSequence := card.LastReadMessageSequence
 	unread := card.Unread
 	pendingToolApprovalCount := card.PendingToolApprovalCount
+	attachmentCount := card.AttachmentCount
 	response := cardResponse{
 		ID: card.ID.String(), ProjectID: card.ProjectID.String(), Kind: card.Kind,
 		Title: card.Title, Description: card.Description,
@@ -1785,6 +1821,7 @@ func doneCardSummaryToResponse(card db.ListProjectDoneCardsPagedRow) cardRespons
 		LastReadMessageSequence:  &lastReadMessageSequence,
 		Unread:                   &unread,
 		PendingToolApprovalCount: &pendingToolApprovalCount,
+		AttachmentCount:          &attachmentCount,
 	}
 	if card.DiscussionState.Valid {
 		response.DiscussionState = card.DiscussionState.String

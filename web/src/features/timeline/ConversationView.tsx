@@ -1447,6 +1447,20 @@ export function ConversationView({
 
                     <ConversationEmptyCardDescription description={card.description} />
 
+                    {card.attachments && card.attachments.length > 0 && (
+                      <div
+                        className="border-t border-line/50 px-5 py-4 sm:px-6"
+                        data-testid="card-attachments-empty-section"
+                      >
+                        <div className="text-[11px] font-medium text-muted-foreground">
+                          {t("附带图片（{{count}}）", {
+                            count: card.attachments.length,
+                          })}
+                        </div>
+                        <MessageAttachmentGrid attachments={card.attachments} />
+                      </div>
+                    )}
+
                     <div className="flex items-center gap-2 border-t border-line/50 bg-muted/15 px-5 py-3 text-xs text-muted-foreground sm:px-6">
                       <Bot className="size-4 shrink-0 text-faint" />
                       <span>
