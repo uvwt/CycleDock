@@ -450,13 +450,26 @@ func (s *Store) ConfirmCard(
 		if command.RowsAffected() != 1 {
 			return ConfirmResult{}, domain.ErrConflict
 		}
+		// 记录触发 Review 转换的运行中 Attempt（若存在），便于通知去重精确区分“本次进 Review 的总结”与“进 Review 后用户的后续追问回复”。
+		var runningAttemptID uuid.NullUUID
+		if err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM turn_attempts
+			WHERE workspace_id=$1 AND card_id=$2 AND status='running'
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		`, workspaceID, cardID).Scan(&runningAttemptID.UUID); err == nil {
+			runningAttemptID.Valid = true
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return ConfirmResult{}, err
+		}
 		if _, err := tx.Exec(ctx,
-			"INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, content) VALUES ($1,$2,$3,'status_change',$4,'working -> review')",
-			uuid.New(), workspaceID, cardID, sourceID,
+			"INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, attempt_id, content) VALUES ($1,$2,$3,'status_change',$4,$5,'working -> review')",
+			uuid.New(), workspaceID, cardID, sourceID, runningAttemptID,
 		); err != nil {
 			return ConfirmResult{}, err
 		}
-		if err := notifySupervisorReview(ctx, tx, workspaceID, cardID, sourceID); err != nil {
+		if err := notifySupervisorReview(ctx, tx, workspaceID, cardID, sourceID, confirmationRound); err != nil {
 			return ConfirmResult{}, err
 		}
 	}

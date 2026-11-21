@@ -12,14 +12,15 @@ import (
 )
 
 type cardUpdate struct {
-	ID                 string `json:"id"`
-	ProjectID          string `json:"project_id"`
-	Kind               string `json:"kind"`
-	Title              string `json:"title"`
-	NotificationsMuted bool   `json:"notifications_muted"`
-	Revision           string `json:"revision"`
-	EventSequence      string `json:"event_sequence"`
-	MessagePreview     string `json:"message_preview"`
+	ID                     string `json:"id"`
+	ProjectID              string `json:"project_id"`
+	Kind                   string `json:"kind"`
+	Title                  string `json:"title"`
+	NotificationsMuted     bool   `json:"notifications_muted"`
+	NotificationSuppressed bool   `json:"notification_suppressed"`
+	Revision               string `json:"revision"`
+	EventSequence          string `json:"event_sequence"`
+	MessagePreview         string `json:"message_preview"`
 	// PendingApprovalCount 是该卡片当前待人工审批的数量；
 	// NotificationKind 区分普通模型消息（"message"）与待人工确认工具审批（"tool_approval"），
 	// 用于实现“卡片静音屏蔽普通消息，但工具审批穿透静音”的产品语义。
@@ -115,7 +116,13 @@ func (api *API) cardUpdates(ctx context.Context, workspaceID uuid.UUID) ([]cardU
 		}
 		updates = append(updates, update)
 	}
-	return updates, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := api.applySupervisorNotificationSuppression(ctx, workspaceID, updates); err != nil {
+		return nil, err
+	}
+	return updates, nil
 }
 
 // 工作空间级连接不随 Card 路由卸载；重连时发送快照，由客户端保留的版本基线补齐断线期间的更新。

@@ -324,9 +324,9 @@ func (api *API) deliverWorkspacePushes(ctx context.Context, workspaceID uuid.UUI
 				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
 				continue
 			}
-			// 单卡片静音时跳过普通消息推送，但工具审批待确认穿透静音；
-			// 跳过时推进该订阅快照，避免后续解除静音时把静音期间的历史消息补推出来。
-			if update.NotificationsMuted && update.NotificationKind != "tool_approval" {
+			// 单卡片静音或已被监督回调链路静默收口时跳过实际 Web Push 投递，但工具审批待确认穿透静音；
+			// 跳过时推进该订阅快照，避免后续解除静音或状态回落时把静音期间的历史消息补推出来。
+			if shouldSuppressCardNotification(update) {
 				silentSnapshots = append(silentSnapshots, cardUpdateToPushSnapshot(sub.ID, cardID, update))
 				continue
 			}

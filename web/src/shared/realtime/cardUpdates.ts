@@ -17,9 +17,10 @@ export type CardUpdate = {
   pending_approval_count?: number;
   attempt_status: string;
   notifications_muted?: boolean;
+  notification_suppressed?: boolean;
 };
 
-// 只有新的模型回复或待人工审批工具调用才触发浏览器/气泡通知。
+// 只有新的模型回复或待人工审批工具调用、且未被静音或监督回调静默收口时才触发浏览器/气泡通知。
 // 置顶、静音切换、标题和执行状态会改变 revision，用于刷新页面缓存，但不会弹窗通知。
 // 卡片静音屏蔽普通消息，但待人工确认工具审批会穿透静音提醒。
 export function cardNotificationBody(
@@ -30,7 +31,10 @@ export function cardNotificationBody(
     return "";
   }
   const isToolApproval = card.notification_kind === "tool_approval";
-  if (card.notifications_muted && !isToolApproval) {
+  if (
+    !isToolApproval &&
+    (card.notifications_muted || card.notification_suppressed)
+  ) {
     return "";
   }
   const currentSeq = Number(card.event_sequence);
