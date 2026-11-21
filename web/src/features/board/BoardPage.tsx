@@ -25,6 +25,7 @@ import {
   Field,
   Modal,
   Spinner,
+  Switch,
   TextArea,
   TextInput,
 } from "../../shared/ui/components";
@@ -273,6 +274,7 @@ export default function BoardPage() {
   const [description, setDescription] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
   const [todoDescription, setTodoDescription] = useState("");
+  const [todoAutoStart, setTodoAutoStart] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window !== "undefined" && window.matchMedia) {
       return window.matchMedia("(min-width: 1024px)").matches;
@@ -471,12 +473,14 @@ export default function BoardPage() {
         projectID!,
         todoTitle.trim(),
         todoDescription.trim(),
+        todoAutoStart,
       );
     },
     onSuccess: (card) => {
       setCreatingTodo(false);
       setTodoTitle("");
       setTodoDescription("");
+      setTodoAutoStart(false);
       if (projectID) {
         upsertCachedProjectCard(queryClient, projectID, card);
         void queryClient.invalidateQueries({
@@ -781,7 +785,10 @@ export default function BoardPage() {
       </Modal>
       <Modal
         open={creatingTodo}
-        onOpenChange={setCreatingTodo}
+      onOpenChange={(open) => {
+          setCreatingTodo(open);
+          if (!open) setTodoAutoStart(false);
+        }}
         title={t("新建待办")}
         description={t("添加一个待办任务到当前项目看板中。")}
       >
@@ -790,7 +797,7 @@ export default function BoardPage() {
             e.preventDefault();
             createTodo.mutate();
           }}
-          className="space-y-4"
+          className="space-y-3"
         >
           <Field label={t("待办标题")}>
             <TextInput
@@ -803,17 +810,38 @@ export default function BoardPage() {
           </Field>
           <Field label={t("待办描述")}>
             <TextArea
-              rows={4}
+              rows={3}
               value={todoDescription}
               onChange={(e) => setTodoDescription(e.target.value)}
               placeholder={t("补充目标、范围或完成条件")}
             />
           </Field>
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-line/70 bg-muted/20 px-3 py-2.5">
+            <div className="min-w-0 space-y-0.5">
+              <div className="text-xs font-semibold text-heading">
+                {t("创建后立即开始执行")}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {todoAutoStart
+                  ? t("创建后立即交给 Cycle 开始推进此待办。")
+                  : t("仅先收入待办池留档，不消耗 Token，可随时在卡片内一键启动。")}
+              </p>
+            </div>
+            <Switch
+              aria-label={t("创建后立即开始执行")}
+              checked={todoAutoStart}
+              onCheckedChange={setTodoAutoStart}
+              className="mt-0.5 shrink-0"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
             <Button
               variant="secondary"
               type="button"
-              onClick={() => setCreatingTodo(false)}
+              onClick={() => {
+                setCreatingTodo(false);
+                setTodoAutoStart(false);
+              }}
             >
               {t("取消")}
             </Button>
@@ -822,7 +850,7 @@ export default function BoardPage() {
               type="submit"
               disabled={!todoTitle.trim() || createTodo.isPending}
             >
-              {t("创建待办")}
+              {todoAutoStart ? t("创建并开始执行") : t("创建待办")}
             </Button>
           </div>
         </form>

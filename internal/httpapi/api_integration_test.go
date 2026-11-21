@@ -616,3 +616,115 @@ func responseCookie(t *testing.T, response *httptest.ResponseRecorder, name stri
 	t.Fatalf("response did not contain cookie %s", name)
 	return nil
 }
+
+func TestManualTodoAutoStartOptionAndOneClickStart(t *testing.T) {
+	handler, pool, dataStore := newHTTPIntegration(t)
+
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+
+	projectRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name": "Todo Start Project",
+	}, cookie, nil)
+	if projectRec.Code != http.StatusCreated {
+		t.Fatalf("create project status=%d body=%s", projectRec.Code, projectRec.Body.String())
+	}
+	var project projectResponse
+	decodeRecorder(t, projectRec, &project)
+	projectID := project.ID
+
+	// 1) 默认人工新建待办（auto_start 未传 / false）：不创建初始 Turn，可后续通过 /start 一键启动。
+	backlogRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":       "待办池留档任务",
+		"description": "先存着，稍后再跑",
+	}, cookie, nil)
+	if backlogRec.Code != http.StatusCreated {
+		t.Fatalf("create backlog todo status=%d body=%s", backlogRec.Code, backlogRec.Body.String())
+	}
+	var backlogCard cardResponse
+	decodeRecorder(t, backlogRec, &backlogCard)
+
+	var backlogTurns int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM card_turns WHERE card_id=$1`, backlogCard.ID).Scan(&backlogTurns); err != nil {
+		t.Fatal(err)
+	}
+	if backlogTurns != 0 {
+		t.Fatalf("default manual todo should not auto-start, turns=%d", backlogTurns)
+	}
+
+	// 缺少 Idempotency-Key 应返回 400。
+	missingKeyRec := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+backlogCard.ID+"/start", map[string]any{}, cookie, nil)
+	if missingKeyRec.Code != http.StatusBadRequest {
+		t.Fatalf("start without idempotency key status=%d, want 400", missingKeyRec.Code)
+	}
+
+	// 一键启动成功创建首轮系统 Turn，且在详情接口的 pending_turns 中可见。
+	startRec := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+backlogCard.ID+"/start", map[string]any{}, cookie, map[string]string{
+		"Idempotency-Key": "http-start-backlog-1",
+	})
+	if startRec.Code != http.StatusCreated {
+		t.Fatalf("start backlog todo status=%d body=%s", startRec.Code, startRec.Body.String())
+	}
+	var startResp struct {
+		TurnID string `json:"turn_id"`
+		Reused bool   `json:"reused"`
+	}
+	decodeRecorder(t, startRec, &startResp)
+	if startResp.TurnID == "" || startResp.Reused {
+		t.Fatalf("unexpected start response: %+v", startResp)
+	}
+
+	// 同幂等键重试返回 reused=true 且相同 turn_id。
+	replayRec := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+backlogCard.ID+"/start", map[string]any{}, cookie, map[string]string{
+		"Idempotency-Key": "http-start-backlog-1",
+	})
+	if replayRec.Code != http.StatusCreated {
+		t.Fatalf("replay start status=%d body=%s", replayRec.Code, replayRec.Body.String())
+	}
+	var replayResp struct {
+		TurnID string `json:"turn_id"`
+		Reused bool   `json:"reused"`
+	}
+	decodeRecorder(t, replayRec, &replayResp)
+	if !replayResp.Reused || replayResp.TurnID != startResp.TurnID {
+		t.Fatalf("unexpected start replay: %+v", replayResp)
+	}
+
+	// 换新幂等键再次启动已排队的卡片应返回 409 Conflict。
+	dupRec := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+backlogCard.ID+"/start", map[string]any{}, cookie, map[string]string{
+		"Idempotency-Key": "http-start-backlog-2",
+	})
+	if dupRec.Code != http.StatusConflict {
+		t.Fatalf("duplicate start status=%d want 409 body=%s", dupRec.Code, dupRec.Body.String())
+	}
+
+	// 2) 人工新建待办并显式勾选 auto_start=true：立即排入首轮系统 Turn，可被 Agent 认领。
+	autoRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+projectID+"/todos", map[string]any{
+		"title":       "立即执行的手动待办",
+		"description": "创建完马上让 Cycle 开始做",
+		"auto_start":  true,
+	}, cookie, nil)
+	if autoRec.Code != http.StatusCreated {
+		t.Fatalf("create auto_start todo status=%d body=%s", autoRec.Code, autoRec.Body.String())
+	}
+	var autoCard cardResponse
+	decodeRecorder(t, autoRec, &autoCard)
+
+	detailRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+autoCard.ID, nil, cookie, nil)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("get auto card detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail struct {
+		PendingTurns []pendingTurnResponse `json:"pending_turns"`
+	}
+	decodeRecorder(t, detailRec, &detail)
+	if len(detail.PendingTurns) != 1 || detail.PendingTurns[0].Source != string(domain.TurnSourceSystem) {
+		t.Fatalf("auto_start todo should have 1 system pending turn, got %+v", detail.PendingTurns)
+	}
+	_ = dataStore
+}

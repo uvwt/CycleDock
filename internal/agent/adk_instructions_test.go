@@ -70,6 +70,31 @@ func TestBuildADKInstructions_包含卡片引用跳转规范(t *testing.T) {
 	if !strings.Contains(mainInstructions, "必须使用标准卡片引用标记 [卡片标题](cycledock://card/<card_id>)") {
 		t.Fatal("主聊天指令必须明确硬约束使用标准卡片引用标记")
 	}
+	if !strings.Contains(mainInstructions, "auto_start: false") {
+		t.Fatal("主聊天指令必须明确说明先建待办暂不实施时传 auto_start: false")
+	}
+}
+
+func TestGenerateWorkToolDefinitionIncludesAutoStart(t *testing.T) {
+	defs := internalToolDefinitions()
+	var found bool
+	for _, def := range defs {
+		if def.Function.Name != "cycledock_generate_work" {
+			continue
+		}
+		found = true
+		props, _ := def.Function.Parameters["properties"].(map[string]any)
+		rawField, ok := props["auto_start"].(map[string]any)
+		if !ok || rawField["type"] != "boolean" {
+			t.Fatalf("cycledock_generate_work missing boolean auto_start schema: %#v", props["auto_start"])
+		}
+		if !strings.Contains(def.Function.Description, "auto_start=false") {
+			t.Fatalf("cycledock_generate_work description should mention auto_start=false: %s", def.Function.Description)
+		}
+	}
+	if !found {
+		t.Fatal("cycledock_generate_work tool definition not found")
+	}
 }
 
 func TestBuildADKInstructions_项目说明包含背景和工作要求(t *testing.T) {

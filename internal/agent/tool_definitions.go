@@ -72,12 +72,13 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_generate_work",
-				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) so the UI displays an interactive card widget with direct navigation.",
+				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. By default auto_start is true and immediately queues the initial Turn for the generated Card; when the user explicitly asks to archive/schedule the work in the backlog without starting execution now, pass auto_start=false. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) so the UI displays an interactive card widget with direct navigation.",
 				Parameters: object(map[string]any{
 					"kind":                   map[string]any{"type": "string", "enum": []string{"todo", "ongoing"}},
 					"title":                  stringField("Concise generated work title."),
 					"description":            stringField("Durable scope and expected outcome for the generated work."),
 					"required_confirmations": map[string]any{"type": "integer", "minimum": 1, "description": "Todo confirmation threshold; use 1 unless the discussion requires more."},
+					"auto_start":             map[string]any{"type": "boolean", "description": "Whether to immediately enqueue the initial execution Turn for the generated Card. Defaults to true; pass false when the user explicitly wants to create/backlog the card without running the Agent yet."},
 					"idempotency_key":        stringField("Stable unique key for this logical generated work item."),
 				}, "kind", "title", "description", "idempotency_key"),
 			},

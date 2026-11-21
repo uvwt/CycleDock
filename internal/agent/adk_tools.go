@@ -290,6 +290,10 @@ func (r attemptToolRuntime) internalHandler(
 		return func(ctx adkagent.Context, args map[string]any) (map[string]any, error) {
 			kind := domain.CardKind(stringArg(args, "kind"))
 			required := int32Arg(args, "required_confirmations")
+			autoStart, err := optionalBoolArg(args, "auto_start")
+			if err != nil {
+				return nil, err
+			}
 			result, err := r.store.GenerateWorkFromDiscussion(ctx, store.GenerateWorkParams{
 				WorkspaceID:           r.context.WorkspaceID,
 				DiscussionID:          r.context.CardID,
@@ -298,16 +302,22 @@ func (r attemptToolRuntime) internalHandler(
 				Title:                 stringArg(args, "title"),
 				Description:           stringArg(args, "description"),
 				RequiredConfirmations: required,
+				AutoStart:             autoStart,
 				IdempotencyKey:        stringArg(args, "idempotency_key"),
 			})
 			if err != nil {
 				return nil, err
 			}
+			started := true
+			if autoStart != nil {
+				started = *autoStart
+			}
 			return map[string]any{
-				"ok":      true,
-				"card_id": result.Card.ID.String(),
-				"kind":    result.Card.Kind,
-				"reused":  result.Reused,
+				"ok":         true,
+				"card_id":    result.Card.ID.String(),
+				"kind":       result.Card.Kind,
+				"auto_start": started,
+				"reused":     result.Reused,
 			}, nil
 		}, nil
 
@@ -874,6 +884,18 @@ func decodeADKToolResult(raw string) (map[string]any, error) {
 		return object, nil
 	}
 	return map[string]any{"result": value}, nil
+}
+
+func optionalBoolArg(args map[string]any, key string) (*bool, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	v, ok := raw.(bool)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a boolean", key)
+	}
+	return &v, nil
 }
 
 func stringArg(args map[string]any, key string) string {

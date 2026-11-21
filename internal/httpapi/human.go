@@ -53,6 +53,7 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/cards/{cardID}/pin", api.togglePinCard)
 	r.Post("/cards/{cardID}/notifications", api.toggleCardNotifications)
 	r.Post("/cards/{cardID}/move", api.moveCard)
+	r.Post("/cards/{cardID}/start", api.startCard)
 	r.Post("/cards/{cardID}/discussion-state", api.setDiscussionState)
 	r.Delete("/cards/{cardID}", api.deleteCard)
 	r.Post("/cards/{cardID}/ongoing-state", api.setOngoingState)
@@ -700,6 +701,7 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
+		AutoStart   bool   `json:"auto_start"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
@@ -715,7 +717,7 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	card, err := api.store.CreateTodoCard(
+	card, err := api.store.CreateTodoCardWithOptions(
 		r.Context(),
 		identity.WorkspaceID,
 		projectID,
@@ -724,12 +726,66 @@ func (api *API) createTodo(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(request.Description),
 		uuid.NullUUID{},
 		1,
+		request.AutoStart,
 	)
 	if err != nil {
 		api.handleError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, cardToResponse(card))
+}
+
+// startCard 为尚未开始执行过的待办或定时卡片一键发起首轮系统执行。
+func (api *API) startCard(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	var request struct {
+		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
+		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &request) {
+			return
+		}
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "idempotency_key_required", "Idempotency-Key header is required")
+		return
+	}
+
+	var preferredRouteID *uuid.UUID
+	if request.PreferredModelRouteID != nil && strings.TrimSpace(*request.PreferredModelRouteID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*request.PreferredModelRouteID))
+		if err != nil || id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_preferred_model_route_id", "invalid preferred_model_route_id")
+			return
+		}
+		preferredRouteID = &id
+	}
+
+	identity := identityFromRequest(r)
+	result, err := api.store.StartCardExecution(r.Context(), store.StartCardExecutionParams{
+		WorkspaceID:           identity.WorkspaceID,
+		CardID:                cardID,
+		AuthorSourceID:        identity.SourceID,
+		IdempotencyKey:        idempotencyKey,
+		DeviceTarget:          request.DeviceTarget,
+		PreferredModelRouteID: preferredRouteID,
+	})
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if !result.Reused && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{Type: "card.updated"})
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"turn_id": result.Turn.ID.String(),
+		"reused":  result.Reused,
+	})
 }
 
 func (api *API) getCard(w http.ResponseWriter, r *http.Request) {

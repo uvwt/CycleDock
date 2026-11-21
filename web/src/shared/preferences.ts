@@ -298,6 +298,20 @@ const en = {
   "要完成什么？": "What needs to be done?",
   "补充目标、范围或完成条件": "Add goals, scope, or completion criteria",
   创建待办: "Create to-do",
+  创建并开始执行: "Create & start",
+  创建后立即开始执行: "Start immediately after creating",
+  "创建后立即交给 Cycle 开始推进此待办。":
+    "Hand this to-do to Cycle right after creation.",
+  "仅先收入待办池留档，不消耗 Token，可随时在卡片内一键启动。":
+    "Save to the backlog without using tokens; start with one click anytime.",
+  开始执行: "Start execution",
+  "正在启动...": "Starting...",
+  已开始执行: "Execution started",
+  启动失败: "Failed to start",
+  "当前待办尚未开始执行，点击即可由 Cycle 开始处理，或直接发送补充说明。":
+    "This to-do hasn't started yet. Click to let Cycle begin, or send additional context below.",
+  "当前定时任务尚未开始执行，点击即可立即启动首轮执行，或直接发送补充说明。":
+    "This scheduled task hasn't run yet. Click to start the first run, or send additional context below.",
   切换项目: "Switch project",
   从讨论中生成工作: "Generate work from discussions",
   没有任务: "No tasks",

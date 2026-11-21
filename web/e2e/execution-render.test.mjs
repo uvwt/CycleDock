@@ -1830,3 +1830,65 @@ test("用户评论附带图片与过期图片渲染，输入框支持纯图片�
     /<button[^>]*type="submit"[^>]*disabled[^>]*aria-label="发送"/,
   );
 });
+
+test("未启动的待办卡片空态展示一键开始执行按钮，且 createTodo/startCard 透传参数", async (t) => {
+  const emptyTodoHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      card: {
+        id: "todo-backlog-1",
+        project_id: "proj-1",
+        kind: "todo",
+        title: "先建卡留档待办",
+        description: "后续确认排期后再一键启动。",
+        todo_state: "todo",
+      },
+      events: [],
+      live: null,
+      cardKind: "todo",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      canStartCard: true,
+      startingCard: false,
+      onStartCard() {},
+      onRetryAttempt() {},
+    }),
+  );
+  assert.match(emptyTodoHtml, /先建卡留档待办/);
+  assert.match(emptyTodoHtml, /开始执行/);
+  assert.match(emptyTodoHtml, /当前待办尚未开始执行/);
+
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init.method,
+      headers: init.headers,
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    return new Response(
+      JSON.stringify({ id: "card-1", turn_id: "turn-1", reused: false }),
+    );
+  });
+  await apiClient.createTodo("proj-1", "留档任务", "暂不执行");
+  await apiClient.createTodo("proj-1", "立即执行任务", "马上开工", true);
+  await apiClient.startCard("card-1", {
+    idempotencyKey: "start-card:card-1",
+    preferred_model_route_id: "route-1",
+  });
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0].body, {
+    title: "留档任务",
+    description: "暂不执行",
+    auto_start: false,
+  });
+  assert.deepEqual(calls[1].body, {
+    title: "立即执行任务",
+    description: "马上开工",
+    auto_start: true,
+  });
+  assert.equal(calls[2].url, "/api/v1/cards/card-1/start");
+  assert.equal(calls[2].method, "POST");
+  assert.equal(calls[2].headers["Idempotency-Key"], "start-card:card-1");
+  assert.deepEqual(calls[2].body, { preferred_model_route_id: "route-1" });
+});
