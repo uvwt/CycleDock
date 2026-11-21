@@ -293,6 +293,7 @@ function CardPageContent({
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
+  const [regeneratingEventID, setRegeneratingEventID] = useState("");
   const [traceAttemptID, setTraceAttemptID] = useState("");
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
@@ -589,14 +590,37 @@ function CardPageContent({
   });
 
   const retryAttempt = useMutation({
-    mutationFn: (attemptID: string) => api.retryAttempt(cardID, attemptID),
-    onMutate: (attemptID) => setRetryingAttemptID(attemptID),
+    mutationFn: ({
+      attemptID,
+      preferredModelRouteID,
+    }: {
+      attemptID: string;
+      preferredModelRouteID?: string | null;
+    }) => api.retryAttempt(cardID, attemptID, preferredModelRouteID),
+    onMutate: ({ attemptID }) => setRetryingAttemptID(attemptID),
     onSuccess: () => {
       void sync();
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : t("重试失败")),
     onSettled: () => setRetryingAttemptID(""),
+  });
+
+  const regenerateMessage = useMutation({
+    mutationFn: ({
+      eventID,
+      preferredModelRouteID,
+    }: {
+      eventID: string;
+      preferredModelRouteID: string | null;
+    }) => api.regenerateMessage(cardID, eventID, preferredModelRouteID),
+    onMutate: ({ eventID }) => setRegeneratingEventID(eventID),
+    onSuccess: () => {
+      setOlderEvents([]);
+      setOlderAttempts([]);
+      void sync();
+    },
+    onSettled: () => setRegeneratingEventID(""),
   });
 
   const approveReview = useMutation({
@@ -1035,7 +1059,20 @@ function CardPageContent({
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
                 retryingAttemptID={retryingAttemptID}
-                onRetryAttempt={(attemptID) => retryAttempt.mutate(attemptID)}
+                regeneratingEventID={regeneratingEventID}
+                onRetryAttempt={(attemptID, preferredModelRouteID) =>
+                  retryAttempt.mutate({ attemptID, preferredModelRouteID })
+                }
+                onRegenerateMessage={
+                  !blocked && card.todo_state !== "done"
+                    ? async (eventID, preferredModelRouteID) => {
+                        await regenerateMessage.mutateAsync({
+                          eventID,
+                          preferredModelRouteID,
+                        });
+                      }
+                    : undefined
+                }
                 onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
                 canApproveReview={
                   card.kind === "todo" && card.todo_state === "review"
