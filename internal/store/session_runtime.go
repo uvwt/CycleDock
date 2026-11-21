@@ -39,6 +39,7 @@ type AgentCardContext struct {
 	CardKind              domain.CardKind
 	CardTitle             string
 	CardDescription       string
+	CardAttachments       []CommentAttachmentRef
 	IsMainDiscussion      bool
 	DiscussionState       string
 	TodoState             string
@@ -144,6 +145,26 @@ func (s *Store) LoadAgentCardContext(
 		if err := json.Unmarshal(sourceEventMessage, &payload); err == nil && len(payload.Attachments) > 0 {
 			out.TurnAttachments = payload.Attachments
 		}
+	}
+	// 加载卡片本身附带的图片（例如新建待办时附带的参考图）。
+	// 仅保留轻量元数据引用，发往模型前由 adk_model.go 按需回填，严禁将原图字节写入会话。
+	cardAttachments, err := s.ListCardAttachments(ctx, out.WorkspaceID, out.CardID)
+	if err != nil {
+		return AgentCardContext{}, fmt.Errorf("load card attachments: %w", err)
+	}
+	if len(cardAttachments) > 0 {
+		refs := make([]CommentAttachmentRef, 0, len(cardAttachments))
+		for _, att := range cardAttachments {
+			refs = append(refs, CommentAttachmentRef{
+				ID:        att.ID,
+				URL:       att.URL,
+				MimeType:  att.MimeType,
+				Width:     att.Width,
+				Height:    att.Height,
+				SizeBytes: att.SizeBytes,
+			})
+		}
+		out.CardAttachments = refs
 	}
 	if discussionState.Valid {
 		out.DiscussionState = discussionState.String

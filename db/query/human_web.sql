@@ -35,7 +35,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -91,6 +92,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
@@ -104,7 +111,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -160,6 +168,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
   AND (c.todo_state IS NULL OR c.todo_state <> 'done')
@@ -174,7 +188,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -230,6 +245,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
   AND c.todo_state = 'done'

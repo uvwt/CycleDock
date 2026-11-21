@@ -15,6 +15,7 @@ import { Spinner } from "../../shared/ui/components";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { CardStatusSwitch } from "./CardStatusSwitch";
 import { RichText } from "../timeline/RichText";
+import { MessageAttachmentGrid } from "../timeline/AttachmentGallery";
 
 const ScheduleEditor = lazy(() =>
   import("./TaskDetailsPanel").then((m) => ({ default: m.ScheduleEditor })),
@@ -192,6 +193,16 @@ export function CardHeaderInfoCard({
       {/* 详细描述 */}
       {card.description?.trim() ? (
         <CardDescriptionCollapsible description={card.description.trim()} />
+      ) : null}
+
+      {/* 卡片自身附带的图片（如新建待办时附带的参考图） */}
+      {card.attachments && card.attachments.length > 0 ? (
+        <div className="space-y-1.5" data-testid="card-header-attachments">
+          <div className="text-[11px] font-medium text-muted-foreground">
+            {t("附带图片（{{count}}）", { count: card.attachments.length })}
+          </div>
+          <MessageAttachmentGrid attachments={card.attachments} />
+        </div>
       ) : null}
 
       {/* 推送通知开关：所有卡片（含主聊天、讨论、Todo、Ongoing）统一提供 */}

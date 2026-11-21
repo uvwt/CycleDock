@@ -14,7 +14,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { BellOff, ListPlus, Pin } from "lucide-react";
+import { BellOff, ImagePlus, ListPlus, Pin } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -38,6 +38,11 @@ import { loadCardPage } from "../../app/route-preload";
 import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
 import type { Card, Project, TodoState } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
+import {
+  MAX_COMPOSER_IMAGES,
+  useComposerImages,
+} from "../cards/useComposerImages";
+import { ComposerImageTray } from "../timeline/AttachmentGallery";
 
 const states: TodoState[] = ["todo", "working", "review", "done"];
 const labels: Record<TodoState, string> = {
@@ -173,12 +178,15 @@ function TaskCard({
   onOpen?: (c: Card) => void;
   isOverlay?: boolean;
 }) {
+  const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: card.id,
   });
   const visualStatus = getCardVisualStatus(card);
   const updatedTime = formatRelativeTime(card.updated_at);
   const summary = stripMarkdownSummary(card.description);
+  const attachmentCount =
+    card.attachment_count ?? card.attachments?.length ?? 0;
 
   if (isOverlay) {
     return (
@@ -246,6 +254,15 @@ function TaskCard({
               {card.notifications_muted && (
                 <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
               )}
+              {attachmentCount > 0 && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground"
+                  title={t("附带 {{count}} 张图片", { count: attachmentCount })}
+                >
+                  <ImagePlus className="size-2.5" />
+                  <span>{attachmentCount}</span>
+                </span>
+              )}
             </div>
             {updatedTime && (
               <span className="shrink-0 text-[11px] font-normal tabular-nums text-faint/70">
@@ -273,6 +290,15 @@ export default function BoardPage() {
   const [description, setDescription] = useState("");
   const [todoTitle, setTodoTitle] = useState("");
   const [todoDescription, setTodoDescription] = useState("");
+  const [todoImageDragOver, setTodoImageDragOver] = useState(false);
+  const todoImageInputRef = useRef<HTMLInputElement | null>(null);
+  const todoImages = useComposerImages({});
+
+  function closeCreateTodoModal() {
+    setCreatingTodo(false);
+    setTodoImageDragOver(false);
+    todoImages.clear();
+  }
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window !== "undefined" && window.matchMedia) {
       return window.matchMedia("(min-width: 1024px)").matches;
@@ -467,16 +493,20 @@ export default function BoardPage() {
   const createTodo = useMutation({
     mutationFn: () => {
       void loadCardPage();
+      const attachmentIDs = todoImages.readyAttachments.map((att) => att.id);
       return api.createTodo(
         projectID!,
         todoTitle.trim(),
         todoDescription.trim(),
+        attachmentIDs,
       );
     },
     onSuccess: (card) => {
       setCreatingTodo(false);
       setTodoTitle("");
       setTodoDescription("");
+      setTodoImageDragOver(false);
+      todoImages.clear();
       if (projectID) {
         upsertCachedProjectCard(queryClient, projectID, card);
         void queryClient.invalidateQueries({
@@ -781,14 +811,34 @@ export default function BoardPage() {
       </Modal>
       <Modal
         open={creatingTodo}
-        onOpenChange={setCreatingTodo}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeCreateTodoModal();
+          } else {
+            setCreatingTodo(true);
+          }
+        }}
         title={t("新建待办")}
         description={t("添加一个待办任务到当前项目看板中。")}
       >
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (todoImages.uploading || createTodo.isPending) return;
             createTodo.mutate();
+          }}
+          onPaste={(e) => {
+            const pastedImages: File[] = [];
+            for (const item of Array.from(e.clipboardData?.items || [])) {
+              if (item.kind === "file" && item.type.startsWith("image/")) {
+                const file = item.getAsFile();
+                if (file) pastedImages.push(file);
+              }
+            }
+            if (pastedImages.length > 0) {
+              e.preventDefault();
+              void todoImages.addFiles(pastedImages);
+            }
           }}
           className="space-y-4"
         >
@@ -809,20 +859,95 @@ export default function BoardPage() {
               placeholder={t("补充目标、范围或完成条件")}
             />
           </Field>
+          <Field
+            label={t("附带图片（可选）")}
+            hint={t("支持点击上传、拖拽或粘贴图片，最多 {{max}} 张。", {
+              max: MAX_COMPOSER_IMAGES,
+            })}
+          >
+            <div
+              data-testid="todo-image-dropzone"
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer.types).includes("Files")) {
+                  e.preventDefault();
+                  setTodoImageDragOver(true);
+                }
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                  setTodoImageDragOver(false);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setTodoImageDragOver(false);
+                if (e.dataTransfer.files?.length) {
+                  void todoImages.addFiles(e.dataTransfer.files);
+                }
+              }}
+              className={
+                "rounded-xl border border-dashed transition-colors " +
+                (todoImageDragOver
+                  ? "border-primary bg-primary/5"
+                  : "border-line bg-canvas/50")
+              }
+            >
+              <input
+                ref={todoImageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                multiple
+                data-testid="todo-image-input"
+                className="hidden"
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    void todoImages.addFiles(files);
+                  }
+                  e.target.value = "";
+                }}
+              />
+              <ComposerImageTray
+                items={todoImages.items}
+                onRemove={todoImages.removeItem}
+              />
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+                <button
+                  type="button"
+                  disabled={
+                    createTodo.isPending ||
+                    todoImages.items.length >= MAX_COMPOSER_IMAGES
+                  }
+                  onClick={() => todoImageInputRef.current?.click()}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ImagePlus className="size-3.5 text-muted-foreground" />
+                  <span>{t("添加图片")}</span>
+                </button>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {todoImages.uploading
+                    ? t("图片上传中...")
+                    : `${todoImages.items.length}/${MAX_COMPOSER_IMAGES}`}
+                </span>
+              </div>
+            </div>
+          </Field>
           <div className="flex justify-end gap-2 pt-2">
             <Button
               variant="secondary"
               type="button"
-              onClick={() => setCreatingTodo(false)}
+              onClick={closeCreateTodoModal}
             >
               {t("取消")}
             </Button>
             <Button
               variant="primary"
               type="submit"
-              disabled={!todoTitle.trim() || createTodo.isPending}
+              disabled={
+                !todoTitle.trim() || createTodo.isPending || todoImages.uploading
+              }
             >
-              {t("创建待办")}
+              {todoImages.uploading ? t("上传中...") : t("创建待办")}
             </Button>
           </div>
         </form>

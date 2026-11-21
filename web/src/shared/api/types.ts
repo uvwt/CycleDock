@@ -44,6 +44,10 @@ export type Card = {
   unread?: boolean;
   /** 被安全守卫挂起、等待人工确认的工具调用数量；仅列表摘要返回。 */
   pending_tool_approval_count?: number;
+  /** 卡片自身附带的图片数量（例如新建待办时附带的参考图）。 */
+  attachment_count?: number;
+  /** 卡片自身附带的图片元数据（创建返回或单卡详情返回）。 */
+  attachments?: AttachmentMeta[];
   pinned_at?: string;
   notifications_muted?: boolean;
   preferred_model_route_id?: string | null;

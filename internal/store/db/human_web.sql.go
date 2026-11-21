@@ -488,7 +488,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -543,6 +544,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
   AND (c.todo_state IS NULL OR c.todo_state <> 'done')
@@ -583,6 +590,7 @@ type ListProjectActiveCardSummariesRow struct {
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
+	AttachmentCount          int64              `json:"attachment_count"`
 }
 
 // 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
@@ -623,6 +631,7 @@ func (q *Queries) ListProjectActiveCardSummaries(ctx context.Context, arg ListPr
 			&i.LastReadMessageSequence,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
+			&i.AttachmentCount,
 		); err != nil {
 			return nil, err
 		}
@@ -791,7 +800,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -846,6 +856,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id
@@ -885,6 +901,7 @@ type ListProjectCardSummariesRow struct {
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
+	AttachmentCount          int64              `json:"attachment_count"`
 }
 
 // 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
@@ -925,6 +942,7 @@ func (q *Queries) ListProjectCardSummaries(ctx context.Context, arg ListProjectC
 			&i.LastReadMessageSequence,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
+			&i.AttachmentCount,
 		); err != nil {
 			return nil, err
 		}
@@ -999,7 +1017,8 @@ SELECT
     COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0) AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count
+    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
+    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
 FROM cards c
 LEFT JOIN LATERAL (
     SELECT
@@ -1054,6 +1073,12 @@ LEFT JOIN LATERAL (
       AND ta.card_id = c.id
       AND ta.status = 'pending'
 ) pending_approval ON true
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS attachment_count
+    FROM card_attachments ca
+    WHERE ca.workspace_id = c.workspace_id
+      AND ca.card_id = c.id
+) card_att ON true
 WHERE c.workspace_id = $2
   AND c.project_id = $3
   AND c.todo_state = 'done'
@@ -1098,6 +1123,7 @@ type ListProjectDoneCardsPagedRow struct {
 	LastReadMessageSequence  int64              `json:"last_read_message_sequence"`
 	Unread                   bool               `json:"unread"`
 	PendingToolApprovalCount int64              `json:"pending_tool_approval_count"`
+	AttachmentCount          int64              `json:"attachment_count"`
 }
 
 // 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
@@ -1144,6 +1170,7 @@ func (q *Queries) ListProjectDoneCardsPaged(ctx context.Context, arg ListProject
 			&i.LastReadMessageSequence,
 			&i.Unread,
 			&i.PendingToolApprovalCount,
+			&i.AttachmentCount,
 		); err != nil {
 			return nil, err
 		}

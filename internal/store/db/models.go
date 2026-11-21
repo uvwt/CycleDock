@@ -103,6 +103,14 @@ type Card struct {
 	NotificationsMuted    bool               `json:"notifications_muted"`
 }
 
+type CardAttachment struct {
+	WorkspaceID  uuid.UUID          `json:"workspace_id"`
+	CardID       uuid.UUID          `json:"card_id"`
+	AttachmentID uuid.UUID          `json:"attachment_id"`
+	Position     int32              `json:"position"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type CardReadCursor struct {
 	WorkspaceID             uuid.UUID          `json:"workspace_id"`
 	SourceID                uuid.UUID          `json:"source_id"`

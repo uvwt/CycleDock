@@ -59,6 +59,53 @@ func TestBuildUserTurnContentPersistsReferenceOnlyNoInlineBytes(t *testing.T) {
 	}
 }
 
+func TestBuildUserTurnContentIncludesCardAttachmentsOnFirstTurnOnly(t *testing.T) {
+	cardAttID := uuid.New()
+	turnAttID := uuid.New()
+
+	// 首轮（TurnSequence == 1）：同时携带卡片附带图片与当前消息图片，且仅存轻量 FileData URI。
+	firstTurn := buildUserTurnContent(store.AgentCardContext{
+		TurnSequence: 1,
+		TurnContent:  "开始处理这个待办",
+		CardAttachments: []store.CommentAttachmentRef{
+			{ID: cardAttID, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+		},
+		TurnAttachments: []store.CommentAttachmentRef{
+			{ID: turnAttID, MimeType: "image/jpeg", Width: 800, Height: 600, SizeBytes: 8192},
+		},
+	})
+	rawFirst, err := json.Marshal(firstTurn)
+	if err != nil {
+		t.Fatalf("marshal first turn: %v", err)
+	}
+	firstStr := string(rawFirst)
+	if strings.Contains(firstStr, "inlineData") || strings.Contains(firstStr, "data:image/") {
+		t.Fatalf("first turn must never persist inline image bytes/base64, got %s", firstStr)
+	}
+	if !strings.Contains(firstStr, userAttachmentURI(cardAttID)) {
+		t.Fatalf("expected card attachment URI %q on first turn, got %s", userAttachmentURI(cardAttID), firstStr)
+	}
+	if !strings.Contains(firstStr, userAttachmentURI(turnAttID)) {
+		t.Fatalf("expected turn attachment URI %q on first turn, got %s", userAttachmentURI(turnAttID), firstStr)
+	}
+
+	// 后续轮次（TurnSequence == 2）：不再重复注入卡片初始附件，避免会话重复膨胀。
+	secondTurn := buildUserTurnContent(store.AgentCardContext{
+		TurnSequence: 2,
+		TurnContent:  "继续补充一下",
+		CardAttachments: []store.CommentAttachmentRef{
+			{ID: cardAttID, MimeType: "image/png", Width: 640, Height: 480, SizeBytes: 4096},
+		},
+	})
+	rawSecond, err := json.Marshal(secondTurn)
+	if err != nil {
+		t.Fatalf("marshal second turn: %v", err)
+	}
+	if strings.Contains(string(rawSecond), userAttachmentURI(cardAttID)) {
+		t.Fatalf("second turn should not duplicate card attachment URI, got %s", string(rawSecond))
+	}
+}
+
 func TestAdkRequestHydratesUserAttachmentAndDegradesWhenExpiredOrOld(t *testing.T) {
 	ctx := context.Background()
 	// 复用隔离临时 schema 并执行完整迁移，避免依赖外部预迁移的 public schema。

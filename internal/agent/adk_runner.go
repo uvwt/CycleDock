@@ -667,6 +667,9 @@ func buildADKInstructions(
 	if value := strings.TrimSpace(card.CardDescription); value != "" {
 		lines = append(lines, fmt.Sprintf("- Card 描述：%s", value))
 	}
+	if len(card.CardAttachments) > 0 {
+		lines = append(lines, fmt.Sprintf("- Card 附带图片：%d 张（已在首轮上下文中以图片附件提供）", len(card.CardAttachments)))
+	}
 	if card.DiscussionState != "" {
 		lines = append(lines, fmt.Sprintf("- Discussion 状态：%s", card.DiscussionState))
 	}
@@ -733,21 +736,41 @@ func turnMessage(card store.AgentCardContext) string {
 // buildUserTurnContent 组装持久化到 ADK Session 的用户消息。
 // 关键约束：严禁将原图二进制/base64 写入 genai.Part.InlineData（否则会被持久化到 PostgreSQL 的 agent_session_events），
 // 仅保存指向本地临时存储的轻量 FileData URI（cycledock-attachment://<id>），发往模型前由 adk_model.go 按需回填。
+// 当卡片首次进入执行（TurnSequence <= 1）且带有创建时附带的图片（CardAttachments）时，
+// 同样仅以轻量 FileData URI 一并注入首轮上下文，避免后续轮次重复注入。
 func buildUserTurnContent(card store.AgentCardContext) *genai.Content {
 	text := turnMessage(card)
-	parts := make([]*genai.Part, 0, 1+len(card.TurnAttachments))
+	includeCardAttachments := len(card.CardAttachments) > 0 && card.TurnSequence <= 1
+	capacity := 1 + len(card.TurnAttachments)
+	if includeCardAttachments {
+		capacity += len(card.CardAttachments)
+	}
+	parts := make([]*genai.Part, 0, capacity)
 	if text != "" {
 		parts = append(parts, genai.NewPartFromText(text))
 	}
-	for _, att := range card.TurnAttachments {
+	seenAttachmentIDs := make(map[uuid.UUID]struct{}, len(card.CardAttachments)+len(card.TurnAttachments))
+	appendAttachment := func(att store.CommentAttachmentRef) {
 		if att.ID == uuid.Nil {
-			continue
+			return
 		}
+		if _, dup := seenAttachmentIDs[att.ID]; dup {
+			return
+		}
+		seenAttachmentIDs[att.ID] = struct{}{}
 		mimeType := strings.TrimSpace(att.MimeType)
 		if mimeType == "" {
 			mimeType = "image/jpeg"
 		}
 		parts = append(parts, genai.NewPartFromURI(userAttachmentURI(att.ID), mimeType))
+	}
+	if includeCardAttachments {
+		for _, att := range card.CardAttachments {
+			appendAttachment(att)
+		}
+	}
+	for _, att := range card.TurnAttachments {
+		appendAttachment(att)
 	}
 	if len(parts) == 0 {
 		parts = append(parts, genai.NewPartFromText(card.TurnContent))

@@ -572,6 +572,13 @@ const en = {
   "大图预览": "Image preview",
   "添加图片（支持粘贴或拖拽）": "Add images (paste or drag & drop)",
   "添加图片": "Add images",
+  "附带图片（可选）": "Attachments (optional)",
+  "支持点击上传、拖拽或粘贴图片，最多 {{max}} 张。":
+    "Click, drag & drop, or paste up to {{max}} images.",
+  "图片上传中...": "Uploading images...",
+  "上传中...": "Uploading...",
+  "附带图片（{{count}}）": "Attached images ({{count}})",
+  "附带 {{count}} 张图片": "{{count}} attached images",
   "为节省磁盘空间已自动淘汰": "Automatically purged to save disk space",
   "点击查看大图": "Click to view full size",
   "消息图片": "Message image",
