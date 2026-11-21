@@ -33,7 +33,6 @@ import {
   CardStatusDot,
   getCardVisualStatus,
 } from "../../shared/ui/CardStatusDot";
-import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import { loadCardPage } from "../../app/route-preload";
 import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
 import type { Card, Project, TodoState } from "../../shared/api/types";
@@ -178,7 +177,6 @@ function TaskCard({
   });
   const visualStatus = getCardVisualStatus(card);
   const updatedTime = formatRelativeTime(card.updated_at);
-  const summary = stripMarkdownSummary(card.description);
 
   if (isOverlay) {
     return (
@@ -208,11 +206,6 @@ function TaskCard({
                 </span>
               )}
             </div>
-            {summary && (
-              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80">
-                {summary}
-              </p>
-            )}
           </div>
         </div>
       </div>
@@ -253,11 +246,6 @@ function TaskCard({
               </span>
             )}
           </div>
-          {summary && (
-            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/80">
-              {summary}
-            </p>
-          )}
         </div>
       </div>
     </button>

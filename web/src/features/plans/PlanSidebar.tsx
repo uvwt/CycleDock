@@ -17,7 +17,6 @@ import {
 } from "../../shared/ui/ContextSidebar";
 import { ConfirmDialog } from "../../shared/ui/components";
 import { EditCardDialog } from "../../shared/ui/EditCardDialog";
-import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import {
   CardStatusDot,
   getCardVisualStatus,
@@ -113,7 +112,6 @@ export function PlanSidebar({
       {plans.length ? (
         <div className="space-y-1">
           {plans.map((card) => {
-            const summary = stripMarkdownSummary(card.description);
             const showHealth =
               card.health === "healthy" ||
               card.health === "warning" ||
@@ -197,7 +195,6 @@ export function PlanSidebar({
                   )
                 }
                 title={card.title || t("未命名定时任务")}
-                description={summary || undefined}
                 meta={
                   showHealth ? (
                     <OngoingHealthBadge health={card.health} size="xs" />

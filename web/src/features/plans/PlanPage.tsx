@@ -7,7 +7,6 @@ import { keys } from "../../app/query";
 import { api } from "../../shared/api/client";
 import type { ProjectSchedule, OngoingState } from "../../shared/api/types";
 import { ErrorView } from "../../shared/ui/components";
-import { stripMarkdownSummary } from "../../shared/lib/markdown";
 import {
   CardStatusDot,
   getCardVisualStatus,
@@ -235,19 +234,11 @@ export default function PlanPage() {
                       )}
                     </span>
                   </span>
-                  {stripMarkdownSummary(card.description) && (
-                    <span
-                      title={stripMarkdownSummary(card.description)}
-                      className="mt-1 line-clamp-1 text-[13px] leading-relaxed text-muted-foreground"
-                    >
-                      {stripMarkdownSummary(card.description)}
-                    </span>
-                  )}
                   {cardSchedules.length ? (
                     cardSchedules.map((item) => (
                       <span
                         key={item.id}
-                        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint"
+                        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint"
                       >
                         <span>{scheduleText(item)}</span>
                         {!item.enabled ? (
@@ -265,7 +256,7 @@ export default function PlanPage() {
                       </span>
                     ))
                   ) : (
-                    <span className="mt-1.5 block text-xs text-faint">
+                    <span className="mt-1 block text-xs text-faint">
                       {t("未设置自动执行时间")}
                     </span>
                   )}
