@@ -701,3 +701,27 @@ export type WeixinLoginSession = {
   created_at: string;
   updated_at: string;
 };
+
+export type QRConnectSession = {
+  session_id: string;
+  platform: RemoteChannelPlatform;
+  channel_id?: string;
+  project_id?: string;
+  role?: RemoteChannelRole;
+  name?: string;
+  domain?: string;
+  base_url?: string;
+  qrcode_content: string;
+  status: "wait" | "scanned" | "confirmed" | "expired" | "error" | "cancelled";
+  interval_ms: number;
+  message?: string;
+  bot_id?: string;
+  app_id?: string;
+  client_id?: string;
+  open_id?: string;
+  weixin_user_id?: string;
+  committed?: boolean;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};

@@ -571,7 +571,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("scheduled_push must NEVER write into main chat session, found %d leaked events", mainEventsAfter)
 	}
 
-	// 8. 验证微信扫码登录 HTTP 端点流程（通过自定义 WeixinLoginStore 指向 mock 服务）
+	// 8. 验证微信扫码登录 HTTP 端点流程（向后兼容）
 	wxSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/ilink/bot/get_bot_qrcode") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"qrcode": "qr-1", "qrcode_img_content": "https://wx.test/qr-1"})
@@ -633,5 +633,108 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	decodeRecorder(t, pollQR, &qrPollResp)
 	if qrPollResp.Session.Status != "confirmed" || !qrPollResp.Channel.HasSecrets || qrPollResp.Channel.Config.WeixinUserID != "wx-u-9" {
 		t.Fatalf("expected weixin secrets encrypted & saved, got %+v", qrPollResp)
+	}
+
+	// 9. 验证通用五平台扫码端点：不传 channel_id 直接一步扫码建卡并自动启用（以微信为例）
+	uniStart := doJSON(t, handler, http.MethodPost, "/api/v1/remote-channels/qr/start", map[string]any{
+		"platform":   "weixin",
+		"project_id": project.ID,
+		"base_url":   wxSrv.URL,
+	}, cookie, nil)
+	if uniStart.Code != http.StatusCreated {
+		t.Fatalf("start unified qr: %d %s", uniStart.Code, uniStart.Body.String())
+	}
+	var uniStartResp struct {
+		Session channels.QRConnectSession `json:"session"`
+	}
+	decodeRecorder(t, uniStart, &uniStartResp)
+	if uniStartResp.Session.ChannelID != uuid.Nil || uniStartResp.Session.QRCodeContent != "https://wx.test/qr-1" {
+		t.Fatalf("unexpected unified qr start session: %+v", uniStartResp.Session)
+	}
+
+	// 连续两次 Poll confirmed，验证只自动创建一条通道（幂等不重复建卡）且敏感凭据不泄露
+	uniPoll1 := doJSON(t, handler, http.MethodGet, "/api/v1/remote-channels/qr/"+uniStartResp.Session.SessionID, nil, cookie, nil)
+	if uniPoll1.Code != http.StatusOK {
+		t.Fatalf("poll unified qr 1: %d %s", uniPoll1.Code, uniPoll1.Body.String())
+	}
+	if strings.Contains(uniPoll1.Body.String(), "wx-qr-secret-tok") {
+		t.Fatalf("unified qr response leaked bot_token: %s", uniPoll1.Body.String())
+	}
+	var uniPollResp1 struct {
+		Session channels.QRConnectSession `json:"session"`
+		Channel remoteChannelDTO          `json:"channel"`
+	}
+	decodeRecorder(t, uniPoll1, &uniPollResp1)
+	if uniPollResp1.Session.Status != "confirmed" || uniPollResp1.Channel.ID == uuid.Nil || !uniPollResp1.Channel.Enabled || !uniPollResp1.Channel.HasSecrets {
+		t.Fatalf("expected auto-created enabled channel, got %+v", uniPollResp1)
+	}
+
+	uniPoll2 := doJSON(t, handler, http.MethodGet, "/api/v1/remote-channels/qr/"+uniStartResp.Session.SessionID, nil, cookie, nil)
+	if uniPoll2.Code != http.StatusOK {
+		t.Fatalf("poll unified qr 2: %d %s", uniPoll2.Code, uniPoll2.Body.String())
+	}
+	var uniPollResp2 struct {
+		Session channels.QRConnectSession `json:"session"`
+		Channel remoteChannelDTO          `json:"channel"`
+	}
+	decodeRecorder(t, uniPoll2, &uniPollResp2)
+	if uniPollResp2.Channel.ID != uniPollResp1.Channel.ID {
+		t.Fatalf("expected idempotent channel id %s on repeat poll, got %s", uniPollResp1.Channel.ID, uniPollResp2.Channel.ID)
+	}
+
+	// 10. 验证入站首条消息自动记忆 target_chat_id（即使通道创建时未填写 target_chat_id）
+	autoChRec := doJSON(t, handler, http.MethodPost, "/api/v1/channels", map[string]any{
+		"name":        "自动记忆测试",
+		"platform":    "telegram",
+		"role":        "main_chat",
+		"transport":   "long_poll",
+		"enabled":     true,
+		"project_id":  project.ID,
+		"push_filter": "all",
+		"secrets":     map[string]any{"bot_token": "123:auto"},
+	}, cookie, nil)
+	if autoChRec.Code != http.StatusCreated {
+		t.Fatalf("create auto memory channel: %d %s", autoChRec.Code, autoChRec.Body.String())
+	}
+	var autoChResp struct {
+		Channel remoteChannelDTO `json:"channel"`
+	}
+	decodeRecorder(t, autoChRec, &autoChResp)
+	autoChID := autoChResp.Channel.ID
+
+	autoStub := newStubChannelAdapter(domain.ChannelPlatformTelegram)
+	autoMgr := channels.NewManager(dataStore, nil, "https://cycledock.example")
+	autoMgr.SetAdapterFactory(func(ch store.RemoteChannel, _ store.RemoteChannelSecrets) (channels.Adapter, error) {
+		if ch.ID == autoChID {
+			return autoStub, nil
+		}
+		return newStubChannelAdapter(ch.Platform), nil
+	})
+	autoCtx, autoCancel := context.WithCancel(ctx)
+	defer autoCancel()
+	if err := autoMgr.Start(autoCtx); err != nil {
+		t.Fatalf("start auto manager: %v", err)
+	}
+	defer autoMgr.Stop()
+
+	autoStub.inbound <- channels.InboundMessage{
+		ExternalMessageID: "auto-mem-1",
+		SenderID:          "tg-u-9",
+		ChatID:            "-100777888",
+		ChatType:          "group",
+		ThreadID:          "42",
+		Content:           "hello auto target",
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		gotCh, err := dataStore.GetRemoteChannel(ctx, workspaceID, autoChID)
+		if err == nil && gotCh.Config.TargetChatID == "-100777888" && gotCh.Config.MessageThreadID == 42 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	gotCh, err := dataStore.GetRemoteChannel(ctx, workspaceID, autoChID)
+	if err != nil || gotCh.Config.TargetChatID != "-100777888" || gotCh.Config.TargetChatType != "group" || gotCh.Config.MessageThreadID != 42 {
+		t.Fatalf("expected target_chat_id auto persisted, got %+v err=%v", gotCh.Config, err)
 	}
 }

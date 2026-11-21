@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   BellRing,
   Bot,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   LoaderCircle,
   MessageCircle,
@@ -16,12 +19,12 @@ import {
   ShieldCheck,
   Trash2,
   Webhook,
-  AlertTriangle,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { api } from "../../shared/api/client";
 import type {
+  QRConnectSession,
   RemoteChannel,
   RemoteChannelGroupPolicy,
   RemoteChannelInput,
@@ -30,7 +33,6 @@ import type {
   RemoteChannelRole,
   RemoteChannelRuntimeStatus,
   RemoteChannelTransport,
-  WeixinLoginSession,
 } from "../../shared/api/types";
 import { keys, queryClient } from "../../app/query";
 import {
@@ -57,7 +59,8 @@ type PlatformMeta = {
   accentBg: string;
   defaultTransport: RemoteChannelTransport;
   supportsWebhook: boolean;
-  supportsQRLogin?: boolean;
+  supportsQRLogin: boolean;
+  qrAppLabel: string;
   protocolHint: string;
 };
 
@@ -66,68 +69,79 @@ const PLATFORMS: PlatformMeta[] = [
     id: "weixin",
     name: "微信",
     shortName: "WX",
-    tagline: "扫码绑定个人微信，免公网回调长轮询收发",
+    tagline: "手机微信扫一扫直接连接，免公网回调长轮询收发",
     badgeColor: "text-emerald-700 dark:text-emerald-300",
     accentBg: "bg-emerald-500/12 border-emerald-500/25",
     defaultTransport: "long_poll",
     supportsWebhook: false,
     supportsQRLogin: true,
-    protocolHint: "iLink HTTP 长轮询 · 扫码获取加密 Bot Token",
+    qrAppLabel: "微信",
+    protocolHint: "支持扫码一键接入 · iLink 长轮询",
   },
   {
     id: "wecom",
     name: "企业微信",
     shortName: "企微",
-    tagline: "AI Bot 官方 WebSocket 长连接 / 群机器人 Webhook",
+    tagline: "扫码一键创建智能机器人，或改用手动填写 / 群 Webhook",
     badgeColor: "text-sky-700 dark:text-sky-300",
     accentBg: "bg-sky-500/12 border-sky-500/25",
     defaultTransport: "websocket",
     supportsWebhook: true,
-    protocolHint: "openws.work.weixin.qq.com 免公网回调",
+    supportsQRLogin: true,
+    qrAppLabel: "企业微信",
+    protocolHint: "支持扫码一键接入 · AI Bot WebSocket",
   },
   {
     id: "feishu",
     name: "飞书 / Lark",
     shortName: "飞书",
-    tagline: "官方 WebSocket 长连接、话题隔离 / 群 Webhook",
+    tagline: "扫码一键创建机器人，支持飞书中国版与 Lark 国际版",
     badgeColor: "text-blue-700 dark:text-blue-300",
     accentBg: "bg-blue-500/12 border-blue-500/25",
     defaultTransport: "websocket",
     supportsWebhook: true,
-    protocolHint: "支持 Feishu / Lark 双域名与群 @ 策略",
+    supportsQRLogin: true,
+    qrAppLabel: "飞书 / Lark",
+    protocolHint: "支持扫码一键接入 · WebSocket 长连接",
   },
   {
     id: "dingtalk",
     name: "钉钉",
     shortName: "钉钉",
-    tagline: "官方 Stream 长连接 / 加签群 Webhook 推送",
+    tagline: "钉钉扫码自动注册 Stream 长连接应用，免手填凭据",
     badgeColor: "text-indigo-700 dark:text-indigo-300",
     accentBg: "bg-indigo-500/12 border-indigo-500/25",
     defaultTransport: "stream",
     supportsWebhook: true,
-    protocolHint: "DingTalk Stream 免公网回调 · 支持加签 Secret",
+    supportsQRLogin: true,
+    qrAppLabel: "钉钉",
+    protocolHint: "支持扫码一键接入 · Stream 长连接",
   },
   {
     id: "qq",
     name: "QQ 机器人",
     shortName: "QQ",
-    tagline: "QQ 开放平台 Bot API + WebSocket Gateway",
+    tagline: "手机 QQ 扫码直接绑定机器人，支持单聊与群聊双向收发",
     badgeColor: "text-violet-700 dark:text-violet-300",
     accentBg: "bg-violet-500/12 border-violet-500/25",
     defaultTransport: "websocket",
     supportsWebhook: false,
-    protocolHint: "C2C 单聊与群聊双向收发",
+    supportsQRLogin: true,
+    qrAppLabel: "手机 QQ",
+    protocolHint: "支持扫码一键接入 · Bot WebSocket",
   },
   {
     id: "telegram",
     name: "Telegram",
     shortName: "TG",
-    tagline: "官方 Bot API 长轮询，支持群 Topics 分流与代理",
+    tagline: "只需填写 1 个 Bot Token，发一条消息即自动绑定会话",
     badgeColor: "text-cyan-700 dark:text-cyan-300",
     accentBg: "bg-cyan-500/12 border-cyan-500/25",
     defaultTransport: "long_poll",
     supportsWebhook: false,
-    protocolHint: "可把 General 绑主聊天、另一 Topic 绑定时推送",
+    supportsQRLogin: false,
+    qrAppLabel: "Telegram",
+    protocolHint: "极简单输入框接入 · 支持 Topics 与代理",
   },
 ];
 
@@ -201,15 +215,31 @@ type FormState = {
   secret_hints: Record<string, string>;
 };
 
+type QRModalTarget = {
+  platform: RemoteChannelPlatform;
+  role: RemoteChannelRole;
+  project_id: string;
+  channel?: RemoteChannel;
+};
+
 function defaultTransportFor(
   platform: RemoteChannelPlatform,
   role: RemoteChannelRole,
+  preferWebhook = false,
 ): RemoteChannelTransport {
   const meta = PLATFORM_MAP[platform];
-  if (role === "scheduled_push" && meta.supportsWebhook) {
+  if ((preferWebhook || role === "scheduled_push") && meta.supportsWebhook) {
     return "webhook";
   }
   return meta.defaultTransport;
+}
+
+function defaultChannelName(
+  platform: RemoteChannelPlatform,
+  role: RemoteChannelRole,
+): string {
+  const meta = PLATFORM_MAP[platform];
+  return role === "scheduled_push" ? `${meta.name} 定时推送` : meta.name;
 }
 
 function buildInitialForm(
@@ -217,6 +247,7 @@ function buildInitialForm(
   role: RemoteChannelRole,
   defaultProjectID: string,
   existing?: RemoteChannel,
+  preferWebhook = false,
 ): FormState {
   if (existing) {
     return {
@@ -233,17 +264,18 @@ function buildInitialForm(
       group_policy: existing.group_policy || "mention_only",
       allow_from_text: (existing.allow_from ?? []).join("\n"),
       base_url: existing.config?.base_url ?? "",
-      domain: existing.config?.domain ?? (existing.platform === "feishu" ? "feishu" : ""),
+      domain:
+        existing.config?.domain ??
+        (existing.platform === "feishu" ? "feishu" : ""),
       ws_url: existing.config?.ws_url ?? "",
       bot_id: existing.config?.bot_id ?? "",
       app_id: existing.config?.app_id ?? "",
       client_id: existing.config?.client_id ?? "",
       target_chat_id: existing.config?.target_chat_id ?? "",
       target_chat_type: existing.config?.target_chat_type ?? "",
-      message_thread_id:
-        existing.config?.message_thread_id && existing.config.message_thread_id > 0
-          ? String(existing.config.message_thread_id)
-          : "",
+      message_thread_id: existing.config?.message_thread_id
+        ? String(existing.config.message_thread_id)
+        : "",
       proxy_url: existing.config?.proxy_url ?? "",
       weixin_user_id: existing.config?.weixin_user_id ?? "",
       bot_token: "",
@@ -255,15 +287,11 @@ function buildInitialForm(
       secret_hints: existing.secret_hints ?? {},
     };
   }
-  const meta = PLATFORM_MAP[platform];
   return {
-    name:
-      role === "scheduled_push"
-        ? `${meta.name} 定时任务推送`
-        : `${meta.name} 主聊天同步`,
+    name: defaultChannelName(platform, role),
     platform,
     role,
-    transport: defaultTransportFor(platform, role),
+    transport: defaultTransportFor(platform, role, preferWebhook),
     enabled: true,
     project_id: defaultProjectID,
     target_card_id: "",
@@ -303,12 +331,15 @@ export function RemoteChannelsSettings() {
     queryFn: api.projects,
   });
 
-  const [roleFilter, setRoleFilter] = useState<"all" | RemoteChannelRole>("all");
+  const [roleFilter, setRoleFilter] = useState<"all" | RemoteChannelRole>(
+    "all",
+  );
   const [editorOpen, setEditorOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RemoteChannel | null>(null);
   const [testingID, setTestingID] = useState<string | null>(null);
-  const [qrChannel, setQrChannel] = useState<RemoteChannel | null>(null);
+  const [qrTarget, setQrTarget] = useState<QRModalTarget | null>(null);
 
   const selectedProjectID = form?.project_id || "";
   const cardsQuery = useQuery({
@@ -351,9 +382,11 @@ export function RemoteChannelsSettings() {
       const threadNum = state.message_thread_id.trim()
         ? Number.parseInt(state.message_thread_id.trim(), 10)
         : 0;
+      const finalName =
+        state.name.trim() || defaultChannelName(state.platform, state.role);
 
       const payload: RemoteChannelInput = {
-        name: state.name.trim(),
+        name: finalName,
         platform: state.platform,
         role: state.role,
         transport: state.transport,
@@ -402,10 +435,15 @@ export function RemoteChannelsSettings() {
       void queryClient.invalidateQueries({ queryKey: keys.channels });
       setEditorOpen(false);
       setForm(null);
-      toast.success(form?.id ? "通道配置已更新" : "远程通道已创建");
-      // 新建微信通道且未配置 token 时自动引导扫码登录
-      if (saved.platform === "weixin" && !saved.has_secrets) {
-        setQrChannel(saved);
+      setAdvancedOpen(false);
+      toast.success(form?.id ? "通道配置已更新" : "远程通道已创建并启动");
+      if (PLATFORM_MAP[saved.platform].supportsQRLogin && !saved.has_secrets) {
+        setQrTarget({
+          platform: saved.platform,
+          role: saved.role,
+          project_id: saved.project_id,
+          channel: saved,
+        });
       }
     },
     onError: (err) => {
@@ -453,17 +491,41 @@ export function RemoteChannelsSettings() {
     }
   };
 
-  const openNew = (
+  // 点击平台按钮：5 个支持扫码的平台默认直接弹出「扫码一键连接」，Telegram 直接打开单输入框极简表单。
+  const openConnect = (
     platform: RemoteChannelPlatform,
     role: RemoteChannelRole = "main_chat",
   ) => {
     const defaultProjectID = projectsQuery.data?.[0]?.id ?? "";
+    const meta = PLATFORM_MAP[platform];
+    if (meta.supportsQRLogin) {
+      setQrTarget({
+        platform,
+        role,
+        project_id: defaultProjectID,
+      });
+      return;
+    }
     setForm(buildInitialForm(platform, role, defaultProjectID));
+    setAdvancedOpen(false);
+    setEditorOpen(true);
+  };
+
+  const openManualEditor = (
+    platform: RemoteChannelPlatform,
+    role: RemoteChannelRole,
+    projectID: string,
+    preferWebhook = false,
+  ) => {
+    setQrTarget(null);
+    setForm(buildInitialForm(platform, role, projectID, undefined, preferWebhook));
+    setAdvancedOpen(false);
     setEditorOpen(true);
   };
 
   const openEdit = (ch: RemoteChannel) => {
     setForm(buildInitialForm(ch.platform, ch.role, ch.project_id, ch));
+    setAdvancedOpen(false);
     setEditorOpen(true);
   };
 
@@ -486,12 +548,14 @@ export function RemoteChannelsSettings() {
     );
   }
 
+  const projects = projectsQuery.data ?? [];
+
   return (
     <div className="min-w-0 space-y-5">
       {/* 顶部工作台总览与平台网格 */}
       <Section
         title="远程通道工作台"
-        description="统一接入微信、企业微信、飞书、钉钉、QQ 与 Telegram（全部免公网回调）。支持「项目主聊天双向同步」与「定时任务独立推送」两种角色。"
+        description="微信、企业微信、飞书、钉钉、QQ 支持手机扫码一键接入，免去手动填写 AppID / Secret / Chat ID；Telegram 仅需填写 Bot Token。"
       >
         <div className="space-y-4">
           {/* 快捷角色提示条 */}
@@ -506,7 +570,7 @@ export function RemoteChannelsSettings() {
                   <Badge variant="secondary">{mainChatCount}</Badge>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  外部 IM 消息经白名单校验后直达项目主聊天，仅回传最终回复、待验收、异常与安全审批，绝不刷屏中间进度。
+                  外部 IM 消息直达项目主聊天，仅回传最终回复、待验收、异常与安全审批，绝不刷屏中间进度。
                 </p>
               </div>
             </div>
@@ -521,34 +585,8 @@ export function RemoteChannelsSettings() {
                   <Badge variant="secondary">{scheduledCount}</Badge>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  单独接收所选项目或 Ongoing 卡片的巡检与定时汇报，绝不写入主聊天 Session，支持群 Webhook 快速接入。
+                  Ongoing 巡检汇报完成后直接推送到指定群或私聊，完全隔离主聊天上下文。
                 </p>
-                <div className="pt-1 flex flex-wrap gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => openNew("wecom", "scheduled_push")}
-                  >
-                    <Webhook className="size-3.5" />
-                    企微定时群机器人
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => openNew("feishu", "scheduled_push")}
-                  >
-                    <Webhook className="size-3.5" />
-                    飞书定时群机器人
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => openNew("dingtalk", "scheduled_push")}
-                  >
-                    <Webhook className="size-3.5" />
-                    钉钉定时群机器人
-                  </Button>
-                </div>
               </div>
             </div>
           </div>
@@ -600,15 +638,19 @@ export function RemoteChannelsSettings() {
                     <Button
                       variant="primary"
                       size="sm"
-                      onClick={() => openNew(p.id, "main_chat")}
+                      onClick={() => openConnect(p.id, "main_chat")}
                     >
-                      <Plus className="size-3.5" />
-                      绑定主聊天
+                      {p.supportsQRLogin ? (
+                        <QrCode className="size-3.5" />
+                      ) : (
+                        <Plus className="size-3.5" />
+                      )}
+                      {p.supportsQRLogin ? "扫码接入" : "配置接入"}
                     </Button>
                     <Button
                       variant="secondary"
                       size="sm"
-                      onClick={() => openNew(p.id, "scheduled_push")}
+                      onClick={() => openConnect(p.id, "scheduled_push")}
                     >
                       <Clock className="size-3.5" />
                       定时推送
@@ -624,66 +666,63 @@ export function RemoteChannelsSettings() {
       {/* 已配置的通道实例列表 */}
       <Section
         title="已配置的通道实例"
-        description="支持多实例并行运行，可按角色筛选、一键测试连接、实时查看心跳与报错，所有凭据均在服务端加密存储并脱敏展示。"
+        description="支持多实例并行运行，可随时重新扫码换绑、测试发送或按需调整高级策略。"
       >
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1 rounded-lg border border-line bg-muted/40 p-1">
+            <div className="flex items-center gap-1.5 rounded-lg border border-line bg-muted/40 p-1">
               {(
                 [
                   { id: "all", label: `全部 (${channels.length})` },
-                  { id: "main_chat", label: `主聊天双向 (${mainChatCount})` },
+                  { id: "main_chat", label: `主聊天 (${mainChatCount})` },
                   {
                     id: "scheduled_push",
-                    label: `定时独立推送 (${scheduledCount})`,
+                    label: `定时推送 (${scheduledCount})`,
                   },
                 ] as const
-              ).map((item) => (
+              ).map((tab) => (
                 <button
-                  key={item.id}
+                  key={tab.id}
                   type="button"
-                  onClick={() => setRoleFilter(item.id)}
+                  onClick={() => setRoleFilter(tab.id)}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    roleFilter === item.id
-                      ? "bg-surface text-primary shadow-xs ring-1 ring-line"
+                    roleFilter === tab.id
+                      ? "bg-surface text-heading shadow-xs"
                       : "text-muted-foreground hover:text-heading"
                   }`}
                 >
-                  {item.label}
+                  {tab.label}
                 </button>
               ))}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void channelsQuery.refetch()}
-            >
-              <RefreshCw className="size-3.5" />
-              刷新状态
-            </Button>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <ShieldCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+              AES-256-GCM 凭据加密 · 永不返回明文密钥
+            </div>
           </div>
 
           {filteredChannels.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-line bg-muted/20 px-4 py-8 text-center">
-              <MessageCircle className="mx-auto mb-2 size-7 text-muted-foreground/60" />
+            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-muted/20 px-4 py-10 text-center">
+              <MessageCircle className="size-8 text-muted-foreground/60" />
               <p className="text-sm font-medium text-heading">
-                还没有配置对应的远程通道
+                尚未配置远程通道
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                点击上方任意平台卡片的「绑定主聊天」或「定时推送」即可快速创建。
+              <p className="max-w-md text-xs text-muted-foreground">
+                在上方平台卡片点击「扫码接入」，手机扫一扫即可完成绑定并立即上线。
               </p>
             </div>
           ) : (
             <div className="space-y-3">
               {filteredChannels.map((ch) => {
                 const meta = PLATFORM_MAP[ch.platform];
-                const status = STATUS_META[ch.runtime_status] ?? STATUS_META.disabled;
+                const status =
+                  STATUS_META[ch.runtime_status] ?? STATUS_META.disabled;
                 const project = projectsByID[ch.project_id];
                 const secretEntries = Object.entries(ch.secret_hints ?? {});
                 return (
                   <div
                     key={ch.id}
-                    className="min-w-0 rounded-xl border border-line bg-surface p-4 space-y-3"
+                    className="min-w-0 space-y-3 rounded-xl border border-line bg-surface p-4"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="flex min-w-0 items-start gap-3">
@@ -745,18 +784,19 @@ export function RemoteChannelsSettings() {
                                 </span>
                               </>
                             )}
-                            {ch.config?.message_thread_id ? (
-                              <span>Topic #{ch.config.message_thread_id}</span>
-                            ) : null}
+                            {ch.config?.target_chat_id && (
+                              <span className="font-mono text-[11px]">
+                                已绑定会话：{ch.config.target_chat_id}
+                              </span>
+                            )}
                           </div>
 
                           {secretEntries.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                              <ShieldCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                            <div className="flex flex-wrap items-center gap-2 pt-0.5">
                               {secretEntries.map(([k, v]) => (
                                 <span
                                   key={k}
-                                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                                  className="inline-flex items-center gap-1 rounded-md border border-line bg-muted/40 px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                                 >
                                   {k}: {v}
                                 </span>
@@ -775,11 +815,18 @@ export function RemoteChannelsSettings() {
                             toggleMutation.mutate({ id: ch.id, enabled: checked })
                           }
                         />
-                        {ch.platform === "weixin" && (
+                        {meta.supportsQRLogin && ch.transport !== "webhook" && (
                           <Button
                             size="sm"
                             variant="secondary"
-                            onClick={() => setQrChannel(ch)}
+                            onClick={() =>
+                              setQrTarget({
+                                platform: ch.platform,
+                                role: ch.role,
+                                project_id: ch.project_id,
+                                channel: ch,
+                              })
+                            }
                           >
                             <QrCode className="size-3.5" />
                             {ch.has_secrets ? "重新扫码" : "扫码登录"}
@@ -804,7 +851,7 @@ export function RemoteChannelsSettings() {
                           onClick={() => openEdit(ch)}
                         >
                           <Pencil className="size-3.5" />
-                          配置
+                          设置
                         </Button>
                         <Button
                           size="sm"
@@ -830,31 +877,56 @@ export function RemoteChannelsSettings() {
         </div>
       </Section>
 
-      {/* 通道新建/编辑弹窗 */}
+      {/* 五平台统一扫码一键接入 / 换绑弹窗 */}
+      {qrTarget && (
+        <ChannelQRConnectModal
+          key={`${qrTarget.platform}-${qrTarget.channel?.id ?? "new"}`}
+          target={qrTarget}
+          projects={projects}
+          onClose={() => setQrTarget(null)}
+          onBound={() => {
+            void queryClient.invalidateQueries({ queryKey: keys.channels });
+            setQrTarget(null);
+          }}
+          onSwitchManual={(projectID, preferWebhook) =>
+            openManualEditor(
+              qrTarget.platform,
+              qrTarget.role,
+              projectID,
+              preferWebhook,
+            )
+          }
+        />
+      )}
+
+      {/* 极简表单弹窗（Telegram 单输入框 / 手动 ID+Secret / Webhook / 编辑高级设置） */}
       <Modal
         open={editorOpen && form !== null}
         onOpenChange={(open) => {
           setEditorOpen(open);
-          if (!open) setForm(null);
+          if (!open) {
+            setForm(null);
+            setAdvancedOpen(false);
+          }
         }}
         title={
           form?.id
-            ? `编辑通道 · ${PLATFORM_MAP[form.platform].name}`
-            : form
-              ? `新建远程通道 · ${PLATFORM_MAP[form.platform].name}`
-              : "配置远程通道"
+            ? `编辑${PLATFORM_MAP[form.platform].name}`
+            : `接入${form ? PLATFORM_MAP[form.platform].name : "远程通道"}`
         }
-        description="所有敏感 Token / Secret / Webhook URL 均通过服务端 AES-256-GCM 加密存储，编辑时留空将保留已保存的凭据。"
+        description={
+          form?.transport === "webhook"
+            ? "填写群机器人 Webhook 地址即可接收定时任务结果推送。"
+            : form?.platform === "telegram"
+              ? "只需填写 Bot Token；保存后给机器人发送任意一条消息，系统会自动记住对话 Chat ID。"
+              : "填写应用凭据即可立即连接；不常用参数已收进下方「高级设置」。"
+        }
       >
         {form && (
           <form
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!form.name.trim()) {
-                toast.error("请填写通道名称");
-                return;
-              }
               if (!form.project_id) {
                 toast.error("请选择绑定项目");
                 return;
@@ -862,159 +934,51 @@ export function RemoteChannelsSettings() {
               saveMutation.mutate(form);
             }}
           >
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="通道名称">
-                <TextInput
-                  value={form.name}
-                  onChange={(e) =>
-                    setForm({ ...form, name: e.target.value })
-                  }
-                  placeholder="例如：产品研发飞书主聊天"
-                />
-              </Field>
-              <Field label="接入平台">
-                <Select
-                  disabled={Boolean(form.id)}
-                  value={form.platform}
-                  onChange={(e) => {
-                    const nextPlatform = e.target.value as RemoteChannelPlatform;
-                    setForm({
-                      ...form,
-                      platform: nextPlatform,
-                      transport: defaultTransportFor(nextPlatform, form.role),
-                      domain: nextPlatform === "feishu" ? "feishu" : "",
-                    });
-                  }}
-                >
-                  {PLATFORMS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="通道角色">
-                <Select
-                  value={form.role}
-                  onChange={(e) => {
-                    const nextRole = e.target.value as RemoteChannelRole;
-                    setForm({
-                      ...form,
-                      role: nextRole,
-                      transport: defaultTransportFor(form.platform, nextRole),
-                    });
-                  }}
-                >
-                  <option value="main_chat">项目主聊天双向同步</option>
-                  <option value="scheduled_push">定时任务独立推送</option>
-                </Select>
-              </Field>
-
-              <Field label="传输模式">
-                <Select
-                  value={form.transport}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      transport: e.target.value as RemoteChannelTransport,
-                    })
-                  }
-                >
-                  {availableTransports(form.platform, form.role).map((tr) => (
-                    <option key={tr} value={tr}>
-                      {transportLabel(tr)}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="绑定项目">
-                <Select
-                  value={form.project_id}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      project_id: e.target.value,
-                      target_card_id: "",
-                    })
-                  }
-                >
-                  {(projectsQuery.data ?? []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-
-              {form.role === "scheduled_push" ? (
-                <Field label="定时任务推送过滤">
+            {/* 顶部保留项目选择；支持扫码的平台在新建手动模式提供一键切回扫码 */}
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div className="min-w-[200px] flex-1">
+                <Field label="绑定项目">
                   <Select
-                    value={form.push_filter}
+                    value={form.project_id}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        push_filter: e.target.value as RemoteChannelPushFilter,
+                        project_id: e.target.value,
+                        target_card_id: "",
                       })
                     }
                   >
-                    <option value="all">全部巡检与汇报结果</option>
-                    <option value="warnings_only">
-                      仅异常告警（warning / critical / 失败）
-                    </option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
                   </Select>
                 </Field>
-              ) : (
-                <Field label="群聊触发策略">
-                  <Select
-                    value={form.group_policy}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        group_policy: e.target.value as RemoteChannelGroupPolicy,
-                      })
-                    }
-                  >
-                    <option value="mention_only">仅 @ 机器人触发（默认）</option>
-                    <option value="allowlist">仅白名单群/成员放行</option>
-                    <option value="all">放行所有群消息</option>
-                  </Select>
-                </Field>
+              </div>
+              {!form.id && PLATFORM_MAP[form.platform].supportsQRLogin && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setEditorOpen(false);
+                    setQrTarget({
+                      platform: form.platform,
+                      role: form.role,
+                      project_id: form.project_id,
+                    });
+                    setForm(null);
+                  }}
+                >
+                  <QrCode className="size-3.5" />
+                  改用扫码连接
+                </Button>
               )}
             </div>
 
-            {form.role === "scheduled_push" && (
-              <Field
-                label="推送目标 Ongoing 卡片（可选）"
-                hint="留空则推送该项目下全部 Ongoing 定时任务的结果；指定后仅推送该卡片，绝不写入主聊天 Session。"
-              >
-                <Select
-                  value={form.target_card_id}
-                  onChange={(e) =>
-                    setForm({ ...form, target_card_id: e.target.value })
-                  }
-                >
-                  <option value="">该项目全部 Ongoing 卡片</option>
-                  {ongoingCards.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.title}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
-
-            {/* 平台专属配置区 */}
+            {/* 核心首屏：仅保留 1~2 个必填凭据框 */}
             <div className="space-y-3 rounded-xl border border-line bg-muted/25 p-3.5">
-              <p className="text-xs font-semibold text-heading">
-                {PLATFORM_MAP[form.platform].name} 凭据与接入参数
-              </p>
-
               {form.transport === "webhook" ? (
                 <>
                   <Field
@@ -1034,13 +998,14 @@ export function RemoteChannelsSettings() {
                       placeholder="https://..."
                     />
                   </Field>
-                  {(form.platform === "feishu" || form.platform === "dingtalk") && (
+                  {(form.platform === "dingtalk" ||
+                    form.platform === "feishu") && (
                     <Field
-                      label="加签密钥 Secret（可选）"
+                      label="加签密钥（可选）"
                       hint={
                         form.secret_hints.webhook_secret
                           ? `已保存：${form.secret_hints.webhook_secret}`
-                          : "若群机器人开启了签名校验请填写"
+                          : "如机器人开启了安全加签校验再填写"
                       }
                     >
                       <TextInput
@@ -1056,44 +1021,42 @@ export function RemoteChannelsSettings() {
                 </>
               ) : (
                 <>
-                  {form.platform === "weixin" && (
-                    <div className="space-y-2 text-xs text-muted-foreground">
-                      <p>
-                        保存后点击「扫码登录」，使用手机微信扫描二维码即可自动获取并加密保存 Bot Token，无需本地微信客户端或公网回调。
-                      </p>
-                      <Field label="iLink 服务地址（默认无需修改）">
-                        <TextInput
-                          value={form.base_url}
-                          onChange={(e) =>
-                            setForm({ ...form, base_url: e.target.value })
-                          }
-                          placeholder="https://ilinkai.weixin.qq.com"
-                        />
-                      </Field>
-                      {form.weixin_user_id && (
-                        <p className="font-mono text-[11px]">
-                          已绑定微信用户：{form.weixin_user_id}
-                        </p>
-                      )}
-                    </div>
+                  {form.platform === "telegram" && (
+                    <Field
+                      label="Bot Token"
+                      hint={
+                        form.secret_hints.bot_token
+                          ? `已保存：${form.secret_hints.bot_token}（留空保持不变）`
+                          : "从 @BotFather 获取；保存后给机器人发一句消息即自动绑定会话"
+                      }
+                    >
+                      <TextInput
+                        type="password"
+                        value={form.bot_token}
+                        onChange={(e) =>
+                          setForm({ ...form, bot_token: e.target.value })
+                        }
+                        placeholder="123456:ABC-DEF..."
+                      />
+                    </Field>
                   )}
 
                   {form.platform === "wecom" && (
                     <>
-                      <Field label="企微 AI Bot ID">
+                      <Field label="Bot ID">
                         <TextInput
                           value={form.bot_id}
                           onChange={(e) =>
                             setForm({ ...form, bot_id: e.target.value })
                           }
-                          placeholder="在企业微信智能机器人后台获取"
+                          placeholder="企业微信智能机器人 Bot ID"
                         />
                       </Field>
                       <Field
-                        label="Bot Secret"
+                        label="Secret"
                         hint={
                           form.secret_hints.secret
-                            ? `已保存：${form.secret_hints.secret}`
+                            ? `已保存：${form.secret_hints.secret}（留空保持不变）`
                             : undefined
                         }
                       >
@@ -1103,19 +1066,7 @@ export function RemoteChannelsSettings() {
                           onChange={(e) =>
                             setForm({ ...form, secret: e.target.value })
                           }
-                          placeholder="输入企业微信 AI Bot Secret"
-                        />
-                      </Field>
-                      <Field
-                        label="默认推送会话 ID（可选）"
-                        hint="收到首条私聊/群聊消息后会自动记忆，也可预先填写 userid 或 chatid"
-                      >
-                        <TextInput
-                          value={form.target_chat_id}
-                          onChange={(e) =>
-                            setForm({ ...form, target_chat_id: e.target.value })
-                          }
-                          placeholder="userid / chatid"
+                          placeholder="输入 Bot Secret"
                         />
                       </Field>
                     </>
@@ -1124,55 +1075,43 @@ export function RemoteChannelsSettings() {
                   {form.platform === "feishu" && (
                     <>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label="平台域名">
-                          <Select
-                            value={form.domain || "feishu"}
-                            onChange={(e) =>
-                              setForm({ ...form, domain: e.target.value })
-                            }
-                          >
-                            <option value="feishu">飞书中国版（feishu.cn）</option>
-                            <option value="lark">Lark 国际版（larksuite.com）</option>
-                          </Select>
-                        </Field>
                         <Field label="App ID">
                           <TextInput
                             value={form.app_id}
                             onChange={(e) =>
                               setForm({ ...form, app_id: e.target.value })
                             }
-                            placeholder="cli_xxxxxxxx"
+                            placeholder="cli_..."
+                          />
+                        </Field>
+                        <Field
+                          label="App Secret"
+                          hint={
+                            form.secret_hints.app_secret
+                              ? `已保存：${form.secret_hints.app_secret}`
+                              : undefined
+                          }
+                        >
+                          <TextInput
+                            type="password"
+                            value={form.app_secret}
+                            onChange={(e) =>
+                              setForm({ ...form, app_secret: e.target.value })
+                            }
+                            placeholder="App Secret"
                           />
                         </Field>
                       </div>
-                      <Field
-                        label="App Secret"
-                        hint={
-                          form.secret_hints.app_secret
-                            ? `已保存：${form.secret_hints.app_secret}`
-                            : undefined
-                        }
-                      >
-                        <TextInput
-                          type="password"
-                          value={form.app_secret}
+                      <Field label="平台版本">
+                        <Select
+                          value={form.domain || "feishu"}
                           onChange={(e) =>
-                            setForm({ ...form, app_secret: e.target.value })
+                            setForm({ ...form, domain: e.target.value })
                           }
-                          placeholder="飞书应用 App Secret"
-                        />
-                      </Field>
-                      <Field
-                        label="默认接收会话 Chat ID（可选）"
-                        hint="用于主动推送/测试发送，例如 oc_xxxx"
-                      >
-                        <TextInput
-                          value={form.target_chat_id}
-                          onChange={(e) =>
-                            setForm({ ...form, target_chat_id: e.target.value })
-                          }
-                          placeholder="oc_xxxxxxxx"
-                        />
+                        >
+                          <option value="feishu">飞书中国版（feishu.cn）</option>
+                          <option value="lark">Lark 国际版（larksuite.com）</option>
+                        </Select>
                       </Field>
                     </>
                   )}
@@ -1210,7 +1149,7 @@ export function RemoteChannelsSettings() {
 
                   {form.platform === "qq" && (
                     <>
-                      <Field label="QQ Bot AppID">
+                      <Field label="AppID">
                         <TextInput
                           value={form.app_id}
                           onChange={(e) =>
@@ -1236,56 +1175,178 @@ export function RemoteChannelsSettings() {
                           placeholder="QQ 开放平台 AppSecret"
                         />
                       </Field>
+                    </>
+                  )}
+
+                  {form.platform === "weixin" && (
+                    <div className="space-y-2 text-xs text-muted-foreground">
+                      <p>
+                        微信通过官方扫码直接获取加密 Bot Token，无需手动填写密钥。
+                      </p>
+                      {form.weixin_user_id && (
+                        <p className="font-mono text-[11px] text-heading">
+                          已绑定微信账号：{form.weixin_user_id}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* 定时推送专属精简选项（仅 role=scheduled_push 时展开） */}
+            {form.role === "scheduled_push" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="推送过滤">
+                  <Select
+                    value={form.push_filter}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        push_filter: e.target.value as RemoteChannelPushFilter,
+                      })
+                    }
+                  >
+                    <option value="all">全部巡检与汇报结果</option>
+                    <option value="warnings_only">仅异常告警</option>
+                  </Select>
+                </Field>
+                <Field label="目标 Ongoing 卡片（可选）">
+                  <Select
+                    value={form.target_card_id}
+                    onChange={(e) =>
+                      setForm({ ...form, target_card_id: e.target.value })
+                    }
+                  >
+                    <option value="">该项目全部 Ongoing 卡片</option>
+                    {ongoingCards.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+            )}
+
+            {/* 可折叠高级设置面板：低频字段全部默认填好并收在此处 */}
+            <div className="rounded-xl border border-line bg-surface">
+              <button
+                type="button"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-heading"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  {advancedOpen ? (
+                    <ChevronDown className="size-3.5" />
+                  ) : (
+                    <ChevronRight className="size-3.5" />
+                  )}
+                  高级设置（名称、角色、群策略、白名单、默认会话与代理）
+                </span>
+                <span className="text-[11px] text-muted-foreground/80">
+                  {advancedOpen ? "收起" : "展开"}
+                </span>
+              </button>
+
+              {advancedOpen && (
+                <div className="space-y-3 border-t border-line px-3.5 py-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="通道名称">
+                      <TextInput
+                        value={form.name}
+                        onChange={(e) =>
+                          setForm({ ...form, name: e.target.value })
+                        }
+                        placeholder={defaultChannelName(
+                          form.platform,
+                          form.role,
+                        )}
+                      />
+                    </Field>
+                    <Field label="通道角色">
+                      <Select
+                        value={form.role}
+                        onChange={(e) => {
+                          const nextRole = e.target.value as RemoteChannelRole;
+                          setForm({
+                            ...form,
+                            role: nextRole,
+                            transport: defaultTransportFor(
+                              form.platform,
+                              nextRole,
+                            ),
+                          });
+                        }}
+                      >
+                        <option value="main_chat">项目主聊天双向同步</option>
+                        <option value="scheduled_push">定时任务独立推送</option>
+                      </Select>
+                    </Field>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="传输模式">
+                      <Select
+                        value={form.transport}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            transport: e.target.value as RemoteChannelTransport,
+                          })
+                        }
+                      >
+                        {availableTransports(form.platform, form.role).map(
+                          (tr) => (
+                            <option key={tr} value={tr}>
+                              {transportLabel(tr)}
+                            </option>
+                          ),
+                        )}
+                      </Select>
+                    </Field>
+
+                    {form.role === "main_chat" && (
+                      <Field label="群聊触发策略">
+                        <Select
+                          value={form.group_policy}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              group_policy: e.target
+                                .value as RemoteChannelGroupPolicy,
+                            })
+                          }
+                        >
+                          <option value="mention_only">
+                            仅 @ 机器人触发（默认）
+                          </option>
+                          <option value="allowlist">仅白名单群/成员放行</option>
+                          <option value="all">放行所有群消息</option>
+                        </Select>
+                      </Field>
+                    )}
+                  </div>
+
+                  {form.transport !== "webhook" && (
+                    <div className="grid gap-3 sm:grid-cols-2">
                       <Field
-                        label="默认推送 OpenID（可选）"
-                        hint="支持 C2C user_openid 或群 group_openid"
+                        label="默认推送会话 ID（可选）"
+                        hint="收到首条合法消息后会自动记忆，无需手动填写"
                       >
                         <TextInput
                           value={form.target_chat_id}
                           onChange={(e) =>
                             setForm({ ...form, target_chat_id: e.target.value })
                           }
-                          placeholder="openid"
+                          placeholder="chat_id / open_id"
                         />
                       </Field>
-                    </>
-                  )}
-
-                  {form.platform === "telegram" && (
-                    <>
-                      <Field
-                        label="Bot Token"
-                        hint={
-                          form.secret_hints.bot_token
-                            ? `已保存：${form.secret_hints.bot_token}`
-                            : "从 @BotFather 获取"
-                        }
-                      >
-                        <TextInput
-                          type="password"
-                          value={form.bot_token}
-                          onChange={(e) =>
-                            setForm({ ...form, bot_token: e.target.value })
-                          }
-                          placeholder="123456:ABC-DEF..."
-                        />
-                      </Field>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Field
-                          label="Chat ID"
-                          hint="私聊用户 ID 或超级群 ID（如 -100...）"
-                        >
-                          <TextInput
-                            value={form.target_chat_id}
-                            onChange={(e) =>
-                              setForm({ ...form, target_chat_id: e.target.value })
-                            }
-                            placeholder="-1001234567890"
-                          />
-                        </Field>
+                      {form.platform === "telegram" && (
                         <Field
                           label="Topic Thread ID（可选）"
-                          hint="超级群分 Topic 绑定时填写，留空为 General"
+                          hint="Telegram 超级群分 Topic 时使用"
                         >
                           <TextInput
                             value={form.message_thread_id}
@@ -1298,63 +1359,78 @@ export function RemoteChannelsSettings() {
                             placeholder="例如：42"
                           />
                         </Field>
-                      </div>
+                      )}
+                      {form.platform === "weixin" && (
+                        <Field label="iLink 服务地址（可选）">
+                          <TextInput
+                            value={form.base_url}
+                            onChange={(e) =>
+                              setForm({ ...form, base_url: e.target.value })
+                            }
+                            placeholder="https://ilinkai.weixin.qq.com"
+                          />
+                        </Field>
+                      )}
+                    </div>
+                  )}
+
+                  {form.platform === "telegram" && (
+                    <Field
+                      label="HTTP/SOCKS 代理地址（可选）"
+                      hint="本地或内网访问 Telegram API 可配置代理，如 http://127.0.0.1:7890"
+                    >
+                      <TextInput
+                        value={form.proxy_url}
+                        onChange={(e) =>
+                          setForm({ ...form, proxy_url: e.target.value })
+                        }
+                        placeholder="http://127.0.0.1:7890"
+                      />
+                    </Field>
+                  )}
+
+                  {form.role === "main_chat" && (
+                    <>
                       <Field
-                        label="HTTP/SOCKS 代理地址（可选）"
-                        hint="国内网络环境可填写本地代理，如 http://127.0.0.1:7890"
+                        label="入站白名单 allow_from（可选）"
+                        hint="每行或逗号分隔用户 ID / 会话 ID；留空表示允许私聊。"
                       >
-                        <TextInput
-                          value={form.proxy_url}
+                        <TextArea
+                          rows={2}
+                          value={form.allow_from_text}
                           onChange={(e) =>
-                            setForm({ ...form, proxy_url: e.target.value })
+                            setForm({
+                              ...form,
+                              allow_from_text: e.target.value,
+                            })
                           }
-                          placeholder="http://127.0.0.1:7890"
+                          placeholder="user_id_1&#10;chat_id_2"
                         />
                       </Field>
+
+                      <div className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-heading">
+                            同步 Web 对话回复
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            默认已推送本通道回复、主动消息、子任务回调与审批提醒；开启后，你在 Web 主聊天发起对话的 AI 最终回复也会同步过来（不回传你输入的原文）。
+                          </p>
+                        </div>
+                        <Switch
+                          checked={form.mirror_web_messages}
+                          onCheckedChange={(checked) =>
+                            setForm({ ...form, mirror_web_messages: checked })
+                          }
+                        />
+                      </div>
                     </>
                   )}
-                </>
+                </div>
               )}
             </div>
 
-            {form.role === "main_chat" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-line px-3.5 py-2.5">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-heading">
-                      同步 Web 对话回复
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      默认已推送本通道回复、主动消息、子任务回调与审批提醒；开启后，你在
-                      Web 主聊天发起对话的 AI
-                      最终回复也会同步过来（不回传你输入的原文）
-                    </p>
-                  </div>
-                  <Switch
-                    checked={form.mirror_web_messages}
-                    onCheckedChange={(checked) =>
-                      setForm({ ...form, mirror_web_messages: checked })
-                    }
-                  />
-                </div>
-
-                <Field
-                  label="入站白名单 allow_from（可选）"
-                  hint="每行或逗号分隔用户 ID / 会话 ID；留空表示允许所有私聊（群聊仍受上方群聊策略约束）。"
-                >
-                  <TextArea
-                    rows={2}
-                    value={form.allow_from_text}
-                    onChange={(e) =>
-                      setForm({ ...form, allow_from_text: e.target.value })
-                    }
-                    placeholder="user_id_1&#10;chat_id_2"
-                  />
-                </Field>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-3 pt-2">
+            <div className="flex items-center justify-between gap-3 pt-1">
               <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                 <Switch
                   checked={form.enabled}
@@ -1370,6 +1446,7 @@ export function RemoteChannelsSettings() {
                   onClick={() => {
                     setEditorOpen(false);
                     setForm(null);
+                    setAdvancedOpen(false);
                   }}
                 >
                   取消
@@ -1379,26 +1456,13 @@ export function RemoteChannelsSettings() {
                   variant="primary"
                   disabled={saveMutation.isPending}
                 >
-                  {saveMutation.isPending ? "保存中…" : "保存配置"}
+                  {saveMutation.isPending ? "保存中…" : "保存并连接"}
                 </Button>
               </div>
             </div>
           </form>
         )}
       </Modal>
-
-      {/* 微信扫码登录弹窗 */}
-      {qrChannel && (
-        <WeixinQRLoginModal
-          key={qrChannel.id}
-          channel={qrChannel}
-          onClose={() => setQrChannel(null)}
-          onBound={() => {
-            void queryClient.invalidateQueries({ queryKey: keys.channels });
-            setQrChannel(null);
-          }}
-        />
-      )}
 
       {/* 删除确认框 */}
       <ConfirmDialog
@@ -1418,82 +1482,142 @@ export function RemoteChannelsSettings() {
   );
 }
 
-function WeixinQRLoginModal({
-  channel,
+function ChannelQRConnectModal({
+  target,
+  projects,
   onClose,
   onBound,
+  onSwitchManual,
 }: {
-  channel: RemoteChannel;
+  target: QRModalTarget;
+  projects: Array<{ id: string; name: string }>;
   onClose: () => void;
   onBound: () => void;
+  onSwitchManual: (projectID: string, preferWebhook: boolean) => void;
 }) {
-  const [session, setSession] = useState<WeixinLoginSession | null>(null);
-  const [loading, setLoading] = useState(true);
+  const meta = PLATFORM_MAP[target.platform];
+  const isRebind = Boolean(target.channel);
+  const [projectID, setProjectID] = useState(
+    target.channel?.project_id ?? target.project_id ?? projects[0]?.id ?? "",
+  );
+  const [domain, setDomain] = useState(
+    target.channel?.config?.domain || (target.platform === "feishu" ? "feishu" : ""),
+  );
+  const [session, setSession] = useState<QRConnectSession | null>(null);
+  const [loadedRequestKey, setLoadedRequestKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const activeSessionIDRef = useRef<string | null>(null);
+
+  const missingProject = !isRebind && !projectID;
+  const requestKey = `${target.platform}:${target.channel?.id ?? "new"}:${projectID}:${domain}:${reloadTick}`;
+  const loading = !missingProject && loadedRequestKey !== requestKey;
 
   useEffect(() => {
+    activeSessionIDRef.current = session?.session_id ?? null;
+  }, [session?.session_id]);
+
+  // 启动或刷新二维码会话
+  useEffect(() => {
+    if (missingProject) {
+      return;
+    }
+
     let cancelled = false;
     void api
-      .startWeixinLogin({
-        channel_id: channel.id,
-        base_url: channel.config?.base_url,
-      })
+      .startChannelQRConnect(
+        isRebind && target.channel
+          ? {
+              channel_id: target.channel.id,
+              domain: target.platform === "feishu" ? domain : undefined,
+            }
+          : {
+              platform: target.platform,
+              project_id: projectID,
+              role: target.role,
+              domain: target.platform === "feishu" ? domain : undefined,
+            },
+      )
       .then((created) => {
         if (cancelled) return;
         setSession(created);
         setError(null);
-        setLoading(false);
+        setLoadedRequestKey(requestKey);
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "获取微信二维码失败");
-        setLoading(false);
+        setError(
+          err instanceof Error ? err.message : `获取${meta.name}二维码失败`,
+        );
+        setLoadedRequestKey(requestKey);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [channel.id, channel.config?.base_url, reloadTick]);
+  }, [
+    missingProject,
+    requestKey,
+    isRebind,
+    target.channel,
+    target.platform,
+    target.role,
+    projectID,
+    domain,
+    meta.name,
+  ]);
 
+  // 按服务端建议间隔轮询确认状态；确认后后端已自动建卡并加密启用。
   useEffect(() => {
     if (!session) return;
     if (
       session.status === "confirmed" ||
       session.status === "expired" ||
-      session.status === "error"
+      session.status === "error" ||
+      session.status === "cancelled"
     ) {
       return;
     }
 
     let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await api.pollWeixinLogin(session.session_id);
-        if (cancelled) return;
-        setSession(res.session);
-        if (res.session.status === "confirmed") {
-          toast.success("微信扫码绑定成功，已自动加密保存凭据");
-          onBound();
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "轮询扫码状态失败");
-        }
-      }
-    };
-
+    const delay = Math.max(1200, Math.min(session.interval_ms || 2000, 5000));
     const timer = window.setTimeout(() => {
-      void poll();
-    }, 1500);
+      void api
+        .pollChannelQRConnect(session.session_id)
+        .then((res) => {
+          if (cancelled) return;
+          setSession(res.session);
+          if (res.session.status === "confirmed") {
+            toast.success(`${meta.name}扫码连接成功，已自动加密保存并上线`);
+            onBound();
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : "轮询扫码状态失败");
+          }
+        });
+    }, delay);
+
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [session, onBound]);
+  }, [session, meta.name, onBound]);
+
+  const handleClose = () => {
+    const sid = activeSessionIDRef.current;
+    if (
+      sid &&
+      session &&
+      (session.status === "wait" || session.status === "scanned")
+    ) {
+      void api.cancelChannelQRConnect(sid).catch(() => {});
+    }
+    onClose();
+  };
 
   const handleRefresh = () => {
-    setLoading(true);
-    setError(null);
     setSession(null);
     setReloadTick((n) => n + 1);
   };
@@ -1502,64 +1626,140 @@ function WeixinQRLoginModal({
     <Modal
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) handleClose();
       }}
-      title="微信扫码登录"
-      description="请使用手机微信扫描下方二维码并确认授权。登录成功后会自动将加密 Bot Token 写入当前通道。"
+      title={
+        isRebind
+          ? `重新扫码绑定 · ${target.channel?.name ?? meta.name}`
+          : `${meta.name}扫码一键连接`
+      }
+      description={`使用手机${meta.qrAppLabel}扫一扫下方二维码，确认后自动创建并上线长连接，无需手动配置任何密钥。`}
     >
-      <div className="flex flex-col items-center gap-4 py-2">
-        {loading ? (
-          <div className="flex h-52 w-52 items-center justify-center rounded-2xl border border-line bg-muted/30">
-            <Spinner text="生成二维码…" />
+      <div className="space-y-4 py-1">
+        {/* 首屏最精简的选择器：绑定项目 +（飞书双域名切换） */}
+        {(!isRebind || target.platform === "feishu") && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {!isRebind && (
+              <Field label="绑定项目">
+                <Select
+                  value={projectID}
+                  onChange={(e) => {
+                    setSession(null);
+                    setProjectID(e.target.value);
+                  }}
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {target.platform === "feishu" && (
+              <Field label="平台版本">
+                <Select
+                  value={domain || "feishu"}
+                  onChange={(e) => {
+                    setSession(null);
+                    setDomain(e.target.value);
+                  }}
+                >
+                  <option value="feishu">飞书中国版（feishu.cn）</option>
+                  <option value="lark">Lark 国际版（larksuite.com）</option>
+                </Select>
+              </Field>
+            )}
           </div>
-        ) : error ? (
-          <div className="w-full space-y-3">
-            <ErrorView error={new Error(error)} onRetry={handleRefresh} />
-          </div>
-        ) : session ? (
-          <>
-            <div className="rounded-2xl border border-line bg-white p-4 shadow-xs">
-              <QRCodeSVG
-                value={session.qrcode_content}
-                size={196}
-                level="M"
+        )}
+
+        <div className="flex flex-col items-center gap-3.5 py-2">
+          {missingProject ? (
+            <div className="w-full space-y-3">
+              <ErrorView
+                error={new Error("请先创建一个项目后再绑定远程通道")}
+                onRetry={handleRefresh}
               />
             </div>
-
-            <div className="flex items-center gap-2 text-xs">
-              {session.status === "confirmed" ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600">
-                  <CheckCircle2 className="size-4" />
-                  绑定成功
-                </span>
-              ) : session.status === "scanned" ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-amber-600">
-                  <LoaderCircle className="size-4 animate-spin" />
-                  已扫码，请在微信手机端点击确认…
-                </span>
-              ) : session.status === "expired" ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-danger">
-                  二维码已过期，请重新生成
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                  <Bot className="size-4" />
-                  等待手机微信扫码…
-                </span>
-              )}
+          ) : loading ? (
+            <div className="flex h-52 w-52 items-center justify-center rounded-2xl border border-line bg-muted/30">
+              <Spinner text="生成二维码…" />
             </div>
-
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={handleRefresh}>
-                <RefreshCw className="size-3.5" />
-                刷新二维码
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                关闭
-              </Button>
+          ) : error ? (
+            <div className="w-full space-y-3">
+              <ErrorView error={new Error(error)} onRetry={handleRefresh} />
             </div>
-          </>
-        ) : null}
+          ) : session ? (
+            <>
+              <div className="rounded-2xl border border-line bg-white p-4 shadow-xs">
+                <QRCodeSVG
+                  value={session.qrcode_content}
+                  size={196}
+                  level="M"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                {session.status === "confirmed" ? (
+                  <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600">
+                    <CheckCircle2 className="size-4" />
+                    绑定成功，正在启用连接…
+                  </span>
+                ) : session.status === "scanned" ? (
+                  <span className="inline-flex items-center gap-1.5 font-medium text-amber-600">
+                    <LoaderCircle className="size-4 animate-spin" />
+                    {session.message || `已扫码，请在${meta.qrAppLabel}确认…`}
+                  </span>
+                ) : session.status === "expired" ? (
+                  <span className="inline-flex items-center gap-1.5 font-medium text-danger">
+                    二维码已过期，请点击刷新重新生成
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <Bot className="size-4" />
+                    {session.message || `等待手机${meta.qrAppLabel}扫码…`}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={handleRefresh}>
+                  <RefreshCw className="size-3.5" />
+                  刷新二维码
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleClose}>
+                  关闭
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        {/* 底部保留轻量切换入口，满足已有企业应用凭据或群 Webhook 用户 */}
+        {!isRebind && (
+          <div className="flex flex-wrap items-center justify-center gap-2 border-t border-line pt-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onSwitchManual(projectID, false)}
+            >
+              <Pencil className="size-3.5" />
+              改用手动填写
+            </Button>
+            {meta.supportsWebhook && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => onSwitchManual(projectID, true)}
+              >
+                <Webhook className="size-3.5" />
+                改用群机器人 Webhook
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );
