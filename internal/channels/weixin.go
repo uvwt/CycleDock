@@ -29,28 +29,46 @@ const (
 	weixinAppID            = "bot"
 	weixinClientVersionInt = (2 << 16) | (4 << 8) | 6
 	weixinItemText         = 1
+	weixinItemImage        = 2
+	weixinItemVoice        = 3
+	weixinItemFile         = 4
+	weixinItemVideo        = 5
 	weixinMsgTypeBot       = 2
 	weixinMsgStateFinish   = 2
 	weixinMaxRunes         = 1800
+
+	// 微信 iLink 长轮询与接口超时约定：
+	// 服务端默认长轮询约 35s，并可能通过 longpolling_timeout_ms 动态调整，
+	// 客户端 HTTP 超时需始终大于服务端长轮询时长，避免空闲长轮询被误判断开重连。
+	defaultWeixinLongPollTimeout = 35 * time.Second
+	minWeixinLongPollTimeout     = 5 * time.Second
+	maxWeixinLongPollTimeout     = 120 * time.Second
+	weixinLongPollTimeoutBuffer  = 15 * time.Second
+	defaultWeixinAPITimeout      = 15 * time.Second
+	defaultWeixinConfigTimeout   = 10 * time.Second
+
+	// iLink context_token 在服务端空闲约 90~160s 后可能过期，
+	// 出站发送前若缓存已超过 60s，先静默调用 getconfig 刷新，失败则回退旧 token。
+	weixinContextTokenRefreshAge = 60 * time.Second
 )
 
 // WeixinLoginSession 表示一个进行中的微信扫码登录会话。
 type WeixinLoginSession struct {
-	SessionID        string    `json:"session_id"`
-	WorkspaceID      uuid.UUID `json:"-"`
-	ChannelID        uuid.UUID `json:"channel_id,omitempty"`
-	QRCodeID         string    `json:"qrcode_id"`
-	QRCodeContent    string    `json:"qrcode_content"`
-	Status           string    `json:"status"` // wait / scanned / confirmed / expired / error
-	BaseURL          string    `json:"base_url"`
-	PollBaseURL      string    `json:"-"`
-	BotID            string    `json:"bot_id,omitempty"`
-	WeixinUserID     string    `json:"weixin_user_id,omitempty"`
-	BotToken         string    `json:"-"`
-	Message          string    `json:"message,omitempty"`
-	ExpiresAt        time.Time `json:"expires_at"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	SessionID     string    `json:"session_id"`
+	WorkspaceID   uuid.UUID `json:"-"`
+	ChannelID     uuid.UUID `json:"channel_id,omitempty"`
+	QRCodeID      string    `json:"qrcode_id"`
+	QRCodeContent string    `json:"qrcode_content"`
+	Status        string    `json:"status"` // wait / scanned / confirmed / expired / error
+	BaseURL       string    `json:"base_url"`
+	PollBaseURL   string    `json:"-"`
+	BotID         string    `json:"bot_id,omitempty"`
+	WeixinUserID  string    `json:"weixin_user_id,omitempty"`
+	BotToken      string    `json:"-"`
+	Message       string    `json:"message,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // WeixinLoginStore 在后端维护短期微信扫码登录会话，支持并发轮询并在确认后自动回填加密凭据。
@@ -121,17 +139,17 @@ func (s *WeixinLoginStore) Start(ctx context.Context, workspaceID, channelID uui
 		return nil, fmt.Errorf("weixin qrcode HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var payload struct {
-		Ret              int    `json:"ret"`
-		ErrCode          int    `json:"errcode"`
-		ErrMsg           string `json:"errmsg"`
-		QRCode           string `json:"qrcode"`
-		QRCodeImgContent string `json:"qrcode_img_content"`
+		Ret              flexInt64  `json:"ret"`
+		ErrCode          flexInt64  `json:"errcode"`
+		ErrMsg           flexString `json:"errmsg"`
+		QRCode           string     `json:"qrcode"`
+		QRCodeImgContent string     `json:"qrcode_img_content"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode weixin qrcode response: %w", err)
 	}
 	if payload.Ret != 0 || payload.ErrCode != 0 {
-		return nil, fmt.Errorf("weixin get_bot_qrcode failed (ret=%d errcode=%d): %s", payload.Ret, payload.ErrCode, payload.ErrMsg)
+		return nil, fmt.Errorf("weixin get_bot_qrcode failed (ret=%d errcode=%d): %s", payload.Ret.Int64(), payload.ErrCode.Int64(), payload.ErrMsg.String())
 	}
 	if strings.TrimSpace(payload.QRCode) == "" {
 		return nil, errors.New("weixin get_bot_qrcode returned empty qrcode")
@@ -208,13 +226,13 @@ func (s *WeixinLoginStore) Poll(ctx context.Context, workspaceID uuid.UUID, sess
 		return nil, fmt.Errorf("weixin qrcode status HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var payload struct {
-		Status       string `json:"status"`
-		BotToken     string `json:"bot_token"`
-		ILinkBotID   string `json:"ilink_bot_id"`
-		ILinkUserID  string `json:"ilink_user_id"`
-		BaseURL      string `json:"baseurl"`
-		RedirectHost string `json:"redirect_host"`
-		ErrMsg       string `json:"errmsg"`
+		Status       string     `json:"status"`
+		BotToken     string     `json:"bot_token"`
+		ILinkBotID   flexString `json:"ilink_bot_id"`
+		ILinkUserID  flexString `json:"ilink_user_id"`
+		BaseURL      string     `json:"baseurl"`
+		RedirectHost string     `json:"redirect_host"`
+		ErrMsg       flexString `json:"errmsg"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode weixin qrcode status: %w", err)
@@ -235,8 +253,8 @@ func (s *WeixinLoginStore) Poll(ctx context.Context, workspaceID uuid.UUID, sess
 		} else {
 			sess.Status = "confirmed"
 			sess.BotToken = strings.TrimSpace(payload.BotToken)
-			sess.BotID = strings.TrimSpace(payload.ILinkBotID)
-			sess.WeixinUserID = strings.TrimSpace(payload.ILinkUserID)
+			sess.BotID = strings.TrimSpace(payload.ILinkBotID.String())
+			sess.WeixinUserID = strings.TrimSpace(payload.ILinkUserID.String())
 			if strings.TrimSpace(payload.BaseURL) != "" {
 				sess.BaseURL = strings.TrimRight(strings.TrimSpace(payload.BaseURL), "/")
 			}
@@ -284,10 +302,13 @@ type WeixinAdapter struct {
 	baseURL    string
 	httpClient *http.Client
 
-	mu            sync.Mutex
-	updatesBuf    string
-	contextTokens map[string]string
-	lastChatID    string
+	mu              sync.Mutex
+	updatesBuf      string
+	longPollTimeout time.Duration
+	contextTokens   map[string]string
+	contextTokenAt  map[string]time.Time
+	lastChatID      string
+	saveState       StatePersister
 }
 
 func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, client *http.Client) *WeixinAdapter {
@@ -296,7 +317,9 @@ func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets
 		baseURL = defaultWeixinBaseURL
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 50 * time.Second}
+		// 不在 client 上写死固定超时，由单次请求的 context.WithTimeout 精确控制
+		// （getupdates 长轮询超时会随服务端 longpolling_timeout_ms 动态调整）。
+		client = &http.Client{}
 	}
 	ctxTokens := make(map[string]string)
 	for k, v := range ch.RuntimeState.WeixinContextTokens {
@@ -312,13 +335,15 @@ func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets
 		lastChat = strings.TrimSpace(ch.RuntimeState.LastChatID)
 	}
 	return &WeixinAdapter{
-		channel:       ch,
-		secrets:       secrets,
-		baseURL:       baseURL,
-		httpClient:    client,
-		updatesBuf:    strings.TrimSpace(ch.RuntimeState.WeixinUpdatesBuf),
-		contextTokens: ctxTokens,
-		lastChatID:    lastChat,
+		channel:         ch,
+		secrets:         secrets,
+		baseURL:         baseURL,
+		httpClient:      client,
+		updatesBuf:      strings.TrimSpace(ch.RuntimeState.WeixinUpdatesBuf),
+		longPollTimeout: defaultWeixinLongPollTimeout,
+		contextTokens:   ctxTokens,
+		contextTokenAt:  make(map[string]time.Time),
+		lastChatID:      lastChat,
 	}
 }
 
@@ -337,6 +362,9 @@ func (a *WeixinAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	if rt.OnStatus != nil {
 		rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 	}
+	a.mu.Lock()
+	a.saveState = rt.SaveState
+	a.mu.Unlock()
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -353,22 +381,27 @@ func (a *WeixinAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 	a.mu.Lock()
 	buf := a.updatesBuf
+	pollTimeout := a.longPollTimeout
 	a.mu.Unlock()
+	if pollTimeout <= 0 {
+		pollTimeout = defaultWeixinLongPollTimeout
+	}
 
 	body := map[string]any{
 		"get_updates_buf": buf,
 		"base_info":       weixinBaseInfo(),
 	}
-	raw, err := a.apiPost(ctx, "ilink/bot/getupdates", body)
+	raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/getupdates", body, pollTimeout+weixinLongPollTimeoutBuffer)
 	if err != nil {
 		return err
 	}
 	var resp struct {
-		Ret           int               `json:"ret"`
-		ErrCode       int               `json:"errcode"`
-		ErrMsg        string            `json:"errmsg"`
-		GetUpdatesBuf string            `json:"get_updates_buf"`
-		Msgs          []weixinInboundMsg `json:"msgs"`
+		Ret                  flexInt64          `json:"ret"`
+		ErrCode              flexInt64          `json:"errcode"`
+		ErrMsg               flexString         `json:"errmsg"`
+		GetUpdatesBuf        string             `json:"get_updates_buf"`
+		LongPollingTimeoutMs flexInt64          `json:"longpolling_timeout_ms"`
+		Msgs                 []weixinInboundMsg `json:"msgs"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return fmt.Errorf("decode weixin getupdates: %w", err)
@@ -377,10 +410,16 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 		if resp.Ret == -14 || resp.ErrCode == -14 {
 			return errors.New("weixin login expired (-14), please scan QR code again")
 		}
-		return fmt.Errorf("weixin getupdates failed (ret=%d errcode=%d): %s", resp.Ret, resp.ErrCode, resp.ErrMsg)
+		return fmt.Errorf("weixin getupdates failed (ret=%d errcode=%d): %s", resp.Ret.Int64(), resp.ErrCode.Int64(), resp.ErrMsg.String())
 	}
 	if rt.OnStatus != nil {
 		rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
+	}
+
+	if nextTimeout := clampWeixinLongPollTimeout(resp.LongPollingTimeoutMs.Int64()); nextTimeout > 0 {
+		a.mu.Lock()
+		a.longPollTimeout = nextTimeout
+		a.mu.Unlock()
 	}
 
 	stateChanged := false
@@ -392,10 +431,10 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 	}
 
 	for _, item := range resp.Msgs {
-		if item.MessageType == weixinMsgTypeBot {
+		if item.MessageType.Int() == weixinMsgTypeBot {
 			continue
 		}
-		fromUser := strings.TrimSpace(item.FromUserID)
+		fromUser := strings.TrimSpace(item.FromUserID.String())
 		if fromUser == "" {
 			continue
 		}
@@ -403,16 +442,22 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 		if text == "" {
 			continue
 		}
-		msgID := strings.TrimSpace(item.MessageID)
-		if msgID == "" && item.Seq > 0 {
-			msgID = strconv.FormatInt(item.Seq, 10)
+		createTimeMs := item.CreateTimeMs.Int64()
+		msgID := strings.TrimSpace(item.MessageID.String())
+		if msgID == "" || msgID == "0" {
+			if seq := item.Seq.Int64(); seq > 0 {
+				msgID = strconv.FormatInt(seq, 10)
+			} else if createTimeMs > 0 {
+				msgID = fmt.Sprintf("%s:%d", fromUser, createTimeMs)
+			} else {
+				msgID = uuid.NewString()
+			}
 		}
-		if msgID == "" {
-			msgID = fmt.Sprintf("%s:%d", fromUser, item.CreateTimeMs)
-		}
+		ctxTok := strings.TrimSpace(item.ContextToken)
 		a.mu.Lock()
-		if strings.TrimSpace(item.ContextToken) != "" {
-			a.contextTokens[fromUser] = strings.TrimSpace(item.ContextToken)
+		if ctxTok != "" {
+			a.contextTokens[fromUser] = ctxTok
+			a.contextTokenAt[fromUser] = time.Now()
 			stateChanged = true
 		}
 		a.lastChatID = fromUser
@@ -422,6 +467,10 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 		if strings.HasSuffix(fromUser, "@chatroom") {
 			chatType = "group"
 		}
+		msgTime := time.Now().UTC()
+		if createTimeMs > 0 {
+			msgTime = time.UnixMilli(createTimeMs)
+		}
 		if rt.OnInbound != nil {
 			_ = rt.OnInbound(ctx, InboundMessage{
 				ExternalMessageID: msgID,
@@ -430,62 +479,134 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 				ChatType:          chatType,
 				Content:           text,
 				Mentioned:         chatType == "direct",
-				ContextToken:      strings.TrimSpace(item.ContextToken),
-				Timestamp:         time.UnixMilli(item.CreateTimeMs),
+				ContextToken:      ctxTok,
+				Timestamp:         msgTime,
 			})
 		}
 	}
 
 	if stateChanged && rt.SaveState != nil {
-		a.mu.Lock()
-		nextBuf := a.updatesBuf
-		nextChat := a.lastChatID
-		tokensCopy := make(map[string]string, len(a.contextTokens))
-		for k, v := range a.contextTokens {
-			tokensCopy[k] = v
-		}
-		a.mu.Unlock()
-		_ = rt.SaveState(ctx, func(st *store.RemoteChannelRuntimeState) {
-			st.WeixinUpdatesBuf = nextBuf
-			st.WeixinContextTokens = tokensCopy
-			if nextChat != "" {
-				st.LastChatID = nextChat
-			}
-		})
+		a.persistState(ctx, rt.SaveState)
 	}
 	return nil
 }
 
-type weixinInboundMsg struct {
-	MessageID    string `json:"message_id"`
-	Seq          int64  `json:"seq"`
-	FromUserID   string `json:"from_user_id"`
-	MessageType  int    `json:"message_type"`
-	ContextToken string `json:"context_token"`
-	CreateTimeMs int64  `json:"create_time_ms"`
-	ItemList     []struct {
-		Type     int `json:"type"`
-		TextItem struct {
-			Text string `json:"text"`
-		} `json:"text_item"`
-	} `json:"item_list"`
+func (a *WeixinAdapter) persistState(ctx context.Context, save StatePersister) {
+	if save == nil {
+		return
+	}
+	a.mu.Lock()
+	nextBuf := a.updatesBuf
+	nextChat := a.lastChatID
+	tokensCopy := make(map[string]string, len(a.contextTokens))
+	for k, v := range a.contextTokens {
+		tokensCopy[k] = v
+	}
+	a.mu.Unlock()
+	_ = save(ctx, func(st *store.RemoteChannelRuntimeState) {
+		st.WeixinUpdatesBuf = nextBuf
+		st.WeixinContextTokens = tokensCopy
+		if nextChat != "" {
+			st.LastChatID = nextChat
+		}
+	})
 }
 
-func extractWeixinText(items []struct {
-	Type     int `json:"type"`
-	TextItem struct {
-		Text string `json:"text"`
-	} `json:"text_item"`
-}) string {
+func clampWeixinLongPollTimeout(ms int64) time.Duration {
+	if ms <= 0 {
+		return 0
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < minWeixinLongPollTimeout {
+		return minWeixinLongPollTimeout
+	}
+	if d > maxWeixinLongPollTimeout {
+		return maxWeixinLongPollTimeout
+	}
+	return d
+}
+
+type weixinInboundMsg struct {
+	MessageID    flexString      `json:"message_id"`
+	Seq          flexInt64       `json:"seq"`
+	FromUserID   flexString      `json:"from_user_id"`
+	MessageType  flexInt64       `json:"message_type"`
+	ContextToken string          `json:"context_token"`
+	CreateTimeMs flexInt64       `json:"create_time_ms"`
+	ItemList     []weixinMsgItem `json:"item_list"`
+}
+
+type weixinMsgItem struct {
+	Type      flexInt64       `json:"type"`
+	TextItem  weixinTextItem  `json:"text_item"`
+	VoiceItem weixinVoiceItem `json:"voice_item"`
+	RefMsg    *weixinRefMsg   `json:"ref_msg"`
+}
+
+type weixinTextItem struct {
+	Text string `json:"text"`
+}
+
+type weixinVoiceItem struct {
+	Text string `json:"text"`
+}
+
+type weixinRefMsg struct {
+	Title       string          `json:"title"`
+	MessageItem *weixinRefInner `json:"message_item"`
+}
+
+type weixinRefInner struct {
+	Type      flexInt64       `json:"type"`
+	TextItem  weixinTextItem  `json:"text_item"`
+	VoiceItem weixinVoiceItem `json:"voice_item"`
+}
+
+// extractWeixinText 从微信 iLink item_list 提取可读文本：
+// 支持普通文本、带引用上下文（ref_msg）的回复文本，以及微信服务端附带的语音转文字（type=3 voice_item.text）。
+func extractWeixinText(items []weixinMsgItem) string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.Type == weixinItemText {
-			if t := strings.TrimSpace(item.TextItem.Text); t != "" {
-				parts = append(parts, t)
+		switch item.Type.Int() {
+		case weixinItemText:
+			text := strings.TrimSpace(item.TextItem.Text)
+			refSummary := formatWeixinRefSummary(item.RefMsg)
+			switch {
+			case refSummary != "" && text != "":
+				parts = append(parts, fmt.Sprintf("[引用: %s]\n%s", refSummary, text))
+			case text != "":
+				parts = append(parts, text)
+			case refSummary != "":
+				parts = append(parts, fmt.Sprintf("[引用: %s]", refSummary))
+			}
+		case weixinItemVoice:
+			if vt := strings.TrimSpace(item.VoiceItem.Text); vt != "" {
+				parts = append(parts, "[语音] "+vt)
 			}
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func formatWeixinRefSummary(ref *weixinRefMsg) string {
+	if ref == nil {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	title := strings.TrimSpace(ref.Title)
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if ref.MessageItem != nil {
+		refText := strings.TrimSpace(ref.MessageItem.TextItem.Text)
+		if refText == "" && ref.MessageItem.Type.Int() == weixinItemVoice {
+			refText = strings.TrimSpace(ref.MessageItem.VoiceItem.Text)
+		}
+		if refText != "" && refText != title {
+			parts = append(parts, refText)
+		}
+	}
+	return strings.Join(parts, " | ")
 }
 
 func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
@@ -498,13 +619,20 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		toUser = a.lastChatID
 	}
 	ctxToken := strings.TrimSpace(msg.ContextToken)
-	if ctxToken == "" && toUser != "" {
-		ctxToken = a.contextTokens[toUser]
+	if toUser != "" {
+		if cached := strings.TrimSpace(a.contextTokens[toUser]); cached != "" {
+			if ctxToken == "" || !a.contextTokenAt[toUser].IsZero() {
+				ctxToken = cached
+			}
+		}
 	}
 	a.mu.Unlock()
 
 	if toUser == "" {
 		return errors.New("weixin target user_id is empty; send one message from WeChat or configure target_chat_id")
+	}
+	if ctxToken != "" {
+		ctxToken = a.refreshContextTokenIfStale(ctx, toUser, ctxToken)
 	}
 	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
 	chunks := SplitMessage(fullText, weixinMaxRunes)
@@ -525,23 +653,74 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		if ctxToken != "" {
 			weixinMsg["context_token"] = ctxToken
 		}
-		raw, err := a.apiPost(ctx, "ilink/bot/sendmessage", map[string]any{
+		raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/sendmessage", map[string]any{
 			"msg":       weixinMsg,
 			"base_info": weixinBaseInfo(),
-		})
+		}, defaultWeixinAPITimeout)
 		if err != nil {
 			return err
 		}
 		var resp struct {
-			Ret     int    `json:"ret"`
-			ErrCode int    `json:"errcode"`
-			ErrMsg  string `json:"errmsg"`
+			Ret     flexInt64  `json:"ret"`
+			ErrCode flexInt64  `json:"errcode"`
+			ErrMsg  flexString `json:"errmsg"`
 		}
 		if err := json.Unmarshal(raw, &resp); err == nil && (resp.Ret != 0 || resp.ErrCode != 0) {
-			return fmt.Errorf("weixin sendmessage failed (ret=%d errcode=%d): %s", resp.Ret, resp.ErrCode, resp.ErrMsg)
+			return fmt.Errorf("weixin sendmessage failed (ret=%d errcode=%d): %s", resp.Ret.Int64(), resp.ErrCode.Int64(), resp.ErrMsg.String())
 		}
 	}
 	return nil
+}
+
+// refreshContextTokenIfStale 在缓存的 context_token 超过 60 秒或缺少获取时间记录时，
+// 静默调用 ilink/bot/getconfig 刷新；任何失败都回退沿用旧 token，不阻断出站消息发送。
+func (a *WeixinAdapter) refreshContextTokenIfStale(ctx context.Context, userID, ctxToken string) string {
+	ctxToken = strings.TrimSpace(ctxToken)
+	if userID == "" || ctxToken == "" {
+		return ctxToken
+	}
+	now := time.Now()
+	a.mu.Lock()
+	cachedTok := strings.TrimSpace(a.contextTokens[userID])
+	cachedAt := a.contextTokenAt[userID]
+	saveState := a.saveState
+	a.mu.Unlock()
+
+	if cachedTok == ctxToken && !cachedAt.IsZero() && now.Sub(cachedAt) < weixinContextTokenRefreshAge {
+		return ctxToken
+	}
+
+	raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/getconfig", map[string]any{
+		"ilink_user_id": userID,
+		"context_token": ctxToken,
+		"base_info":     weixinBaseInfo(),
+	}, defaultWeixinConfigTimeout)
+	if err != nil {
+		return ctxToken
+	}
+	var resp struct {
+		Ret          flexInt64  `json:"ret"`
+		ErrCode      flexInt64  `json:"errcode"`
+		ContextToken flexString `json:"context_token"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return ctxToken
+	}
+	if resp.Ret != 0 || resp.ErrCode != 0 {
+		return ctxToken
+	}
+	refreshed := strings.TrimSpace(resp.ContextToken.String())
+	if refreshed == "" {
+		return ctxToken
+	}
+	a.mu.Lock()
+	a.contextTokens[userID] = refreshed
+	a.contextTokenAt[userID] = time.Now()
+	a.mu.Unlock()
+	if refreshed != ctxToken && saveState != nil {
+		a.persistState(ctx, saveState)
+	}
+	return refreshed
 }
 
 func (a *WeixinAdapter) Test(ctx context.Context, testText string) error {
@@ -551,6 +730,7 @@ func (a *WeixinAdapter) Test(ctx context.Context, testText string) error {
 	a.mu.Lock()
 	target := a.lastChatID
 	ctxToken := a.contextTokens[target]
+	pollTimeout := a.longPollTimeout
 	a.mu.Unlock()
 	if target != "" {
 		return a.Send(ctx, OutboundMessage{
@@ -559,39 +739,55 @@ func (a *WeixinAdapter) Test(ctx context.Context, testText string) error {
 			Text:         testText,
 		})
 	}
+	if pollTimeout <= 0 {
+		pollTimeout = defaultWeixinLongPollTimeout
+	}
 	// 尚未收到过私聊会话时，探测一次 getupdates 校验 bot_token 有效性。
-	raw, err := a.apiPost(ctx, "ilink/bot/getupdates", map[string]any{
+	raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/getupdates", map[string]any{
 		"get_updates_buf": a.updatesBuf,
 		"base_info":       weixinBaseInfo(),
-	})
+	}, pollTimeout+weixinLongPollTimeoutBuffer)
 	if err != nil {
 		return err
 	}
 	var resp struct {
-		Ret     int    `json:"ret"`
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
+		Ret     flexInt64  `json:"ret"`
+		ErrCode flexInt64  `json:"errcode"`
+		ErrMsg  flexString `json:"errmsg"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return err
 	}
 	if resp.Ret != 0 || resp.ErrCode != 0 {
-		return fmt.Errorf("weixin token check failed (ret=%d errcode=%d): %s", resp.Ret, resp.ErrCode, resp.ErrMsg)
+		return fmt.Errorf("weixin token check failed (ret=%d errcode=%d): %s", resp.Ret.Int64(), resp.ErrCode.Int64(), resp.ErrMsg.String())
 	}
 	return nil
 }
 
-func (a *WeixinAdapter) apiPost(ctx context.Context, endpoint string, body map[string]any) ([]byte, error) {
+func (a *WeixinAdapter) apiPostWithTimeout(ctx context.Context, endpoint string, body map[string]any, timeout time.Duration) ([]byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/"+strings.TrimLeft(endpoint, "/"), bytes.NewReader(payload))
+	reqCtx := ctx
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		reqCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, a.baseURL+"/"+strings.TrimLeft(endpoint, "/"), bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header = weixinHeaders(a.secrets.BotToken)
-	resp, err := a.httpClient.Do(req)
+	client := a.httpClient
+	if timeout > 0 && client.Timeout > 0 && client.Timeout < timeout {
+		// 仅放开本次长轮询请求的客户端超时上限，不修改调用方共享的 http.Client。
+		cloned := *client
+		cloned.Timeout = timeout
+		client = &cloned
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

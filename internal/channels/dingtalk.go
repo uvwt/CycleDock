@@ -170,19 +170,20 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		SpecVersion string `json:"specVersion"`
 		Type        string `json:"type"`
 		Headers     struct {
-			Topic     string `json:"topic"`
-			MessageID string `json:"messageId"`
+			Topic     string     `json:"topic"`
+			MessageID flexString `json:"messageId"`
 		} `json:"headers"`
 		Data string `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &frame); err != nil {
 		return
 	}
+	headerMsgID := strings.TrimSpace(frame.Headers.MessageID.String())
 	if strings.EqualFold(frame.Type, "SYSTEM") {
 		if strings.EqualFold(frame.Headers.Topic, "ping") {
 			_ = conn.WriteJSON(map[string]any{
 				"code":    200,
-				"headers": map[string]string{"contentType": "application/json", "messageId": frame.Headers.MessageID},
+				"headers": map[string]string{"contentType": "application/json", "messageId": headerMsgID},
 				"message": "OK",
 				"data":    frame.Data,
 			})
@@ -192,10 +193,10 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		}
 		return
 	}
-	if frame.Headers.MessageID != "" {
+	if headerMsgID != "" {
 		_ = conn.WriteJSON(map[string]any{
 			"code":    200,
-			"headers": map[string]string{"contentType": "application/json", "messageId": frame.Headers.MessageID},
+			"headers": map[string]string{"contentType": "application/json", "messageId": headerMsgID},
 			"message": "OK",
 			"data":    `{"response":null}`,
 		})
@@ -204,13 +205,13 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		return
 	}
 	var msg struct {
-		MsgID            string `json:"msgId"`
-		ConversationID   string `json:"conversationId"`
-		ConversationType string `json:"conversationType"` // "1"=单聊, "2"=群聊
-		SenderStaffID    string `json:"senderStaffId"`
-		SenderID         string `json:"senderId"`
-		SessionWebhook   string `json:"sessionWebhook"`
-		IsInAtList       bool   `json:"isInAtList"`
+		MsgID            flexString `json:"msgId"`
+		ConversationID   flexString `json:"conversationId"`
+		ConversationType flexString `json:"conversationType"` // "1"=单聊, "2"=群聊（兼容数字 1/2）
+		SenderStaffID    flexString `json:"senderStaffId"`
+		SenderID         flexString `json:"senderId"`
+		SessionWebhook   string     `json:"sessionWebhook"`
+		IsInAtList       bool       `json:"isInAtList"`
 		Text             struct {
 			Content string `json:"content"`
 		} `json:"text"`
@@ -222,22 +223,22 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 	if text == "" {
 		return
 	}
-	senderID := strings.TrimSpace(msg.SenderStaffID)
+	senderID := strings.TrimSpace(msg.SenderStaffID.String())
 	if senderID == "" {
-		senderID = strings.TrimSpace(msg.SenderID)
+		senderID = strings.TrimSpace(msg.SenderID.String())
 	}
-	chatID := strings.TrimSpace(msg.ConversationID)
+	chatID := strings.TrimSpace(msg.ConversationID.String())
 	if chatID == "" {
 		chatID = senderID
 	}
 	chatType := "direct"
-	if msg.ConversationType == "2" {
+	if strings.TrimSpace(msg.ConversationType.String()) == "2" {
 		chatType = "group"
 	}
 	mentioned := chatType == "direct" || msg.IsInAtList
-	msgID := strings.TrimSpace(msg.MsgID)
+	msgID := strings.TrimSpace(msg.MsgID.String())
 	if msgID == "" {
-		msgID = strings.TrimSpace(frame.Headers.MessageID)
+		msgID = headerMsgID
 	}
 	if msgID == "" {
 		msgID = uuid.NewString()
@@ -303,8 +304,8 @@ func (a *DingTalkAdapter) accessToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("dingtalk accessToken HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var parsed struct {
-		AccessToken string `json:"accessToken"`
-		ExpireIn    int    `json:"expireIn"`
+		AccessToken string    `json:"accessToken"`
+		ExpireIn    flexInt64 `json:"expireIn"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
@@ -312,7 +313,7 @@ func (a *DingTalkAdapter) accessToken(ctx context.Context) (string, error) {
 	if strings.TrimSpace(parsed.AccessToken) == "" {
 		return "", errors.New("dingtalk accessToken response is empty")
 	}
-	ttl := time.Duration(parsed.ExpireIn-120) * time.Second
+	ttl := time.Duration(parsed.ExpireIn.Int64()-120) * time.Second
 	if ttl < time.Minute {
 		ttl = 5 * time.Minute
 	}
