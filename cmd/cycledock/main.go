@@ -20,6 +20,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/channels"
 	"github.com/uvwt/CycleDock/internal/httpapi"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
 	"github.com/uvwt/CycleDock/internal/modelauth"
@@ -112,6 +113,14 @@ func main() {
 		logger.Error("configure webhook trigger encryption", "error", err)
 		os.Exit(1)
 	}
+	channelKey := os.Getenv("CYCLEDOCK_CHANNEL_ENCRYPTION_KEY")
+	if channelKey == "" {
+		channelKey = triggerKey
+	}
+	if err := dataStore.ConfigureChannelEncryption(channelKey); err != nil {
+		logger.Error("configure remote channel encryption", "error", err)
+		os.Exit(1)
+	}
 	nexusDockService, err := nexusdock.New(pool, nexusdock.Config{
 		MCPURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_MCP_URL"),
 		WebURL:        os.Getenv("CYCLEDOCK_NEXUSDOCK_WEB_URL"),
@@ -180,19 +189,24 @@ func main() {
 		}
 		mcpHandlers = mcpserver.New(dataStore, oauthService, logger)
 	}
+	channelManager := channels.NewManager(dataStore, logger, publicURL)
+	channelDispatcher := channels.NewDispatcher(dataStore, channelManager, logger, publicURL)
+
 	router := httpapi.NewRouter(pool, dataStore, authService, httpapi.Config{
-		SecureCookie: secureCookie,
-		WebDir:       os.Getenv("WEB_DIR"),
-		Logger:       logger,
-		OAuth:        oauthService,
-		NexusDock:    nexusDockService,
-		Attachments:  attachmentsService,
-		MCP:          mcpHandlers.MCP,
-		MCPMetadata:  mcpHandlers.ProtectedResourceMetadata,
-		ModelAuth:    modelAuthService,
-		ModelClient:  modelClient,
-		Live:         live,
-		Push:         pushSender,
+		SecureCookie:   secureCookie,
+		WebDir:         os.Getenv("WEB_DIR"),
+		PublicURL:      publicURL,
+		Logger:         logger,
+		OAuth:          oauthService,
+		NexusDock:      nexusDockService,
+		Attachments:    attachmentsService,
+		MCP:            mcpHandlers.MCP,
+		MCPMetadata:    mcpHandlers.ProtectedResourceMetadata,
+		ModelAuth:      modelAuthService,
+		ModelClient:    modelClient,
+		Live:           live,
+		Push:           pushSender,
+		ChannelManager: channelManager,
 	})
 
 	server := &http.Server{
@@ -204,6 +218,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go attachmentsService.RunBackgroundCleanup(ctx)
+	if err := channelManager.Start(ctx); err != nil {
+		logger.Warn("start remote channels manager failed", "error", err)
+	}
+	defer channelManager.Stop()
+	go channelDispatcher.Run(ctx, 2*time.Second)
 	sessionService := agentsession.NewPostgresService(pool)
 	artifactService := agentartifact.NewPostgresService(pool)
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{

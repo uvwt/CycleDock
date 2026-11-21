@@ -36,6 +36,9 @@ import type {
   ToolApproval,
   DeviceToolGuard,
   ToolGuardSettings,
+  RemoteChannel,
+  RemoteChannelInput,
+  WeixinLoginSession,
 } from "./types";
 
 export class APIError extends Error {
@@ -451,5 +454,47 @@ export const api = {
       },
       undefined,
       (value.timeout_ms || 30_000) + 5_000,
+    ),
+  channels: () =>
+    request<{ channels: RemoteChannel[] }>("/channels").then(
+      (res) => res.channels ?? [],
+    ),
+  createChannel: (value: RemoteChannelInput) =>
+    request<{ channel: RemoteChannel }>("/channels", "POST", value).then(
+      (res) => res.channel,
+    ),
+  updateChannel: (id: string, value: RemoteChannelInput) =>
+    request<{ channel: RemoteChannel }>(`/channels/${id}`, "PUT", value).then(
+      (res) => res.channel,
+    ),
+  toggleChannel: (id: string, enabled: boolean) =>
+    request<{ channel: RemoteChannel }>(`/channels/${id}/enabled`, "POST", {
+      enabled,
+    }).then((res) => res.channel),
+  deleteChannel: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/channels/${id}`, "DELETE"),
+  testChannel: (id: string, message?: string) =>
+    request<{ ok: boolean; message: string; channel?: RemoteChannel }>(
+      `/channels/${id}/test`,
+      "POST",
+      message ? { message } : {},
+      undefined,
+      30_000,
+    ),
+  startWeixinLogin: (value: { channel_id?: string; base_url?: string }) =>
+    request<{ session: WeixinLoginSession }>(
+      "/channels/weixin/login/start",
+      "POST",
+      value,
+      undefined,
+      25_000,
+    ).then((res) => res.session),
+  pollWeixinLogin: (sessionID: string) =>
+    request<{ session: WeixinLoginSession; channel?: RemoteChannel }>(
+      `/channels/weixin/login/${encodeURIComponent(sessionID)}`,
+      "GET",
+      undefined,
+      undefined,
+      65_000,
     ),
 };

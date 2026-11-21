@@ -26,6 +26,7 @@ type Store struct {
 	mcpCipher     cipher.AEAD
 	modelCipher   cipher.AEAD
 	triggerCipher cipher.AEAD
+	channelCipher cipher.AEAD
 	// workReady 在可能产生可认领 Trigger 的事务提交后叫醒本机 Dispatcher。
 	// 未注册时写入仍然成功，只是要等 Dispatcher 下一轮轮询。
 	workReady func()
@@ -33,6 +34,11 @@ type Store struct {
 
 func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, queries: db.New(pool)}
+}
+
+// Pool 返回底层连接池，供同进程后台服务做受控只读扫描。
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
 }
 
 // SetWorkReadyNotifier 注册事务提交后的叫醒函数。进程启动时由 Dispatcher 注册一次。

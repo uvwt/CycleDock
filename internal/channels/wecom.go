@@ -1,0 +1,400 @@
+package channels
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/store"
+)
+
+const (
+	defaultWeComWSURL = "wss://openws.work.weixin.qq.com"
+	wecomMaxRunes     = 2000
+)
+
+// WeComAdapter 支持企业微信 AI Bot 官方 WebSocket 长连接（免公网回调），
+// 以及专门用于定时任务推送的企微群机器人 Webhook 模式。
+type WeComAdapter struct {
+	channel    store.RemoteChannel
+	secrets    store.RemoteChannelSecrets
+	wsURL      string
+	httpClient *http.Client
+
+	mu         sync.Mutex
+	conn       *wsConn
+	lastChatID string
+	lastChatTy string
+}
+
+func NewWeComAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, client *http.Client) *WeComAdapter {
+	wsURL := strings.TrimSpace(ch.Config.WSURL)
+	if wsURL == "" {
+		wsURL = defaultWeComWSURL
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	lastChat := strings.TrimSpace(ch.Config.TargetChatID)
+	if lastChat == "" {
+		lastChat = strings.TrimSpace(ch.RuntimeState.LastChatID)
+	}
+	lastChatTy := strings.TrimSpace(ch.Config.TargetChatType)
+	if lastChatTy == "" {
+		lastChatTy = strings.TrimSpace(ch.RuntimeState.LastChatType)
+	}
+	return &WeComAdapter{
+		channel:    ch,
+		secrets:    secrets,
+		wsURL:      wsURL,
+		httpClient: client,
+		lastChatID: lastChat,
+		lastChatTy: lastChatTy,
+	}
+}
+
+func (a *WeComAdapter) Platform() domain.ChannelPlatform {
+	return domain.ChannelPlatformWeCom
+}
+
+func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
+	if a.channel.Transport == domain.ChannelTransportWebhook {
+		if strings.TrimSpace(a.secrets.WebhookURL) == "" {
+			err := errors.New("wecom webhook_url is not configured")
+			if rt.OnStatus != nil {
+				rt.OnStatus(ctx, domain.ChannelRuntimeError, err.Error(), false)
+			}
+			return err
+		}
+		if rt.OnStatus != nil {
+			rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	if strings.TrimSpace(a.channel.Config.BotID) == "" || strings.TrimSpace(a.secrets.Secret) == "" {
+		err := errors.New("wecom bot_id and secret are required for websocket mode")
+		if rt.OnStatus != nil {
+			rt.OnStatus(ctx, domain.ChannelRuntimeError, err.Error(), false)
+		}
+		return err
+	}
+
+	conn, err := dialWS(ctx, a.wsURL)
+	if err != nil {
+		return fmt.Errorf("dial wecom websocket: %w", err)
+	}
+	defer func() {
+		a.mu.Lock()
+		if a.conn == conn {
+			a.conn = nil
+		}
+		a.mu.Unlock()
+		_ = conn.Close()
+	}()
+
+	// 按企微 AI Bot WebSocket 协议发送订阅鉴权帧（aibot_subscribe）。
+	subFrame := map[string]any{
+		"cmd":     "aibot_subscribe",
+		"headers": map[string]string{"req_id": "sub-" + uuid.NewString()[:8]},
+		"body": map[string]string{
+			"bot_id": strings.TrimSpace(a.channel.Config.BotID),
+			"secret": strings.TrimSpace(a.secrets.Secret),
+		},
+	}
+	if err := conn.WriteJSON(subFrame); err != nil {
+		return fmt.Errorf("send wecom subscribe frame: %w", err)
+	}
+
+	a.mu.Lock()
+	a.conn = conn
+	a.mu.Unlock()
+
+	if rt.OnStatus != nil {
+		rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
+	}
+
+	hbDone := make(chan struct{})
+	defer close(hbDone)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hbDone:
+				return
+			case <-ticker.C:
+				_ = conn.WriteJSON(map[string]any{
+					"cmd":     "ping",
+					"headers": map[string]string{"req_id": "ping-" + uuid.NewString()[:8]},
+				})
+				if rt.OnStatus != nil {
+					rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
+				}
+			}
+		}
+	}()
+
+	for {
+		_, data, err := conn.Read()
+		if err != nil {
+			return err
+		}
+		var frame struct {
+			Cmd     string `json:"cmd"`
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+			Headers struct {
+				ReqID string `json:"req_id"`
+			} `json:"headers"`
+			Body struct {
+				MsgID    string `json:"msgid"`
+				ChatID   string `json:"chatid"`
+				ChatType string `json:"chattype"`
+				MsgType  string `json:"msgtype"`
+				From     struct {
+					UserID string `json:"userid"`
+				} `json:"from"`
+				Text struct {
+					Content string `json:"content"`
+				} `json:"text"`
+				Content string `json:"content"`
+			} `json:"body"`
+		}
+		if err := json.Unmarshal(data, &frame); err != nil {
+			continue
+		}
+		if frame.ErrCode != 0 && strings.Contains(strings.ToLower(frame.Cmd), "subscribe") {
+			return fmt.Errorf("wecom subscribe failed (%d): %s", frame.ErrCode, frame.ErrMsg)
+		}
+		if frame.Cmd == "pong" || frame.Cmd == "aibot_subscribe_ack" || frame.Cmd == "aibot_subscribe" {
+			if rt.OnStatus != nil {
+				rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
+			}
+			continue
+		}
+		if frame.Cmd != "aibot_msg_callback" && frame.Cmd != "message.text" && frame.Body.MsgID == "" {
+			continue
+		}
+		text := strings.TrimSpace(frame.Body.Text.Content)
+		if text == "" {
+			text = strings.TrimSpace(frame.Body.Content)
+		}
+		if text == "" {
+			continue
+		}
+		senderID := strings.TrimSpace(frame.Body.From.UserID)
+		chatType := "direct"
+		chatID := senderID
+		if strings.EqualFold(frame.Body.ChatType, "group") || strings.TrimSpace(frame.Body.ChatID) != "" {
+			if strings.EqualFold(frame.Body.ChatType, "group") {
+				chatType = "group"
+			}
+			if strings.TrimSpace(frame.Body.ChatID) != "" {
+				chatID = strings.TrimSpace(frame.Body.ChatID)
+			}
+		}
+		msgID := strings.TrimSpace(frame.Body.MsgID)
+		if msgID == "" {
+			msgID = strings.TrimSpace(frame.Headers.ReqID)
+		}
+		if msgID == "" {
+			msgID = uuid.NewString()
+		}
+
+		a.mu.Lock()
+		a.lastChatID = chatID
+		a.lastChatTy = chatType
+		a.mu.Unlock()
+		if rt.SaveState != nil {
+			_ = rt.SaveState(ctx, func(st *store.RemoteChannelRuntimeState) {
+				st.LastChatID = chatID
+				st.LastChatType = chatType
+			})
+		}
+
+		if rt.OnInbound != nil {
+			_ = rt.OnInbound(ctx, InboundMessage{
+				ExternalMessageID: msgID,
+				SenderID:          senderID,
+				ChatID:            chatID,
+				ChatType:          chatType,
+				Content:           text,
+				Mentioned:         true, // 企微 AI Bot 群聊仅在 @ 机器人时回调
+				Timestamp:         time.Now().UTC(),
+			})
+		}
+	}
+}
+
+func (a *WeComAdapter) Send(ctx context.Context, msg OutboundMessage) error {
+	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	chunks := SplitMessage(fullText, wecomMaxRunes)
+	if a.channel.Transport == domain.ChannelTransportWebhook {
+		webhookURL := strings.TrimSpace(a.secrets.WebhookURL)
+		if webhookURL == "" {
+			return errors.New("wecom webhook_url is not configured")
+		}
+		for _, chunk := range chunks {
+			if err := postJSONExpectOK(ctx, a.httpClient, webhookURL, map[string]any{
+				"msgtype":  "markdown",
+				"markdown": map[string]string{"content": chunk},
+			}, "errcode"); err != nil {
+				return fmt.Errorf("wecom webhook send: %w", err)
+			}
+		}
+		return nil
+	}
+
+	a.mu.Lock()
+	conn := a.conn
+	chatID := strings.TrimSpace(msg.ChatID)
+	if chatID == "" {
+		chatID = a.lastChatID
+	}
+	chatType := strings.TrimSpace(msg.ChatType)
+	if chatType == "" {
+		chatType = a.lastChatTy
+	}
+	a.mu.Unlock()
+
+	if conn == nil {
+		return errors.New("wecom websocket is not connected")
+	}
+	if chatID == "" {
+		return errors.New("wecom target chat_id is empty")
+	}
+	chatTypeNum := 1
+	if strings.EqualFold(chatType, "group") {
+		chatTypeNum = 2
+	}
+	for _, chunk := range chunks {
+		frame := map[string]any{
+			"cmd":     "aibot_send_msg",
+			"headers": map[string]string{"req_id": "send-" + uuid.NewString()[:8]},
+			"body": map[string]any{
+				"chatid":    chatID,
+				"chat_type": chatTypeNum,
+				"msgtype":   "markdown",
+				"markdown":  map[string]string{"content": chunk},
+			},
+		}
+		if err := conn.WriteJSON(frame); err != nil {
+			return fmt.Errorf("wecom websocket send: %w", err)
+		}
+	}
+	return nil
+}
+
+func (a *WeComAdapter) Test(ctx context.Context, testText string) error {
+	if a.channel.Transport == domain.ChannelTransportWebhook {
+		return a.Send(ctx, OutboundMessage{Text: testText})
+	}
+	a.mu.Lock()
+	connected := a.conn != nil
+	target := a.lastChatID
+	a.mu.Unlock()
+	if connected && target != "" {
+		return a.Send(ctx, OutboundMessage{ChatID: target, Text: testText})
+	}
+	if strings.TrimSpace(a.channel.Config.BotID) == "" || strings.TrimSpace(a.secrets.Secret) == "" {
+		return errors.New("wecom bot_id and secret are required")
+	}
+	// 轻量校验：尝试短连接并发送订阅帧验证端点可达。
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := dialWS(dialCtx, a.wsURL)
+	if err != nil {
+		return fmt.Errorf("wecom websocket connectivity test failed: %w", err)
+	}
+	defer conn.Close()
+	return conn.WriteJSON(map[string]any{
+		"cmd":     "aibot_subscribe",
+		"headers": map[string]string{"req_id": "test-" + uuid.NewString()[:8]},
+		"body": map[string]string{
+			"bot_id": strings.TrimSpace(a.channel.Config.BotID),
+			"secret": strings.TrimSpace(a.secrets.Secret),
+		},
+	})
+}
+
+func postJSONExpectOK(ctx context.Context, client *http.Client, endpoint string, body any, codeField string) error {
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(rawBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respRaw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
+	}
+	if codeField != "" && len(respRaw) > 0 {
+		var parsed map[string]any
+		if err := json.Unmarshal(respRaw, &parsed); err == nil {
+			if codeVal, ok := parsed[codeField]; ok {
+				if num, ok := codeVal.(float64); ok && int(num) != 0 {
+					return fmt.Errorf("remote error %s=%d: %s", codeField, int(num), strings.TrimSpace(string(respRaw)))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// signWebhookHMAC 生成钉钉/飞书群机器人 Webhook 加签摘要。
+func signDingTalkWebhookURL(rawURL, secret string, now time.Time) (string, error) {
+	if strings.TrimSpace(secret) == "" {
+		return rawURL, nil
+	}
+	ts := strconv.FormatInt(now.UnixMilli(), 10)
+	stringToSign := ts + "\n" + secret
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(stringToSign))
+	sig := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	q := parsed.Query()
+	q.Set("timestamp", ts)
+	q.Set("sign", sig)
+	parsed.RawQuery = q.Encode()
+	return parsed.String(), nil
+}
+
+func signFeishuWebhook(secret string, now time.Time) (string, string) {
+	ts := strconv.FormatInt(now.Unix(), 10)
+	stringToSign := ts + "\n" + secret
+	mac := hmac.New(sha256.New, []byte(stringToSign))
+	return ts, base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}

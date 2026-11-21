@@ -22,6 +22,7 @@ export const keys = {
   providerModels: (baseURL: string, apiCredentialID = "") =>
     ["provider-models", baseURL, apiCredentialID] as const,
   mcp: ["mcp"] as const,
+  channels: ["remote-channels"] as const,
   nexus: ["nexus"] as const,
   nexusDevices: (workspaceID: string) =>
     ["nexus", "devices", workspaceID] as const,

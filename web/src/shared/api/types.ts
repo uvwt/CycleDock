@@ -445,3 +445,111 @@ export type TraceEvent = {
 export type TraceEventsResponse = {
   events: TraceEvent[];
 };
+
+export type RemoteChannelPlatform =
+  | "weixin"
+  | "wecom"
+  | "feishu"
+  | "dingtalk"
+  | "qq"
+  | "telegram";
+
+export type RemoteChannelRole = "main_chat" | "scheduled_push";
+
+export type RemoteChannelTransport =
+  | "long_poll"
+  | "websocket"
+  | "stream"
+  | "webhook";
+
+export type RemoteChannelPushFilter = "all" | "warnings_only";
+
+export type RemoteChannelGroupPolicy = "mention_only" | "allowlist" | "all";
+
+export type RemoteChannelRuntimeStatus =
+  | "disabled"
+  | "starting"
+  | "connected"
+  | "reconnecting"
+  | "error";
+
+export type RemoteChannelConfig = {
+  base_url?: string;
+  domain?: string;
+  ws_url?: string;
+  bot_id?: string;
+  app_id?: string;
+  client_id?: string;
+  target_chat_id?: string;
+  target_chat_type?: string;
+  message_thread_id?: number;
+  proxy_url?: string;
+  weixin_user_id?: string;
+};
+
+export type RemoteChannelSecretsInput = {
+  bot_token?: string;
+  secret?: string;
+  app_secret?: string;
+  client_secret?: string;
+  webhook_url?: string;
+  webhook_secret?: string;
+};
+
+export type RemoteChannel = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  platform: RemoteChannelPlatform;
+  role: RemoteChannelRole;
+  transport: RemoteChannelTransport;
+  enabled: boolean;
+  project_id: string;
+  target_card_id?: string | null;
+  push_filter: RemoteChannelPushFilter;
+  mirror_web_messages: boolean;
+  group_policy: RemoteChannelGroupPolicy;
+  allow_from: string[];
+  config: RemoteChannelConfig;
+  has_secrets: boolean;
+  secret_hints: Record<string, string>;
+  runtime_status: RemoteChannelRuntimeStatus;
+  last_error?: string;
+  last_heartbeat_at?: string;
+  last_inbound_at?: string;
+  last_outbound_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RemoteChannelInput = {
+  name: string;
+  platform: RemoteChannelPlatform;
+  role: RemoteChannelRole;
+  transport: RemoteChannelTransport;
+  enabled?: boolean;
+  project_id: string;
+  target_card_id?: string | null;
+  push_filter?: RemoteChannelPushFilter;
+  mirror_web_messages?: boolean;
+  group_policy?: RemoteChannelGroupPolicy;
+  allow_from?: string[];
+  config: RemoteChannelConfig;
+  secrets?: RemoteChannelSecretsInput;
+  clear_secrets?: boolean;
+};
+
+export type WeixinLoginSession = {
+  session_id: string;
+  channel_id?: string;
+  qrcode_id: string;
+  qrcode_content: string;
+  status: "wait" | "scanned" | "confirmed" | "expired" | "error";
+  base_url: string;
+  bot_id?: string;
+  weixin_user_id?: string;
+  message?: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+};
