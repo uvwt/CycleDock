@@ -423,7 +423,8 @@ func buildBuiltInProactivePrompt(
 	b.WriteString("请按以下要求执行：\n")
 	b.WriteString("1. 结合用户最近可能感兴趣的消息、主聊天上下文以及 Recall 长期记忆（如有 recall_search / recall_read 可主动检索），挑选一个用户当下可能关心或觉得有用的话题（避免与主聊天上一条主动消息完全重复）。\n")
 	b.WriteString("2. 如果已连接设备（NexusDock）或 MCP 工具，主动调用不具破坏性（只读、查询类、无副作用）的设备 Skill 或 MCP 工具获取最新真实信息或状态；严禁执行修改文件、删除数据、重启服务、改写配置等任何破坏性操作。\n")
-	b.WriteString("3. 禁止发送任何中间进度气泡（严禁调用 end_turn=false 的 reply_message）。完成所有只读查询后，将最终内容整理成自然、简短的一段话，只调用 1 次 reply_message（type=\"text\", end_turn=true）发送 1 条气泡到主聊天。")
+	b.WriteString("3. 禁止发送任何中间进度气泡（严禁调用 end_turn=false 的 reply_message）。完成所有只读查询后，将最终内容整理成自然、简短的一段话，只调用 1 次 reply_message（type=\"text\", end_turn=true）发送 1 条气泡到主聊天。\n")
+	b.WriteString("4. 若回复中提及具体卡片，请使用 [卡片标题](cycledock://card/<card_id>) 并将其单独成行/成段（前后留空行）。该标记在前端会渲染为独占一行的块级卡片组件并自动展示实时状态，严禁把卡片嵌在句子中间，也严禁在前后紧跟冒号、逗号、顿号、句号、分号、破折号或括号状态说明。")
 	return b.String()
 }
 

@@ -1,4 +1,5 @@
 import {
+  Children,
   isValidElement,
   memo,
   useCallback,
@@ -26,6 +27,10 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "../../app/project-context";
 import { ChatActionCard } from "../../shared/ui/chat";
+import {
+  normalizeCardMentions,
+  parseCardLink,
+} from "./cardLinkFormatting";
 
 // 在 lowlight 常用语言包的基础上补充运维/开发高频语言，避免引入全量数百种冷门语法导致前端包膨胀。
 const HIGHLIGHT_LANGUAGES = {
@@ -151,70 +156,6 @@ function customUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-function parseCardLink(href?: string): { cardId: string; projectId?: string } | null {
-  if (!href) return null;
-
-  let path = href.trim();
-  // 兼容同源完整 URL 提取 pathname
-  if (path.startsWith("http://") || path.startsWith("https://")) {
-    try {
-      const url = new URL(path);
-      path = url.pathname;
-    } catch {
-      // 忽略无法解析的 URL，保持原 path
-    }
-  }
-
-  // Match cycledock://card/:cardId or cycledock://card/:projectId/:cardId
-  if (path.startsWith("cycledock://card/")) {
-    const parts = path.replace("cycledock://card/", "").split("/").filter(Boolean);
-    if (parts.length === 1) {
-      return { cardId: parts[0] };
-    }
-    if (parts.length >= 2) {
-      return { projectId: parts[0], cardId: parts[1] };
-    }
-  }
-
-  // Match [card:UUID] or card:UUID
-  if (path.startsWith("card:")) {
-    const cardId = path.replace("card:", "").trim();
-    if (cardId) return { cardId };
-  }
-
-  // Match /cards/:projectId/:cardId or /cards/:cardId 以及 /chat/:projectId/:cardId 或 /chat/:cardId
-  const match = path.match(/^\/(?:cards|chat)\/([^/?#]+)(?:\/([^/?#]+))?/);
-  if (match) {
-    if (match[2]) {
-      return { projectId: match[1], cardId: match[2] };
-    }
-    return { cardId: match[1] };
-  }
-
-  return null;
-}
-
-/**
- * 将正文中裸露的 card:UUID 或 cycledock://card/... 规范化为 Markdown 链接，
- * 避免因缺少 Markdown 括号而无法触发 parseCardLink 拦截渲染。
- */
-function normalizeCardMentions(text: string): string {
-  if (!text) return "";
-
-  // 1. 将未被 Markdown 链接包裹的 cycledock://card/... 转为 [查看卡片详情](cycledock://card/...)
-  let result = text.replace(
-    /(^|[^(\]="'])(cycledock:\/\/card\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)?)/g,
-    "$1[查看卡片详情]($2)",
-  );
-
-  // 2. 将未被 Markdown 链接包裹的 card:UUID 转为 [查看卡片详情](card:UUID)
-  result = result.replace(
-    /(^|[^(\]="'])(card:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))/g,
-    "$1[查看卡片详情]($2)",
-  );
-
-  return result;
-}
 
 export const RichText = memo(function RichText({
   content,
@@ -297,6 +238,25 @@ export const RichText = memo(function RichText({
 
   const markdownComponents = useMemo(
     () => ({
+      p: ({ children }: { children?: ReactNode }) => {
+        const items = Children.toArray(children).filter(
+          (child) => !(typeof child === "string" && child.trim() === ""),
+        );
+        const hasCardChild = items.some(
+          (child) =>
+            isValidElement<{ href?: string }>(child) &&
+            typeof child.props?.href === "string" &&
+            parseCardLink(child.props.href) !== null,
+        );
+        if (hasCardChild) {
+          // ChatActionCard 本身渲染为块级 div，避免落入 <p> 内造成非法嵌套与多余间距
+          if (items.length === 1) {
+            return <>{children}</>;
+          }
+          return <div className="my-1.5">{children}</div>;
+        }
+        return <p>{children}</p>;
+      },
       a: ({
         href,
         children,

@@ -72,7 +72,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_generate_work",
-				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. By default auto_start is true and immediately queues the initial Turn for the generated Card; when the user explicitly asks to archive/schedule the work in the backlog without starting execution now, pass auto_start=false. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) so the UI displays an interactive card widget with direct navigation.",
+				Description: "Generate one work Card from the current active Discussion. Classify finite work as todo and long-term, periodic, or continuously monitored work as ongoing. Never call this from Todo or Ongoing cards. By default auto_start is true and immediately queues the initial Turn for the generated Card; when the user explicitly asks to archive/schedule the work in the backlog without starting execution now, pass auto_start=false. Always mention the generated card in your user-visible reply using [Card Title](cycledock://card/<card_id>) because the UI renders it as a standalone full-width block card widget with live status and direct navigation. Place the card reference on its own standalone line/paragraph (with blank lines around it); never embed it inline in a sentence or attach colons, commas, periods, semicolons, dashes, or parenthetical status notes directly before or after it.",
 				Parameters: object(map[string]any{
 					"kind":                   map[string]any{"type": "string", "enum": []string{"todo", "ongoing"}},
 					"title":                  stringField("Concise generated work title."),
@@ -90,7 +90,7 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Choice messages also complete this Turn; the human answer starts a new Turn. Do not send a second final answer.",
 				Parameters: object(map[string]any{
 					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
-					"content": stringField("Markdown content. Required for text."),
+					"content": stringField("Markdown content. Required for text. Any [Card Title](cycledock://card/<card_id>) reference renders as a standalone block card with live status, so put it on its own line with blank lines around it and never attach adjacent punctuation or parenthetical notes."),
 					"url":     stringField("HTTPS attachment URL, for attachment."),
 					"alt":     stringField("Attachment description."),
 					"images":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 8},
