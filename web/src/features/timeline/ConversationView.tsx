@@ -29,6 +29,7 @@ import {
 import type {
   Attempt,
   Card,
+  CardKind,
   PendingTurn,
   TimelineEvent,
 } from "../../shared/api/types";
@@ -50,6 +51,7 @@ import {
   RunDuration,
   StandaloneExecution,
 } from "./ExecutionStatus";
+import { BubbleRetryMenu } from "./BubbleRetryMenu";
 import { RichText } from "./RichText";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 import { MessageAttachmentGrid } from "./AttachmentGallery";
@@ -251,7 +253,15 @@ export type QuotedMessage = {
 
 type ExecutionActions = {
   retryingAttemptID?: string;
-  onRetryAttempt: (attemptID: string) => void;
+  regeneratingEventID?: string;
+  onRetryAttempt: (
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) => void;
+  onRegenerateMessage?: (
+    eventID: string,
+    preferredModelRouteID: string | null,
+  ) => Promise<void>;
   onOpenTrace?: (attemptID: string) => void;
   onReply?: (quote: QuotedMessage) => void;
   onEditMessage?: (eventID: string, content: string) => Promise<void>;
@@ -287,6 +297,8 @@ function TimeSeparator({ value }: { value: string }) {
 function EventRow({
   event,
   cardID,
+  cardKind,
+  cardPreferredRouteID,
   attempts,
   headerAttempts,
   showSender,
@@ -295,11 +307,15 @@ function EventRow({
   replyModel,
   live,
   isLatest = false,
+  willTruncateFollowing = false,
+  cardRunning = false,
   compact = false,
   ...actions
 }: {
   event: TimelineEvent;
   cardID?: string;
+  cardKind?: CardKind;
+  cardPreferredRouteID?: string | null;
   attempts: ExecutionAttempt[];
   headerAttempts: Attempt[];
   showSender: boolean;
@@ -308,6 +324,8 @@ function EventRow({
   replyModel?: string;
   live: LiveAttempt | null;
   isLatest?: boolean;
+  willTruncateFollowing?: boolean;
+  cardRunning?: boolean;
   compact?: boolean;
 } & ExecutionActions) {
   const { t } = useTranslation();
@@ -623,6 +641,25 @@ function EventRow({
     human && event.type === "comment" && actions.onEditMessage,
   );
 
+  // 支持对已落库的 AI 回复气泡（含 finding/result）以及人类消息气泡触发重试/换模型重跑；
+  // 排除尚未落库或正在流式输出的预览气泡（无 persisted eventID），以及非对话消息（如卡片间委托 comment）。
+  const isStreamingPreview = Boolean(preview && !preview.eventID);
+  const canRegenerate = Boolean(
+    actions.onRegenerateMessage &&
+      !isStreamingPreview &&
+      !hasActiveAttempt &&
+      (human
+        ? event.type === "comment"
+        : event.type === "message" ||
+          event.type === "finding" ||
+          event.type === "result"),
+  );
+  const isRegeneratingThis = actions.regeneratingEventID === event.id;
+  const regenerateDisabled = Boolean(
+    (actions.regeneratingEventID && !isRegeneratingThis) ||
+      (cardRunning && !isRegeneratingThis),
+  );
+
   function handleStartEdit() {
     if (!canEdit) return;
     setEditDraft(rawText);
@@ -774,6 +811,8 @@ function EventRow({
                       <AttemptMetadata
                         key={attempt.id}
                         attempt={attempt}
+                        cardKind={cardKind}
+                        cardPreferredRouteID={cardPreferredRouteID}
                         {...actions}
                       />
                     ))}
@@ -893,6 +932,50 @@ function EventRow({
                 onClick={handleStartEdit}
               />
             )}
+            {canRegenerate && actions.onRegenerateMessage && (
+              <BubbleRetryMenu
+                replyModel={replyModel}
+                cardKind={cardKind}
+                cardPreferredRouteID={cardPreferredRouteID}
+                align={human ? "end" : "start"}
+                willTruncateFollowing={willTruncateFollowing}
+                loading={isRegeneratingThis}
+                disabled={regenerateDisabled}
+                onOpenChange={(open) => {
+                  if (open) setTouchActive(true);
+                }}
+                onConfirmRetry={async (preferredModelRouteID) => {
+                  try {
+                    await actions.onRegenerateMessage?.(
+                      event.id,
+                      preferredModelRouteID,
+                    );
+                    setTouchActive(false);
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : t("重新回答失败"),
+                    );
+                  }
+                }}
+                renderTrigger={({ onClick, disabled, title, icon }) => (
+                  <ChatBubbleAction
+                    data-bubble-retry-trigger
+                    icon={icon}
+                    disabled={disabled}
+                    title={
+                      cardRunning && !isRegeneratingThis
+                        ? t("当前正在生成回答，请稍候重试")
+                        : title
+                    }
+                    aria-label={title}
+                    onClick={onClick}
+                    className="disabled:cursor-not-allowed disabled:opacity-45"
+                  />
+                )}
+              />
+            )}
             {actions.onReply && (
               <ChatBubbleAction
                 icon={<Reply className="size-3.5" />}
@@ -954,7 +1037,13 @@ function EventRow({
       </ChatBubble>
       {attempts.length > 0 && (
         <div className="mt-3">
-          <ExecutionStatus attempts={attempts} live={live} {...actions} />
+          <ExecutionStatus
+            attempts={attempts}
+            live={live}
+            cardKind={cardKind}
+            cardPreferredRouteID={cardPreferredRouteID}
+            {...actions}
+          />
         </div>
       )}
     </>
@@ -1028,7 +1117,7 @@ export function ConversationView({
   card?: Card;
   events: TimelineEvent[];
   live: LiveAttempt | null;
-  cardKind: string;
+  cardKind: CardKind;
   pendingTurns: PendingTurn[];
   currentAttempt: Attempt | null;
   attemptHistory: Attempt[];
@@ -1509,6 +1598,8 @@ export function ConversationView({
                 <StandaloneExecution
                   attempts={item.attempts}
                   live={displayLive}
+                  cardKind={cardKind}
+                  cardPreferredRouteID={card?.preferred_model_route_id}
                   {...actions}
                 />
               </div>
@@ -1530,6 +1621,38 @@ export function ConversationView({
             event.message?.model ||
             matchedAttempt?.model ||
             rowHeaderAttempts.find((attempt) => attempt.model)?.model;
+          // 若当前气泡之后还存在后续对话轮次（另一轮人类消息、不同 attempt 的回复、或排队中的新 Turn），
+          // 重新生成时会截断后续历史，因此需要弹出轻量二次确认。
+          const hasFollowingDialogue =
+            pendingTurns.length > 0 ||
+            timelineItems.slice(index + 1).some((later) => {
+              if (later.kind !== "event") return true;
+              const laterEvent = later.row.event;
+              if (systemTypes.has(laterEvent.type)) return false;
+              // 同一 AI 回复轮次拆分成多个气泡（同一 attempt_id）时，点击其中任一气泡视作重跑最新这一轮，不弹确认
+              if (
+                event.actor_kind !== "human" &&
+                event.attempt_id &&
+                laterEvent.attempt_id === event.attempt_id
+              ) {
+                return false;
+              }
+              // 点击最新一条人类消息且后面仅有它自己的那轮回复（无更后的人类消息）也不需要打断确认
+              if (
+                event.actor_kind === "human" &&
+                laterEvent.actor_kind !== "human"
+              ) {
+                const laterHuman = timelineItems
+                  .slice(index + 1)
+                  .some(
+                    (afterItem) =>
+                      afterItem.kind === "event" &&
+                      afterItem.row.event.actor_kind === "human",
+                  );
+                return laterHuman;
+              }
+              return true;
+            });
           return (
             <div
               key={key}
@@ -1539,6 +1662,8 @@ export function ConversationView({
               <EventRow
                 event={event}
                 cardID={card?.id}
+                cardKind={cardKind}
+                cardPreferredRouteID={card?.preferred_model_route_id}
                 preview={preview}
                 previewStatus={matchedAttempt?.status}
                 replyModel={replyModel}
@@ -1547,6 +1672,8 @@ export function ConversationView({
                 headerAttempts={rowHeaderAttempts}
                 live={displayLive}
                 isLatest={!running && index === timelineItems.length - 1}
+                willTruncateFollowing={hasFollowingDialogue}
+                cardRunning={Boolean(running)}
                 compact={compact}
                 {...actions}
                 canApproveReview={
@@ -1567,6 +1694,8 @@ export function ConversationView({
               attempts={[running]}
               live={displayLive}
               showSender={!runningContinues}
+              cardKind={cardKind}
+              cardPreferredRouteID={card?.preferred_model_route_id}
               {...actions}
             />
           </div>

@@ -311,17 +311,35 @@ export const api = {
       "PATCH",
       { content },
     ),
+  regenerateMessage: (
+    id: string,
+    eventID: string,
+    preferredModelRouteID?: string | null,
+  ) =>
+    request<{ event_id?: string; turn_id: string }>(
+      `/cards/${id}/messages/${eventID}/regenerate`,
+      "POST",
+      preferredModelRouteID
+        ? { preferred_model_route_id: preferredModelRouteID }
+        : { preferred_model_route_id: null },
+    ),
   editTurn: (id: string, turnID: string, content: string) =>
     request<void>(`/cards/${id}/turns/${turnID}`, "PATCH", { content }),
   steerTurn: (id: string, turnID: string) =>
     request<void>(`/cards/${id}/turns/${turnID}/steer`, "POST", {}),
   cancelTurn: (id: string, turnID: string) =>
     request<void>(`/cards/${id}/turns/${turnID}/cancel`, "POST", {}),
-  retryAttempt: (id: string, attemptID: string) =>
+  retryAttempt: (
+    id: string,
+    attemptID: string,
+    preferredModelRouteID?: string | null,
+  ) =>
     request<{ attempt_id: string }>(
       `/cards/${id}/attempts/${attemptID}/retry`,
       "POST",
-      {},
+      preferredModelRouteID !== undefined
+        ? { preferred_model_route_id: preferredModelRouteID }
+        : {},
     ),
   getAttemptTrace: (id: string, attemptID: string) =>
     request<TraceOverview>(`/cards/${id}/attempts/${attemptID}/trace`),

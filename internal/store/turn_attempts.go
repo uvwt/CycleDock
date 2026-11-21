@@ -459,6 +459,17 @@ func (s *Store) RetryAttempt(
 	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
 	reason domain.AttemptReason,
 ) (RetryAttemptResult, error) {
+	return s.RetryAttemptWithModelRoute(ctx, workspaceID, cardID, attemptID, runnerSourceID, reason, nil)
+}
+
+// RetryAttemptWithModelRoute 在重试失败/过期/取消的 Attempt 时，支持为本次 Turn 覆盖单次优先模型路由。
+// preferredModelRouteID 传 nil 表示沿用该 Turn 原有配置或卡片/工作区默认路由。
+func (s *Store) RetryAttemptWithModelRoute(
+	ctx context.Context,
+	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
+	reason domain.AttemptReason,
+	preferredModelRouteID *uuid.UUID,
+) (RetryAttemptResult, error) {
 	if reason != domain.AttemptReasonRetry && reason != domain.AttemptReasonRecovery {
 		return RetryAttemptResult{}, fmt.Errorf("invalid retry reason %q", reason)
 	}
@@ -473,6 +484,10 @@ func (s *Store) RetryAttempt(
 		return RetryAttemptResult{}, err
 	}
 	if err := requireRunnableSource(ctx, tx, workspaceID, runnerSourceID); err != nil {
+		return RetryAttemptResult{}, err
+	}
+	validatedRouteID, err := validateEnabledWorkspaceModelRouteTx(ctx, tx, workspaceID, preferredModelRouteID)
+	if err != nil {
 		return RetryAttemptResult{}, err
 	}
 
@@ -533,6 +548,16 @@ func (s *Store) RetryAttempt(
 	}
 	if latestID != target.ID {
 		return RetryAttemptResult{}, fmt.Errorf("%w: only the latest attempt can be retried", domain.ErrConflict)
+	}
+
+	if validatedRouteID.Valid {
+		if _, err := tx.Exec(ctx, `
+			UPDATE card_turns
+			SET preferred_model_route_id = $4
+			WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+		`, workspaceID, cardID, target.TurnID, validatedRouteID); err != nil {
+			return RetryAttemptResult{}, err
+		}
 	}
 
 	attemptIDNew := uuid.New()

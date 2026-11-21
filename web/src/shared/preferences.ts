@@ -593,6 +593,25 @@ const en = {
   请求模型: "Requested model",
   "上游未返回，按请求模型展示": "Not returned by upstream; showing requested model",
   模型提供方: "Model provider",
+  重新回答: "Regenerate",
+  切换模型或重新回答: "Regenerate or switch model",
+  "正在重新生成...": "Regenerating...",
+  "当前正在生成回答，请稍候重试": "Response is currently generating; please wait",
+  重新回答失败: "Failed to regenerate response",
+  选择模型重新回答: "Choose a model to regenerate",
+  "仅对本次重试生效，不会修改当前卡片默认模型。":
+    "Applies to this retry only and does not change the card default model.",
+  "仅对本次重试生效，确认后将重新生成该轮并清空后续消息。":
+    "Applies to this retry only; confirming will regenerate this turn and clear following messages.",
+  使用当前默认重试: "Retry with current default",
+  "上次使用：{{model}}": "Last used: {{model}}",
+  切换指定模型: "Switch model",
+  上次模型: "Last used",
+  "确认重新生成回答？": "Regenerate this response?",
+  "将使用 {{model}} 重新生成该轮回答，并清空此消息之后的后续对话记录。":
+    "This will regenerate the response using {{model}} and clear all messages after it.",
+  "将重新生成该轮回答，并清空此消息之后的后续对话记录。":
+    "This will regenerate the response and clear all messages after it.",
 } as const;
 
 void i18n.use(initReactI18next).init({
