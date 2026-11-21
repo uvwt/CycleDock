@@ -55,6 +55,7 @@ type API struct {
 	push               pushSender
 	channelManager     *channels.Manager
 	fallbackWeixinAuth *channels.WeixinLoginStore
+	fallbackQRAuth     *channels.QRConnectStore
 	publicBaseURL      string
 	secureCookie       bool
 	logger             *slog.Logger

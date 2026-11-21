@@ -96,6 +96,12 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Post("/channels/{channelID}/enabled", api.toggleRemoteChannel)
 	r.Post("/channels/{channelID}/test", api.testRemoteChannel)
 	r.Delete("/channels/{channelID}", api.deleteRemoteChannel)
+	r.Post("/channels/qr/start", api.startChannelQRConnect)
+	r.Get("/channels/qr/{sessionID}", api.pollChannelQRConnect)
+	r.Post("/channels/qr/{sessionID}/cancel", api.cancelChannelQRConnect)
+	r.Post("/remote-channels/qr/start", api.startChannelQRConnect)
+	r.Get("/remote-channels/qr/{sessionID}", api.pollChannelQRConnect)
+	r.Post("/remote-channels/qr/{sessionID}/cancel", api.cancelChannelQRConnect)
 	r.Post("/channels/weixin/login/start", api.startWeixinLogin)
 	r.Get("/channels/weixin/login/{sessionID}", api.pollWeixinLogin)
 

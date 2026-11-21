@@ -146,8 +146,8 @@ func (a *FeishuAdapter) fetchWSEndpoint(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("feishu ws endpoint HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var parsed struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
+		Code flexInt64  `json:"code"`
+		Msg  flexString `json:"msg"`
 		Data struct {
 			URL string `json:"URL"`
 		} `json:"data"`
@@ -156,7 +156,7 @@ func (a *FeishuAdapter) fetchWSEndpoint(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if parsed.Code != 0 || strings.TrimSpace(parsed.Data.URL) == "" {
-		return "", fmt.Errorf("feishu ws endpoint failed (code=%d): %s", parsed.Code, parsed.Msg)
+		return "", fmt.Errorf("feishu ws endpoint failed (code=%d): %s", parsed.Code.Int64(), parsed.Msg.String())
 	}
 	return strings.TrimSpace(parsed.Data.URL), nil
 }
@@ -165,7 +165,7 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	// 同时兼容 JSON 事件封装与长连接 ACK 协议，便于测试和与网关兼容。
 	var envelope struct {
 		Type   string          `json:"type"`
-		ID     string          `json:"id"`
+		ID     flexString      `json:"id"`
 		Header json.RawMessage `json:"header"`
 		Event  json.RawMessage `json:"event"`
 		Data   json.RawMessage `json:"data"`
@@ -173,15 +173,16 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return
 	}
+	envelopeID := strings.TrimSpace(envelope.ID.String())
 	if envelope.Type == "ping" {
-		_ = conn.WriteJSON(map[string]any{"type": "pong", "id": envelope.ID})
+		_ = conn.WriteJSON(map[string]any{"type": "pong", "id": envelopeID})
 		if rt.OnStatus != nil {
 			rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 		}
 		return
 	}
-	if envelope.ID != "" {
-		_ = conn.WriteJSON(map[string]any{"code": 200, "id": envelope.ID})
+	if envelopeID != "" {
+		_ = conn.WriteJSON(map[string]any{"code": 200, "id": envelopeID})
 	}
 	eventBytes := envelope.Event
 	if len(eventBytes) == 0 && len(envelope.Data) > 0 {
@@ -198,19 +199,19 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	var event struct {
 		Sender struct {
 			SenderID struct {
-				OpenID string `json:"open_id"`
-				UserID string `json:"user_id"`
+				OpenID flexString `json:"open_id"`
+				UserID flexString `json:"user_id"`
 			} `json:"sender_id"`
 			SenderType string `json:"sender_type"`
 		} `json:"sender"`
 		Message struct {
-			MessageID string `json:"message_id"`
-			RootID    string `json:"root_id"`
-			ThreadID  string `json:"thread_id"`
-			ChatID    string `json:"chat_id"`
-			ChatType  string `json:"chat_type"`
-			MsgType   string `json:"message_type"`
-			Content   string `json:"content"`
+			MessageID flexString `json:"message_id"`
+			RootID    flexString `json:"root_id"`
+			ThreadID  flexString `json:"thread_id"`
+			ChatID    flexString `json:"chat_id"`
+			ChatType  string     `json:"chat_type"`
+			MsgType   string     `json:"message_type"`
+			Content   string     `json:"content"`
 			Mentions  []struct {
 				Key  string `json:"key"`
 				Name string `json:"name"`
@@ -220,7 +221,8 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	if err := json.Unmarshal(eventBytes, &event); err != nil {
 		return
 	}
-	if strings.EqualFold(event.Sender.SenderType, "app") || strings.TrimSpace(event.Message.MessageID) == "" {
+	msgID := strings.TrimSpace(event.Message.MessageID.String())
+	if strings.EqualFold(event.Sender.SenderType, "app") || msgID == "" {
 		return
 	}
 	text := extractFeishuText(event.Message.Content)
@@ -239,14 +241,14 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 		chatType = "group"
 	}
 	mentioned := chatType == "direct" || len(event.Message.Mentions) > 0
-	senderID := strings.TrimSpace(event.Sender.SenderID.OpenID)
+	senderID := strings.TrimSpace(event.Sender.SenderID.OpenID.String())
 	if senderID == "" {
-		senderID = strings.TrimSpace(event.Sender.SenderID.UserID)
+		senderID = strings.TrimSpace(event.Sender.SenderID.UserID.String())
 	}
-	chatID := strings.TrimSpace(event.Message.ChatID)
-	threadID := strings.TrimSpace(event.Message.ThreadID)
+	chatID := strings.TrimSpace(event.Message.ChatID.String())
+	threadID := strings.TrimSpace(event.Message.ThreadID.String())
 	if threadID == "" {
-		threadID = strings.TrimSpace(event.Message.RootID)
+		threadID = strings.TrimSpace(event.Message.RootID.String())
 	}
 
 	a.mu.Lock()
@@ -264,7 +266,7 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	}
 	if rt.OnInbound != nil {
 		_ = rt.OnInbound(ctx, InboundMessage{
-			ExternalMessageID: strings.TrimSpace(event.Message.MessageID),
+			ExternalMessageID: msgID,
 			SenderID:          senderID,
 			ChatID:            chatID,
 			ChatType:          chatType,
@@ -314,18 +316,18 @@ func (a *FeishuAdapter) tenantAccessToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var parsed struct {
-		Code              int    `json:"code"`
-		Msg               string `json:"msg"`
-		TenantAccessToken string `json:"tenant_access_token"`
-		Expire            int    `json:"expire"`
+		Code              flexInt64  `json:"code"`
+		Msg               flexString `json:"msg"`
+		TenantAccessToken string     `json:"tenant_access_token"`
+		Expire            flexInt64  `json:"expire"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
 	}
 	if parsed.Code != 0 || strings.TrimSpace(parsed.TenantAccessToken) == "" {
-		return "", fmt.Errorf("feishu tenant_access_token failed (code=%d): %s", parsed.Code, parsed.Msg)
+		return "", fmt.Errorf("feishu tenant_access_token failed (code=%d): %s", parsed.Code.Int64(), parsed.Msg.String())
 	}
-	ttl := time.Duration(parsed.Expire-120) * time.Second
+	ttl := time.Duration(parsed.Expire.Int64()-120) * time.Second
 	if ttl < time.Minute {
 		ttl = 5 * time.Minute
 	}
@@ -403,11 +405,11 @@ func (a *FeishuAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 			return fmt.Errorf("feishu send HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 		}
 		var parsed struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
+			Code flexInt64  `json:"code"`
+			Msg  flexString `json:"msg"`
 		}
 		if err := json.Unmarshal(raw, &parsed); err == nil && parsed.Code != 0 {
-			return fmt.Errorf("feishu send failed (code=%d): %s", parsed.Code, parsed.Msg)
+			return fmt.Errorf("feishu send failed (code=%d): %s", parsed.Code.Int64(), parsed.Msg.String())
 		}
 	}
 	return nil

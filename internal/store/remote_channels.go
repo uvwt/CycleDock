@@ -998,24 +998,48 @@ func (s *Store) EventOriginChannelID(ctx context.Context, workspaceID, eventID u
 	return channelID, true, nil
 }
 
+// AttemptTurnOrigin 描述某次 Attempt 对应的 Turn 来源及可选的入站远程通道 ID。
+type AttemptTurnOrigin struct {
+	Source          domain.TurnSource
+	OriginChannelID uuid.UUID
+	HasOrigin       bool
+}
+
 // AttemptOriginChannelID 查询某次 Attempt 对应的 Turn 是否源自远程通道。
 func (s *Store) AttemptOriginChannelID(ctx context.Context, workspaceID, attemptID uuid.UUID) (uuid.UUID, bool, error) {
-	var channelID uuid.UUID
+	info, ok, err := s.AttemptTurnOrigin(ctx, workspaceID, attemptID)
+	if err != nil || !ok || !info.HasOrigin {
+		return uuid.Nil, false, err
+	}
+	return info.OriginChannelID, true, nil
+}
+
+// AttemptTurnOrigin 查询某次 Attempt 对应的 Turn 来源（human/schedule/system/trigger）
+// 及可选的入站远程通道 ID，供主聊天通道判断是否需要推送终态回复。
+func (s *Store) AttemptTurnOrigin(ctx context.Context, workspaceID, attemptID uuid.UUID) (AttemptTurnOrigin, bool, error) {
+	var source string
+	var channelID uuid.NullUUID
 	err := s.pool.QueryRow(ctx, `
-		SELECT d.channel_id
+		SELECT t.source, d.channel_id
 		FROM turn_attempts a
-		JOIN remote_channel_inbound_dedup d
+		JOIN card_turns t
+		  ON t.workspace_id = a.workspace_id AND t.id = a.turn_id
+		LEFT JOIN remote_channel_inbound_dedup d
 		  ON d.workspace_id = a.workspace_id AND d.turn_id = a.turn_id
 		WHERE a.workspace_id = $1 AND a.id = $2
 		LIMIT 1
-	`, workspaceID, attemptID).Scan(&channelID)
+	`, workspaceID, attemptID).Scan(&source, &channelID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, nil
+		return AttemptTurnOrigin{}, false, nil
 	}
 	if err != nil {
-		return uuid.Nil, false, err
+		return AttemptTurnOrigin{}, false, err
 	}
-	return channelID, true, nil
+	return AttemptTurnOrigin{
+		Source:          domain.TurnSource(source),
+		OriginChannelID: channelID.UUID,
+		HasOrigin:       channelID.Valid,
+	}, true, nil
 }
 
 // GetChannelOutboundCursor 读取某通道在某卡片上的出站投递水位。
