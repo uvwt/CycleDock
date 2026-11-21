@@ -77,13 +77,10 @@ function AttachmentImageCard({
     return (
       <div
         data-testid="attachment-expired-placeholder"
-        className="flex min-h-[96px] min-w-[168px] max-w-[240px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-line/80 bg-muted/50 px-3 py-4 text-center text-muted-foreground"
+        className="flex min-h-[88px] min-w-[148px] max-w-[240px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line/80 bg-muted/50 px-4 py-4 text-center text-muted-foreground"
       >
         <ImageOff className="size-5 opacity-70" />
-        <span className="text-xs font-medium">{t("图片已过期清理")}</span>
-        <span className="text-[11px] opacity-75">
-          {t("为节省磁盘空间已自动淘汰")}
-        </span>
+        <span className="text-xs font-medium">{t("图片已过期")}</span>
       </div>
     );
   }
