@@ -44,7 +44,10 @@ import type {
   CardWatcher,
   RemoteChannel,
   RemoteChannelInput,
+  RemoteChannelPlatform,
+  RemoteChannelRole,
   WeixinLoginSession,
+  QRConnectSession,
 } from "./types";
 
 export class APIError extends Error {
@@ -629,4 +632,36 @@ export const api = {
       undefined,
       65_000,
     ),
+  startChannelQRConnect: (value: {
+    channel_id?: string;
+    platform?: RemoteChannelPlatform;
+    project_id?: string;
+    role?: RemoteChannelRole;
+    name?: string;
+    domain?: string;
+    base_url?: string;
+  }) =>
+    request<{ session: QRConnectSession }>(
+      "/remote-channels/qr/start",
+      "POST",
+      value,
+      undefined,
+      25_000,
+    ).then((res) => res.session),
+  pollChannelQRConnect: (sessionID: string) =>
+    request<{ session: QRConnectSession; channel?: RemoteChannel }>(
+      `/remote-channels/qr/${encodeURIComponent(sessionID)}`,
+      "GET",
+      undefined,
+      undefined,
+      65_000,
+    ),
+  cancelChannelQRConnect: (sessionID: string) =>
+    request<{ session: QRConnectSession }>(
+      `/remote-channels/qr/${encodeURIComponent(sessionID)}/cancel`,
+      "POST",
+      {},
+      undefined,
+      15_000,
+    ).then((res) => res.session),
 };

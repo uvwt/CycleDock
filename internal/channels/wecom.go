@@ -159,19 +159,19 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			return err
 		}
 		var frame struct {
-			Cmd     string `json:"cmd"`
-			ErrCode int    `json:"errcode"`
-			ErrMsg  string `json:"errmsg"`
+			Cmd     string     `json:"cmd"`
+			ErrCode flexInt64  `json:"errcode"`
+			ErrMsg  flexString `json:"errmsg"`
 			Headers struct {
-				ReqID string `json:"req_id"`
+				ReqID flexString `json:"req_id"`
 			} `json:"headers"`
 			Body struct {
-				MsgID    string `json:"msgid"`
-				ChatID   string `json:"chatid"`
-				ChatType string `json:"chattype"`
-				MsgType  string `json:"msgtype"`
+				MsgID    flexString `json:"msgid"`
+				ChatID   flexString `json:"chatid"`
+				ChatType flexString `json:"chattype"`
+				MsgType  flexString `json:"msgtype"`
 				From     struct {
-					UserID string `json:"userid"`
+					UserID flexString `json:"userid"`
 				} `json:"from"`
 				Text struct {
 					Content string `json:"content"`
@@ -183,7 +183,7 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			continue
 		}
 		if frame.ErrCode != 0 && strings.Contains(strings.ToLower(frame.Cmd), "subscribe") {
-			return fmt.Errorf("wecom subscribe failed (%d): %s", frame.ErrCode, frame.ErrMsg)
+			return fmt.Errorf("wecom subscribe failed (%d): %s", frame.ErrCode.Int64(), frame.ErrMsg.String())
 		}
 		if frame.Cmd == "pong" || frame.Cmd == "aibot_subscribe_ack" || frame.Cmd == "aibot_subscribe" {
 			if rt.OnStatus != nil {
@@ -191,7 +191,7 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			}
 			continue
 		}
-		if frame.Cmd != "aibot_msg_callback" && frame.Cmd != "message.text" && frame.Body.MsgID == "" {
+		if frame.Cmd != "aibot_msg_callback" && frame.Cmd != "message.text" && strings.TrimSpace(frame.Body.MsgID.String()) == "" {
 			continue
 		}
 		text := strings.TrimSpace(frame.Body.Text.Content)
@@ -201,20 +201,22 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 		if text == "" {
 			continue
 		}
-		senderID := strings.TrimSpace(frame.Body.From.UserID)
+		senderID := strings.TrimSpace(frame.Body.From.UserID.String())
 		chatType := "direct"
 		chatID := senderID
-		if strings.EqualFold(frame.Body.ChatType, "group") || strings.TrimSpace(frame.Body.ChatID) != "" {
-			if strings.EqualFold(frame.Body.ChatType, "group") {
+		chatTypeRaw := strings.TrimSpace(frame.Body.ChatType.String())
+		bodyChatID := strings.TrimSpace(frame.Body.ChatID.String())
+		if strings.EqualFold(chatTypeRaw, "group") || chatTypeRaw == "2" || bodyChatID != "" {
+			if strings.EqualFold(chatTypeRaw, "group") || chatTypeRaw == "2" {
 				chatType = "group"
 			}
-			if strings.TrimSpace(frame.Body.ChatID) != "" {
-				chatID = strings.TrimSpace(frame.Body.ChatID)
+			if bodyChatID != "" {
+				chatID = bodyChatID
 			}
 		}
-		msgID := strings.TrimSpace(frame.Body.MsgID)
+		msgID := strings.TrimSpace(frame.Body.MsgID.String())
 		if msgID == "" {
-			msgID = strings.TrimSpace(frame.Headers.ReqID)
+			msgID = strings.TrimSpace(frame.Headers.ReqID.String())
 		}
 		if msgID == "" {
 			msgID = uuid.NewString()
@@ -359,11 +361,12 @@ func postJSONExpectOK(ctx context.Context, client *http.Client, endpoint string,
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
 	}
 	if codeField != "" && len(respRaw) > 0 {
-		var parsed map[string]any
+		var parsed map[string]json.RawMessage
 		if err := json.Unmarshal(respRaw, &parsed); err == nil {
-			if codeVal, ok := parsed[codeField]; ok {
-				if num, ok := codeVal.(float64); ok && int(num) != 0 {
-					return fmt.Errorf("remote error %s=%d: %s", codeField, int(num), strings.TrimSpace(string(respRaw)))
+			if rawCode, ok := parsed[codeField]; ok {
+				var code flexInt64
+				if err := json.Unmarshal(rawCode, &code); err == nil && code != 0 {
+					return fmt.Errorf("remote error %s=%d: %s", codeField, code.Int64(), strings.TrimSpace(string(respRaw)))
 				}
 			}
 		}

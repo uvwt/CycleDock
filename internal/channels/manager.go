@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type Manager struct {
 	publicURL  string
 	factory    AdapterFactory
 	weixinAuth *WeixinLoginStore
+	qrAuth     *QRConnectStore
 
 	mu      sync.Mutex
 	baseCtx context.Context
@@ -45,12 +47,14 @@ func NewManager(st *store.Store, logger *slog.Logger, publicURL string) *Manager
 	if logger == nil {
 		logger = slog.Default()
 	}
+	weixinAuth := NewWeixinLoginStore(nil, defaultWeixinBaseURL)
 	return &Manager{
 		store:      st,
 		logger:     logger,
 		publicURL:  strings.TrimRight(strings.TrimSpace(publicURL), "/"),
 		factory:    DefaultAdapterFactory(nil),
-		weixinAuth: NewWeixinLoginStore(nil, defaultWeixinBaseURL),
+		weixinAuth: weixinAuth,
+		qrAuth:     NewQRConnectStore(nil, weixinAuth),
 		runners:    make(map[uuid.UUID]*channelRunner),
 	}
 }
@@ -68,6 +72,7 @@ func (m *Manager) SetWeixinLoginStore(ls *WeixinLoginStore) {
 	defer m.mu.Unlock()
 	if ls != nil {
 		m.weixinAuth = ls
+		m.qrAuth = NewQRConnectStore(nil, ls)
 	}
 }
 
@@ -75,6 +80,23 @@ func (m *Manager) WeixinLoginStore() *WeixinLoginStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.weixinAuth
+}
+
+func (m *Manager) SetQRConnectStore(qs *QRConnectStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if qs != nil {
+		m.qrAuth = qs
+		if qs.WeixinStore() != nil {
+			m.weixinAuth = qs.WeixinStore()
+		}
+	}
+}
+
+func (m *Manager) QRConnectStore() *QRConnectStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.qrAuth
 }
 
 // DefaultAdapterFactory 构造生产 6 平台适配器工厂。
@@ -319,6 +341,32 @@ func (m *Manager) handleInbound(ctx context.Context, workspaceID, channelID uuid
 	}
 	if !latest.Enabled || !PolicyAllows(latest, msg) {
 		return nil
+	}
+	// 收到首条合法入站消息且未配置默认推送目标时，自动记忆 target_chat_id（及飞书/Telegram 等会话类型/Thread），
+	// 这样无论扫码建卡还是 Telegram 单填 Bot Token，都不需要用户手填 Chat ID / OpenID。
+	chatID := strings.TrimSpace(msg.ChatID)
+	if chatID != "" && strings.TrimSpace(latest.Config.TargetChatID) == "" {
+		chatType := strings.TrimSpace(msg.ChatType)
+		threadID, _ := strconv.ParseInt(strings.TrimSpace(msg.ThreadID), 10, 64)
+		if updated, saveErr := m.store.UpdateRemoteChannelSecretsAndConfig(
+			ctx,
+			workspaceID,
+			channelID,
+			store.RemoteChannelSecrets{},
+			func(cfg *store.RemoteChannelConfig) {
+				if strings.TrimSpace(cfg.TargetChatID) == "" {
+					cfg.TargetChatID = chatID
+				}
+				if chatType != "" && strings.TrimSpace(cfg.TargetChatType) == "" {
+					cfg.TargetChatType = chatType
+				}
+				if threadID > 0 && cfg.MessageThreadID == 0 {
+					cfg.MessageThreadID = threadID
+				}
+			},
+		); saveErr == nil {
+			latest = updated
+		}
 	}
 	_, err = m.store.IngestRemoteChannelMessage(ctx, latest, msg.ExternalMessageID, msg.SenderID, msg.ChatID, msg.Content)
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,8 +114,8 @@ func (a *QQAdapter) accessToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("qq getAppAccessToken HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var parsed struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   any    `json:"expires_in"`
+		AccessToken string    `json:"access_token"`
+		ExpiresIn   flexInt64 `json:"expires_in"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return "", err
@@ -124,14 +123,9 @@ func (a *QQAdapter) accessToken(ctx context.Context) (string, error) {
 	if strings.TrimSpace(parsed.AccessToken) == "" {
 		return "", errors.New("qq getAppAccessToken returned empty access_token")
 	}
-	expireSec := 7200
-	switch v := parsed.ExpiresIn.(type) {
-	case float64:
-		expireSec = int(v)
-	case string:
-		if n, err := strconv.Atoi(v); err == nil {
-			expireSec = n
-		}
+	expireSec := parsed.ExpiresIn.Int64()
+	if expireSec <= 0 {
+		expireSec = 7200
 	}
 	ttl := time.Duration(expireSec-120) * time.Second
 	if ttl < time.Minute {
@@ -206,8 +200,8 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			return err
 		}
 		var payload struct {
-			Op int             `json:"op"`
-			S  *int64          `json:"s"`
+			Op flexInt64       `json:"op"`
+			S  *flexInt64      `json:"s"`
 			T  string          `json:"t"`
 			D  json.RawMessage `json:"d"`
 		}
@@ -215,12 +209,12 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			continue
 		}
 		if payload.S != nil {
-			lastSeq = *payload.S
+			lastSeq = payload.S.Int64()
 		}
-		switch payload.Op {
+		switch payload.Op.Int() {
 		case 10: // Hello -> 发送 Identify 并启动心跳
 			var hello struct {
-				HeartbeatInterval int64 `json:"heartbeat_interval"`
+				HeartbeatInterval flexInt64 `json:"heartbeat_interval"`
 			}
 			_ = json.Unmarshal(payload.D, &hello)
 			if err := conn.WriteJSON(map[string]any{
@@ -235,7 +229,7 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			}
 			if !hbStarted {
 				hbStarted = true
-				interval := time.Duration(hello.HeartbeatInterval) * time.Millisecond
+				interval := time.Duration(hello.HeartbeatInterval.Int64()) * time.Millisecond
 				if interval <= 0 {
 					interval = 30 * time.Second
 				}
@@ -274,13 +268,13 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 
 func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string, raw json.RawMessage, rt AdapterRuntime) {
 	var msg struct {
-		ID          string `json:"id"`
-		Content     string `json:"content"`
-		GroupOpenID string `json:"group_openid"`
+		ID          flexString `json:"id"`
+		Content     string     `json:"content"`
+		GroupOpenID flexString `json:"group_openid"`
 		Author      struct {
-			UserOpenID   string `json:"user_openid"`
-			MemberOpenID string `json:"member_openid"`
-			ID           string `json:"id"`
+			UserOpenID   flexString `json:"user_openid"`
+			MemberOpenID flexString `json:"member_openid"`
+			ID           flexString `json:"id"`
 		} `json:"author"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
@@ -290,21 +284,22 @@ func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string,
 	if text == "" {
 		return
 	}
-	isGroup := eventType == "GROUP_AT_MESSAGE_CREATE" || strings.TrimSpace(msg.GroupOpenID) != ""
-	senderID := strings.TrimSpace(msg.Author.UserOpenID)
+	groupOpenID := strings.TrimSpace(msg.GroupOpenID.String())
+	isGroup := eventType == "GROUP_AT_MESSAGE_CREATE" || groupOpenID != ""
+	senderID := strings.TrimSpace(msg.Author.UserOpenID.String())
 	if senderID == "" {
-		senderID = strings.TrimSpace(msg.Author.MemberOpenID)
+		senderID = strings.TrimSpace(msg.Author.MemberOpenID.String())
 	}
 	if senderID == "" {
-		senderID = strings.TrimSpace(msg.Author.ID)
+		senderID = strings.TrimSpace(msg.Author.ID.String())
 	}
 	chatID := senderID
 	chatType := "direct"
 	if isGroup {
 		chatType = "group"
-		chatID = strings.TrimSpace(msg.GroupOpenID)
+		chatID = groupOpenID
 	}
-	msgID := strings.TrimSpace(msg.ID)
+	msgID := strings.TrimSpace(msg.ID.String())
 	if msgID == "" {
 		msgID = uuid.NewString()
 	}

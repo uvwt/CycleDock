@@ -150,26 +150,26 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 		Result      []struct {
-			UpdateID int64 `json:"update_id"`
+			UpdateID flexInt64 `json:"update_id"`
 			Message  *struct {
-				MessageID       int64 `json:"message_id"`
-				MessageThreadID int64 `json:"message_thread_id"`
-				Date            int64 `json:"date"`
-				Text            string `json:"text"`
-				Caption         string `json:"caption"`
+				MessageID       flexInt64 `json:"message_id"`
+				MessageThreadID flexInt64 `json:"message_thread_id"`
+				Date            flexInt64 `json:"date"`
+				Text            string    `json:"text"`
+				Caption         string    `json:"caption"`
 				From            *struct {
-					ID       int64  `json:"id"`
-					IsBot    bool   `json:"is_bot"`
-					Username string `json:"username"`
+					ID       flexInt64 `json:"id"`
+					IsBot    bool      `json:"is_bot"`
+					Username string    `json:"username"`
 				} `json:"from"`
 				Chat struct {
-					ID   int64  `json:"id"`
-					Type string `json:"type"`
+					ID   flexInt64 `json:"id"`
+					Type string    `json:"type"`
 				} `json:"chat"`
 				Entities []struct {
-					Type   string `json:"type"`
-					Offset int    `json:"offset"`
-					Length int    `json:"length"`
+					Type   string    `json:"type"`
+					Offset flexInt64 `json:"offset"`
+					Length flexInt64 `json:"length"`
 				} `json:"entities"`
 			} `json:"message"`
 		} `json:"result"`
@@ -187,19 +187,21 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 	var maxOffset int64
 	stateChanged := false
 	for _, upd := range resp.Result {
-		if upd.UpdateID+1 > maxOffset {
-			maxOffset = upd.UpdateID + 1
+		updateID := upd.UpdateID.Int64()
+		if updateID+1 > maxOffset {
+			maxOffset = updateID + 1
 		}
 		m := upd.Message
 		if m == nil || (m.From != nil && m.From.IsBot) {
 			continue
 		}
-		chatIDStr := strconv.FormatInt(m.Chat.ID, 10)
+		chatIDStr := strconv.FormatInt(m.Chat.ID.Int64(), 10)
+		threadID := m.MessageThreadID.Int64()
 		// 若通道绑定了特定 chat_id 或 Topic（message_thread_id），严格过滤避免跨 Topic 串台。
 		if boundChat := strings.TrimSpace(a.channel.Config.TargetChatID); boundChat != "" && boundChat != chatIDStr {
 			continue
 		}
-		if a.channel.Config.MessageThreadID > 0 && m.MessageThreadID != a.channel.Config.MessageThreadID {
+		if a.channel.Config.MessageThreadID > 0 && threadID != a.channel.Config.MessageThreadID {
 			continue
 		}
 		text := strings.TrimSpace(m.Text)
@@ -222,28 +224,32 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 			}
 		}
 		senderID := chatIDStr
-		if m.From != nil && m.From.ID != 0 {
-			senderID = strconv.FormatInt(m.From.ID, 10)
+		if m.From != nil && m.From.ID.Int64() != 0 {
+			senderID = strconv.FormatInt(m.From.ID.Int64(), 10)
 		}
 
 		a.mu.Lock()
 		a.lastChatID = chatIDStr
-		if m.MessageThreadID > 0 {
-			a.lastThread = m.MessageThreadID
+		if threadID > 0 {
+			a.lastThread = threadID
 		}
 		a.mu.Unlock()
 		stateChanged = true
 
+		msgTime := time.Now().UTC()
+		if m.Date.Int64() > 0 {
+			msgTime = time.Unix(m.Date.Int64(), 0).UTC()
+		}
 		if rt.OnInbound != nil {
 			_ = rt.OnInbound(ctx, InboundMessage{
-				ExternalMessageID: fmt.Sprintf("%s:%d", chatIDStr, m.MessageID),
+				ExternalMessageID: fmt.Sprintf("%s:%d", chatIDStr, m.MessageID.Int64()),
 				SenderID:          senderID,
 				ChatID:            chatIDStr,
 				ChatType:          chatType,
-				ThreadID:          formatNonZeroInt64(m.MessageThreadID),
+				ThreadID:          formatNonZeroInt64(threadID),
 				Content:           text,
 				Mentioned:         mentioned,
-				Timestamp:         time.Unix(m.Date, 0).UTC(),
+				Timestamp:         msgTime,
 			})
 		}
 	}
