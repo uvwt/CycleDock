@@ -384,31 +384,32 @@ type PushSubscriptionCardRevision struct {
 }
 
 type RemoteChannel struct {
-	ID                uuid.UUID          `json:"id"`
-	WorkspaceID       uuid.UUID          `json:"workspace_id"`
-	Name              string             `json:"name"`
-	Platform          string             `json:"platform"`
-	Role              string             `json:"role"`
-	Transport         string             `json:"transport"`
-	Enabled           bool               `json:"enabled"`
-	ProjectID         uuid.UUID          `json:"project_id"`
-	TargetCardID      uuid.NullUUID      `json:"target_card_id"`
-	PushFilter        string             `json:"push_filter"`
-	MirrorWebMessages bool               `json:"mirror_web_messages"`
-	GroupPolicy       string             `json:"group_policy"`
-	AllowFrom         []string           `json:"allow_from"`
-	ConfigJson        []byte             `json:"config_json"`
-	SecretCiphertext  []byte             `json:"secret_ciphertext"`
-	SecretHints       []byte             `json:"secret_hints"`
-	RuntimeStatus     string             `json:"runtime_status"`
-	LastError         string             `json:"last_error"`
-	LastHeartbeatAt   pgtype.Timestamptz `json:"last_heartbeat_at"`
-	LastInboundAt     pgtype.Timestamptz `json:"last_inbound_at"`
-	LastOutboundAt    pgtype.Timestamptz `json:"last_outbound_at"`
-	RuntimeStateJson  []byte             `json:"runtime_state_json"`
-	CreatedBySourceID uuid.NullUUID      `json:"created_by_source_id"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	WorkspaceID        uuid.UUID          `json:"workspace_id"`
+	Name               string             `json:"name"`
+	Platform           string             `json:"platform"`
+	Role               string             `json:"role"`
+	Transport          string             `json:"transport"`
+	Enabled            bool               `json:"enabled"`
+	ProjectID          uuid.UUID          `json:"project_id"`
+	TargetCardID       uuid.NullUUID      `json:"target_card_id"`
+	PushFilter         string             `json:"push_filter"`
+	MirrorWebMessages  bool               `json:"mirror_web_messages"`
+	GroupPolicy        string             `json:"group_policy"`
+	AllowFrom          []string           `json:"allow_from"`
+	ConfigJson         []byte             `json:"config_json"`
+	SecretCiphertext   []byte             `json:"secret_ciphertext"`
+	SecretHints        []byte             `json:"secret_hints"`
+	RuntimeStatus      string             `json:"runtime_status"`
+	LastError          string             `json:"last_error"`
+	LastHeartbeatAt    pgtype.Timestamptz `json:"last_heartbeat_at"`
+	LastInboundAt      pgtype.Timestamptz `json:"last_inbound_at"`
+	LastOutboundAt     pgtype.Timestamptz `json:"last_outbound_at"`
+	RuntimeStateJson   []byte             `json:"runtime_state_json"`
+	CreatedBySourceID  uuid.NullUUID      `json:"created_by_source_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ConversationCardID uuid.NullUUID      `json:"conversation_card_id"`
 }
 
 type RemoteChannelInboundDedup struct {
