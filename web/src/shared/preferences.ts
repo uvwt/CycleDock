@@ -913,6 +913,12 @@ const en = {
   今天: "Today",
   明天: "Tomorrow",
   上次执行失败: "Last run failed",
+  需关注: "Needs attention",
+  "已暂停 / 已归档": "Paused / Archived",
+  总览: "Overview",
+  查看定时任务总览: "View scheduled tasks overview",
+  "搜索定时任务…": "Search scheduled tasks...",
+  没有匹配的定时任务: "No matching scheduled tasks",
 } as const;
 
 void i18n.use(initReactI18next).init({

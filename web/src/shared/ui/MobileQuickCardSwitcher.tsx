@@ -41,9 +41,10 @@ import { ConfirmDialog } from "./components";
 import { EditCardDialog } from "./EditCardDialog";
 import { SwipeActionGroup, SwipeableRow } from "./SwipeableRow";
 import { cn } from "../lib/utils";
-
-type SwitcherTab =
-  "focus" | "todo" | "working" | "review" | "discussion" | "ongoing" | "done";
+import {
+  QUICK_SWITCHER_TAB_ORDER,
+  type SwitcherTab,
+} from "../lib/quick-switcher-tabs";
 
 export interface QuickCardSwitcherTriggerProps {
   projectID: string;
@@ -451,6 +452,15 @@ export function QuickCardSwitcherModal({
         "data-[state=active]:text-indigo-600 dark:data-[state=active]:text-indigo-400",
     },
     {
+      id: "ongoing",
+      label: t("定时任务"),
+      icon: CalendarClock,
+      count: tabFocusMeta.ongoing.count,
+      badgeStatus: tabFocusMeta.ongoing.status,
+      colorClasses:
+        "data-[state=active]:text-violet-600 dark:data-[state=active]:text-violet-400",
+    },
+    {
       id: "todo",
       label: t("待办"),
       icon: ListTodo,
@@ -486,16 +496,12 @@ export function QuickCardSwitcherModal({
       colorClasses:
         "data-[state=active]:text-emerald-600 dark:data-[state=active]:text-emerald-400",
     },
-    {
-      id: "ongoing",
-      label: t("定时任务"),
-      icon: CalendarClock,
-      count: tabFocusMeta.ongoing.count,
-      badgeStatus: tabFocusMeta.ongoing.status,
-      colorClasses:
-        "data-[state=active]:text-violet-600 dark:data-[state=active]:text-violet-400",
-    },
   ];
+  tabs.sort(
+    (a, b) =>
+      QUICK_SWITCHER_TAB_ORDER.indexOf(a.id) -
+      QUICK_SWITCHER_TAB_ORDER.indexOf(b.id),
+  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
