@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -34,12 +35,13 @@ type channelBackoffState struct {
 	lastInboundAt time.Time
 }
 
-// Dispatcher 挂在与 Web Push 一致的终态消息扫描分发链路：
+// Dispatcher 挂在与 Web Push 一致的消息扫描分发链路：
 // 1. main_chat（双向对话通道）：
 //
-//   - 通道专属普通讨论卡（ch.ConversationCardID）：始终回推最终回复气泡（含通过该通道发问的回复、
-//     该讨论派生的子任务回调、以及用户在 Web 端打开该专属讨论卡发起对话的回复）；严格过滤 end_turn=false 中间进度气泡。
-//   - 项目主聊天（card.IsMainChat）：单向推送主聊天终态回复（绝不写回本通道专属讨论卡上下文），推送时带「【主聊天】」标识；
+//   - 通道专属普通讨论卡（ch.ConversationCardID）：放开多气泡推送，将同一 Turn 内的全部非空用户可见回复气泡
+//     （含 end_turn=false 中间进度/分段气泡与 end_turn=true 终态气泡）按序推送到对应外部 IM；
+//   - 项目主聊天（card.IsMainChat 且非本通道专属讨论卡）：单向推送主聊天终态回复（绝不写回本通道专属讨论卡上下文），
+//     推送时带「【主聊天】」标识，继续严格过滤 end_turn=false 中间进度气泡避免后台执行刷屏；
 //     其中系统/定时/触发器/子任务回调终态回复默认推送，Web 主聊天的人工问答最终回复在开启 mirror_web_messages 时单向推送。
 //   - 项目内高价值提醒：仅当 Todo/Ongoing 的监督回调目标既不是本通道专属讨论卡也不是项目主聊天时推送【待验收】/【执行异常】模板提醒，
 //     【安全审批挂起】始终保留并附带卡片直达链接；日常对话回复不附带冗余卡片链接。
@@ -423,6 +425,18 @@ type cardSummary struct {
 	SourceDiscussionActive bool
 }
 
+// shouldDeliverChannelMessageBubble 决定一条用户可见回复气泡是否允许发往外部 IM：
+//   - 通道专属普通讨论卡（isOwnConversation=true）：允许连续推送同一 Turn 内的全部非空气泡（含 end_turn=false），
+//     保留实时进度与自然分段对话体验；
+//   - 项目主聊天单向镜像（isOwnConversation=false）：严格过滤 end_turn=false 中间气泡，仅推终态回复或 choice 提问，
+//     避免后台执行刷屏。
+func shouldDeliverChannelMessageBubble(isOwnConversation bool, endTurn bool, msgType string) bool {
+	if isOwnConversation {
+		return true
+	}
+	return endTurn || msgType == "choice"
+}
+
 // shouldDeliverMainChatMessage 判断项目主聊天的一条终态回复气泡是否应单向推送到指定远程通道。
 // 规则：
 //  1. 源自当前远程通道入站的 Turn（兼容升级前历史遗留数据）始终推送；
@@ -576,6 +590,25 @@ func (d *Dispatcher) listCardEventsAfter(ctx context.Context, workspaceID, cardI
 	return out, rows.Err()
 }
 
+func (d *Dispatcher) isAttemptRunning(ctx context.Context, workspaceID uuid.UUID, attemptID uuid.NullUUID) (bool, error) {
+	if !attemptID.Valid {
+		return false, nil
+	}
+	var status string
+	err := d.store.Pool().QueryRow(ctx, `
+		SELECT status
+		FROM turn_attempts
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, attemptID.UUID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == string(domain.AttemptStatusRunning), nil
+}
+
 func (d *Dispatcher) latestCardAttempt(ctx context.Context, workspaceID, cardID uuid.UUID) (uuid.UUID, string, string, bool) {
 	var attemptID uuid.UUID
 	var status, errSummary string
@@ -711,11 +744,11 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 	cardURL := ChannelCardURL(d.publicURL, card.ProjectID, card.ID)
 	isOwnConversation := ch.ConversationCardID.Valid && card.ID == ch.ConversationCardID.UUID
 
-	// 1. 本通道专属讨论卡或项目主聊天的终态回复气泡：
-	// - 专属讨论卡（isOwnConversation）：始终将所有终态回复回推到本通道，不附带冗余卡片链接；
-	// - 项目主聊天（card.IsMainChat）：仅单向推送，带「【主聊天】」标识，绝不写回专属讨论卡上下文；
+	// 1. 本通道专属讨论卡或项目主聊天的回复气泡：
+	// - 专属讨论卡（isOwnConversation）：放开多气泡推送（含 end_turn=false 正常用户可见气泡），按序全量回推且不附带冗余卡片链接；
+	// - 项目主聊天（card.IsMainChat）：仅单向推送终态回复（严格过滤 end_turn=false），带「【主聊天】」标识，绝不写回专属讨论卡上下文；
 	//   系统/定时/子任务回调终态回复默认推送，Web 主聊天的人工问答回复受 mirror_web_messages 控制；
-	// - 严格过滤 end_turn=false 中间进度气泡；每发完或跳过一条即刻落盘游标，杜绝刷屏。
+	// - 空文本气泡始终跳过，每发完或跳过一条即刻落盘游标，杜绝重复刷屏。
 	if isOwnConversation || card.IsMainChat {
 		if msgs, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, "message", cursor.LastMessageSeq); err == nil {
 			for _, ev := range msgs {
@@ -723,6 +756,7 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					Type    string `json:"type"`
 					Content string `json:"content"`
 					EndTurn bool   `json:"end_turn"`
+					Preview bool   `json:"preview"`
 					Widget  *struct {
 						Question string `json:"question"`
 					} `json:"widget"`
@@ -734,8 +768,24 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					}
 					continue
 				}
-				// 铁律：严禁把中间进度气泡（end_turn=false）推送到外部 IM。
-				if !payload.EndTurn && payload.Type != "choice" {
+				// 流式预览气泡（preview=true）在正式发布时会原地覆盖同一条事件且保持 sequence 不变：
+				// - 若所属 Attempt 仍在运行，停止本轮推进并等待原地转正或清理，既不提前推半截草稿，也不跳过转正后的正式消息；
+				// - 若所属 Attempt 已结束（如取消/失败留下的截断草稿），跳过并推进游标，避免阻塞后续正式消息。
+				if payload.Preview {
+					running, err := d.isAttemptRunning(ctx, ch.WorkspaceID, ev.AttemptID)
+					if err != nil {
+						return err
+					}
+					if running {
+						break
+					}
+					cursor.LastMessageSeq = ev.Seq
+					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
+						return saveErr
+					}
+					continue
+				}
+				if !shouldDeliverChannelMessageBubble(isOwnConversation, payload.EndTurn, payload.Type) {
 					cursor.LastMessageSeq = ev.Seq
 					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
 						return saveErr
@@ -955,12 +1005,27 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 	// 2. Ongoing 定时执行的终态回复气泡（仅 push_filter=all 时同步普通终态汇总，精简不附冗余链接）
 	if msgs, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, "message", cursor.LastMessageSeq); err == nil {
 		for _, ev := range msgs {
-			if ch.PushFilter != domain.ChannelPushFilterWarningsOnly {
-				var payload struct {
-					Content string `json:"content"`
-					EndTurn bool   `json:"end_turn"`
+			var payload struct {
+				Content string `json:"content"`
+				EndTurn bool   `json:"end_turn"`
+				Preview bool   `json:"preview"`
+			}
+			if err := json.Unmarshal(ev.Message, &payload); err == nil {
+				if payload.Preview {
+					running, err := d.isAttemptRunning(ctx, ch.WorkspaceID, ev.AttemptID)
+					if err != nil {
+						return err
+					}
+					if running {
+						break
+					}
+					cursor.LastMessageSeq = ev.Seq
+					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
+						return saveErr
+					}
+					continue
 				}
-				if err := json.Unmarshal(ev.Message, &payload); err == nil && payload.EndTurn {
+				if ch.PushFilter != domain.ChannelPushFilterWarningsOnly && payload.EndTurn {
 					body := strings.TrimSpace(payload.Content)
 					if body == "" {
 						body = strings.TrimSpace(ev.Content)

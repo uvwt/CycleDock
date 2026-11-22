@@ -13,6 +13,32 @@ import (
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
+// InboundAttachmentKind 描述外部 IM 入站附件的归一化媒体类别。
+type InboundAttachmentKind string
+
+const (
+	InboundAttachmentImage InboundAttachmentKind = "image"
+	InboundAttachmentFile  InboundAttachmentKind = "file"
+	InboundAttachmentAudio InboundAttachmentKind = "audio"
+	InboundAttachmentVideo InboundAttachmentKind = "video"
+	InboundAttachmentOther InboundAttachmentKind = "other"
+)
+
+// InboundAttachment 表示外部 IM 消息附带的一份媒体或文件。
+// 适配器既可直接填充已拉取或解密后的 RawData，也可提供 DownloadURL（及可选请求头）由公共层统一受限下载；
+// 对于当前附件服务不支持原生解析的媒体（如语音/视频）或无法拉取的加密媒体，可填写 Transcript 或 Note 防止消息静默丢失。
+type InboundAttachment struct {
+	Kind            InboundAttachmentKind
+	FileName        string
+	MimeType        string
+	SizeBytes       int64
+	RawData         []byte
+	DownloadURL     string
+	DownloadHeaders map[string]string
+	Transcript      string
+	Note            string
+}
+
 // InboundMessage 表示从外部 IM 平台接收并已做协议归一化的一条消息。
 type InboundMessage struct {
 	ExternalMessageID string
@@ -21,6 +47,7 @@ type InboundMessage struct {
 	ChatType          string // "direct" 或 "group"
 	ThreadID          string
 	Content           string
+	Attachments       []InboundAttachment
 	Mentioned         bool
 	SessionWebhook    string
 	ContextToken      string
@@ -80,7 +107,7 @@ func PolicyAllows(ch store.RemoteChannel, msg InboundMessage) bool {
 	if ch.Role != domain.ChannelRoleMainChat {
 		return false
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	if strings.TrimSpace(msg.Content) == "" && len(msg.Attachments) == 0 {
 		return false
 	}
 	isGroup := strings.EqualFold(strings.TrimSpace(msg.ChatType), "group")

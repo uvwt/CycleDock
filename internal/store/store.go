@@ -265,6 +265,7 @@ func mapConstraintError(err error) error {
 		"turn_attempts_invocation_uq":
 		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
 	case "events_comment_idempotency_uq",
+		"events_message_idempotency_uq",
 		"card_turns_source_idempotency_uq",
 		"card_turns_schedule_occurrence_uq",
 		"triggers_cause_event_uq",

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -26,12 +27,13 @@ type AdapterFactory func(ch store.RemoteChannel, secrets store.RemoteChannelSecr
 // Manager 负责管理所有已启用远程通道的生命周期：
 // 随服务启停、热加载配置变更、指数退避重连、连接状态上报、并发安全出站投递。
 type Manager struct {
-	store      *store.Store
-	logger     *slog.Logger
-	publicURL  string
-	factory    AdapterFactory
-	weixinAuth *WeixinLoginStore
-	qrAuth     *QRConnectStore
+	store       *store.Store
+	attachments *attachments.Service
+	logger      *slog.Logger
+	publicURL   string
+	factory     AdapterFactory
+	weixinAuth  *WeixinLoginStore
+	qrAuth      *QRConnectStore
 
 	mu      sync.Mutex
 	baseCtx context.Context
@@ -101,6 +103,13 @@ func (m *Manager) SetAdapterFactory(factory AdapterFactory) {
 	if factory != nil {
 		m.factory = factory
 	}
+}
+
+// SetAttachmentsService 可选注入附件存储服务，使远程通道入站的图片/纯文本附件自动落盘并绑定到对话 Turn。
+func (m *Manager) SetAttachmentsService(svc *attachments.Service) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attachments = svc
 }
 
 func (m *Manager) SetWeixinLoginStore(ls *WeixinLoginStore) {
@@ -424,6 +433,7 @@ func (m *Manager) handleInbound(ctx context.Context, workspaceID, channelID uuid
 		"sender_hint", MaskRemoteIdentifier(msg.SenderID),
 		"external_msg_id", msg.ExternalMessageID,
 		"content_len", len([]rune(strings.TrimSpace(msg.Content))),
+		"attachments_count", len(msg.Attachments),
 	)
 	if !latest.Enabled {
 		chLogger.Debug("ignore inbound message because remote channel is disabled")
@@ -470,14 +480,24 @@ func (m *Manager) handleInbound(ctx context.Context, workspaceID, channelID uuid
 			chLogger.Warn("auto-bind remote channel target_chat_id failed", "err", saveErr)
 		}
 	}
-	res, err := m.store.IngestRemoteChannelMessage(ctx, latest, msg.ExternalMessageID, msg.SenderID, msg.ChatID, msg.Content)
+	// 附带远端媒体时先做一次只读去重检查，避免重连重放同一 external_message_id 时重复下载和产生孤立附件。
+	if len(msg.Attachments) > 0 {
+		if existing, found, checkErr := m.store.HasIngestedRemoteChannelMessage(ctx, latest.WorkspaceID, latest.ID, msg.ExternalMessageID); checkErr == nil && found {
+			chLogger.Info("remote channel inbound message with attachments already ingested",
+				"card_id", existing.CardID, "turn_id", existing.TurnID, "reused", true)
+			return nil
+		}
+	}
+
+	content, attachmentIDs := m.prepareInboundAttachments(ctx, latest, msg, chLogger)
+	res, err := m.store.IngestRemoteChannelMessageWithAttachments(ctx, latest, msg.ExternalMessageID, msg.SenderID, msg.ChatID, content, attachmentIDs)
 	if err != nil {
 		chLogger.Warn("ingest remote channel inbound message failed", "err", err)
 		_ = m.store.UpdateRemoteChannelRuntime(ctx, workspaceID, channelID, latest.RuntimeStatus, "入站消息处理失败："+err.Error(), false)
 		return err
 	}
 	chLogger.Info("remote channel inbound message ingested",
-		"card_id", res.CardID, "turn_id", res.TurnID, "reused", res.Reused)
+		"card_id", res.CardID, "turn_id", res.TurnID, "reused", res.Reused, "uploaded_attachments", len(attachmentIDs))
 	return nil
 }
 

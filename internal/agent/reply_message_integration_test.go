@@ -327,3 +327,126 @@ func TestReplyPreviewStreamsBeforeToolCommit(t *testing.T) {
 		t.Fatalf("ADK calls=%d responses=%d", calls, responses)
 	}
 }
+
+func TestFailedReplyMessageDiscardsPreviewWithoutDuplicateBubbles(t *testing.T) {
+	dataStore, pool := newAgentIntegrationStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	modelCalls := 0
+	modelHTTP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		modelCalls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeCall := func(index int, id, args string) {
+			raw, _ := json.Marshal(map[string]any{
+				"choices": []any{map[string]any{
+					"delta": map[string]any{
+						"tool_calls": []any{map[string]any{
+							"index": index, "id": id,
+							"function": map[string]string{"name": "reply_message", "arguments": args},
+						}},
+					},
+				}},
+			})
+			fmt.Fprintf(w, "data: %s\n\n", raw)
+			w.(http.Flusher).Flush()
+		}
+		switch modelCalls {
+		case 1:
+			// 第 1 次调用：流式输出正文后携带非法 widget 字段，触发校验失败。
+			writeCall(0, "bad-reply", `{"type":"text","content":"你好！有什么我可以帮你的吗？","widget":{"question":"选一个","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},"end_turn":true,"idempotency_key":"reply-greeting-1"}`)
+		case 2:
+			// 第 2 次调用：修正参数后成功发送，并在同批追加一条应被拒绝的第二条 reply_message。
+			writeCall(0, "good-reply", `{"type":"text","content":"你好！有什么我可以帮你的吗？","end_turn":true,"idempotency_key":"reply-greeting-1"}`)
+			writeCall(1, "extra-after-end", `{"type":"text","content":"不应残留的第二条","end_turn":false,"idempotency_key":"reply-greeting-2"}`)
+		default:
+			t.Errorf("unexpected model call %d", modelCalls)
+		}
+		fmt.Fprintln(w, "data: [DONE]")
+	}))
+	defer modelHTTP.Close()
+
+	workspace, err := dataStore.CreateWorkspace(ctx, "Discard preview test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := dataStore.CreateSource(ctx, workspace.ID, domain.SourceKindHuman, "Human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := dataStore.CreateProject(ctx, workspace.ID, "Discard", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID,
+		"Greeting", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := dataStore.SaveAgentSettings(ctx, workspace.ID, testRunnerSettings(modelHTTP.URL, "preview-model"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.CreateHumanTurn(ctx, workspace.ID, card.ID, human.ID,
+		"你好", "discard-e2e-turn", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspace.ID, settings.SourceID, time.Now().UTC(), time.Minute)
+	if err != nil || claim == nil {
+		t.Fatalf("claim=%+v err=%v", claim, err)
+	}
+
+	hub := realtime.NewHub()
+	sub, _ := hub.Subscribe(card.ID)
+	defer sub.Close()
+	runner := NewRunner(dataStore, modelclient.New(), nil, RunnerConfig{
+		SessionService:    agentsession.NewPostgresService(pool),
+		Live:              hub,
+		HeartbeatInterval: 50 * time.Millisecond,
+		LeaseDuration:     time.Minute,
+	})
+	if err := runner.RunAttempt(ctx, *claim); err != nil {
+		t.Fatalf("RunAttempt: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("modelCalls=%d want 2", modelCalls)
+	}
+
+	var discardedCount, committedCount int
+	for len(sub.Events) > 0 {
+		event := <-sub.Events
+		switch event.Type {
+		case "reply.discarded":
+			discardedCount++
+		case "reply.committed":
+			committedCount++
+		}
+	}
+	if discardedCount != 2 || committedCount != 1 {
+		t.Fatalf("sse events discarded=%d committed=%d want 2/1", discardedCount, committedCount)
+	}
+
+	timeline, err := dataStore.ListCardTimeline(ctx, workspace.ID, card.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	for _, event := range timeline {
+		if event.EventType != "message" {
+			continue
+		}
+		var payload struct {
+			Preview bool `json:"preview"`
+		}
+		if err := json.Unmarshal(event.Message, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Preview {
+			t.Fatalf("orphan preview remained in timeline: %+v", event)
+		}
+		messages = append(messages, event.Content)
+	}
+	if len(messages) != 1 || messages[0] != "你好！有什么我可以帮你的吗？" {
+		t.Fatalf("timeline messages=%v want single committed reply", messages)
+	}
+}

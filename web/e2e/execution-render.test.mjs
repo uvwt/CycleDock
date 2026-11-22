@@ -273,7 +273,7 @@ test("连续消息只在组首展示发送者，切换后再次出现仍开启�
   ]);
   assert.deepEqual(groupStarts(html), [true, false, true, false, true, true]);
   assert.equal((html.match(/>Agent A</g) || []).length, 2);
-  assert.doesNotMatch(html, /小明|lucide-user|pr-12/);
+  assert.doesNotMatch(html, />小明<|lucide-user|pr-12/);
   for (let i = 1; i <= 6; i++) assert.match(html, new RegExp(`消息 ${i}`));
 });
 

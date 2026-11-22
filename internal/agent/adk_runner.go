@@ -745,11 +745,39 @@ func formatStatusChangesPrompt(changes []store.CardStatusChange) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// formatTurnQuotePrompt 将用户本轮引用的历史消息原文拼装为清晰上下文，
+// 让模型准确知道用户针对哪段内容发问，同时保持前端人类气泡正文不被 `> ...` 污染。
+func formatTurnQuotePrompt(quote *store.CommentQuote) string {
+	if quote == nil {
+		return ""
+	}
+	text := strings.TrimSpace(quote.Text)
+	if text == "" {
+		return ""
+	}
+	sender := strings.TrimSpace(quote.Sender)
+	header := "[引用历史消息内容]"
+	if sender != "" {
+		header = fmt.Sprintf("[引用 %s 的消息内容]", sender)
+	}
+	lines := strings.Split(text, "\n")
+	quotedLines := make([]string, len(lines))
+	for i, line := range lines {
+		quotedLines[i] = "> " + line
+	}
+	return header + "\n" + strings.Join(quotedLines, "\n")
+}
+
 // 选择随 Turn 持久化；只在真正 Claim 后追加到 Session，排队与技术重试使用同一快照。
 // 状态变更提示静默注入模型上下文（不落库前端气泡），使模型感知自上一轮执行以来的状态流转历史。
 func turnMessage(card store.AgentCardContext) string {
 	var sections []string
-	sections = append(sections, card.TurnContent)
+	if quotePrompt := formatTurnQuotePrompt(card.TurnQuote); quotePrompt != "" {
+		sections = append(sections, quotePrompt)
+	}
+	if card.TurnContent != "" {
+		sections = append(sections, card.TurnContent)
+	}
 
 	if prompt := formatStatusChangesPrompt(card.StatusChanges); prompt != "" {
 		sections = append(sections, prompt)

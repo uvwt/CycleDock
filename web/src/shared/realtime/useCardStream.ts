@@ -72,6 +72,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
           "attempt.finished",
           "attempt.failed",
           "reply.committed",
+          "reply.discarded",
           "timeline.truncated",
         ].includes(event.type)
       )

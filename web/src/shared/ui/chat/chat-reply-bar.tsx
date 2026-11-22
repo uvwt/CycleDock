@@ -1,5 +1,7 @@
 import { Reply, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { formatQuotePreview } from "../../../features/timeline/selectionQuote";
 
 export interface ChatReplyBarProps {
   sender: string;
@@ -14,28 +16,33 @@ export function ChatReplyBar({
   onClose,
   className,
 }: ChatReplyBarProps) {
+  const { t } = useTranslation();
+  const previewText = formatQuotePreview(text, 160);
   return (
     <div
+      data-testid="chat-reply-bar"
       className={cn(
-        "relative mx-1 mt-0.5 mb-1.5 flex items-center justify-between gap-2.5 rounded-xl border border-line/60 border-l-4 border-l-primary bg-muted/75 px-3 py-2 text-xs shadow-xs",
+        "relative mx-1 mt-0.5 mb-1.5 flex items-center justify-between gap-2 rounded-xl border border-line/60 border-l-3 border-l-primary bg-muted/75 px-2.5 py-1.5 text-xs shadow-2xs",
         className,
       )}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2.5">
-        <div className="grid size-6 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          <Reply className="size-3.5" />
-        </div>
-        <div className="min-w-0 flex-1 leading-snug">
-          <p className="font-semibold text-primary">{sender}</p>
-          <p className="truncate text-muted-foreground">{text}</p>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <Reply className="size-3.5 shrink-0 text-primary" />
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 font-semibold text-primary">
+            {sender}
+          </span>
+          <span className="truncate text-muted-foreground" title={text}>
+            {previewText}
+          </span>
         </div>
       </div>
       <button
         type="button"
         onClick={onClose}
-        className="grid size-6 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground transition hover:bg-muted-foreground/10 hover:text-foreground active:scale-95"
-        title="取消引用"
-        aria-label="取消引用"
+        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground transition hover:bg-muted-foreground/10 hover:text-foreground active:scale-95"
+        title={t("取消引用")}
+        aria-label={t("取消引用")}
       >
         <X className="size-3.5" />
       </button>

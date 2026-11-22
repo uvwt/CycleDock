@@ -167,3 +167,32 @@ func TestHubAttemptRepliedSurvivesSnapshotUntilAttemptFinished(t *testing.T) {
 		t.Fatalf("finished snapshot retained: %+v", afterSnap)
 	}
 }
+
+func TestHubDiscardedPreviewIsRemovedAndCannotBeReopened(t *testing.T) {
+	hub := NewHub()
+	card := uuid.New()
+	hub.Publish(card, Event{Type: "attempt.started", AttemptID: "a"})
+	sub, _ := hub.Subscribe(card)
+	defer sub.Close()
+
+	hub.Publish(card, Event{Type: "reply.preview", AttemptID: "a", ReplyID: "bad", Order: 1, Text: "重复草稿"})
+	hub.Publish(card, Event{Type: "reply.preview", AttemptID: "a", ReplyID: "good", Order: 2, Text: "正式回复"})
+	hub.Publish(card, Event{Type: "reply.discarded", AttemptID: "a", ReplyID: "bad"})
+	for range 3 {
+		<-sub.Events
+	}
+
+	reconnected, snapshot := hub.Subscribe(card)
+	defer reconnected.Close()
+	if snapshot == nil || len(snapshot.Replies) != 1 || snapshot.Replies[0].ID != "good" {
+		t.Fatalf("discarded preview remained in snapshot: %+v", snapshot)
+	}
+
+	// 已丢弃的 preview_id 不能被迟到分片重新打开。
+	hub.Publish(card, Event{Type: "reply.delta", AttemptID: "a", ReplyID: "bad", Text: "迟到片段"})
+	select {
+	case ev := <-sub.Events:
+		t.Fatalf("late delta reopened discarded preview: %+v", ev)
+	default:
+	}
+}
