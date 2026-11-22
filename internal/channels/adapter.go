@@ -36,6 +36,9 @@ type OutboundMessage struct {
 	SessionWebhook string
 	ContextToken   string
 	CardURL        string
+	// Proactive 标记该消息属于非对话直接回复的主动推送（如主聊天镜像、定时任务、子任务提醒）。
+	// 对微信等对主动推送存在账号级限流的平台，用于区分交互回复与主动推送配额。
+	Proactive bool
 }
 
 // InboundHandler 处理单条外部入站消息。

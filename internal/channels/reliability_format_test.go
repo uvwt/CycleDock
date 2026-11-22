@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -242,7 +243,7 @@ func TestDispatcher_BackoffAndResetOnNewInbound(t *testing.T) {
 		LastInboundAt: &t1,
 	}
 
-	wait1 := d.recordChannelFailure(ch)
+	wait1 := d.recordChannelFailure(ch, errors.New("network timeout"))
 	if wait1 != 10*time.Second {
 		t.Fatalf("first backoff should be 10s, got %v", wait1)
 	}
@@ -257,7 +258,7 @@ func TestDispatcher_BackoffAndResetOnNewInbound(t *testing.T) {
 	}
 
 	// 第二次失败退避升至 30 秒，但收到新的入站消息后立即解除退避。
-	wait2 := d.recordChannelFailure(ch)
+	wait2 := d.recordChannelFailure(ch, errors.New("network timeout"))
 	if wait2 != 30*time.Second {
 		t.Fatalf("second backoff should be 30s, got %v", wait2)
 	}
@@ -265,5 +266,171 @@ func TestDispatcher_BackoffAndResetOnNewInbound(t *testing.T) {
 	ch.LastInboundAt = &t2
 	if d.shouldSkipByBackoff(ch) {
 		t.Fatal("fresh inbound message should immediately reset channel backoff")
+	}
+}
+
+func TestDispatcher_WeixinThrottleBackoffAndPrioritizeOwnConversation(t *testing.T) {
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	d := NewDispatcher(nil, nil, nil, "")
+	d.SetNowFunc(func() time.Time { return now })
+
+	t1 := now.Add(-1 * time.Minute)
+	ch := store.RemoteChannel{
+		ID:            uuid.New(),
+		Platform:      domain.ChannelPlatformWeixin,
+		LastInboundAt: &t1,
+	}
+
+	// 命中微信 ret=-2 限流时，应直接进入 15m -> 30m -> 60m 长冷却，防止 5 分钟一次探测续期惩罚。
+	throttleErr := fmt.Errorf("%w: weixin sendmessage failed (ret=-2 errcode=0): prepare failed", ErrWeixinSendThrottled)
+	if wait := d.recordChannelFailure(ch, throttleErr); wait != 15*time.Minute {
+		t.Fatalf("first weixin throttle backoff = %v, want 15m", wait)
+	}
+	if wait := d.recordChannelFailure(ch, throttleErr); wait != 30*time.Minute {
+		t.Fatalf("second weixin throttle backoff = %v, want 30m", wait)
+	}
+	if wait := d.recordChannelFailure(ch, throttleErr); wait != 60*time.Minute {
+		t.Fatalf("third weixin throttle backoff = %v, want 60m", wait)
+	}
+	if wait := d.recordChannelFailure(ch, throttleErr); wait != 60*time.Minute {
+		t.Fatalf("fourth weixin throttle backoff should cap at 60m, got %v", wait)
+	}
+
+	// 收到用户新入站消息后仍可立即解除退避，保证交互回复及时性。
+	t2 := now.Add(5 * time.Second)
+	ch.LastInboundAt = &t2
+	if d.shouldSkipByBackoff(ch) {
+		t.Fatal("fresh inbound message should reset weixin throttle backoff")
+	}
+
+	// 验证专属对话卡永远排在项目主聊天与历史子任务之前。
+	ownID := uuid.New()
+	mainID := uuid.New()
+	todoID := uuid.New()
+	ch.ConversationCardID = uuid.NullUUID{UUID: ownID, Valid: true}
+	ordered := prioritizeMainChatCards(ch, []cardSummary{
+		{ID: mainID, IsMainChat: true},
+		{ID: todoID, Kind: domain.CardKindTodo},
+		{ID: ownID, Kind: domain.CardKindDiscussion},
+	})
+	if len(ordered) != 3 || ordered[0].ID != ownID || ordered[1].ID != mainID || ordered[2].ID != todoID {
+		t.Fatalf("unexpected prioritized card order: %+v", ordered)
+	}
+}
+
+func TestWeixinAdapter_ProactiveQuotaProtectsRepliesAndWrapsThrottleError(t *testing.T) {
+	var sendCalls atomic.Int32
+	var returnThrottle atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ilink/bot/getconfig":
+			// 服务端不返回新 context_token，模拟生产常见情况。
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0})
+		case "/ilink/bot/sendmessage":
+			sendCalls.Add(1)
+			if returnThrottle.Load() {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ret":     -2,
+					"errcode": 0,
+					"errmsg":  "prepare failed",
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0})
+		}
+	}))
+	defer srv.Close()
+
+	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	ch := store.RemoteChannel{
+		ID:       uuid.New(),
+		Platform: domain.ChannelPlatformWeixin,
+		Config:   store.RemoteChannelConfig{BaseURL: srv.URL, TargetChatID: "wx-u1@im.wechat"},
+		RuntimeState: store.RemoteChannelRuntimeState{
+			WeixinContextTokens: map[string]string{"wx-u1@im.wechat": "ctx-1"},
+		},
+	}
+	adapter := NewWeixinAdapter(ch, store.RemoteChannelSecrets{BotToken: "wx-tok"}, srv.Client())
+	adapter.chunkDelay = 0
+	adapter.nowFn = func() time.Time { return now }
+	adapter.mu.Lock()
+	adapter.contextTokenAt["wx-u1@im.wechat"] = now
+	adapter.mu.Unlock()
+
+	// 1. 主动推送在 24h 安全配额（4 条）内全部放行。
+	for i := 0; i < defaultWeixinProactivePushLimit; i++ {
+		if err := adapter.Send(context.Background(), OutboundMessage{Text: "主动通知", Proactive: true}); err != nil {
+			t.Fatalf("proactive send #%d unexpected error: %v", i+1, err)
+		}
+	}
+	// 2. 第 5 条主动推送命中本地安全配额，快速跳过且不调用网关 sendmessage。
+	callsBefore := sendCalls.Load()
+	err := adapter.Send(context.Background(), OutboundMessage{Text: "超配额主动通知", Proactive: true})
+	if !errors.Is(err, ErrWeixinProactiveQuotaExceeded) {
+		t.Fatalf("expected ErrWeixinProactiveQuotaExceeded, got %v", err)
+	}
+	if sendCalls.Load() != callsBefore {
+		t.Fatalf("quota-blocked proactive send should not call gateway sendmessage")
+	}
+	// 3. 即使主动推送配额已满，用户实时对话回复（Proactive=false）仍不受限制正常发送。
+	if err := adapter.Send(context.Background(), OutboundMessage{Text: "你好，实时回复", Proactive: false}); err != nil {
+		t.Fatalf("interactive reply must bypass proactive quota, got: %v", err)
+	}
+	// 4. 24h 窗口滑过后，主动推送配额自动恢复。
+	now = now.Add(24*time.Hour + time.Minute)
+	if err := adapter.Send(context.Background(), OutboundMessage{Text: "次日主动通知", Proactive: true}); err != nil {
+		t.Fatalf("proactive quota should recover after 24h window, got: %v", err)
+	}
+	// 5. 网关返回 ret=-2 且 getconfig 无新 token 时，应包装 ErrWeixinSendThrottled 且只调用一次 sendmessage。
+	returnThrottle.Store(true)
+	callsBefore = sendCalls.Load()
+	err = adapter.Send(context.Background(), OutboundMessage{Text: "触发限流", Proactive: false})
+	if !errors.Is(err, ErrWeixinSendThrottled) {
+		t.Fatalf("expected ErrWeixinSendThrottled on ret=-2, got %v", err)
+	}
+	if sendCalls.Load() != callsBefore+1 {
+		t.Fatalf("ret=-2 without refreshed token must fail fast with 1 sendmessage call, got %d", sendCalls.Load()-callsBefore)
+	}
+	if !strings.Contains(err.Error(), "has_context_token=true") {
+		t.Fatalf("expected diagnostic summary in error, got %v", err)
+	}
+}
+
+func TestWeixinAdapter_RunCallsNotifyStartAndStop(t *testing.T) {
+	var startCalls, stopCalls, pollCalls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ilink/bot/msg/notifystart":
+			startCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0})
+		case "/ilink/bot/msg/notifystop":
+			stopCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0})
+		case "/ilink/bot/getupdates":
+			pollCalls.Add(1)
+			cancel()
+			_ = json.NewEncoder(w).Encode(map[string]any{"ret": 0, "msgs": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	adapter := NewWeixinAdapter(
+		store.RemoteChannel{
+			ID:       uuid.New(),
+			Platform: domain.ChannelPlatformWeixin,
+			Config:   store.RemoteChannelConfig{BaseURL: srv.URL},
+		},
+		store.RemoteChannelSecrets{BotToken: "wx-tok"},
+		srv.Client(),
+	)
+	_ = adapter.Run(ctx, AdapterRuntime{})
+	if startCalls.Load() != 1 || stopCalls.Load() != 1 || pollCalls.Load() != 1 {
+		t.Fatalf("expected notifystart=1 notifystop=1 getupdates=1, got start=%d stop=%d poll=%d",
+			startCalls.Load(), stopCalls.Load(), pollCalls.Load())
 	}
 }

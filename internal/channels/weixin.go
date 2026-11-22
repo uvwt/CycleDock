@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,9 +28,9 @@ import (
 
 const (
 	defaultWeixinBaseURL   = "https://ilinkai.weixin.qq.com"
-	weixinChannelVersion   = "2.4.6"
+	weixinChannelVersion   = "2.4.10"
 	weixinAppID            = "bot"
-	weixinClientVersionInt = (2 << 16) | (4 << 8) | 6
+	weixinClientVersionInt = (2 << 16) | (4 << 8) | 10
 	weixinItemText         = 1
 	weixinItemImage        = 2
 	weixinItemVoice        = 3
@@ -54,7 +55,20 @@ const (
 	weixinContextTokenRefreshAge = 60 * time.Second
 	// 多片消息连续调用 ilink/bot/sendmessage 时保留短间隔，降低服务端 ret=-2 prepare failed 概率。
 	defaultWeixinChunkDelay = 200 * time.Millisecond
+	// 微信 iLink 对“主动推送”存在账号级 24h 突发阈值（实测约 5~6 条独立消息即触发 ret=-2 惩罚），
+	// 而交互式回复（用户发消息后立即回复）不受该阈值限制。
+	// 本地为主动推送预留安全配额（每 24h 最多 4 条），避免定时/主聊天镜像把正常微信聊天通道打进限流惩罚。
+	defaultWeixinProactivePushLimit  = 4
+	defaultWeixinProactivePushWindow = 24 * time.Hour
 )
+
+// ErrWeixinSendThrottled 表示微信 iLink 网关返回 ret=-2 (prepare failed) 或触发本地主动推送限流保护。
+// 实测 ret=-2 涵盖账号级主动推送限流惩罚与上下文失效，且惩罚期内任何持续探测都会拉长冷却窗口，
+// 因此调用方必须立即中止本轮同通道其余发送并进入长冷却，严禁短间隔连打重试。
+var ErrWeixinSendThrottled = errors.New("weixin sendmessage throttled")
+
+// ErrWeixinProactiveQuotaExceeded 表示主动推送已达本地安全配额（仅作用于 Proactive=true 的消息，不影响对话回复）。
+var ErrWeixinProactiveQuotaExceeded = errors.New("weixin proactive push quota exceeded")
 
 // WeixinLoginSession 表示一个进行中的微信扫码登录会话。
 type WeixinLoginSession struct {
@@ -307,13 +321,18 @@ type WeixinAdapter struct {
 	httpClient *http.Client
 	chunkDelay time.Duration
 
-	mu              sync.Mutex
-	updatesBuf      string
-	longPollTimeout time.Duration
-	contextTokens   map[string]string
-	contextTokenAt  map[string]time.Time
-	lastChatID      string
-	saveState       StatePersister
+	mu                    sync.Mutex
+	updatesBuf            string
+	longPollTimeout       time.Duration
+	contextTokens         map[string]string
+	contextTokenAt        map[string]time.Time
+	lastChatID            string
+	saveState             StatePersister
+	lastProactivePushAt   time.Time
+	proactivePushSent     []time.Time
+	proactivePushLimit    int
+	proactivePushWindow   time.Duration
+	nowFn                 func() time.Time
 }
 
 func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, client *http.Client) *WeixinAdapter {
@@ -340,17 +359,68 @@ func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets
 		lastChat = strings.TrimSpace(ch.RuntimeState.LastChatID)
 	}
 	return &WeixinAdapter{
-		channel:         ch,
-		secrets:         secrets,
-		baseURL:         baseURL,
-		httpClient:      client,
-		chunkDelay:      defaultWeixinChunkDelay,
-		updatesBuf:      strings.TrimSpace(ch.RuntimeState.WeixinUpdatesBuf),
-		longPollTimeout: defaultWeixinLongPollTimeout,
-		contextTokens:   ctxTokens,
-		contextTokenAt:  make(map[string]time.Time),
-		lastChatID:      lastChat,
+		channel:             ch,
+		secrets:             secrets,
+		baseURL:             baseURL,
+		httpClient:          client,
+		chunkDelay:          defaultWeixinChunkDelay,
+		updatesBuf:          strings.TrimSpace(ch.RuntimeState.WeixinUpdatesBuf),
+		longPollTimeout:     defaultWeixinLongPollTimeout,
+		contextTokens:       ctxTokens,
+		contextTokenAt:      make(map[string]time.Time),
+		lastChatID:          lastChat,
+		proactivePushLimit:  defaultWeixinProactivePushLimit,
+		proactivePushWindow: defaultWeixinProactivePushWindow,
+		nowFn:               time.Now,
 	}
+}
+
+func (a *WeixinAdapter) now() time.Time {
+	a.mu.Lock()
+	fn := a.nowFn
+	a.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return time.Now()
+}
+
+// reserveProactiveQuota 检查主动推送（Proactive=true）是否仍在 24h 安全配额内。
+// 交互式回复（Proactive=false）不经过此配额限制；返回 nil 表示允许发送，并在真正发送成功后由 recordProactiveSent 记账。
+func (a *WeixinAdapter) checkProactiveQuota() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proactivePushLimit <= 0 || a.proactivePushWindow <= 0 {
+		return nil
+	}
+	now := time.Now()
+	if a.nowFn != nil {
+		now = a.nowFn()
+	}
+	cutoff := now.Add(-a.proactivePushWindow)
+	kept := a.proactivePushSent[:0]
+	for _, ts := range a.proactivePushSent {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	a.proactivePushSent = kept
+	if len(a.proactivePushSent) >= a.proactivePushLimit {
+		return fmt.Errorf("%w (%d/%d in %s; skipping proactive push to protect WeChat reply availability)",
+			ErrWeixinProactiveQuotaExceeded, len(a.proactivePushSent), a.proactivePushLimit, a.proactivePushWindow)
+	}
+	return nil
+}
+
+func (a *WeixinAdapter) recordProactiveSent() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	if a.nowFn != nil {
+		now = a.nowFn()
+	}
+	a.lastProactivePushAt = now
+	a.proactivePushSent = append(a.proactivePushSent, now)
 }
 
 func (a *WeixinAdapter) Platform() domain.ChannelPlatform {
@@ -371,6 +441,13 @@ func (a *WeixinAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	a.mu.Lock()
 	a.saveState = rt.SaveState
 	a.mu.Unlock()
+	// 对齐官方 openclaw-weixin 生命周期：长轮询启停时非致命上报 notifystart / notifystop。
+	a.notifyLifecycle(ctx, "ilink/bot/msg/notifystart", rtLogger(rt))
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		a.notifyLifecycle(stopCtx, "ilink/bot/msg/notifystop", rtLogger(rt))
+	}()
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -381,6 +458,17 @@ func (a *WeixinAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			}
 			return err
 		}
+	}
+}
+
+func (a *WeixinAdapter) notifyLifecycle(ctx context.Context, endpoint string, logger *slog.Logger) {
+	if strings.TrimSpace(a.secrets.BotToken) == "" {
+		return
+	}
+	if _, err := a.apiPostWithTimeout(ctx, endpoint, map[string]any{
+		"base_info": weixinBaseInfo(),
+	}, defaultWeixinConfigTimeout); err != nil && ctx.Err() == nil && logger != nil {
+		logger.Debug("weixin lifecycle notify skipped", "endpoint", endpoint, "err", err)
 	}
 }
 
@@ -684,6 +772,11 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	if toUser == "" {
 		return fmt.Errorf("%w: weixin target user_id is empty; send one message from WeChat or configure target_chat_id", ErrTargetNotBound)
 	}
+	if msg.Proactive {
+		if err := a.checkProactiveQuota(); err != nil {
+			return err
+		}
+	}
 	if ctxToken != "" {
 		ctxToken = a.refreshContextToken(ctx, toUser, ctxToken, false)
 	}
@@ -704,8 +797,10 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		if sendErr == nil {
 			continue
 		}
-		// 微信 iLink 返回 ret=-2 (prepare failed) 通常是 context_token 过期/失效或会话状态漂移。
-		// 先强制调用一次 getconfig 刷新 context_token；若拿到新 token 立即重试一次当前分片。
+		// 微信 iLink 返回 ret=-2 (prepare failed) 实测可能是账号级主动推送限流惩罚或上下文失效，
+		// 且在限流惩罚窗口内盲目重复请求 sendmessage 会不断拉长冷却时长。
+		// 仅在强制调用 getconfig 明确拿到「不同于旧值的新 context_token」时重试一次；否则立即返回
+		// ErrWeixinSendThrottled 让上层停止连打并进入冷却退避。
 		if isWeixinPrepareFailed(retCode, errCode, errMsg) {
 			if ctxToken != "" {
 				refreshed := a.refreshContextToken(ctx, toUser, ctxToken, true)
@@ -716,13 +811,21 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 					}
 				}
 			}
-			// 标记缓存时间失效，促使下次尝试重新刷新；同时在错误中给出明确排障提示。
+			// 标记缓存时间失效，同时附带脱敏诊断摘要（是否存在 context_token 与文本长度），
+			// 并包装 ErrWeixinSendThrottled 通知 Dispatcher 立即熔断本轮同通道其余发送。
 			a.mu.Lock()
 			delete(a.contextTokenAt, toUser)
 			a.mu.Unlock()
-			return fmt.Errorf("%w (context_token may be expired; send a message in WeChat to refresh)", sendErr)
+			return fmt.Errorf("%w: %v (has_context_token=%t text_runes=%d proactive=%t; ilink may be rate-limiting proactive sends or context_token expired)",
+				ErrWeixinSendThrottled, sendErr, ctxToken != "", len([]rune(chunk)), msg.Proactive)
 		}
 		return sendErr
+	}
+	// 仅保留最近一次检查与记录逻辑，确保在 Send 成功后准确记账；
+	// 在长轮询收到任何新的用户入站消息后，重置主动推送的短期连续计数无关，保持 24h 滑动窗口即可。
+	// 若单测需要自定义时钟或限额，可直接配置 nowFn / proactivePushLimit / proactivePushWindow。
+	if msg.Proactive {
+		a.recordProactiveSent()
 	}
 	return nil
 }
