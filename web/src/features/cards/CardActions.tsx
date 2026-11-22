@@ -185,6 +185,9 @@ export function CardActions({
       </Button>
     );
 
+  const isChannelManaged = Boolean(card.managed_by_remote_channel_id);
+  const canEditText = !preserve && !isChannelManaged;
+
   const cardKindLabel =
     card.kind === "discussion"
       ? t("讨论")
@@ -251,7 +254,7 @@ export function CardActions({
                   )}
                 </button>
 
-                {!preserve && (
+                {canEditText && (
                   <button
                     type="button"
                     onClick={() => {
@@ -386,7 +389,7 @@ export function CardActions({
             )}
           </MenuItem>
 
-          {!preserve && (
+          {canEditText && (
             <MenuItem onSelect={openEditor}>
               <Pencil className="size-4" />
               {t("编辑信息")}

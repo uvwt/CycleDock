@@ -223,6 +223,14 @@ func (s *Store) UpdateCardText(
 	if isMain {
 		return db.Card{}, fmt.Errorf("%w: main discussion text cannot be modified", domain.ErrConflict)
 	}
+	// 远程通道专属讨论卡的标题与描述由系统托管（随通道名与平台格式自动同步），禁止手工修改。
+	isManaged, err := isRemoteChannelConversationCard(ctx, s.pool, workspaceID, cardID)
+	if err != nil {
+		return db.Card{}, err
+	}
+	if isManaged {
+		return db.Card{}, fmt.Errorf("%w: remote channel conversation card title and description are managed by the channel", domain.ErrConflict)
+	}
 	card, err := s.queries.UpdateCardText(ctx, db.UpdateCardTextParams{
 		Title:       title,
 		Description: description,

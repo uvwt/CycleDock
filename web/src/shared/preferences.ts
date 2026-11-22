@@ -529,6 +529,8 @@ const en = {
   保存失败: "Failed to save",
   "保存中…": "Saving…",
   讨论标题: "Discussion title",
+  "该讨论卡由远程通道自动托管，标题与描述随通道配置同步，无法在此编辑。如需改名，请前往「设置 → 远程通道」。":
+    "This discussion card is managed by a remote channel. Its title and description stay synced with the channel settings and cannot be edited here. Rename it under Settings → Remote Channels.",
   任务标题: "Task title",
   定时任务标题: "Scheduled task title",
   焦点: "Focus",

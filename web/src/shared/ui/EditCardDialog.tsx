@@ -29,6 +29,7 @@ function EditCardDialogContent({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const isChannelManaged = Boolean(card.managed_by_remote_channel_id);
   const [title, setTitle] = useState(card.title || "");
   const [description, setDescription] = useState(card.description || "");
 
@@ -79,19 +80,24 @@ function EditCardDialogContent({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (title.trim() && !updateMutation.isPending) {
+          if (!isChannelManaged && title.trim() && !updateMutation.isPending) {
             updateMutation.mutate();
           }
         }}
         className="space-y-4"
       >
+        {isChannelManaged && (
+          <p className="rounded-xl border border-line/70 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            {t("该讨论卡由远程通道自动托管，标题与描述随通道配置同步，无法在此编辑。如需改名，请前往「设置 → 远程通道」。")}
+          </p>
+        )}
         <Field label={t("标题")}>
           <TextInput
-            autoFocus
+            autoFocus={!isChannelManaged}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder={titlePlaceholder}
-            disabled={updateMutation.isPending}
+            disabled={updateMutation.isPending || isChannelManaged}
           />
         </Field>
         <Field label={t("描述")}>
@@ -100,7 +106,7 @@ function EditCardDialogContent({
             onChange={(e) => setDescription(e.target.value)}
             rows={5}
             placeholder={t("目标、范围与必要背景")}
-            disabled={updateMutation.isPending}
+            disabled={updateMutation.isPending || isChannelManaged}
           />
         </Field>
         <div className="flex justify-end gap-2 pt-1">
@@ -109,16 +115,18 @@ function EditCardDialogContent({
             disabled={updateMutation.isPending}
             onClick={() => onOpenChange(false)}
           >
-            {t("取消")}
+            {isChannelManaged ? t("关闭") : t("取消")}
           </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={!title.trim() || updateMutation.isPending}
-          >
-            <Save className="size-4" />
-            {updateMutation.isPending ? t("保存中…") : t("保存")}
-          </Button>
+          {!isChannelManaged && (
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!title.trim() || updateMutation.isPending}
+            >
+              <Save className="size-4" />
+              {updateMutation.isPending ? t("保存中…") : t("保存")}
+            </Button>
+          )}
         </div>
       </form>
     </Modal>

@@ -16,29 +16,30 @@ import (
 )
 
 type remoteChannelDTO struct {
-	ID                uuid.UUID                   `json:"id"`
-	WorkspaceID       uuid.UUID                   `json:"workspace_id"`
-	Name              string                      `json:"name"`
-	Platform          domain.ChannelPlatform      `json:"platform"`
-	Role              domain.ChannelRole          `json:"role"`
-	Transport         domain.ChannelTransport     `json:"transport"`
-	Enabled           bool                        `json:"enabled"`
-	ProjectID         uuid.UUID                   `json:"project_id"`
-	TargetCardID      *uuid.UUID                  `json:"target_card_id,omitempty"`
-	PushFilter        domain.ChannelPushFilter    `json:"push_filter"`
-	MirrorWebMessages bool                        `json:"mirror_web_messages"`
-	GroupPolicy       domain.ChannelGroupPolicy   `json:"group_policy"`
-	AllowFrom         []string                    `json:"allow_from"`
-	Config            store.RemoteChannelConfig   `json:"config"`
-	HasSecrets        bool                        `json:"has_secrets"`
-	SecretHints       map[string]string           `json:"secret_hints"`
-	RuntimeStatus     domain.ChannelRuntimeStatus `json:"runtime_status"`
-	LastError         string                      `json:"last_error,omitempty"`
-	LastHeartbeatAt   *time.Time                  `json:"last_heartbeat_at,omitempty"`
-	LastInboundAt     *time.Time                  `json:"last_inbound_at,omitempty"`
-	LastOutboundAt    *time.Time                  `json:"last_outbound_at,omitempty"`
-	CreatedAt         time.Time                   `json:"created_at"`
-	UpdatedAt         time.Time                   `json:"updated_at"`
+	ID                 uuid.UUID                   `json:"id"`
+	WorkspaceID        uuid.UUID                   `json:"workspace_id"`
+	Name               string                      `json:"name"`
+	Platform           domain.ChannelPlatform      `json:"platform"`
+	Role               domain.ChannelRole          `json:"role"`
+	Transport          domain.ChannelTransport     `json:"transport"`
+	Enabled            bool                        `json:"enabled"`
+	ProjectID          uuid.UUID                   `json:"project_id"`
+	TargetCardID       *uuid.UUID                  `json:"target_card_id,omitempty"`
+	ConversationCardID *uuid.UUID                  `json:"conversation_card_id,omitempty"`
+	PushFilter         domain.ChannelPushFilter    `json:"push_filter"`
+	MirrorWebMessages  bool                        `json:"mirror_web_messages"`
+	GroupPolicy        domain.ChannelGroupPolicy   `json:"group_policy"`
+	AllowFrom          []string                    `json:"allow_from"`
+	Config             store.RemoteChannelConfig   `json:"config"`
+	HasSecrets         bool                        `json:"has_secrets"`
+	SecretHints        map[string]string           `json:"secret_hints"`
+	RuntimeStatus      domain.ChannelRuntimeStatus `json:"runtime_status"`
+	LastError          string                      `json:"last_error,omitempty"`
+	LastHeartbeatAt    *time.Time                  `json:"last_heartbeat_at,omitempty"`
+	LastInboundAt      *time.Time                  `json:"last_inbound_at,omitempty"`
+	LastOutboundAt     *time.Time                  `json:"last_outbound_at,omitempty"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	UpdatedAt          time.Time                   `json:"updated_at"`
 }
 
 func toRemoteChannelDTO(ch store.RemoteChannel) remoteChannelDTO {
@@ -46,6 +47,11 @@ func toRemoteChannelDTO(ch store.RemoteChannel) remoteChannelDTO {
 	if ch.TargetCardID.Valid {
 		id := ch.TargetCardID.UUID
 		targetCardID = &id
+	}
+	var conversationCardID *uuid.UUID
+	if ch.ConversationCardID.Valid {
+		id := ch.ConversationCardID.UUID
+		conversationCardID = &id
 	}
 	allowFrom := ch.AllowFrom
 	if allowFrom == nil {
@@ -56,29 +62,30 @@ func toRemoteChannelDTO(ch store.RemoteChannel) remoteChannelDTO {
 		hints = map[string]string{}
 	}
 	return remoteChannelDTO{
-		ID:                ch.ID,
-		WorkspaceID:       ch.WorkspaceID,
-		Name:              ch.Name,
-		Platform:          ch.Platform,
-		Role:              ch.Role,
-		Transport:         ch.Transport,
-		Enabled:           ch.Enabled,
-		ProjectID:         ch.ProjectID,
-		TargetCardID:      targetCardID,
-		PushFilter:        ch.PushFilter,
-		MirrorWebMessages: ch.MirrorWebMessages,
-		GroupPolicy:       ch.GroupPolicy,
-		AllowFrom:         allowFrom,
-		Config:            ch.Config,
-		HasSecrets:        ch.HasSecrets(),
-		SecretHints:       hints,
-		RuntimeStatus:     ch.RuntimeStatus,
-		LastError:         ch.LastError,
-		LastHeartbeatAt:   ch.LastHeartbeatAt,
-		LastInboundAt:     ch.LastInboundAt,
-		LastOutboundAt:    ch.LastOutboundAt,
-		CreatedAt:         ch.CreatedAt,
-		UpdatedAt:         ch.UpdatedAt,
+		ID:                 ch.ID,
+		WorkspaceID:        ch.WorkspaceID,
+		Name:               ch.Name,
+		Platform:           ch.Platform,
+		Role:               ch.Role,
+		Transport:          ch.Transport,
+		Enabled:            ch.Enabled,
+		ProjectID:          ch.ProjectID,
+		TargetCardID:       targetCardID,
+		ConversationCardID: conversationCardID,
+		PushFilter:         ch.PushFilter,
+		MirrorWebMessages:  ch.MirrorWebMessages,
+		GroupPolicy:        ch.GroupPolicy,
+		AllowFrom:          allowFrom,
+		Config:             ch.Config,
+		HasSecrets:         ch.HasSecrets(),
+		SecretHints:        hints,
+		RuntimeStatus:      ch.RuntimeStatus,
+		LastError:          ch.LastError,
+		LastHeartbeatAt:    ch.LastHeartbeatAt,
+		LastInboundAt:      ch.LastInboundAt,
+		LastOutboundAt:     ch.LastOutboundAt,
+		CreatedAt:          ch.CreatedAt,
+		UpdatedAt:          ch.UpdatedAt,
 	}
 }
 

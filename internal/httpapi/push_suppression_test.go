@@ -189,3 +189,44 @@ func TestIsSupervisorNotificationSuppressedRules(t *testing.T) {
 		t.Fatal("discussion auto-retry reply with choice must not be suppressed")
 	}
 }
+
+func TestIsSupervisorNotificationSuppressedRemoteChannelOrigin(t *testing.T) {
+	baseRemote := cardNotificationFacts{
+		CardID:            uuid.New(),
+		Kind:              string(domain.CardKindDiscussion),
+		EventType:         "message",
+		MessageType:       "text",
+		MessageSeq:        12,
+		MessageTurnSource: string(domain.TurnSourceHuman),
+		FromRemoteChannel: true,
+	}
+
+	if !isSupervisorNotificationSuppressed(baseRemote) {
+		t.Fatal("expected remote-channel-originated reply to suppress Web Push")
+	}
+
+	choiceRemote := baseRemote
+	choiceRemote.MessageType = "choice"
+	if !isSupervisorNotificationSuppressed(choiceRemote) {
+		t.Fatal("expected remote-channel-originated choice reply to suppress Web Push (already delivered to IM)")
+	}
+
+	// tool_approval 必须始终穿透抑制，避免遗漏人工安全审批。
+	approvalRemote := baseRemote
+	approvalRemote.EventType = "tool_approval"
+	if isSupervisorNotificationSuppressed(approvalRemote) {
+		t.Fatal("tool_approval event must bypass remote channel suppression")
+	}
+
+	pendingApprovalRemote := baseRemote
+	pendingApprovalRemote.PendingApprovalCount = 1
+	if isSupervisorNotificationSuppressed(pendingApprovalRemote) {
+		t.Fatal("pending tool approval must bypass remote channel suppression")
+	}
+
+	webOrigin := baseRemote
+	webOrigin.FromRemoteChannel = false
+	if isSupervisorNotificationSuppressed(webOrigin) {
+		t.Fatal("normal web human reply must NOT be suppressed")
+	}
+}

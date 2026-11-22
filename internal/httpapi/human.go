@@ -176,6 +176,21 @@ type cardResponse struct {
 	// 列表摘要与创建/详情接口返回：卡片自身附带的图片数量及详情元数据。
 	AttachmentCount *int64                     `json:"attachment_count,omitempty"`
 	Attachments     []store.CardAttachmentMeta `json:"attachments,omitempty"`
+
+	// 远程通道专属讨论卡托管标记：当讨论卡由某个远程通道自动创建并托管时返回，
+	// 前端据此对标题与描述做只读保护（仍允许置顶、静音、归档与删除）。
+	ManagedByRemoteChannelID       *string `json:"managed_by_remote_channel_id,omitempty"`
+	ManagedByRemoteChannelName     *string `json:"managed_by_remote_channel_name,omitempty"`
+	ManagedByRemoteChannelPlatform *string `json:"managed_by_remote_channel_platform,omitempty"`
+}
+
+func applyRemoteChannelBinding(resp *cardResponse, b store.RemoteChannelConversationBinding) {
+	id := b.ChannelID.String()
+	name := b.ChannelName
+	platform := string(b.Platform)
+	resp.ManagedByRemoteChannelID = &id
+	resp.ManagedByRemoteChannelName = &name
+	resp.ManagedByRemoteChannelPlatform = &platform
 }
 
 type cardReadResponse struct {
@@ -412,6 +427,8 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 	}
 	identity := identityFromRequest(r)
 
+	channelBindings, _ := api.store.ListRemoteChannelConversationBindings(r.Context(), identity.WorkspaceID)
+
 	// If caller explicitly passes all=true, retain backward-compatible full query.
 	// Otherwise, default to truncated active cards + latest N done cards.
 	if r.URL.Query().Get("all") == "true" {
@@ -424,7 +441,11 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 		}
 		response := make([]cardResponse, 0, len(cards))
 		for _, card := range cards {
-			response = append(response, cardSummaryToResponse(card))
+			item := cardSummaryToResponse(card)
+			if b, ok := channelBindings[card.ID]; ok {
+				applyRemoteChannelBinding(&item, b)
+			}
+			response = append(response, item)
 		}
 		writeJSON(w, http.StatusOK, response)
 		return
@@ -465,10 +486,18 @@ func (api *API) listProjectCards(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]cardResponse, 0, len(activeCards)+len(doneCards))
 	for _, card := range activeCards {
-		response = append(response, activeCardSummaryToResponse(card))
+		item := activeCardSummaryToResponse(card)
+		if b, ok := channelBindings[card.ID]; ok {
+			applyRemoteChannelBinding(&item, b)
+		}
+		response = append(response, item)
 	}
 	for _, card := range doneCards {
-		response = append(response, doneCardSummaryToResponse(card))
+		item := doneCardSummaryToResponse(card)
+		if b, ok := channelBindings[card.ID]; ok {
+			applyRemoteChannelBinding(&item, b)
+		}
+		response = append(response, item)
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -1005,6 +1034,9 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		AttemptHistory: attemptsToResponse(attemptHistory),
 		Schedules:      schedulesToResponse(schedules),
 		Health:         string(health),
+	}
+	if binding, ok, bindErr := api.store.GetRemoteChannelForConversationCard(ctx, identity.WorkspaceID, card.ID); bindErr == nil && ok {
+		applyRemoteChannelBinding(&response.Card, binding)
 	}
 	if len(cardAttachments) > 0 {
 		count := int64(len(cardAttachments))

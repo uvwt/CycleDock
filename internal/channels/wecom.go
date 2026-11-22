@@ -185,6 +185,12 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 		if frame.ErrCode != 0 && strings.Contains(strings.ToLower(frame.Cmd), "subscribe") {
 			return fmt.Errorf("wecom subscribe failed (%d): %s", frame.ErrCode.Int64(), frame.ErrMsg.String())
 		}
+		if frame.ErrCode != 0 && strings.Contains(strings.ToLower(frame.Cmd), "send") {
+			if rt.OnStatus != nil {
+				rt.OnStatus(ctx, domain.ChannelRuntimeConnected, fmt.Sprintf("企微消息发送返回错误(%d): %s", frame.ErrCode.Int64(), frame.ErrMsg.String()), true)
+			}
+			continue
+		}
 		if frame.Cmd == "pong" || frame.Cmd == "aibot_subscribe_ack" || frame.Cmd == "aibot_subscribe" {
 			if rt.OnStatus != nil {
 				rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
@@ -248,7 +254,7 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 }
 
 func (a *WeComAdapter) Send(ctx context.Context, msg OutboundMessage) error {
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformWeCom, msg.Text, msg.CardURL)
 	chunks := SplitMessage(fullText, wecomMaxRunes)
 	if a.channel.Transport == domain.ChannelTransportWebhook {
 		webhookURL := strings.TrimSpace(a.secrets.WebhookURL)
@@ -282,7 +288,7 @@ func (a *WeComAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		return errors.New("wecom websocket is not connected")
 	}
 	if chatID == "" {
-		return errors.New("wecom target chat_id is empty")
+		return fmt.Errorf("%w: wecom target chat_id is empty", ErrTargetNotBound)
 	}
 	chatTypeNum := 1
 	if strings.EqualFold(chatType, "group") {

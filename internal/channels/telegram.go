@@ -93,6 +93,7 @@ func (a *TelegramAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	if err != nil {
 		return err
 	}
+	rtLogger(rt).Info("telegram bot authenticated", "bot_username", botUsername)
 	if rt.OnStatus != nil {
 		rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 	}
@@ -191,6 +192,58 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 		if updateID+1 > maxOffset {
 			maxOffset = updateID + 1
 		}
+	}
+	if maxOffset > offset {
+		a.mu.Lock()
+		a.offset = maxOffset
+		a.mu.Unlock()
+		stateChanged = true
+	}
+	// 先持久化最新 offset 与会话定位，避免单条 OnInbound 报错或断开重连后重复拉取旧消息，
+	// 并确保 Dispatcher 立刻能从数据库 RuntimeState 读到首条私聊的 LastChatID。
+	for _, upd := range resp.Result {
+		m := upd.Message
+		if m == nil || (m.From != nil && m.From.IsBot) {
+			continue
+		}
+		chatIDStr := strconv.FormatInt(m.Chat.ID.Int64(), 10)
+		threadID := m.MessageThreadID.Int64()
+		if boundChat := strings.TrimSpace(a.channel.Config.TargetChatID); boundChat != "" && boundChat != chatIDStr {
+			continue
+		}
+		if a.channel.Config.MessageThreadID > 0 && threadID != a.channel.Config.MessageThreadID {
+			continue
+		}
+		a.mu.Lock()
+		if a.lastChatID != chatIDStr {
+			a.lastChatID = chatIDStr
+			stateChanged = true
+		}
+		if threadID > 0 && a.lastThread != threadID {
+			a.lastThread = threadID
+			stateChanged = true
+		}
+		a.mu.Unlock()
+	}
+	if stateChanged && rt.SaveState != nil {
+		a.mu.Lock()
+		nextOffset := a.offset
+		nextChat := a.lastChatID
+		nextThread := formatNonZeroInt64(a.lastThread)
+		a.mu.Unlock()
+		_ = rt.SaveState(ctx, func(st *store.RemoteChannelRuntimeState) {
+			st.TelegramOffset = nextOffset
+			if nextChat != "" {
+				st.LastChatID = nextChat
+			}
+			if nextThread != "" {
+				st.LastThreadID = nextThread
+			}
+		})
+		stateChanged = false
+	}
+
+	for _, upd := range resp.Result {
 		m := upd.Message
 		if m == nil || (m.From != nil && m.From.IsBot) {
 			continue
@@ -228,14 +281,6 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 			senderID = strconv.FormatInt(m.From.ID.Int64(), 10)
 		}
 
-		a.mu.Lock()
-		a.lastChatID = chatIDStr
-		if threadID > 0 {
-			a.lastThread = threadID
-		}
-		a.mu.Unlock()
-		stateChanged = true
-
 		msgTime := time.Now().UTC()
 		if m.Date.Int64() > 0 {
 			msgTime = time.Unix(m.Date.Int64(), 0).UTC()
@@ -252,29 +297,6 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 				Timestamp:         msgTime,
 			})
 		}
-	}
-
-	if maxOffset > offset {
-		a.mu.Lock()
-		a.offset = maxOffset
-		a.mu.Unlock()
-		stateChanged = true
-	}
-	if stateChanged && rt.SaveState != nil {
-		a.mu.Lock()
-		nextOffset := a.offset
-		nextChat := a.lastChatID
-		nextThread := formatNonZeroInt64(a.lastThread)
-		a.mu.Unlock()
-		_ = rt.SaveState(ctx, func(st *store.RemoteChannelRuntimeState) {
-			st.TelegramOffset = nextOffset
-			if nextChat != "" {
-				st.LastChatID = nextChat
-			}
-			if nextThread != "" {
-				st.LastThreadID = nextThread
-			}
-		})
 	}
 	return nil
 }
@@ -297,31 +319,64 @@ func (a *TelegramAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		threadID = parsed
 	}
 	if chatID == "" {
-		return errors.New("telegram target chat_id is empty")
+		return fmt.Errorf("%w: telegram target chat_id is empty", ErrTargetNotBound)
 	}
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformTelegram, msg.Text, msg.CardURL)
 	for _, chunk := range SplitMessage(fullText, telegramMaxRunes) {
-		body := map[string]any{
-			"chat_id":                  chatID,
-			"text":                     chunk,
-			"disable_web_page_preview": true,
-		}
-		if threadID > 0 {
-			body["message_thread_id"] = threadID
-		}
-		raw, err := a.apiCall(ctx, "sendMessage", body)
-		if err != nil {
+		htmlChunk := MarkdownToTelegramHTML(chunk)
+		if err := a.sendMessageOnce(ctx, chatID, threadID, htmlChunk, "HTML"); err != nil {
+			if isTelegramParseError(err) {
+				plain := MarkdownToPlainText(chunk)
+				if plain == "" {
+					plain = chunk
+				}
+				if fallbackErr := a.sendMessageOnce(ctx, chatID, threadID, plain, ""); fallbackErr != nil {
+					return fmt.Errorf("%v (fallback plain send failed: %w)", err, fallbackErr)
+				}
+				continue
+			}
 			return err
-		}
-		var resp struct {
-			OK          bool   `json:"ok"`
-			Description string `json:"description"`
-		}
-		if err := json.Unmarshal(raw, &resp); err == nil && !resp.OK {
-			return fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
 		}
 	}
 	return nil
+}
+
+func (a *TelegramAdapter) sendMessageOnce(ctx context.Context, chatID string, threadID int64, text, parseMode string) error {
+	body := map[string]any{
+		"chat_id":                  chatID,
+		"text":                     text,
+		"disable_web_page_preview": true,
+	}
+	if parseMode != "" {
+		body["parse_mode"] = parseMode
+	}
+	if threadID > 0 {
+		body["message_thread_id"] = threadID
+	}
+	raw, err := a.apiCall(ctx, "sendMessage", body)
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(raw, &resp); err == nil && !resp.OK {
+		return fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func isTelegramParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "can't parse entities") ||
+		strings.Contains(low, "parse entities") ||
+		strings.Contains(low, "unsupported start tag") ||
+		strings.Contains(low, "unclosed start tag") ||
+		strings.Contains(low, "can't find end tag")
 }
 
 func (a *TelegramAdapter) Test(ctx context.Context, testText string) error {

@@ -338,8 +338,25 @@ func (a *FeishuAdapter) tenantAccessToken(ctx context.Context) (string, error) {
 	return parsed.TenantAccessToken, nil
 }
 
+func feishuInteractiveCardPayload(markdownContent string) map[string]any {
+	return map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"body": map[string]any{
+			"elements": []map[string]any{
+				{
+					"tag":     "markdown",
+					"content": markdownContent,
+				},
+			},
+		},
+	}
+}
+
 func (a *FeishuAdapter) Send(ctx context.Context, msg OutboundMessage) error {
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformFeishu, msg.Text, msg.CardURL)
 	chunks := SplitMessage(fullText, feishuMaxRunes)
 	if a.channel.Transport == domain.ChannelTransportWebhook {
 		webhookURL := strings.TrimSpace(a.secrets.WebhookURL)
@@ -347,17 +364,33 @@ func (a *FeishuAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 			return errors.New("feishu webhook_url is not configured")
 		}
 		for _, chunk := range chunks {
-			payload := map[string]any{
-				"msg_type": "text",
-				"content":  map[string]string{"text": chunk},
+			// 优先发送 Interactive 2.0 Markdown 卡片，失败自动降级纯文本，绝不因富文本语法拒收丢消息。
+			cardPayload := map[string]any{
+				"msg_type": "interactive",
+				"card":     feishuInteractiveCardPayload(chunk),
 			}
 			if sec := strings.TrimSpace(a.secrets.WebhookSecret); sec != "" {
 				ts, sign := signFeishuWebhook(sec, time.Now())
-				payload["timestamp"] = ts
-				payload["sign"] = sign
+				cardPayload["timestamp"] = ts
+				cardPayload["sign"] = sign
 			}
-			if err := postJSONExpectOK(ctx, a.httpClient, webhookURL, payload, "code"); err != nil {
-				return fmt.Errorf("feishu webhook send: %w", err)
+			if err := postJSONExpectOK(ctx, a.httpClient, webhookURL, cardPayload, "code"); err != nil {
+				plain := MarkdownToPlainText(chunk)
+				if plain == "" {
+					plain = chunk
+				}
+				textPayload := map[string]any{
+					"msg_type": "text",
+					"content":  map[string]string{"text": plain},
+				}
+				if sec := strings.TrimSpace(a.secrets.WebhookSecret); sec != "" {
+					ts, sign := signFeishuWebhook(sec, time.Now())
+					textPayload["timestamp"] = ts
+					textPayload["sign"] = sign
+				}
+				if fallbackErr := postJSONExpectOK(ctx, a.httpClient, webhookURL, textPayload, "code"); fallbackErr != nil {
+					return fmt.Errorf("feishu webhook send: %w (text fallback failed: %v)", err, fallbackErr)
+				}
 			}
 		}
 		return nil
@@ -374,43 +407,62 @@ func (a *FeishuAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	}
 	a.mu.Unlock()
 	if chatID == "" {
-		return errors.New("feishu target chat_id is empty")
+		return fmt.Errorf("%w: feishu target chat_id is empty", ErrTargetNotBound)
 	}
 	receiveIDType := "chat_id"
 	if strings.HasPrefix(chatID, "ou_") {
 		receiveIDType = "open_id"
+	} else if !strings.HasPrefix(chatID, "oc_") {
+		// 兼容飞书 user_id / union_id：非 oc_ 群/单聊会话 ID 且非 ou_ 时，如果是 on_ 则走 union_id。
+		if strings.HasPrefix(chatID, "on_") {
+			receiveIDType = "union_id"
+		}
 	}
+	endpoint := a.baseURL + "/open-apis/im/v1/messages?receive_id_type=" + receiveIDType
 	for _, chunk := range chunks {
-		contentBytes, _ := json.Marshal(map[string]string{"text": chunk})
-		bodyBytes, _ := json.Marshal(map[string]any{
-			"receive_id": chatID,
-			"msg_type":   "text",
-			"content":    string(contentBytes),
-			"uuid":       uuid.NewString(),
-		})
-		endpoint := a.baseURL + "/open-apis/im/v1/messages?receive_id_type=" + receiveIDType
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return err
+		cardBytes, _ := json.Marshal(feishuInteractiveCardPayload(chunk))
+		if err := a.sendOpenAPIMessage(ctx, token, endpoint, chatID, "interactive", string(cardBytes)); err != nil {
+			plain := MarkdownToPlainText(chunk)
+			if plain == "" {
+				plain = chunk
+			}
+			textBytes, _ := json.Marshal(map[string]string{"text": plain})
+			if fallbackErr := a.sendOpenAPIMessage(ctx, token, endpoint, chatID, "text", string(textBytes)); fallbackErr != nil {
+				return fmt.Errorf("%w (text fallback failed: %v)", err, fallbackErr)
+			}
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			return err
-		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			return fmt.Errorf("feishu send HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-		}
-		var parsed struct {
-			Code flexInt64  `json:"code"`
-			Msg  flexString `json:"msg"`
-		}
-		if err := json.Unmarshal(raw, &parsed); err == nil && parsed.Code != 0 {
-			return fmt.Errorf("feishu send failed (code=%d): %s", parsed.Code.Int64(), parsed.Msg.String())
-		}
+	}
+	return nil
+}
+
+func (a *FeishuAdapter) sendOpenAPIMessage(ctx context.Context, token, endpoint, chatID, msgType, contentJSON string) error {
+	bodyBytes, _ := json.Marshal(map[string]any{
+		"receive_id": chatID,
+		"msg_type":   msgType,
+		"content":    contentJSON,
+		"uuid":       uuid.NewString(),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("feishu send HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var parsed struct {
+		Code flexInt64  `json:"code"`
+		Msg  flexString `json:"msg"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err == nil && parsed.Code != 0 {
+		return fmt.Errorf("feishu send failed (code=%d): %s", parsed.Code.Int64(), parsed.Msg.String())
 	}
 	return nil
 }

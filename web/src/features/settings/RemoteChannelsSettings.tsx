@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowUpRight,
   BellRing,
   Bot,
   CheckCircle2,
@@ -565,12 +567,12 @@ export function RemoteChannelsSettings() {
                 <div className="flex items-center gap-2">
                   <MessageSquare className="size-4 shrink-0 text-primary" />
                   <span className="text-[13px] font-semibold text-heading">
-                    主聊天双向同步
+                    双向对话（专属独立讨论）
                   </span>
                   <Badge variant="secondary">{mainChatCount}</Badge>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  外部 IM 消息直达项目主聊天，仅回传最终回复、待验收、异常与安全审批，绝不刷屏中间进度。
+                  每条通道自动拥有独立讨论卡，消息与子任务回调不混入项目主聊天；主聊天系统与待验收/审批提醒仍会单向推送。
                 </p>
               </div>
             </div>
@@ -585,7 +587,7 @@ export function RemoteChannelsSettings() {
                   <Badge variant="secondary">{scheduledCount}</Badge>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
-                  Ongoing 巡检汇报完成后直接推送到指定群或私聊，完全隔离主聊天上下文。
+                  Ongoing 巡检汇报完成后直接推送到指定群或私聊，仅单向推送、不接收入站消息。
                 </p>
               </div>
             </div>
@@ -674,7 +676,7 @@ export function RemoteChannelsSettings() {
               {(
                 [
                   { id: "all", label: `全部 (${channels.length})` },
-                  { id: "main_chat", label: `主聊天 (${mainChatCount})` },
+                  { id: "main_chat", label: `双向对话 (${mainChatCount})` },
                   {
                     id: "scheduled_push",
                     label: `定时推送 (${scheduledCount})`,
@@ -746,8 +748,8 @@ export function RemoteChannelsSettings() {
                             </span>
                             <Badge variant="secondary" className="text-[11px]">
                               {ch.role === "main_chat"
-                                ? "主聊天双向同步"
-                                : "定时任务独立推送"}
+                                ? "双向对话"
+                                : "定时推送"}
                             </Badge>
                             <Badge variant="outline" className="text-[11px]">
                               {transportLabel(ch.transport)}
@@ -758,6 +760,19 @@ export function RemoteChannelsSettings() {
                             <span>
                               项目：{project ? project.name : ch.project_id.slice(0, 8)}
                             </span>
+                            {ch.role === "main_chat" && (
+                              ch.conversation_card_id ? (
+                                <Link
+                                  to={`/cards/${ch.project_id}/${ch.conversation_card_id}`}
+                                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                                >
+                                  专属讨论卡
+                                  <ArrowUpRight className="size-3" />
+                                </Link>
+                              ) : (
+                                <span>专属讨论卡：首条消息自动创建</span>
+                              )
+                            )}
                             {ch.role === "scheduled_push" && (
                               <span>
                                 范围：
@@ -773,7 +788,7 @@ export function RemoteChannelsSettings() {
                             {ch.role === "main_chat" && (
                               <>
                                 <span>
-                                  同步 Web 对话回复：
+                                  同时推送主聊天人工对话：
                                   {ch.mirror_web_messages ? "已开启" : "关闭"}
                                 </span>
                                 <span>
@@ -1280,7 +1295,7 @@ export function RemoteChannelsSettings() {
                           });
                         }}
                       >
-                        <option value="main_chat">项目主聊天双向同步</option>
+                        <option value="main_chat">双向对话（专属独立讨论）</option>
                         <option value="scheduled_push">定时任务独立推送</option>
                       </Select>
                     </Field>
@@ -1411,10 +1426,10 @@ export function RemoteChannelsSettings() {
                       <div className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2">
                         <div className="min-w-0">
                           <p className="text-xs font-medium text-heading">
-                            同步 Web 对话回复
+                            同时推送主聊天人工对话
                           </p>
                           <p className="text-[11px] text-muted-foreground">
-                            默认已推送本通道回复、主动消息、子任务回调与审批提醒；开启后，你在 Web 主聊天发起对话的 AI 最终回复也会同步过来（不回传你输入的原文）。
+                            本通道专属讨论卡的回复、子任务回调，以及项目主聊天的系统汇报/待验收/审批提醒默认都会推送；开启后，你在 Web 主聊天手动发起对话的 AI 最终回复也会附带【主聊天】标识单向推送到这里（不写入本通道专属讨论上下文）。
                           </p>
                         </div>
                         <Switch
