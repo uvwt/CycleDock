@@ -196,6 +196,7 @@ func main() {
 		mcpHandlers = mcpserver.New(dataStore, oauthService, logger)
 	}
 	channelManager := channels.NewManager(dataStore, logger, publicURL)
+	channelManager.SetAttachmentsService(attachmentsService)
 	channelDispatcher := channels.NewDispatcher(dataStore, channelManager, logger, publicURL)
 
 	router := httpapi.NewRouter(pool, dataStore, authService, httpapi.Config{

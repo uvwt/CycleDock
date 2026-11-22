@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -221,6 +222,7 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 	var msg struct {
 		MsgID            flexString `json:"msgId"`
 		MsgType          string     `json:"msgtype"`
+		RobotCode        flexString `json:"robotCode"`
 		ConversationID   flexString `json:"conversationId"`
 		ConversationType flexString `json:"conversationType"` // "1"=单聊, "2"=群聊（兼容数字 1/2）
 		SenderStaffID    flexString `json:"senderStaffId"`
@@ -231,8 +233,14 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 			Content string `json:"content"`
 		} `json:"text"`
 		Content struct {
-			RichText []struct {
-				Text string `json:"text"`
+			DownloadCode string `json:"downloadCode"`
+			FileName     string `json:"fileName"`
+			Recognition  string `json:"recognition"`
+			Duration     flexInt64 `json:"duration"`
+			RichText     []struct {
+				Text         string `json:"text"`
+				DownloadCode string `json:"downloadCode"`
+				Type         string `json:"type"`
 			} `json:"richText"`
 		} `json:"content"`
 	}
@@ -240,18 +248,91 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		log.Warn("dingtalk stream callback data decode failed", "topic", frame.Headers.Topic, "err", err)
 		return false
 	}
+	robotCode := strings.TrimSpace(msg.RobotCode.String())
+	if robotCode == "" {
+		robotCode = strings.TrimSpace(a.channel.Config.AppID)
+	}
 	text := strings.TrimSpace(msg.Text.Content)
-	if text == "" && len(msg.Content.RichText) > 0 {
+	atts := make([]InboundAttachment, 0, 2)
+	msgType := strings.ToLower(strings.TrimSpace(msg.MsgType))
+
+	switch msgType {
+	case "picture":
+		atts = append(atts, a.fetchDingTalkAttachment(ctx, InboundAttachmentImage, msg.Content.DownloadCode, robotCode, "image.png"))
+	case "file":
+		fileName := strings.TrimSpace(msg.Content.FileName)
+		kind := classifyAttachmentKind("", fileName)
+		if kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, "")) {
+			atts = append(atts, a.fetchDingTalkAttachment(ctx, kind, msg.Content.DownloadCode, robotCode, fileName))
+		} else {
+			atts = append(atts, InboundAttachment{
+				Kind:     kind,
+				FileName: fileName,
+			})
+		}
+	case "audio":
+		note := ""
+		if ms := msg.Content.Duration.Int64(); ms > 0 {
+			sec := (ms + 500) / 1000
+			if sec <= 0 {
+				sec = 1
+			}
+			note = fmt.Sprintf("时长约 %d 秒", sec)
+		}
+		atts = append(atts, InboundAttachment{
+			Kind:       InboundAttachmentAudio,
+			Transcript: strings.TrimSpace(msg.Content.Recognition),
+			Note:       note,
+		})
+	case "video":
+		note := ""
+		if ms := msg.Content.Duration.Int64(); ms > 0 {
+			sec := (ms + 500) / 1000
+			if sec <= 0 {
+				sec = 1
+			}
+			note = fmt.Sprintf("时长约 %d 秒", sec)
+		}
+		atts = append(atts, InboundAttachment{
+			Kind:     InboundAttachmentVideo,
+			FileName: strings.TrimSpace(msg.Content.FileName),
+			Note:     note,
+		})
+	case "richtext":
 		parts := make([]string, 0, len(msg.Content.RichText))
 		for _, item := range msg.Content.RichText {
 			if t := strings.TrimSpace(item.Text); t != "" {
 				parts = append(parts, t)
 			}
+			if dc := strings.TrimSpace(item.DownloadCode); dc != "" {
+				atts = append(atts, a.fetchDingTalkAttachment(ctx, InboundAttachmentImage, dc, robotCode, "image.png"))
+			}
 		}
-		text = strings.TrimSpace(strings.Join(parts, " "))
+		if text == "" {
+			text = strings.TrimSpace(strings.Join(parts, " "))
+		}
+	default:
+		if text == "" && len(msg.Content.RichText) > 0 {
+			parts := make([]string, 0, len(msg.Content.RichText))
+			for _, item := range msg.Content.RichText {
+				if t := strings.TrimSpace(item.Text); t != "" {
+					parts = append(parts, t)
+				}
+				if dc := strings.TrimSpace(item.DownloadCode); dc != "" {
+					atts = append(atts, a.fetchDingTalkAttachment(ctx, InboundAttachmentImage, dc, robotCode, "image.png"))
+				}
+			}
+			text = strings.TrimSpace(strings.Join(parts, " "))
+		}
+		if text == "" && len(atts) == 0 && msgType != "" && msgType != "text" {
+			atts = append(atts, InboundAttachment{
+				Kind: InboundAttachmentOther,
+				Note: fmt.Sprintf("钉钉 %s 消息", msgType),
+			})
+		}
 	}
-	if text == "" {
-		log.Debug("dingtalk stream callback ignored empty text", "msgtype", msg.MsgType)
+	if text == "" && len(atts) == 0 {
+		log.Debug("dingtalk stream callback ignored empty message", "msgtype", msg.MsgType)
 		return false
 	}
 	senderID := strings.TrimSpace(msg.SenderStaffID.String())
@@ -301,12 +382,85 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 			ChatID:            chatID,
 			ChatType:          chatType,
 			Content:           text,
+			Attachments:       atts,
 			Mentioned:         mentioned,
 			SessionWebhook:    strings.TrimSpace(msg.SessionWebhook),
 			Timestamp:         time.Now().UTC(),
 		})
 	}
 	return false
+}
+
+// fetchDingTalkAttachment 使用钉钉机器人媒体下载接口根据 downloadCode 换取临时下载链接并拉取字节。
+func (a *DingTalkAdapter) fetchDingTalkAttachment(
+	ctx context.Context,
+	kind InboundAttachmentKind,
+	downloadCode, robotCode, fileName string,
+) InboundAttachment {
+	att := InboundAttachment{
+		Kind:     kind,
+		FileName: strings.TrimSpace(fileName),
+	}
+	downloadCode = strings.TrimSpace(downloadCode)
+	if downloadCode == "" {
+		att.Note = "钉钉消息缺少 downloadCode"
+		return att
+	}
+	downloadURL, err := a.resolveDingTalkDownloadURL(ctx, downloadCode, robotCode)
+	if err != nil {
+		att.Note = "钉钉媒体链接获取失败：" + err.Error()
+		return att
+	}
+	data, respMime, err := downloadInboundAttachment(ctx, a.httpClient, downloadURL, nil, attachments.DefaultMaxUploadBytes)
+	if err != nil {
+		att.Note = "钉钉媒体下载失败：" + err.Error()
+		return att
+	}
+	att.RawData = data
+	if att.MimeType == "" {
+		att.MimeType = respMime
+	}
+	return att
+}
+
+func (a *DingTalkAdapter) resolveDingTalkDownloadURL(ctx context.Context, downloadCode, robotCode string) (string, error) {
+	token, err := a.accessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	payload := map[string]string{
+		"downloadCode": downloadCode,
+		"robotCode":    strings.TrimSpace(robotCode),
+	}
+	encoded, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1.0/robot/messageFiles/download", bytes.NewReader(encoded))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var parsed struct {
+		DownloadURL string `json:"downloadUrl"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(parsed.DownloadURL) == "" {
+		return "", errors.New("未返回 downloadUrl")
+	}
+	return strings.TrimSpace(parsed.DownloadURL), nil
 }
 
 func (a *DingTalkAdapter) accessToken(ctx context.Context) (string, error) {

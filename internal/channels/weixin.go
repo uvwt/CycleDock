@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -474,11 +475,16 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 			continue
 		}
 		text := extractWeixinText(item.ItemList)
-		if text == "" {
+		atts := a.extractWeixinAttachments(ctx, item.ItemList)
+		if text == "" && len(atts) == 0 {
 			continue
 		}
 		createTimeMs := item.CreateTimeMs.Int64()
-		msgID := resolveWeixinExternalMessageID(item, fromUser, createTimeMs, text, idx)
+		fpSeed := text
+		if fpSeed == "" {
+			fpSeed = weixinAttachmentsFingerprintSeed(atts)
+		}
+		msgID := resolveWeixinExternalMessageID(item, fromUser, createTimeMs, fpSeed, idx)
 		ctxTok := strings.TrimSpace(item.ContextToken)
 
 		chatType := "direct"
@@ -496,6 +502,7 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 				ChatID:            fromUser,
 				ChatType:          chatType,
 				Content:           text,
+				Attachments:       atts,
 				Mentioned:         chatType == "direct",
 				ContextToken:      ctxTok,
 				Timestamp:         msgTime,
@@ -592,7 +599,10 @@ type weixinInboundMsg struct {
 type weixinMsgItem struct {
 	Type      flexInt64       `json:"type"`
 	TextItem  weixinTextItem  `json:"text_item"`
+	ImageItem weixinImageItem `json:"image_item"`
 	VoiceItem weixinVoiceItem `json:"voice_item"`
+	FileItem  weixinFileItem  `json:"file_item"`
+	VideoItem weixinVideoItem `json:"video_item"`
 	RefMsg    *weixinRefMsg   `json:"ref_msg"`
 }
 
@@ -600,8 +610,39 @@ type weixinTextItem struct {
 	Text string `json:"text"`
 }
 
+type weixinMediaRef struct {
+	EncryptQueryParam string `json:"encrypt_query_param"`
+	AESKey            string `json:"aes_key"`
+	FullURL           string `json:"full_url"`
+}
+
+type weixinImageItem struct {
+	URL      string          `json:"url"`
+	FileName string          `json:"filename"`
+	AESKey   string          `json:"aeskey"`
+	HDSize   flexInt64       `json:"hd_size"`
+	MidSize  flexInt64       `json:"mid_size"`
+	Media    *weixinMediaRef `json:"media"`
+}
+
 type weixinVoiceItem struct {
-	Text string `json:"text"`
+	Text     string    `json:"text"`
+	Playtime flexInt64 `json:"playtime"`
+}
+
+type weixinFileItem struct {
+	FileName string          `json:"file_name"`
+	Name     string          `json:"filename"`
+	URL      string          `json:"url"`
+	Len      flexInt64       `json:"len"`
+	Size     flexInt64       `json:"size"`
+	Media    *weixinMediaRef `json:"media"`
+}
+
+type weixinVideoItem struct {
+	FileName string    `json:"file_name"`
+	Playtime flexInt64 `json:"playtime"`
+	Size     flexInt64 `json:"video_size"`
 }
 
 type weixinRefMsg struct {
@@ -639,6 +680,142 @@ func extractWeixinText(items []weixinMsgItem) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// extractWeixinAttachments 提取微信 iLink item_list 中的图片、文件、无转写语音与视频：
+// - 支持直接 URL 或 iLink CDN AES-128-ECB 加密媒体的下载与解密；
+// - 无法拉取或当前不支持原生解析的媒体（如无转写语音、视频、二进制文件）保留结构化说明，绝不静默丢弃。
+func (a *WeixinAdapter) extractWeixinAttachments(ctx context.Context, items []weixinMsgItem) []InboundAttachment {
+	atts := make([]InboundAttachment, 0)
+	for _, item := range items {
+		switch item.Type.Int() {
+		case weixinItemImage:
+			fileName := strings.TrimSpace(item.ImageItem.FileName)
+			size := item.ImageItem.HDSize.Int64()
+			if size <= 0 {
+				size = item.ImageItem.MidSize.Int64()
+			}
+			att := InboundAttachment{
+				Kind:      InboundAttachmentImage,
+				FileName:  fileName,
+				MimeType:  "image/jpeg",
+				SizeBytes: size,
+			}
+			dlURL, aesKey := resolveWeixinMediaSource(item.ImageItem.URL, item.ImageItem.AESKey, item.ImageItem.Media)
+			switch {
+			case dlURL != "" && aesKey != "":
+				if plain, err := a.downloadAndDecryptWeixinMedia(ctx, dlURL, aesKey, attachments.DefaultMaxUploadBytes); err == nil {
+					att.RawData = plain
+				} else {
+					att.Note = "微信图片下载或解密失败：" + err.Error()
+				}
+			case dlURL != "":
+				att.DownloadURL = dlURL
+			default:
+				att.Note = "微信消息未包含可直接下载的图片链接"
+			}
+			atts = append(atts, att)
+
+		case weixinItemVoice:
+			// 有服务端转写文本的语音已由 extractWeixinText 写入正文；仅无转写文本时补齐语音占位防静默丢失。
+			if strings.TrimSpace(item.VoiceItem.Text) != "" {
+				continue
+			}
+			note := ""
+			if ms := item.VoiceItem.Playtime.Int64(); ms > 0 {
+				sec := (ms + 500) / 1000
+				if sec <= 0 {
+					sec = 1
+				}
+				note = fmt.Sprintf("时长约 %d 秒", sec)
+			}
+			atts = append(atts, InboundAttachment{
+				Kind: InboundAttachmentAudio,
+				Note: note,
+			})
+
+		case weixinItemFile:
+			fileName := strings.TrimSpace(item.FileItem.FileName)
+			if fileName == "" {
+				fileName = strings.TrimSpace(item.FileItem.Name)
+			}
+			size := item.FileItem.Len.Int64()
+			if size <= 0 {
+				size = item.FileItem.Size.Int64()
+			}
+			kind := classifyAttachmentKind("", fileName)
+			att := InboundAttachment{
+				Kind:      kind,
+				FileName:  fileName,
+				SizeBytes: size,
+			}
+			if kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, "")) {
+				dlURL, aesKey := resolveWeixinMediaSource(item.FileItem.URL, "", item.FileItem.Media)
+				switch {
+				case dlURL != "" && aesKey != "":
+					if plain, err := a.downloadAndDecryptWeixinMedia(ctx, dlURL, aesKey, attachments.DefaultMaxUploadBytes); err == nil {
+						att.RawData = plain
+					} else {
+						att.Note = "微信文件下载或解密失败：" + err.Error()
+					}
+				case dlURL != "":
+					att.DownloadURL = dlURL
+				}
+			}
+			atts = append(atts, att)
+
+		case weixinItemVideo:
+			note := ""
+			if sec := item.VideoItem.Playtime.Int64(); sec > 0 {
+				note = fmt.Sprintf("时长 %d 秒", sec)
+			}
+			atts = append(atts, InboundAttachment{
+				Kind:      InboundAttachmentVideo,
+				FileName:  strings.TrimSpace(item.VideoItem.FileName),
+				SizeBytes: item.VideoItem.Size.Int64(),
+				Note:      note,
+			})
+		}
+	}
+	return atts
+}
+
+func resolveWeixinMediaSource(directURL, itemAESKey string, media *weixinMediaRef) (string, string) {
+	aesKey := strings.TrimSpace(itemAESKey)
+	if media != nil && strings.TrimSpace(media.AESKey) != "" {
+		aesKey = strings.TrimSpace(media.AESKey)
+	}
+	if u := strings.TrimSpace(directURL); u != "" {
+		return u, aesKey
+	}
+	if media != nil {
+		if u := strings.TrimSpace(media.FullURL); u != "" {
+			return u, aesKey
+		}
+		if qp := strings.TrimSpace(media.EncryptQueryParam); qp != "" {
+			return "https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=" + url.QueryEscape(qp), aesKey
+		}
+	}
+	return "", aesKey
+}
+
+func (a *WeixinAdapter) downloadAndDecryptWeixinMedia(ctx context.Context, rawURL, aesKey string, maxBytes int64) ([]byte, error) {
+	raw, _, err := downloadInboundAttachment(ctx, a.httpClient, rawURL, nil, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, isImg := attachments.DetectImageFormat(raw); isImg {
+		return raw, nil
+	}
+	return decryptWeixinAES128ECB(raw, aesKey)
+}
+
+func weixinAttachmentsFingerprintSeed(atts []InboundAttachment) string {
+	parts := make([]string, 0, len(atts))
+	for _, att := range atts {
+		parts = append(parts, fmt.Sprintf("%s:%s:%d:%s", att.Kind, att.FileName, att.SizeBytes, att.DownloadURL))
+	}
+	return strings.Join(parts, "|")
 }
 
 func formatWeixinRefSummary(ref *weixinRefMsg) string {

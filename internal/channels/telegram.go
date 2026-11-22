@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -172,6 +174,45 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 					Offset flexInt64 `json:"offset"`
 					Length flexInt64 `json:"length"`
 				} `json:"entities"`
+				Photo []struct {
+					FileID   string    `json:"file_id"`
+					FileSize flexInt64 `json:"file_size"`
+					Width    flexInt64 `json:"width"`
+					Height   flexInt64 `json:"height"`
+				} `json:"photo"`
+				Document *struct {
+					FileID   string    `json:"file_id"`
+					FileName string    `json:"file_name"`
+					MimeType string    `json:"mime_type"`
+					FileSize flexInt64 `json:"file_size"`
+				} `json:"document"`
+				Voice *struct {
+					FileID   string    `json:"file_id"`
+					Duration flexInt64 `json:"duration"`
+					MimeType string    `json:"mime_type"`
+					FileSize flexInt64 `json:"file_size"`
+				} `json:"voice"`
+				Audio *struct {
+					FileID   string    `json:"file_id"`
+					Duration flexInt64 `json:"duration"`
+					FileName string    `json:"file_name"`
+					Title    string    `json:"title"`
+					MimeType string    `json:"mime_type"`
+					FileSize flexInt64 `json:"file_size"`
+				} `json:"audio"`
+				Video *struct {
+					FileID   string    `json:"file_id"`
+					Duration flexInt64 `json:"duration"`
+					FileName string    `json:"file_name"`
+					MimeType string    `json:"mime_type"`
+					FileSize flexInt64 `json:"file_size"`
+				} `json:"video"`
+				Sticker *struct {
+					FileID     string `json:"file_id"`
+					Emoji      string `json:"emoji"`
+					IsAnimated bool   `json:"is_animated"`
+					IsVideo    bool   `json:"is_video"`
+				} `json:"sticker"`
 			} `json:"message"`
 		} `json:"result"`
 	}
@@ -261,7 +302,112 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 		if text == "" {
 			text = strings.TrimSpace(m.Caption)
 		}
-		if text == "" {
+		atts := make([]InboundAttachment, 0, 2)
+		if len(m.Photo) > 0 {
+			best := m.Photo[len(m.Photo)-1]
+			bestScore := best.Width.Int64() * best.Height.Int64()
+			for _, p := range m.Photo {
+				score := p.Width.Int64() * p.Height.Int64()
+				if score > bestScore || (score == bestScore && p.FileSize.Int64() > best.FileSize.Int64()) {
+					best = p
+					bestScore = score
+				}
+			}
+			att := InboundAttachment{
+				Kind:      InboundAttachmentImage,
+				FileName:  "photo.jpg",
+				MimeType:  "image/jpeg",
+				SizeBytes: best.FileSize.Int64(),
+			}
+			if data, filePath, dlErr := a.downloadTelegramFile(ctx, best.FileID, attachments.DefaultMaxUploadBytes); dlErr == nil {
+				att.RawData = data
+				if base := strings.TrimSpace(path.Base(filePath)); base != "" && base != "." && base != "/" {
+					att.FileName = base
+				}
+			} else {
+				att.Note = "Telegram 图片下载失败：" + dlErr.Error()
+			}
+			atts = append(atts, att)
+		}
+		if m.Document != nil && strings.TrimSpace(m.Document.FileID) != "" {
+			fileName := strings.TrimSpace(m.Document.FileName)
+			mimeType := strings.TrimSpace(m.Document.MimeType)
+			kind := classifyAttachmentKind(mimeType, fileName)
+			att := InboundAttachment{
+				Kind:      kind,
+				FileName:  fileName,
+				MimeType:  mimeType,
+				SizeBytes: m.Document.FileSize.Int64(),
+			}
+			if (kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, mimeType))) &&
+				m.Document.FileSize.Int64() <= attachments.DefaultMaxUploadBytes {
+				if data, filePath, dlErr := a.downloadTelegramFile(ctx, m.Document.FileID, attachments.DefaultMaxUploadBytes); dlErr == nil {
+					att.RawData = data
+					if att.FileName == "" {
+						if base := strings.TrimSpace(path.Base(filePath)); base != "" && base != "." && base != "/" {
+							att.FileName = base
+						}
+					}
+				} else {
+					att.Note = "Telegram 文件下载失败：" + dlErr.Error()
+				}
+			}
+			atts = append(atts, att)
+		}
+		if m.Voice != nil {
+			note := ""
+			if dur := m.Voice.Duration.Int64(); dur > 0 {
+				note = fmt.Sprintf("时长 %d 秒", dur)
+			}
+			atts = append(atts, InboundAttachment{
+				Kind:      InboundAttachmentAudio,
+				FileName:  "voice.ogg",
+				MimeType:  strings.TrimSpace(m.Voice.MimeType),
+				SizeBytes: m.Voice.FileSize.Int64(),
+				Note:      note,
+			})
+		}
+		if m.Audio != nil {
+			fileName := strings.TrimSpace(m.Audio.FileName)
+			if fileName == "" {
+				fileName = strings.TrimSpace(m.Audio.Title)
+			}
+			note := ""
+			if dur := m.Audio.Duration.Int64(); dur > 0 {
+				note = fmt.Sprintf("时长 %d 秒", dur)
+			}
+			atts = append(atts, InboundAttachment{
+				Kind:      InboundAttachmentAudio,
+				FileName:  fileName,
+				MimeType:  strings.TrimSpace(m.Audio.MimeType),
+				SizeBytes: m.Audio.FileSize.Int64(),
+				Note:      note,
+			})
+		}
+		if m.Video != nil {
+			note := ""
+			if dur := m.Video.Duration.Int64(); dur > 0 {
+				note = fmt.Sprintf("时长 %d 秒", dur)
+			}
+			atts = append(atts, InboundAttachment{
+				Kind:      InboundAttachmentVideo,
+				FileName:  strings.TrimSpace(m.Video.FileName),
+				MimeType:  strings.TrimSpace(m.Video.MimeType),
+				SizeBytes: m.Video.FileSize.Int64(),
+				Note:      note,
+			})
+		}
+		if m.Sticker != nil {
+			note := "贴纸表情"
+			if emoji := strings.TrimSpace(m.Sticker.Emoji); emoji != "" {
+				note = "贴纸 " + emoji
+			}
+			atts = append(atts, InboundAttachment{
+				Kind: InboundAttachmentOther,
+				Note: note,
+			})
+		}
+		if text == "" && len(atts) == 0 {
 			continue
 		}
 		chatType := "direct"
@@ -293,6 +439,7 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, rt AdapterRuntime, botUs
 				ChatType:          chatType,
 				ThreadID:          formatNonZeroInt64(threadID),
 				Content:           text,
+				Attachments:       atts,
 				Mentioned:         mentioned,
 				Timestamp:         msgTime,
 			})
@@ -390,6 +537,51 @@ func (a *TelegramAdapter) Test(ctx context.Context, testText string) error {
 		return a.Send(ctx, OutboundMessage{ChatID: target, Text: testText})
 	}
 	return nil
+}
+
+// downloadTelegramFile 通过 Telegram Bot API getFile 拉取文件字节，复用通道自带代理并在报错中严格隐藏 BotToken。
+func (a *TelegramAdapter) downloadTelegramFile(ctx context.Context, fileID string, maxBytes int64) ([]byte, string, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return nil, "", errors.New("file_id 为空")
+	}
+	raw, err := a.apiCall(ctx, "getFile", map[string]any{"file_id": fileID})
+	if err != nil {
+		return nil, "", errors.New("getFile 请求失败")
+	}
+	var resp struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			FilePath string    `json:"file_path"`
+			FileSize flexInt64 `json:"file_size"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, "", errors.New("getFile 响应解析失败")
+	}
+	if !resp.OK || strings.TrimSpace(resp.Result.FilePath) == "" {
+		if strings.TrimSpace(resp.Description) != "" {
+			return nil, "", errors.New(strings.TrimSpace(resp.Description))
+		}
+		return nil, "", errors.New("getFile 未返回 file_path")
+	}
+	if maxBytes > 0 && resp.Result.FileSize.Int64() > maxBytes {
+		return nil, resp.Result.FilePath, fmt.Errorf("文件过大（超出 %d MiB 上限）", maxBytes>>20)
+	}
+	filePath := strings.TrimLeft(strings.TrimSpace(resp.Result.FilePath), "/")
+	fileURL := fmt.Sprintf("%s/file/bot%s/%s", a.baseURL, strings.TrimSpace(a.secrets.BotToken), filePath)
+	data, _, err := downloadInboundAttachment(ctx, a.httpClient, fileURL, nil, maxBytes)
+	if err != nil {
+		// 严禁把包含 BotToken 的 URL 透传到日志或占位提示中。
+		token := strings.TrimSpace(a.secrets.BotToken)
+		msg := err.Error()
+		if token != "" {
+			msg = strings.ReplaceAll(msg, token, "***")
+		}
+		return nil, filePath, errors.New(msg)
+	}
+	return data, filePath, nil
 }
 
 func (a *TelegramAdapter) apiCall(ctx context.Context, method string, body map[string]any) ([]byte, error) {
