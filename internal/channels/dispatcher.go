@@ -20,6 +20,12 @@ const (
 	defaultDispatcherBackoffBase     = 10 * time.Second
 	defaultDispatcherBackoffMax      = 5 * time.Minute
 	defaultDispatcherMaxEventRetries = 5
+
+	// 微信 iLink ret=-2 (prepare failed) 存在账号级限流惩罚升级：在惩罚期内频繁调用
+	// sendmessage 会把原本约 1 小时的冷却窗口不断拉长至十余小时。
+	// 因此命中 ErrWeixinSendThrottled 后直接进入长冷却（15m -> 30m -> 60m），停止每 5 分钟探测。
+	defaultWeixinThrottleBackoffBase = 15 * time.Minute
+	defaultWeixinThrottleBackoffMax  = 60 * time.Minute
 )
 
 type channelBackoffState struct {
@@ -165,7 +171,7 @@ func (d *Dispatcher) recordChannelSuccess(channelID uuid.UUID) {
 	d.mu.Unlock()
 }
 
-func (d *Dispatcher) recordChannelFailure(ch store.RemoteChannel) time.Duration {
+func (d *Dispatcher) recordChannelFailure(ch store.RemoteChannel, err error) time.Duration {
 	now := d.now()
 	inboundAt := channelInboundTimestamp(ch)
 	d.mu.Lock()
@@ -180,6 +186,19 @@ func (d *Dispatcher) recordChannelFailure(ch store.RemoteChannel) time.Duration 
 	if d.backoffBase <= 0 {
 		st.nextRetryAt = now
 		return 0
+	}
+	if errors.Is(err, ErrWeixinSendThrottled) {
+		// 微信限流惩罚期专用长冷却：15m -> 30m -> 60m（封顶 60m），避免短间隔反复探测续期惩罚。
+		wait := defaultWeixinThrottleBackoffBase
+		for i := 1; i < st.failures; i++ {
+			wait *= 2
+			if wait >= defaultWeixinThrottleBackoffMax {
+				wait = defaultWeixinThrottleBackoffMax
+				break
+			}
+		}
+		st.nextRetryAt = now.Add(wait)
+		return wait
 	}
 	// 指数退避：10s -> 30s -> 60s -> 120s -> 300s（封顶 5 分钟），彻底避免异常通道每 2 秒死打外部 API。
 	wait := d.backoffBase
@@ -218,6 +237,26 @@ func (d *Dispatcher) sendOutboundEvent(
 	}
 	if errors.Is(err, ErrTargetNotBound) {
 		return false, err
+	}
+	if errors.Is(err, ErrWeixinProactiveQuotaExceeded) {
+		// 微信主动推送触发本地 24h 安全配额时，直接跳过该条非关键主动推送并推进游标，
+		// 不污染通道退避状态，也不影响用户专属对话卡的实时回复。
+		d.logger.Warn("remote channel proactive push skipped by local safety quota",
+			"channel_id", ch.ID,
+			"platform", ch.Platform,
+			"card_id", cardID,
+			"event_key", eventKey,
+			"err", err,
+		)
+		return true, nil
+	}
+	if errors.Is(err, ErrWeixinSendThrottled) {
+		// 微信 ret=-2 属于网关账号级限流冷却：
+		// - 专属对话卡的用户实时回复不计入死信丢弃，待冷却解除或用户新入站消息后继续投递；
+		// - 非专属卡片（主聊天镜像/历史通知）照常受 maxEventRetries 限制，避免旧积压长期卡住通道。
+		if ch.ConversationCardID.Valid && cardID == ch.ConversationCardID.UUID {
+			return false, err
+		}
 	}
 	d.mu.Lock()
 	d.eventFailures[eventKey]++
@@ -299,7 +338,7 @@ func (d *Dispatcher) DeliverOnce(ctx context.Context) error {
 			d.handleUnboundChannel(ctx, ch)
 			continue
 		}
-		wait := d.recordChannelFailure(ch)
+		wait := d.recordChannelFailure(ch, deliverErr)
 		d.logger.Warn("deliver remote channel failed, backing off",
 			"channel_id", ch.ID,
 			"platform", ch.Platform,
@@ -602,11 +641,37 @@ func (d *Dispatcher) persistCursor(ctx context.Context, cursor store.RemoteChann
 	return d.store.UpsertChannelOutboundCursor(ctx, cursor)
 }
 
+// prioritizeMainChatCards 将当前通道的专属讨论卡排在项目主聊天及其他子任务卡片之前。
+// 这样用户在外部 IM（尤其是存在主动推送配额的微信）发消息后，实时对话回复永远优先于旧主聊天/通知积压，
+// 不会被历史推送抢占额度或提前触发限流熔断。
+func prioritizeMainChatCards(ch store.RemoteChannel, cards []cardSummary) []cardSummary {
+	if !ch.ConversationCardID.Valid || len(cards) <= 1 {
+		return cards
+	}
+	ownID := ch.ConversationCardID.UUID
+	ownIdx := -1
+	for i, c := range cards {
+		if c.ID == ownID {
+			ownIdx = i
+			break
+		}
+	}
+	if ownIdx <= 0 {
+		return cards
+	}
+	reordered := make([]cardSummary, 0, len(cards))
+	reordered = append(reordered, cards[ownIdx])
+	reordered = append(reordered, cards[:ownIdx]...)
+	reordered = append(reordered, cards[ownIdx+1:]...)
+	return reordered
+}
+
 func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.RemoteChannel) error {
 	cards, err := d.listProjectCards(ctx, ch.WorkspaceID, ch.ProjectID)
 	if err != nil {
 		return err
 	}
+	cards = prioritizeMainChatCards(ch, cards)
 	var firstCardErr error
 	for _, card := range cards {
 		if ctx.Err() != nil {
@@ -617,6 +682,11 @@ func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.Remote
 				"channel_id", ch.ID, "card_id", card.ID, "err", err)
 			if firstCardErr == nil {
 				firstCardErr = err
+			}
+			// 微信 ret=-2 限流惩罚一旦触发，立即中止本轮该通道其余卡片发送，
+			// 避免同一轮内连打多张卡片把网关惩罚窗口继续拉长。
+			if errors.Is(err, ErrWeixinSendThrottled) {
+				return err
 			}
 			// 单张卡片失败不中断其它卡片已就绪事件的投递；已发送的游标也已经逐条落盘。
 			continue
@@ -702,13 +772,15 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					continue
 				}
 				outText := body
+				isProactive := !isOwnConversation
 				if !isOwnConversation && card.IsMainChat {
 					outText = formatMainChatMirrorText(body)
 				}
 				// 日常对话回复与主聊天单向镜像均保持干净纯文本，不再末尾拼接冗余「查看卡片：https://...」。
 				eventKey := fmt.Sprintf("msg:%s:%s:%d", ch.ID, card.ID, ev.Seq)
 				if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-					Text: outText,
+					Text:      outText,
+					Proactive: isProactive,
 				}); err != nil {
 					return err
 				}
@@ -740,8 +812,9 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					text := fmt.Sprintf("【待验收】%s 已进入 Review，请及时核查确认。", card.Title)
 					eventKey := fmt.Sprintf("status:%s:%s:%d", ch.ID, card.ID, ev.Seq)
 					if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-						Text:    text,
-						CardURL: cardURL,
+						Text:      text,
+						CardURL:   cardURL,
+						Proactive: true,
 					}); err != nil {
 						return err
 					}
@@ -768,8 +841,9 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					text := fmt.Sprintf("【执行异常】%s 执行失败/超时：%s", card.Title, reason)
 					eventKey := fmt.Sprintf("attempt:%s:%s:%s:%s", ch.ID, card.ID, attemptID, status)
 					if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-						Text:    text,
-						CardURL: cardURL,
+						Text:      text,
+						CardURL:   cardURL,
+						Proactive: true,
 					}); err != nil {
 						return err
 					}
@@ -789,8 +863,9 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 			text := fmt.Sprintf("【安全审批挂起】%s 请求执行受保护工具 `%s`：%s", card.Title, toolName, strings.TrimSpace(reason))
 			eventKey := fmt.Sprintf("approval:%s:%s:%s", ch.ID, card.ID, approvalID)
 			if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-				Text:    text,
-				CardURL: cardURL,
+				Text:      text,
+				CardURL:   cardURL,
+				Proactive: !isOwnConversation,
 			}); err != nil {
 				return err
 			}
@@ -826,6 +901,9 @@ func (d *Dispatcher) deliverScheduledPushChannel(ctx context.Context, ch store.R
 			if firstCardErr == nil {
 				firstCardErr = err
 			}
+			if errors.Is(err, ErrWeixinSendThrottled) {
+				return err
+			}
 			continue
 		}
 	}
@@ -860,8 +938,9 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 				}
 				eventKey := fmt.Sprintf("checkin:%s:%s:%d", ch.ID, card.ID, ev.Seq)
 				if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-					Text:    text,
-					CardURL: outURL,
+					Text:      text,
+					CardURL:   outURL,
+					Proactive: true,
 				}); err != nil {
 					return err
 				}
@@ -891,7 +970,8 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 						text := fmt.Sprintf("【定时任务汇报】%s\n%s", card.Title, body)
 						eventKey := fmt.Sprintf("sched_msg:%s:%s:%d", ch.ID, card.ID, ev.Seq)
 						if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-							Text: text,
+							Text:      text,
+							Proactive: true,
 						}); err != nil {
 							return err
 						}
@@ -916,8 +996,9 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 				text := fmt.Sprintf("【定时任务异常】%s 执行失败/超时：%s", card.Title, reason)
 				eventKey := fmt.Sprintf("sched_attempt:%s:%s:%s:%s", ch.ID, card.ID, attemptID, status)
 				if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-					Text:    text,
-					CardURL: cardURL,
+					Text:      text,
+					CardURL:   cardURL,
+					Proactive: true,
 				}); err != nil {
 					return err
 				}
