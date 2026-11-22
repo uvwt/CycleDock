@@ -909,6 +909,10 @@ const en = {
   删除讨论: "Delete discussion",
   删除任务: "Delete task",
   删除定时任务: "Delete scheduled task",
+  下次: "Next",
+  今天: "Today",
+  明天: "Tomorrow",
+  上次执行失败: "Last run failed",
 } as const;
 
 void i18n.use(initReactI18next).init({
