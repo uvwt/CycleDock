@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   Bell,
   BellOff,
+  CheckCircle2,
   FileText,
   Mail,
   MailOpen,
@@ -24,6 +25,8 @@ import {
 import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import { isCardUnread } from "../../shared/lib/card-read-state";
 import { useCardReadState } from "../../shared/lib/useCardReadState";
+import { isReviewTodoCard } from "../../shared/lib/review-acceptance";
+import { useCompleteReviewCard } from "../../shared/lib/useCompleteReviewCard";
 import {
   Button,
   ConfirmDialog,
@@ -133,6 +136,8 @@ export function CardActions({
 
   const toggleMute = useCardNotificationMute(card);
   const toggleReadState = useCardReadState(card);
+  const completeReview = useCompleteReviewCard();
+  const canCompleteReview = !preserve && isReviewTodoCard(card);
   const effectiveIsActive = isActive || variant === "toolbar";
   const unread = isCardUnread(card, effectiveIsActive);
 
@@ -210,6 +215,27 @@ export function CardActions({
                 </SheetTitle>
               </SheetHeader>
               <div className="flex flex-col gap-1 p-2">
+                {canCompleteReview && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={completeReview.isPending}
+                      onClick={() => {
+                        setDrawerOpen(false);
+                        completeReview.mutate({
+                          id: card.id,
+                          projectID: card.project_id,
+                        });
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-emerald-600 transition active:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
+                    >
+                      <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                      <span>{t("验收完成")}</span>
+                    </button>
+                    <div className="my-1 h-px bg-line/60" />
+                  </>
+                )}
+
                 {taskDetails && card.kind !== "discussion" && (
                   <button
                     type="button"
@@ -355,6 +381,26 @@ export function CardActions({
           align={menuSide === "right" ? "start" : "end"}
           trigger={triggerButton}
         >
+          {canCompleteReview && (
+            <>
+              <MenuItem
+                disabled={completeReview.isPending}
+                onSelect={() =>
+                  completeReview.mutate({
+                    id: card.id,
+                    projectID: card.project_id,
+                  })
+                }
+              >
+                <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  {t("验收完成")}
+                </span>
+              </MenuItem>
+              <MenuSeparator />
+            </>
+          )}
+
           {taskDetails && card.kind !== "discussion" && (
             <MenuItem onSelect={() => setDetailsOpen(true)}>
               <FileText className="size-4" />
