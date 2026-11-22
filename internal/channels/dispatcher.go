@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -589,6 +590,25 @@ func (d *Dispatcher) listCardEventsAfter(ctx context.Context, workspaceID, cardI
 	return out, rows.Err()
 }
 
+func (d *Dispatcher) isAttemptRunning(ctx context.Context, workspaceID uuid.UUID, attemptID uuid.NullUUID) (bool, error) {
+	if !attemptID.Valid {
+		return false, nil
+	}
+	var status string
+	err := d.store.Pool().QueryRow(ctx, `
+		SELECT status
+		FROM turn_attempts
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, attemptID.UUID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == string(domain.AttemptStatusRunning), nil
+}
+
 func (d *Dispatcher) latestCardAttempt(ctx context.Context, workspaceID, cardID uuid.UUID) (uuid.UUID, string, string, bool) {
 	var attemptID uuid.UUID
 	var status, errSummary string
@@ -736,11 +756,29 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					Type    string `json:"type"`
 					Content string `json:"content"`
 					EndTurn bool   `json:"end_turn"`
+					Preview bool   `json:"preview"`
 					Widget  *struct {
 						Question string `json:"question"`
 					} `json:"widget"`
 				}
 				if err := json.Unmarshal(ev.Message, &payload); err != nil {
+					cursor.LastMessageSeq = ev.Seq
+					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
+						return saveErr
+					}
+					continue
+				}
+				// 流式预览气泡（preview=true）在正式发布时会原地覆盖同一条事件且保持 sequence 不变：
+				// - 若所属 Attempt 仍在运行，停止本轮推进并等待原地转正或清理，既不提前推半截草稿，也不跳过转正后的正式消息；
+				// - 若所属 Attempt 已结束（如取消/失败留下的截断草稿），跳过并推进游标，避免阻塞后续正式消息。
+				if payload.Preview {
+					running, err := d.isAttemptRunning(ctx, ch.WorkspaceID, ev.AttemptID)
+					if err != nil {
+						return err
+					}
+					if running {
+						break
+					}
 					cursor.LastMessageSeq = ev.Seq
 					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
 						return saveErr
@@ -967,12 +1005,27 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 	// 2. Ongoing 定时执行的终态回复气泡（仅 push_filter=all 时同步普通终态汇总，精简不附冗余链接）
 	if msgs, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, "message", cursor.LastMessageSeq); err == nil {
 		for _, ev := range msgs {
-			if ch.PushFilter != domain.ChannelPushFilterWarningsOnly {
-				var payload struct {
-					Content string `json:"content"`
-					EndTurn bool   `json:"end_turn"`
+			var payload struct {
+				Content string `json:"content"`
+				EndTurn bool   `json:"end_turn"`
+				Preview bool   `json:"preview"`
+			}
+			if err := json.Unmarshal(ev.Message, &payload); err == nil {
+				if payload.Preview {
+					running, err := d.isAttemptRunning(ctx, ch.WorkspaceID, ev.AttemptID)
+					if err != nil {
+						return err
+					}
+					if running {
+						break
+					}
+					cursor.LastMessageSeq = ev.Seq
+					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
+						return saveErr
+					}
+					continue
 				}
-				if err := json.Unmarshal(ev.Message, &payload); err == nil && payload.EndTurn {
+				if ch.PushFilter != domain.ChannelPushFilterWarningsOnly && payload.EndTurn {
 					body := strings.TrimSpace(payload.Content)
 					if body == "" {
 						body = strings.TrimSpace(ev.Content)

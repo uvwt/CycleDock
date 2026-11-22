@@ -315,19 +315,23 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	}); err != nil {
 		t.Fatalf("publish progress bubble: %v", err)
 	}
-	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+	// 直接插入一条空文本 message 事件，验证 Dispatcher 防御性跳过空文本气泡不刷屏。
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO events (id, workspace_id, card_id, event_type, actor_source_id, attempt_id, content, message)
+		VALUES ($1, $2, $3, 'message', $4, $5, '   ', '{"type":"text","content":"   ","end_turn":false}'::jsonb)
+	`, uuid.New(), workspaceID, convCardID, agentSrc.ID, attemptID); err != nil {
+		t.Fatalf("insert empty bubble event: %v", err)
+	}
+	// 写入一条运行中的流式预览气泡（preview=true），验证 Dispatcher 既不会提前推送半截草稿，也不会推进游标跳过其原地转正后的正式消息。
+	if err := dataStore.SaveReplyPreview(ctx, store.ReplyPreviewParams{
 		WorkspaceID:    workspaceID,
 		CardID:         convCardID,
 		AttemptID:      attemptID,
 		RunnerSourceID: agentSrc.ID,
-		IdempotencyKey: "empty-bubble-1",
-		Message: store.ReplyMessage{
-			Type:    "text",
-			Content: "   ",
-			EndTurn: false,
-		},
+		PreviewID:      "final-bubble-preview-1",
+		Content:        "今日全部服务（流式草稿）",
 	}); err != nil {
-		t.Fatalf("publish empty bubble: %v", err)
+		t.Fatalf("save reply preview bubble: %v", err)
 	}
 
 	if err := dispatcher.DeliverOnce(ctx); err != nil {
@@ -344,6 +348,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		AttemptID:      attemptID,
 		RunnerSourceID: agentSrc.ID,
 		IdempotencyKey: "final-bubble-1",
+		PreviewID:      "final-bubble-preview-1",
 		FinishOnEnd:    true,
 		Message: store.ReplyMessage{
 			Type:    "text",
@@ -1054,11 +1059,13 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 				WHERE workspace_id = $1 AND card_id = $2
 			`, workspaceID, autoConvCardID).Scan(&boundAttCount)
 			if boundAttCount == 1 {
-				_ = pool.QueryRow(ctx, `
+				if qErr := pool.QueryRow(ctx, `
 					SELECT content, message FROM events
 					WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'comment'
-					ORDER BY seq DESC LIMIT 1
-				`, workspaceID, autoConvCardID).Scan(&lastCommentContent, &lastCommentRaw)
+					ORDER BY sequence DESC LIMIT 1
+				`, workspaceID, autoConvCardID).Scan(&lastCommentContent, &lastCommentRaw); qErr != nil {
+					t.Fatalf("query latest comment event: %v", qErr)
+				}
 				break
 			}
 		}
