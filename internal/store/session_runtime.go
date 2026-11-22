@@ -547,6 +547,17 @@ func (s *Store) CompleteAttempt(
 	if command.RowsAffected() != 1 {
 		return domain.ErrAttemptNotCurrent
 	}
+	// 正常完成 Attempt 时，在同一事务内清理未转正的孤儿预览气泡（例如模型路由切换或放弃调用留下的草稿）。
+	// 取消、打断或失败路径不经过 CompleteAttempt，仍按设计保留已输出的流式正文。
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM events
+		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+		  AND actor_source_id=$4 AND event_type='message'
+		  AND idempotency_key IS NULL
+		  AND message->>'preview'='true'
+	`, workspaceID, cardID, attemptID, runnerSourceID); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}

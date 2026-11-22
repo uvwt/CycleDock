@@ -23,6 +23,7 @@ export type TaskProgress = {
 export type LiveAttempt = {
   attemptID: string;
   replies: LiveReply[];
+  discardedReplyIDs?: Record<string, true>;
   stage: string;
   deviceName?: string;
   task?: TaskProgress;
@@ -105,6 +106,7 @@ export function applyCardStreamEvent(
       return { ...live, task: event.task };
     case "reply.preview": {
       if (!event.reply_id || !event.text) return live;
+      if (live.discardedReplyIDs?.[event.reply_id]) return live;
       const existing = live.replies.find(
         (reply) => reply.id === event.reply_id,
       );
@@ -131,11 +133,14 @@ export function applyCardStreamEvent(
         ),
       };
     case "reply.discarded":
+      if (!event.reply_id) return live;
       return {
         ...live,
-        replies: live.replies.map((reply) =>
-          reply.id === event.reply_id ? { ...reply, failed: true } : reply,
-        ),
+        replies: live.replies.filter((reply) => reply.id !== event.reply_id),
+        discardedReplyIDs: {
+          ...live.discardedReplyIDs,
+          [event.reply_id]: true,
+        },
       };
     case "reply.reset":
       return {
