@@ -141,6 +141,17 @@ func (s *Store) UpdateCardFromAgentAttempt(
 		return UpdateCardFromAttemptResult{}, err
 	}
 
+	// 远程通道专属讨论卡的标题与描述由系统托管，禁止 Agent 修改（但仍允许置顶或归档）。
+	if p.Title != nil || p.Description != nil {
+		isManaged, err := isRemoteChannelConversationCard(ctx, tx, p.WorkspaceID, p.TargetCardID)
+		if err != nil {
+			return UpdateCardFromAttemptResult{}, err
+		}
+		if isManaged {
+			return UpdateCardFromAttemptResult{}, fmt.Errorf("%w: remote channel conversation card title and description are managed by the channel", domain.ErrConflict)
+		}
+	}
+
 	kind := domain.CardKind(current.Kind)
 	switch kind {
 	case domain.CardKindTodo:

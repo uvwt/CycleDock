@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,10 +20,11 @@ import (
 )
 
 const (
-	defaultQQAPIBaseURL  = "https://api.sgroup.qq.com"
-	defaultQQAuthBaseURL = "https://bots.qq.com"
-	qqIntentsGroupAndC2C = 1 << 25
-	qqMaxRunes           = 2000
+	defaultQQAPIBaseURL    = "https://api.sgroup.qq.com"
+	defaultQQAuthBaseURL   = "https://bots.qq.com"
+	qqIntentsGroupAndC2C   = 1 << 25
+	qqMaxRunes             = 2000
+	qqPassiveMsgMaxAge     = 4 * time.Minute // QQ 被动回复 msg_id 有效期 5 分钟，留 1 分钟安全余量
 )
 
 // QQAdapter 实现 QQ 开放平台官方 Bot API v2 + WebSocket Gateway（app_id + secret，C2C 单聊与群聊）。
@@ -33,6 +35,7 @@ type QQAdapter struct {
 	authURL    string
 	wsURL      string
 	httpClient *http.Client
+	nowFn      func() time.Time
 
 	mu          sync.Mutex
 	token       string
@@ -40,6 +43,7 @@ type QQAdapter struct {
 	lastChatID  string
 	lastChatTy  string
 	lastMsgID   string
+	lastMsgAt   time.Time
 	msgSeq      int
 }
 
@@ -63,6 +67,12 @@ func NewQQAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, cl
 	if lastChatTy == "" {
 		lastChatTy = strings.TrimSpace(ch.RuntimeState.LastChatType)
 	}
+	var lastMsgAt time.Time
+	if ch.RuntimeState.LastMessageAt > 0 {
+		lastMsgAt = time.Unix(ch.RuntimeState.LastMessageAt, 0).UTC()
+	}
+	// 使用基于当前时间戳的高位种子初始化 msgSeq，防止进程重启后从 1 重新开始与旧 msg_id+msg_seq 碰撞被 QQ 拒收。
+	seedSeq := int(time.Now().Unix()%900000) + 1000
 	return &QQAdapter{
 		channel:    ch,
 		secrets:    secrets,
@@ -70,9 +80,12 @@ func NewQQAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, cl
 		authURL:    authURL,
 		wsURL:      strings.TrimSpace(ch.Config.WSURL),
 		httpClient: client,
+		nowFn:      time.Now,
 		lastChatID: lastChat,
 		lastChatTy: lastChatTy,
 		lastMsgID:  strings.TrimSpace(ch.RuntimeState.LastMessageID),
+		lastMsgAt:  lastMsgAt,
+		msgSeq:     seedSeq,
 	}
 }
 
@@ -189,10 +202,11 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	}
 	defer conn.Close()
 
-	var lastSeq int64
+	var lastSeq atomic.Int64
 	hbStop := make(chan struct{})
 	defer close(hbStop)
 	hbStarted := false
+	log := rtLogger(rt)
 
 	for {
 		_, data, err := conn.Read()
@@ -209,7 +223,7 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			continue
 		}
 		if payload.S != nil {
-			lastSeq = payload.S.Int64()
+			lastSeq.Store(payload.S.Int64())
 		}
 		switch payload.Op.Int() {
 		case 10: // Hello -> 发送 Identify 并启动心跳
@@ -243,7 +257,7 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 						case <-hbStop:
 							return
 						case <-ticker.C:
-							_ = conn.WriteJSON(map[string]any{"op": 1, "d": lastSeq})
+							_ = conn.WriteJSON(map[string]any{"op": 1, "d": lastSeq.Load()})
 						}
 					}
 				}()
@@ -252,8 +266,15 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			if rt.OnStatus != nil {
 				rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 			}
+		case 7: // Reconnect
+			log.Warn("qq gateway requested reconnect (op=7)")
+			return errors.New("qq gateway requested reconnect")
+		case 9: // Invalid Session
+			log.Warn("qq gateway rejected session (op=9, check app_id/secret/intents)")
+			return errors.New("qq gateway invalid session (op=9)")
 		case 0: // Dispatch
 			if payload.T == "READY" {
+				log.Info("qq gateway READY received")
 				if rt.OnStatus != nil {
 					rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 				}
@@ -261,6 +282,8 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 			}
 			if payload.T == "C2C_MESSAGE_CREATE" || payload.T == "GROUP_AT_MESSAGE_CREATE" {
 				a.handleDispatchMessage(ctx, payload.T, payload.D, rt)
+			} else if payload.T != "" {
+				log.Debug("qq gateway ignored dispatch event", "event_type", payload.T)
 			}
 		}
 	}
@@ -304,16 +327,19 @@ func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string,
 		msgID = uuid.NewString()
 	}
 
+	now := a.now()
 	a.mu.Lock()
 	a.lastChatID = chatID
 	a.lastChatTy = chatType
 	a.lastMsgID = msgID
+	a.lastMsgAt = now
 	a.mu.Unlock()
 	if rt.SaveState != nil {
 		_ = rt.SaveState(ctx, func(st *store.RemoteChannelRuntimeState) {
 			st.LastChatID = chatID
 			st.LastChatType = chatType
 			st.LastMessageID = msgID
+			st.LastMessageAt = now.Unix()
 		})
 	}
 	if rt.OnInbound != nil {
@@ -324,9 +350,16 @@ func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string,
 			ChatType:          chatType,
 			Content:           text,
 			Mentioned:         true, // QQ 群聊仅投递 GROUP_AT_MESSAGE_CREATE
-			Timestamp:         time.Now().UTC(),
+			Timestamp:         now,
 		})
 	}
+}
+
+func (a *QQAdapter) now() time.Time {
+	if a.nowFn != nil {
+		return a.nowFn().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (a *QQAdapter) Send(ctx context.Context, msg OutboundMessage) error {
@@ -334,6 +367,7 @@ func (a *QQAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	if err != nil {
 		return err
 	}
+	now := a.now()
 	a.mu.Lock()
 	chatID := strings.TrimSpace(msg.ChatID)
 	if chatID == "" {
@@ -343,46 +377,69 @@ func (a *QQAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	if chatType == "" {
 		chatType = a.lastChatTy
 	}
-	replyMsgID := a.lastMsgID
+	replyMsgID := ""
+	if a.lastMsgID != "" && !a.lastMsgAt.IsZero() && now.Sub(a.lastMsgAt) <= qqPassiveMsgMaxAge {
+		replyMsgID = a.lastMsgID
+	}
 	a.mu.Unlock()
 
 	if chatID == "" {
-		return errors.New("qq target openid is empty")
+		return fmt.Errorf("%w: qq target openid is empty", ErrTargetNotBound)
 	}
 	endpoint := a.apiBaseURL + "/v2/users/" + chatID + "/messages"
 	if strings.EqualFold(chatType, "group") {
 		endpoint = a.apiBaseURL + "/v2/groups/" + chatID + "/messages"
 	}
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformQQ, msg.Text, msg.CardURL)
 	for _, chunk := range SplitMessage(fullText, qqMaxRunes) {
-		a.mu.Lock()
-		a.msgSeq++
-		seq := a.msgSeq
-		a.mu.Unlock()
-		payload := map[string]any{
-			"content":  chunk,
-			"msg_type": 0,
-			"msg_seq":  seq,
+		if err := a.sendChunk(ctx, token, endpoint, chunk, replyMsgID); err != nil {
+			if replyMsgID == "" {
+				return err
+			}
+			// 被动回复 msg_id 可能已过期或达到单 msg_id 回复上限，清空过期 msg_id 后自动降级为主动消息重试一次。
+			a.mu.Lock()
+			if a.lastMsgID == replyMsgID {
+				a.lastMsgID = ""
+				a.lastMsgAt = time.Time{}
+			}
+			a.mu.Unlock()
+			replyMsgID = ""
+			if fallbackErr := a.sendChunk(ctx, token, endpoint, chunk, ""); fallbackErr != nil {
+				return fmt.Errorf("%v (fallback proactive send failed: %w)", err, fallbackErr)
+			}
 		}
-		if replyMsgID != "" {
-			payload["msg_id"] = replyMsgID
-		}
-		bodyBytes, _ := json.Marshal(payload)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "QQBot "+token)
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			return err
-		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			return fmt.Errorf("qq send HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-		}
+	}
+	return nil
+}
+
+func (a *QQAdapter) sendChunk(ctx context.Context, token, endpoint, chunk, replyMsgID string) error {
+	a.mu.Lock()
+	a.msgSeq++
+	seq := a.msgSeq
+	a.mu.Unlock()
+	payload := map[string]any{
+		"content":  chunk,
+		"msg_type": 0,
+		"msg_seq":  seq,
+	}
+	if replyMsgID != "" {
+		payload["msg_id"] = replyMsgID
+	}
+	bodyBytes, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "QQBot "+token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("qq send HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }

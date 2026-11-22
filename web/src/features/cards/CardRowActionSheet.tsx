@@ -174,7 +174,7 @@ export function CardRowActionSheet({
             )}
           </button>
 
-          {!preserve && onEdit && (
+          {!preserve && !card.managed_by_remote_channel_id && onEdit && (
             <button
               type="button"
               onClick={() => {

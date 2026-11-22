@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,9 +21,10 @@ import (
 type stubChannelAdapter struct {
 	platform domain.ChannelPlatform
 
-	mu      sync.Mutex
-	sent    []channels.OutboundMessage
-	inbound chan channels.InboundMessage
+	mu            sync.Mutex
+	sent          []channels.OutboundMessage
+	failSubstring string
+	inbound       chan channels.InboundMessage
 }
 
 func newStubChannelAdapter(platform domain.ChannelPlatform) *stubChannelAdapter {
@@ -30,6 +32,12 @@ func newStubChannelAdapter(platform domain.ChannelPlatform) *stubChannelAdapter 
 		platform: platform,
 		inbound:  make(chan channels.InboundMessage, 16),
 	}
+}
+
+func (s *stubChannelAdapter) FailNextMatching(substr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failSubstring = substr
 }
 
 func (s *stubChannelAdapter) Platform() domain.ChannelPlatform { return s.platform }
@@ -53,6 +61,10 @@ func (s *stubChannelAdapter) Run(ctx context.Context, rt channels.AdapterRuntime
 func (s *stubChannelAdapter) Send(_ context.Context, msg channels.OutboundMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failSubstring != "" && strings.Contains(msg.Text, s.failSubstring) {
+		s.failSubstring = ""
+		return context.DeadlineExceeded
+	}
 	s.sent = append(s.sent, msg)
 	return nil
 }
@@ -231,18 +243,18 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		}
 	}
 
-	// 等待入站写入主聊天并落库 comment
-	var mainCardID uuid.UUID
+	// 等待入站写入该通道专属普通讨论卡并落库 comment
+	var convCardID uuid.UUID
 	var commentCount int
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		card, err := dataStore.MainDiscussion(ctx, workspaceID, projectID)
-		if err == nil {
-			mainCardID = card.ID
+		chLatest, err := dataStore.GetRemoteChannel(ctx, workspaceID, mainChID)
+		if err == nil && chLatest.ConversationCardID.Valid {
+			convCardID = chLatest.ConversationCardID.UUID
 			_ = pool.QueryRow(ctx, `
 				SELECT COUNT(*) FROM events
 				WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'comment'
-			`, workspaceID, mainCardID).Scan(&commentCount)
+			`, workspaceID, convCardID).Scan(&commentCount)
 			if commentCount > 0 {
 				break
 			}
@@ -251,14 +263,17 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	}
 	// 多等一小会儿确保重复消息也处理完且不会产生第二条 comment
 	time.Sleep(150 * time.Millisecond)
-	if mainCardID == uuid.Nil {
-		t.Fatal("expected main discussion auto-created by inbound message")
+	if convCardID == uuid.Nil {
+		t.Fatal("expected channel dedicated conversation card auto-created by inbound message")
+	}
+	if mainDisc, err := dataStore.MainDiscussion(ctx, workspaceID, projectID); err == nil && mainDisc.ID == convCardID {
+		t.Fatalf("channel conversation card must be isolated from project main discussion, got same id %s", convCardID)
 	}
 
 	if err := pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM events
 		WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'comment'
-	`, workspaceID, mainCardID).Scan(&commentCount); err != nil {
+	`, workspaceID, convCardID).Scan(&commentCount); err != nil {
 		t.Fatalf("count comments: %v", err)
 	}
 	if commentCount != 1 {
@@ -274,16 +289,16 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	}
 
 	// 5. 模拟 Agent 认领并回复：先发中间进度气泡 (end_turn=false)，再发最终气泡 (end_turn=true)
-	// 验证：中间进度气泡绝不推送，只推送最终气泡且附带直达链接。
+	// 验证：中间进度气泡绝不推送，只推送最终气泡，且日常回复不附带冗余 CardURL。
 	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
 	if err != nil {
-		t.Fatalf("claim main turn attempt: %v", err)
+		t.Fatalf("claim channel conversation turn attempt: %v", err)
 	}
 	attemptID := claim.Attempt.ID
 
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
 		WorkspaceID:    workspaceID,
-		CardID:         mainCardID,
+		CardID:         convCardID,
 		AttemptID:      attemptID,
 		RunnerSourceID: agentSrc.ID,
 		IdempotencyKey: "progress-bubble-1",
@@ -305,7 +320,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
 		WorkspaceID:    workspaceID,
-		CardID:         mainCardID,
+		CardID:         convCardID,
 		AttemptID:      attemptID,
 		RunnerSourceID: agentSrc.ID,
 		IdempotencyKey: "final-bubble-1",
@@ -323,13 +338,19 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after final bubble: %v", err)
 	}
 	sentMain := mainStub.SentMessages()
-	if len(sentMain) != 1 || !strings.Contains(sentMain[0].Text, "今日全部服务运行正常") || !strings.Contains(sentMain[0].CardURL, mainCardID.String()) {
-		t.Fatalf("expected 1 final bubble with card link, got %+v", sentMain)
+	if len(sentMain) != 1 || !strings.Contains(sentMain[0].Text, "今日全部服务运行正常") || sentMain[0].CardURL != "" {
+		t.Fatalf("expected 1 clean daily reply without redundant card link, got %+v", sentMain)
 	}
 
-	// 6. 验证 mirror_web_messages=true 时：
-	// - 不再把 Web 端人类评论原文包装成 [Web 主聊天] 回传到 IM；
-	// - 但 Web 端发起对话后的 AI 最终回复会同步到 IM。
+	// 6. 验证项目主聊天单向推送（不污染本通道专属讨论卡）：
+	// - 不回传 Web 端人类评论原文；
+	// - mirror_web_messages=true 时，主聊天 AI 最终回复附带【主聊天】标识单向推送到 IM，不附带冗余 CardURL。
+	mainDisc, _, err := dataStore.EnsureMainDiscussion(ctx, workspaceID, projectID, uuid.MustParse(identity.Source.ID))
+	if err != nil {
+		t.Fatalf("ensure project main discussion: %v", err)
+	}
+	mainCardID := mainDisc.ID
+
 	webComment := doJSON(t, handler, http.MethodPost, "/api/v1/cards/"+mainCardID.String()+"/comments", map[string]any{
 		"content": "这是我在 Web 端发的补充消息",
 	}, cookie, map[string]string{"Idempotency-Key": "web-comment-mirror-1"})
@@ -366,8 +387,8 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after web reply (mirror on): %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "已收到你在 Web 端的补充消息") {
-		t.Fatalf("expected mirrored web AI reply (without human echo), got %+v", sentMain)
+	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "【主聊天】") || !strings.Contains(sentMain[1].Text, "已收到你在 Web 端的补充消息") || sentMain[1].CardURL != "" {
+		t.Fatalf("expected mirrored main-chat AI reply with 【主聊天】 tag and no redundant card link, got %+v", sentMain)
 	}
 
 	// 6b. 关闭 mirror_web_messages=false 后验证：
@@ -539,8 +560,196 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after other discussion todo review: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 5 || !strings.Contains(sentMain[4].Text, "【待验收】专项子任务") {
-		t.Fatalf("expected template review reminder for non-main-chat todo, got %+v", sentMain)
+	if len(sentMain) != 5 || !strings.Contains(sentMain[4].Text, "【待验收】专项子任务") || !strings.Contains(sentMain[4].CardURL, "/cards/") {
+		t.Fatalf("expected template review reminder with direct card link for non-main-chat todo, got %+v", sentMain)
+	}
+
+	// 6c. 补充验证：Web Push 抑制（远程通道入站触发的专属讨论卡回复应静默抑制，不重复弹 Web Push）。
+	pushRec := doJSON(t, handler, http.MethodGet, "/api/v1/workspaces/"+workspaceID.String()+"/card-updates", nil, cookie, nil)
+	if pushRec.Code == http.StatusOK {
+		var updatesResp struct {
+			Updates []cardUpdate `json:"updates"`
+		}
+		decodeRecorder(t, pushRec, &updatesResp)
+		foundConv := false
+		for _, u := range updatesResp.Updates {
+			if u.ID == convCardID.String() {
+				foundConv = true
+				if !u.NotificationSuppressed {
+					t.Fatalf("expected remote-channel-originated reply on convCard %s to have NotificationSuppressed=true, got %+v", convCardID, u)
+				}
+			}
+		}
+		if !foundConv {
+			t.Fatalf("expected convCard %s in card-updates response", convCardID)
+		}
+	}
+
+	// 6d. 补充验证：专属讨论卡被归档后，新入站消息自动重建一张新的活跃专属讨论卡，不阻塞聊天。
+	if _, err := pool.Exec(ctx, `
+		UPDATE cards SET discussion_state = 'archived' WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, convCardID); err != nil {
+		t.Fatalf("archive old channel conversation card: %v", err)
+	}
+	mainStub.inbound <- channels.InboundMessage{
+		ExternalMessageID: "ext-msg-after-archive",
+		SenderID:          "tg-user-1",
+		ChatID:            "-100999",
+		ChatType:          "direct",
+		Content:           "归档后的新对话消息",
+	}
+	var rebuiltConvID uuid.UUID
+	rebuildDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(rebuildDeadline) {
+		chAfter, err := dataStore.GetRemoteChannel(ctx, workspaceID, mainChID)
+		if err == nil && chAfter.ConversationCardID.Valid && chAfter.ConversationCardID.UUID != convCardID {
+			rebuiltConvID = chAfter.ConversationCardID.UUID
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if rebuiltConvID == uuid.Nil {
+		t.Fatal("expected archived channel conversation card to be auto-rebuilt on next inbound message")
+	}
+
+	// 6d-2. 补充验证：专属讨论卡系统托管保护（禁止手工 PATCH 改标题/描述；API 详情返回托管标记；修改通道名自动同步专属卡标题）。
+	detailRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+rebuiltConvID.String(), nil, cookie, nil)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("get rebuilt conv card detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
+	}
+	var convDetail struct {
+		Card struct {
+			ID                             string  `json:"id"`
+			Title                          string  `json:"title"`
+			Description                    string  `json:"description"`
+			ManagedByRemoteChannelID       *string `json:"managed_by_remote_channel_id"`
+			ManagedByRemoteChannelName     *string `json:"managed_by_remote_channel_name"`
+			ManagedByRemoteChannelPlatform *string `json:"managed_by_remote_channel_platform"`
+		} `json:"card"`
+	}
+	decodeRecorder(t, detailRec, &convDetail)
+	if convDetail.Card.ManagedByRemoteChannelID == nil || *convDetail.Card.ManagedByRemoteChannelID != mainChID.String() {
+		t.Fatalf("expected managed_by_remote_channel_id=%s, got %+v", mainChID, convDetail.Card)
+	}
+	if !strings.Contains(convDetail.Card.Description, "回复格式要求") {
+		t.Fatalf("expected platform format control hint in managed card description, got %q", convDetail.Card.Description)
+	}
+	patchBlockedRec := doJSON(t, handler, http.MethodPatch, "/api/v1/cards/"+rebuiltConvID.String(), map[string]any{
+		"title":       "试图手工改名",
+		"description": "试图手工改描述",
+	}, cookie, nil)
+	if patchBlockedRec.Code != http.StatusConflict {
+		t.Fatalf("expected HTTP 409 when manually editing remote-channel managed card, got %d body=%s", patchBlockedRec.Code, patchBlockedRec.Body.String())
+	}
+	// 通过通道更新接口改名后，专属讨论卡标题应同步更新。
+	chBeforeRename, err := dataStore.GetRemoteChannel(ctx, workspaceID, mainChID)
+	if err != nil {
+		t.Fatalf("get channel before rename: %v", err)
+	}
+	if _, err := dataStore.UpdateRemoteChannel(ctx, workspaceID, mainChID, store.RemoteChannelInput{
+		Name:              "Telegram 专属对话改名",
+		Platform:          chBeforeRename.Platform,
+		Role:              chBeforeRename.Role,
+		Transport:         chBeforeRename.Transport,
+		Enabled:           chBeforeRename.Enabled,
+		ProjectID:         chBeforeRename.ProjectID,
+		PushFilter:        chBeforeRename.PushFilter,
+		MirrorWebMessages: chBeforeRename.MirrorWebMessages,
+		GroupPolicy:       chBeforeRename.GroupPolicy,
+		AllowFrom:         chBeforeRename.AllowFrom,
+		Config:            chBeforeRename.Config,
+	}); err != nil {
+		t.Fatalf("rename remote channel: %v", err)
+	}
+	var syncedTitle string
+	if err := pool.QueryRow(ctx, `SELECT title FROM cards WHERE workspace_id = $1 AND id = $2`, workspaceID, rebuiltConvID).Scan(&syncedTitle); err != nil {
+		t.Fatalf("query synced conv card title: %v", err)
+	}
+	if syncedTitle != "Telegram 专属对话改名" {
+		t.Fatalf("expected channel rename to sync conversation card title, got %q", syncedTitle)
+	}
+
+	// 6e. 补充验证：出站游标逐条即时落盘（模拟第 1 条成功、第 2 条发送失败，下一轮绝不重复发送第 1 条，彻底根治刷屏）。
+	// EnsureChannelConversationCard 提交后会异步写入 human Turn，这里轮询等待新建专属卡的 Turn 入队并认领。
+	var rebuiltClaim *store.AttemptClaim
+	claimDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(claimDeadline) {
+		c, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
+		if errors.Is(err, domain.ErrNotFound) || c == nil {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			t.Fatalf("claim rebuilt conv card attempt: %v", err)
+		}
+		if c.Turn.CardID == rebuiltConvID {
+			rebuiltClaim = c
+			break
+		}
+		// 若拿到前面遗留的其它卡 Turn，直接完成它继续取下一条。
+		_, _, _ = dataStore.PublishReply(ctx, store.PublishReplyParams{
+			WorkspaceID:    workspaceID,
+			CardID:         c.Turn.CardID,
+			AttemptID:      c.Attempt.ID,
+			RunnerSourceID: agentSrc.ID,
+			IdempotencyKey: "drain-other-" + c.Attempt.ID.String(),
+			FinishOnEnd:    true,
+			Message:        store.ReplyMessage{Type: "text", Content: "ok", EndTurn: true},
+		})
+	}
+	if rebuiltClaim == nil || rebuiltClaim.Turn.CardID != rebuiltConvID {
+		t.Fatalf("did not claim turn for rebuilt conv card %s", rebuiltConvID)
+	}
+	// 测试环境下禁用退避等待，确保立即进行下一轮补发验证。
+	dispatcher.SetBackoffBase(0)
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         rebuiltConvID,
+		AttemptID:      rebuiltClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "cursor-persist-msg-1",
+		FinishOnEnd:    false,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "游标逐条落盘验证第一条",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish cursor test msg 1: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         rebuiltConvID,
+		AttemptID:      rebuiltClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "cursor-persist-msg-2",
+		FinishOnEnd:    true,
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "游标逐条落盘验证第二条",
+			EndTurn: true,
+		},
+	}); err != nil {
+		t.Fatalf("publish cursor test msg 2: %v", err)
+	}
+	// 让 stub 在收到第二条消息时首次报错，随后恢复。
+	mainStub.FailNextMatching("游标逐条落盘验证第二条")
+	_ = dispatcher.DeliverOnce(ctx)
+	// 第二轮投递：第一条绝不可重复发送，仅补发第二条。
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver second round after partial failure: %v", err)
+	}
+	var countMsg1, countMsg2 int
+	for _, m := range mainStub.SentMessages() {
+		if strings.Contains(m.Text, "游标逐条落盘验证第一条") {
+			countMsg1++
+		}
+		if strings.Contains(m.Text, "游标逐条落盘验证第二条") {
+			countMsg2++
+		}
+	}
+	if countMsg1 != 1 || countMsg2 != 1 {
+		t.Fatalf("per-event cursor persistence failed: msg1=%d msg2=%d (want 1 and 1)", countMsg1, countMsg2)
 	}
 
 	// 7. 验证定时任务独立推送：healthy 巡检在 warnings_only 下被过滤，warning 巡检被推送，且绝不写入主聊天 Session！

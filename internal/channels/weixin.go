@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +52,8 @@ const (
 	// iLink context_token 在服务端空闲约 90~160s 后可能过期，
 	// 出站发送前若缓存已超过 60s，先静默调用 getconfig 刷新，失败则回退旧 token。
 	weixinContextTokenRefreshAge = 60 * time.Second
+	// 多片消息连续调用 ilink/bot/sendmessage 时保留短间隔，降低服务端 ret=-2 prepare failed 概率。
+	defaultWeixinChunkDelay = 200 * time.Millisecond
 )
 
 // WeixinLoginSession 表示一个进行中的微信扫码登录会话。
@@ -301,6 +305,7 @@ type WeixinAdapter struct {
 	secrets    store.RemoteChannelSecrets
 	baseURL    string
 	httpClient *http.Client
+	chunkDelay time.Duration
 
 	mu              sync.Mutex
 	updatesBuf      string
@@ -339,6 +344,7 @@ func NewWeixinAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets
 		secrets:         secrets,
 		baseURL:         baseURL,
 		httpClient:      client,
+		chunkDelay:      defaultWeixinChunkDelay,
 		updatesBuf:      strings.TrimSpace(ch.RuntimeState.WeixinUpdatesBuf),
 		longPollTimeout: defaultWeixinLongPollTimeout,
 		contextTokens:   ctxTokens,
@@ -429,8 +435,37 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 		a.mu.Unlock()
 		stateChanged = true
 	}
-
+	// 先把新的 get_updates_buf 与本批收到的 context_token 及时持久化，
+	// 避免单条 OnInbound 处理失败或连接中断后 updatesBuf 回退，导致微信服务端无限重推旧消息。
 	for _, item := range resp.Msgs {
+		if item.MessageType.Int() == weixinMsgTypeBot {
+			continue
+		}
+		fromUser := strings.TrimSpace(item.FromUserID.String())
+		if fromUser == "" {
+			continue
+		}
+		ctxTok := strings.TrimSpace(item.ContextToken)
+		a.mu.Lock()
+		if ctxTok != "" && a.contextTokens[fromUser] != ctxTok {
+			a.contextTokens[fromUser] = ctxTok
+			a.contextTokenAt[fromUser] = time.Now()
+			stateChanged = true
+		} else if ctxTok != "" {
+			a.contextTokenAt[fromUser] = time.Now()
+		}
+		if a.lastChatID != fromUser {
+			a.lastChatID = fromUser
+			stateChanged = true
+		}
+		a.mu.Unlock()
+	}
+	if stateChanged && rt.SaveState != nil {
+		a.persistState(ctx, rt.SaveState)
+		stateChanged = false
+	}
+
+	for idx, item := range resp.Msgs {
 		if item.MessageType.Int() == weixinMsgTypeBot {
 			continue
 		}
@@ -443,25 +478,8 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 			continue
 		}
 		createTimeMs := item.CreateTimeMs.Int64()
-		msgID := strings.TrimSpace(item.MessageID.String())
-		if msgID == "" || msgID == "0" {
-			if seq := item.Seq.Int64(); seq > 0 {
-				msgID = strconv.FormatInt(seq, 10)
-			} else if createTimeMs > 0 {
-				msgID = fmt.Sprintf("%s:%d", fromUser, createTimeMs)
-			} else {
-				msgID = uuid.NewString()
-			}
-		}
+		msgID := resolveWeixinExternalMessageID(item, fromUser, createTimeMs, text, idx)
 		ctxTok := strings.TrimSpace(item.ContextToken)
-		a.mu.Lock()
-		if ctxTok != "" {
-			a.contextTokens[fromUser] = ctxTok
-			a.contextTokenAt[fromUser] = time.Now()
-			stateChanged = true
-		}
-		a.lastChatID = fromUser
-		a.mu.Unlock()
 
 		chatType := "direct"
 		if strings.HasSuffix(fromUser, "@chatroom") {
@@ -489,6 +507,38 @@ func (a *WeixinAdapter) pollOnce(ctx context.Context, rt AdapterRuntime) error {
 		a.persistState(ctx, rt.SaveState)
 	}
 	return nil
+}
+
+// resolveWeixinExternalMessageID 优先使用 iLink 返回的各类消息 ID/序号字段；
+// 当服务端全部缺失时使用确定性 SHA-256 指纹（基于发送者、时间戳/批内序号与正文），
+// 杜绝旧版 uuid.NewString() 导致去重表失效的问题。
+func resolveWeixinExternalMessageID(item weixinInboundMsg, fromUser string, createTimeMs int64, text string, batchIdx int) string {
+	candidates := []string{
+		strings.TrimSpace(item.MessageID.String()),
+		strings.TrimSpace(item.MsgID.String()),
+		strings.TrimSpace(item.NewMsgID.String()),
+		strings.TrimSpace(item.ClientID.String()),
+	}
+	for _, id := range candidates {
+		if id != "" && id != "0" {
+			return id
+		}
+	}
+	if seq := item.Seq.Int64(); seq > 0 {
+		return strconv.FormatInt(seq, 10)
+	}
+	if createTimeMs > 0 {
+		return fmt.Sprintf("%s:%d", fromUser, createTimeMs)
+	}
+	h := sha256.New()
+	_, _ = io.WriteString(h, fromUser)
+	_, _ = io.WriteString(h, "|")
+	_, _ = io.WriteString(h, strconv.FormatInt(createTimeMs, 10))
+	_, _ = io.WriteString(h, "|")
+	_, _ = io.WriteString(h, strconv.Itoa(batchIdx))
+	_, _ = io.WriteString(h, "|")
+	_, _ = io.WriteString(h, text)
+	return "fp:" + hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 func (a *WeixinAdapter) persistState(ctx context.Context, save StatePersister) {
@@ -528,6 +578,9 @@ func clampWeixinLongPollTimeout(ms int64) time.Duration {
 
 type weixinInboundMsg struct {
 	MessageID    flexString      `json:"message_id"`
+	MsgID        flexString      `json:"msg_id"`
+	NewMsgID     flexString      `json:"new_msg_id"`
+	ClientID     flexString      `json:"client_id"`
 	Seq          flexInt64       `json:"seq"`
 	FromUserID   flexString      `json:"from_user_id"`
 	MessageType  flexInt64       `json:"message_type"`
@@ -629,52 +682,99 @@ func (a *WeixinAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	a.mu.Unlock()
 
 	if toUser == "" {
-		return errors.New("weixin target user_id is empty; send one message from WeChat or configure target_chat_id")
+		return fmt.Errorf("%w: weixin target user_id is empty; send one message from WeChat or configure target_chat_id", ErrTargetNotBound)
 	}
 	if ctxToken != "" {
-		ctxToken = a.refreshContextTokenIfStale(ctx, toUser, ctxToken)
+		ctxToken = a.refreshContextToken(ctx, toUser, ctxToken, false)
 	}
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformWeixin, msg.Text, msg.CardURL)
 	chunks := SplitMessage(fullText, weixinMaxRunes)
-	for _, chunk := range chunks {
-		weixinMsg := map[string]any{
-			"from_user_id":  "",
-			"to_user_id":    toUser,
-			"client_id":     "cycledock-" + uuid.NewString()[:12],
-			"message_type":  weixinMsgTypeBot,
-			"message_state": weixinMsgStateFinish,
-			"item_list": []map[string]any{
-				{
-					"type":      weixinItemText,
-					"text_item": map[string]string{"text": chunk},
-				},
-			},
+	if len(chunks) == 0 {
+		return nil
+	}
+	for idx, chunk := range chunks {
+		if idx > 0 && a.chunkDelay > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(a.chunkDelay):
+			}
 		}
-		if ctxToken != "" {
-			weixinMsg["context_token"] = ctxToken
+		retCode, errCode, errMsg, sendErr := a.sendSingleChunk(ctx, toUser, ctxToken, chunk)
+		if sendErr == nil {
+			continue
 		}
-		raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/sendmessage", map[string]any{
-			"msg":       weixinMsg,
-			"base_info": weixinBaseInfo(),
-		}, defaultWeixinAPITimeout)
-		if err != nil {
-			return err
+		// 微信 iLink 返回 ret=-2 (prepare failed) 通常是 context_token 过期/失效或会话状态漂移。
+		// 先强制调用一次 getconfig 刷新 context_token；若拿到新 token 立即重试一次当前分片。
+		if isWeixinPrepareFailed(retCode, errCode, errMsg) {
+			if ctxToken != "" {
+				refreshed := a.refreshContextToken(ctx, toUser, ctxToken, true)
+				if refreshed != "" && refreshed != ctxToken {
+					ctxToken = refreshed
+					if _, _, _, retryErr := a.sendSingleChunk(ctx, toUser, ctxToken, chunk); retryErr == nil {
+						continue
+					}
+				}
+			}
+			// 标记缓存时间失效，促使下次尝试重新刷新；同时在错误中给出明确排障提示。
+			a.mu.Lock()
+			delete(a.contextTokenAt, toUser)
+			a.mu.Unlock()
+			return fmt.Errorf("%w (context_token may be expired; send a message in WeChat to refresh)", sendErr)
 		}
-		var resp struct {
-			Ret     flexInt64  `json:"ret"`
-			ErrCode flexInt64  `json:"errcode"`
-			ErrMsg  flexString `json:"errmsg"`
-		}
-		if err := json.Unmarshal(raw, &resp); err == nil && (resp.Ret != 0 || resp.ErrCode != 0) {
-			return fmt.Errorf("weixin sendmessage failed (ret=%d errcode=%d): %s", resp.Ret.Int64(), resp.ErrCode.Int64(), resp.ErrMsg.String())
-		}
+		return sendErr
 	}
 	return nil
 }
 
-// refreshContextTokenIfStale 在缓存的 context_token 超过 60 秒或缺少获取时间记录时，
+func isWeixinPrepareFailed(retCode, errCode int64, errMsg string) bool {
+	if retCode == -2 || errCode == -2 {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(errMsg)), "prepare failed")
+}
+
+func (a *WeixinAdapter) sendSingleChunk(ctx context.Context, toUser, ctxToken, chunk string) (int64, int64, string, error) {
+	weixinMsg := map[string]any{
+		"from_user_id":  "",
+		"to_user_id":    toUser,
+		"client_id":     "cycledock-" + uuid.NewString()[:12],
+		"message_type":  weixinMsgTypeBot,
+		"message_state": weixinMsgStateFinish,
+		"item_list": []map[string]any{
+			{
+				"type":      weixinItemText,
+				"text_item": map[string]string{"text": chunk},
+			},
+		},
+	}
+	if ctxToken != "" {
+		weixinMsg["context_token"] = ctxToken
+	}
+	raw, err := a.apiPostWithTimeout(ctx, "ilink/bot/sendmessage", map[string]any{
+		"msg":       weixinMsg,
+		"base_info": weixinBaseInfo(),
+	}, defaultWeixinAPITimeout)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	var resp struct {
+		Ret     flexInt64  `json:"ret"`
+		ErrCode flexInt64  `json:"errcode"`
+		ErrMsg  flexString `json:"errmsg"`
+	}
+	if err := json.Unmarshal(raw, &resp); err == nil && (resp.Ret != 0 || resp.ErrCode != 0) {
+		retV := resp.Ret.Int64()
+		errV := resp.ErrCode.Int64()
+		msgV := resp.ErrMsg.String()
+		return retV, errV, msgV, fmt.Errorf("weixin sendmessage failed (ret=%d errcode=%d): %s", retV, errV, msgV)
+	}
+	return 0, 0, "", nil
+}
+
+// refreshContextToken 在缓存的 context_token 超过 60 秒、缺少获取时间记录或 force=true 时，
 // 静默调用 ilink/bot/getconfig 刷新；任何失败都回退沿用旧 token，不阻断出站消息发送。
-func (a *WeixinAdapter) refreshContextTokenIfStale(ctx context.Context, userID, ctxToken string) string {
+func (a *WeixinAdapter) refreshContextToken(ctx context.Context, userID, ctxToken string, force bool) string {
 	ctxToken = strings.TrimSpace(ctxToken)
 	if userID == "" || ctxToken == "" {
 		return ctxToken
@@ -686,7 +786,7 @@ func (a *WeixinAdapter) refreshContextTokenIfStale(ctx context.Context, userID, 
 	saveState := a.saveState
 	a.mu.Unlock()
 
-	if cachedTok == ctxToken && !cachedAt.IsZero() && now.Sub(cachedAt) < weixinContextTokenRefreshAge {
+	if !force && cachedTok == ctxToken && !cachedAt.IsZero() && now.Sub(cachedAt) < weixinContextTokenRefreshAge {
 		return ctxToken
 	}
 

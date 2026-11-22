@@ -38,6 +38,7 @@ type DingTalkAdapter struct {
 	tokenExpiry        time.Time
 	lastChatID         string
 	lastSessionWebhook string
+	saveState          StatePersister
 }
 
 func NewDingTalkAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, client *http.Client) *DingTalkAdapter {
@@ -105,6 +106,10 @@ func (a *DingTalkAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	}
 	defer conn.Close()
 
+	a.mu.Lock()
+	a.saveState = rt.SaveState
+	a.mu.Unlock()
+	rtLogger(rt).Info("dingtalk stream websocket connected")
 	if rt.OnStatus != nil {
 		rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 	}
@@ -114,7 +119,9 @@ func (a *DingTalkAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 		if err != nil {
 			return err
 		}
-		a.handleStreamFrame(ctx, conn, data, rt)
+		if shouldDisconnect := a.handleStreamFrame(ctx, conn, data, rt); shouldDisconnect {
+			return errors.New("dingtalk stream server requested disconnect")
+		}
 	}
 }
 
@@ -165,7 +172,8 @@ func (a *DingTalkAdapter) openStreamConnection(ctx context.Context) (string, err
 	return u.String(), nil
 }
 
-func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, raw []byte, rt AdapterRuntime) {
+func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, raw []byte, rt AdapterRuntime) bool {
+	log := rtLogger(rt)
 	var frame struct {
 		SpecVersion string `json:"specVersion"`
 		Type        string `json:"type"`
@@ -176,7 +184,8 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		Data string `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &frame); err != nil {
-		return
+		log.Debug("dingtalk stream frame decode failed", "err", err)
+		return false
 	}
 	headerMsgID := strings.TrimSpace(frame.Headers.MessageID.String())
 	if strings.EqualFold(frame.Type, "SYSTEM") {
@@ -190,8 +199,13 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 			if rt.OnStatus != nil {
 				rt.OnStatus(ctx, domain.ChannelRuntimeConnected, "", true)
 			}
+			return false
 		}
-		return
+		if strings.EqualFold(frame.Headers.Topic, "disconnect") {
+			log.Warn("dingtalk stream server sent disconnect frame")
+			return true
+		}
+		return false
 	}
 	if headerMsgID != "" {
 		_ = conn.WriteJSON(map[string]any{
@@ -202,10 +216,11 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		})
 	}
 	if strings.TrimSpace(frame.Data) == "" {
-		return
+		return false
 	}
 	var msg struct {
 		MsgID            flexString `json:"msgId"`
+		MsgType          string     `json:"msgtype"`
 		ConversationID   flexString `json:"conversationId"`
 		ConversationType flexString `json:"conversationType"` // "1"=单聊, "2"=群聊（兼容数字 1/2）
 		SenderStaffID    flexString `json:"senderStaffId"`
@@ -215,25 +230,45 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 		Text             struct {
 			Content string `json:"content"`
 		} `json:"text"`
+		Content struct {
+			RichText []struct {
+				Text string `json:"text"`
+			} `json:"richText"`
+		} `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(frame.Data), &msg); err != nil {
-		return
+		log.Warn("dingtalk stream callback data decode failed", "topic", frame.Headers.Topic, "err", err)
+		return false
 	}
 	text := strings.TrimSpace(msg.Text.Content)
+	if text == "" && len(msg.Content.RichText) > 0 {
+		parts := make([]string, 0, len(msg.Content.RichText))
+		for _, item := range msg.Content.RichText {
+			if t := strings.TrimSpace(item.Text); t != "" {
+				parts = append(parts, t)
+			}
+		}
+		text = strings.TrimSpace(strings.Join(parts, " "))
+	}
 	if text == "" {
-		return
+		log.Debug("dingtalk stream callback ignored empty text", "msgtype", msg.MsgType)
+		return false
 	}
 	senderID := strings.TrimSpace(msg.SenderStaffID.String())
 	if senderID == "" {
 		senderID = strings.TrimSpace(msg.SenderID.String())
 	}
-	chatID := strings.TrimSpace(msg.ConversationID.String())
-	if chatID == "" {
-		chatID = senderID
-	}
+	// 单聊场景优先保存 senderID 作为 chatID，便于 sessionWebhook 过期后通过 /v1.0/robot/oToMessages/batchSend 主动补发；
+	// 群聊场景保存 conversationId。
 	chatType := "direct"
 	if strings.TrimSpace(msg.ConversationType.String()) == "2" {
 		chatType = "group"
+	}
+	chatID := senderID
+	if chatType == "group" || chatID == "" {
+		if convID := strings.TrimSpace(msg.ConversationID.String()); convID != "" {
+			chatID = convID
+		}
 	}
 	mentioned := chatType == "direct" || msg.IsInAtList
 	msgID := strings.TrimSpace(msg.MsgID.String())
@@ -271,6 +306,7 @@ func (a *DingTalkAdapter) handleStreamFrame(ctx context.Context, conn *wsConn, r
 			Timestamp:         time.Now().UTC(),
 		})
 	}
+	return false
 }
 
 func (a *DingTalkAdapter) accessToken(ctx context.Context) (string, error) {
@@ -325,7 +361,7 @@ func (a *DingTalkAdapter) accessToken(ctx context.Context) (string, error) {
 }
 
 func (a *DingTalkAdapter) Send(ctx context.Context, msg OutboundMessage) error {
-	fullText := FormatOutboundWithLink(msg.Text, msg.CardURL)
+	fullText := FormatOutboundForPlatform(domain.ChannelPlatformDingTalk, msg.Text, msg.CardURL)
 	chunks := SplitMessage(fullText, dingTalkMaxRunes)
 	if a.channel.Transport == domain.ChannelTransportWebhook {
 		webhookURL := strings.TrimSpace(a.secrets.WebhookURL)
@@ -350,7 +386,8 @@ func (a *DingTalkAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 		return nil
 	}
 
-	// Stream 模式下优先复用入站回调附带的 sessionWebhook，其次走官方 OpenAPI 单聊发送。
+	// Stream 模式下优先复用入站回调附带的 sessionWebhook；若 sessionWebhook 已过期或发送失败，
+	// 并且具备有效的单聊 chatID 与应用凭据，则自动清空过期 sessionWebhook 并回退到 OpenAPI 发送。
 	a.mu.Lock()
 	sessionWebhook := strings.TrimSpace(msg.SessionWebhook)
 	if sessionWebhook == "" {
@@ -360,9 +397,12 @@ func (a *DingTalkAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	if chatID == "" {
 		chatID = a.lastChatID
 	}
+	chatType := strings.TrimSpace(msg.ChatType)
+	saveState := a.saveState
 	a.mu.Unlock()
 
 	if sessionWebhook != "" {
+		var webhookErr error
 		for _, chunk := range chunks {
 			if err := postJSONExpectOK(ctx, a.httpClient, sessionWebhook, map[string]any{
 				"msgtype": "markdown",
@@ -371,42 +411,81 @@ func (a *DingTalkAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 					"text":  chunk,
 				},
 			}, "errcode"); err != nil {
-				return fmt.Errorf("dingtalk sessionWebhook send: %w", err)
+				webhookErr = fmt.Errorf("dingtalk sessionWebhook send: %w", err)
+				break
 			}
 		}
-		return nil
+		if webhookErr == nil {
+			return nil
+		}
+		// 若不是群聊且有单聊目标与客户端凭据，自动清理失效的 sessionWebhook（含持久化态）并回退 OpenAPI 发送。
+		if chatID == "" || strings.EqualFold(chatType, "group") ||
+			strings.TrimSpace(a.channel.Config.ClientID) == "" ||
+			strings.TrimSpace(a.secrets.ClientSecret) == "" {
+			return webhookErr
+		}
+		a.mu.Lock()
+		if a.lastSessionWebhook == sessionWebhook {
+			a.lastSessionWebhook = ""
+		}
+		a.mu.Unlock()
+		if saveState != nil {
+			_ = saveState(ctx, func(st *store.RemoteChannelRuntimeState) {
+				if st.LastSessionWebhook == sessionWebhook {
+					st.LastSessionWebhook = ""
+				}
+			})
+		}
 	}
 
 	if chatID == "" {
-		return errors.New("dingtalk target chat_id or sessionWebhook is empty")
+		return fmt.Errorf("%w: dingtalk target chat_id or sessionWebhook is empty", ErrTargetNotBound)
 	}
 	token, err := a.accessToken(ctx)
 	if err != nil {
 		return err
 	}
 	for _, chunk := range chunks {
-		paramBytes, _ := json.Marshal(map[string]string{"content": chunk})
-		bodyBytes, _ := json.Marshal(map[string]any{
-			"robotCode": strings.TrimSpace(a.channel.Config.ClientID),
-			"userIds":   []string{chatID},
-			"msgKey":    "sampleText",
-			"msgParam":  string(paramBytes),
+		mdParamBytes, _ := json.Marshal(map[string]string{
+			"title": "CycleDock 回复",
+			"text":  chunk,
 		})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyBytes))
-		if err != nil {
-			return err
+		if err := a.batchSendOnce(ctx, token, chatID, "sampleMarkdown", string(mdParamBytes)); err != nil {
+			// sampleMarkdown 若因特殊语法被拒收，自动降级 sampleText 保证消息不丢。
+			plain := MarkdownToPlainText(chunk)
+			if plain == "" {
+				plain = chunk
+			}
+			textParamBytes, _ := json.Marshal(map[string]string{"content": plain})
+			if fallbackErr := a.batchSendOnce(ctx, token, chatID, "sampleText", string(textParamBytes)); fallbackErr != nil {
+				return fmt.Errorf("%w (sampleText fallback failed: %v)", err, fallbackErr)
+			}
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-acs-dingtalk-access-token", token)
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			return err
-		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			return fmt.Errorf("dingtalk batchSend HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-		}
+	}
+	return nil
+}
+
+func (a *DingTalkAdapter) batchSendOnce(ctx context.Context, token, chatID, msgKey, msgParam string) error {
+	bodyBytes, _ := json.Marshal(map[string]any{
+		"robotCode": strings.TrimSpace(a.channel.Config.ClientID),
+		"userIds":   []string{chatID},
+		"msgKey":    msgKey,
+		"msgParam":  msgParam,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("dingtalk batchSend HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }
