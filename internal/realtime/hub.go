@@ -62,6 +62,7 @@ type ReplyPreview struct {
 type liveState struct {
 	attemptID  string
 	replies    []ReplyPreview
+	discarded  map[string]struct{}
 	stage      string
 	deviceName string
 	task       *TaskProgress
@@ -178,6 +179,9 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 				event.Type = "reply.preview"
 			}
 			if event.Type == "reply.preview" {
+				if _, discarded := st.discarded[event.ReplyID]; discarded {
+					return
+				}
 				if total+len(event.Text) > maxLiveBytes {
 					return
 				}
@@ -202,7 +206,13 @@ func (h *Hub) Publish(cardID uuid.UUID, event Event) {
 				if event.Type == "reply.committed" {
 					st.replies[index].EventID = event.EventID
 				} else {
-					st.replies[index].Failed = true
+					// 单个工具调用明确被拒绝/失败丢弃：数据库已删除该未转正预览，
+					// 实时快照同步移除该条目并记录已丢弃 ID，避免页面出现“失败预览 + 重试正式消息”双气泡。
+					if st.discarded == nil {
+						st.discarded = make(map[string]struct{})
+					}
+					st.discarded[event.ReplyID] = struct{}{}
+					st.replies = append(st.replies[:index], st.replies[index+1:]...)
 				}
 			}
 		}

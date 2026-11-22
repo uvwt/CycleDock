@@ -298,3 +298,91 @@ func TestChoiceRepliesRejectOldQuestionsAndAcceptOnlyOneAnswer(t *testing.T) {
 		t.Fatalf("accepted answer turns=%+v err=%v", pending, err)
 	}
 }
+
+func TestPublishReplyAllowsSameIdempotencyKeyAcrossCardsAndAttempts(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+
+	otherCard, err := s.CreateTodoCard(ctx, f.WorkspaceID, f.ProjectID, f.HumanID,
+		"Second card", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID,
+		"Hi card A", "turn-a-1", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, otherCard.ID, f.HumanID,
+		"Hi card B", "turn-b-1", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	claimA1, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, f.CardID, f.AgentID, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimB1, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, otherCard.ID, f.AgentID, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const sharedKey = "reply-greeting-1"
+	pA1 := PublishReplyParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claimA1.Attempt.ID,
+		RunnerSourceID: f.AgentID, IdempotencyKey: sharedKey, FinishOnEnd: true,
+		Message: ReplyMessage{Type: "text", Content: "你好，这是卡片 A 的回复", EndTurn: true},
+	}
+	idA1, reused, err := s.PublishReply(ctx, pA1)
+	if err != nil || reused || idA1 == uuid.Nil {
+		t.Fatalf("card A first reply id=%s reused=%v err=%v", idA1, reused, err)
+	}
+
+	// 不同卡片使用相同 actor_source_id 与相同 idempotency_key 必须正常成功，不能误报 ErrIdempotencyMismatch。
+	pB1 := PublishReplyParams{
+		WorkspaceID: f.WorkspaceID, CardID: otherCard.ID, AttemptID: claimB1.Attempt.ID,
+		RunnerSourceID: f.AgentID, IdempotencyKey: sharedKey, FinishOnEnd: true,
+		Message: ReplyMessage{Type: "text", Content: "你好，这是卡片 B 的回复", EndTurn: true},
+	}
+	idB1, reused, err := s.PublishReply(ctx, pB1)
+	if err != nil || reused || idB1 == uuid.Nil || idB1 == idA1 {
+		t.Fatalf("card B same key id=%s reused=%v err=%v", idB1, reused, err)
+	}
+
+	// 同一卡片新的一轮 Attempt 复用相同 idempotency_key 也应独立成功。
+	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID,
+		"Second turn on A", "turn-a-2", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	claimA2, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, f.CardID, f.AgentID, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pA2 := PublishReplyParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claimA2.Attempt.ID,
+		RunnerSourceID: f.AgentID, IdempotencyKey: sharedKey, FinishOnEnd: true,
+		Message: ReplyMessage{Type: "text", Content: "卡片 A 第二轮回复", EndTurn: true},
+	}
+	idA2, reused, err := s.PublishReply(ctx, pA2)
+	if err != nil || reused || idA2 == uuid.Nil || idA2 == idA1 {
+		t.Fatalf("card A second attempt same key id=%s reused=%v err=%v", idA2, reused, err)
+	}
+
+	// 同卡同 Attempt 合法重试仍复用原事件；篡改内容仍拒绝 ErrIdempotencyMismatch。
+	if retryID, reused, err := s.PublishReply(ctx, pA2); err != nil || !reused || retryID != idA2 {
+		t.Fatalf("same attempt retry id=%s reused=%v err=%v", retryID, reused, err)
+	}
+	tampered := pA2
+	tampered.Message.Content = "篡改后的内容"
+	if _, _, err := s.PublishReply(ctx, tampered); !errors.Is(err, domain.ErrIdempotencyMismatch) {
+		t.Fatalf("tampered replay err=%v want ErrIdempotencyMismatch", err)
+	}
+
+	// 验证数据库唯一索引 events_message_idempotency_uq 兜底拦截同卡同 Attempt 重复插入。
+	_, err = s.pool.Exec(ctx, `INSERT INTO events
+		(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message,idempotency_key,request_hash)
+		VALUES ($1,$2,$3,'message',$4,$5,'dup','{"type":"text","content":"dup","end_turn":true}'::jsonb,$6,'hash')`,
+		uuid.New(), f.WorkspaceID, f.CardID, f.AgentID, claimA2.Attempt.ID, sharedKey)
+	if !errors.Is(mapConstraintError(err), domain.ErrConflict) {
+		t.Fatalf("duplicate message idempotency insert err=%v want conflict", err)
+	}
+}

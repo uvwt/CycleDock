@@ -151,15 +151,16 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 		return uuid.Nil, false, err
 	}
 	// 幂等读取放在状态检查之前：成功发送后 end_turn 可能已关闭 Attempt。
-	var oldID, oldCard, oldAttempt uuid.UUID
+	// reply_message 幂等键限定在当前卡片与当前 Attempt 内，避免跨卡或跨轮次误撞冲突。
+	var oldID uuid.UUID
 	var oldHash string
-	err = tx.QueryRow(ctx, `SELECT id,card_id,attempt_id,COALESCE(request_hash,'')
-		FROM events WHERE workspace_id=$1 AND actor_source_id=$2
-		AND event_type='message' AND idempotency_key=$3`,
-		p.WorkspaceID, p.RunnerSourceID, p.IdempotencyKey).
-		Scan(&oldID, &oldCard, &oldAttempt, &oldHash)
+	err = tx.QueryRow(ctx, `SELECT id,COALESCE(request_hash,'')
+		FROM events WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+		AND actor_source_id=$4 AND event_type='message' AND idempotency_key=$5`,
+		p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.IdempotencyKey).
+		Scan(&oldID, &oldHash)
 	if err == nil {
-		if oldCard != p.CardID || oldAttempt != p.AttemptID || oldHash != hash {
+		if oldHash != hash {
 			return uuid.Nil, false, domain.ErrIdempotencyMismatch
 		}
 		if p.PreviewID != "" {
@@ -270,4 +271,45 @@ func (s *Store) SaveReplyPreview(ctx context.Context, p ReplyPreviewParams) erro
 		return fmt.Errorf("%w: reply preview already sent or rewritten", domain.ErrConflict)
 	}
 	return tx.Commit(ctx)
+}
+
+type DiscardReplyPreviewParams struct {
+	WorkspaceID, CardID, AttemptID, RunnerSourceID uuid.UUID
+	PreviewID                                      string
+}
+
+// DiscardReplyPreview 删除单个被拒绝或调用失败的未转正预览气泡。
+// 仅在 Attempt 仍处于 running 状态且该预览尚未写入 idempotency_key 时删除，
+// 不影响已正式提交的消息，也不会误删已取消/已替代 Attempt 保留的流式正文。
+func (s *Store) DiscardReplyPreview(ctx context.Context, p DiscardReplyPreviewParams) error {
+	p.PreviewID, _ = agentdata.NormalizeText(p.PreviewID)
+	if p.PreviewID == "" || len(p.PreviewID) > 512 {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCard(ctx, tx, p.WorkspaceID, p.CardID); err != nil {
+		return err
+	}
+	if err := requireCurrentAttempt(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, domain.AttemptStatusRunning); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `DELETE FROM events
+		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+		  AND actor_source_id=$4 AND event_type='message'
+		  AND message->>'preview_id'=$5 AND idempotency_key IS NULL`,
+		p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.PreviewID)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if command.RowsAffected() > 0 {
+		s.notifyWorkspaceChanged(p.WorkspaceID)
+	}
+	return nil
 }

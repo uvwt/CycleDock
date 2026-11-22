@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -245,6 +247,26 @@ func (p *replyEventPublisher) publish(ctx context.Context, event *session.Event)
 				update.Type = "reply.committed"
 				update.EventID = eventID.String()
 			}
+		}
+		if update.Type == "reply.discarded" && p.store != nil {
+			// 工具调用失败或被拒绝时先删除未转正的预览记录再发 SSE，避免刷新或重连后残留重复气泡。
+			// 若 Attempt 已因取消/替代离开 running 状态，保留已输出正文且不视作错误。
+			if err := p.store.DiscardReplyPreview(ctx, store.DiscardReplyPreviewParams{
+				WorkspaceID:    p.context.WorkspaceID,
+				CardID:         p.cardID,
+				AttemptID:      p.attemptID,
+				RunnerSourceID: p.context.RunnerSourceID,
+				PreviewID:      id,
+			}); err != nil && !errors.Is(err, domain.ErrAttemptNotCurrent) {
+				return err
+			}
+		}
+		delete(p.previewIDs, response.ID)
+		delete(p.texts, id)
+		if p.replies != nil {
+			p.replies.mu.Lock()
+			delete(p.replies.previewIDs, response.ID)
+			p.replies.mu.Unlock()
 		}
 		p.emit(p.cardID, update)
 	}

@@ -119,3 +119,16 @@ test("收到 attempt.replied 或带 replied=true 的重连快照时标记已回�
   const next = apply(live, "attempt.started", event({ attempt_id: "next" }));
   assert.equal(next.replied, undefined);
 });
+
+test("被拒绝的回复预览立即移除且迟到参数不能重新打开", () => {
+  let live = apply(started(), "reply.preview", event({ reply_id: "bad", order: 1, text: "重复草稿" }));
+  live = apply(live, "reply.preview", event({ reply_id: "good", order: 2, text: "正式回复" }));
+  live = apply(live, "reply.discarded", event({ reply_id: "bad" }));
+  assert.deepEqual(
+    live.replies.map((reply) => reply.id),
+    ["good"],
+  );
+  const afterDiscard = live;
+  live = apply(live, "reply.preview", event({ reply_id: "bad", order: 1, text: "迟到片段" }));
+  assert.equal(live, afterDiscard);
+});

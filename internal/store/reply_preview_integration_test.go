@@ -192,3 +192,150 @@ func TestReplyPreviewRacingCancellationPreservesAcceptedPrefix(t *testing.T) {
 		t.Fatalf("after cancel=%v", err)
 	}
 }
+
+func TestDiscardReplyPreviewDeletesOnlyUncommittedPreview(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID, "测试预览清理", "discard-turn", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, f.CardID, f.AgentID, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPreview := ReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen1:failed-call", Content: "失败调用的预览正文",
+	}
+	if err := s.SaveReplyPreview(ctx, failedPreview); err != nil {
+		t.Fatal(err)
+	}
+	committedPreview := ReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen2:ok-call", Content: "成功调用的正式正文",
+	}
+	if err := s.SaveReplyPreview(ctx, committedPreview); err != nil {
+		t.Fatal(err)
+	}
+	committedID, _, err := s.PublishReply(ctx, PublishReplyParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: committedPreview.PreviewID, IdempotencyKey: "ok-1",
+		Message: ReplyMessage{Type: "text", Content: "成功调用的正式正文", EndTurn: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 删除失败调用的未转正预览；对已转正预览调用 DiscardReplyPreview 不得误删正式消息。
+	if err := s.DiscardReplyPreview(ctx, DiscardReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: failedPreview.PreviewID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DiscardReplyPreview(ctx, DiscardReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: committedPreview.PreviewID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := New(s.pool).ListCardTimeline(ctx, f.WorkspaceID, f.CardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []uuid.UUID
+	for _, row := range rows {
+		if row.EventType == "message" {
+			messages = append(messages, row.ID)
+		}
+	}
+	if len(messages) != 1 || messages[0] != committedID {
+		t.Fatalf("messages after discard=%v want only %s", messages, committedID)
+	}
+
+	// 已取消的 Attempt 保留未提交正文，迟到的 DiscardReplyPreview 必须被拒绝且不删除正文。
+	keptPreview := ReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen3:cancelled", Content: "取消前已输出的半篇正文",
+	}
+	if err := s.SaveReplyPreview(ctx, keptPreview); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelAttempt(ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, f.HumanID, "手动停止", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DiscardReplyPreview(ctx, DiscardReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: keptPreview.PreviewID,
+	}); !errors.Is(err, domain.ErrAttemptNotCurrent) {
+		t.Fatalf("discard after cancel err=%v want ErrAttemptNotCurrent", err)
+	}
+	rows, err = New(s.pool).ListCardTimeline(ctx, f.WorkspaceID, f.CardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundKept := false
+	for _, row := range rows {
+		if row.EventType == "message" && row.Content == keptPreview.Content {
+			foundKept = true
+		}
+	}
+	if !foundKept {
+		t.Fatal("cancelled attempt preview was unexpectedly deleted")
+	}
+}
+
+func TestCompleteAttemptCleansOrphanReplyPreviews(t *testing.T) {
+	s := requireIntegration(t)
+	f := newFixture(t, s, domain.CardKindTodo)
+	ctx := context.Background()
+	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID, "路由切换恢复", "complete-cleanup", domain.DispatchModeEnqueue); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimCardTurnAttempt(ctx, f.WorkspaceID, f.CardID, f.AgentID, time.Now().UTC(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟主模型流式写了一半预览后切换备用模型，未经过 reply.discarded 的孤儿预览。
+	if err := s.SaveReplyPreview(ctx, ReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen-primary:call-1", Content: "主线路半截草稿",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveReplyPreview(ctx, ReplyPreviewParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen-backup:call-1", Content: "备用线路正式回复",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finalID, _, err := s.PublishReply(ctx, PublishReplyParams{
+		WorkspaceID: f.WorkspaceID, CardID: f.CardID, AttemptID: claim.Attempt.ID,
+		RunnerSourceID: f.AgentID, PreviewID: "gen-backup:call-1", IdempotencyKey: "backup-final",
+		Message: ReplyMessage{Type: "text", Content: "备用线路正式回复", EndTurn: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteAttempt(ctx, f.WorkspaceID, f.CardID, claim.Attempt.ID, f.AgentID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := New(s.pool).ListCardTimeline(ctx, f.WorkspaceID, f.CardID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	for _, row := range rows {
+		if row.EventType == "message" {
+			if row.ID != finalID {
+				t.Fatalf("orphan preview survived CompleteAttempt: %+v", row)
+			}
+			messages = append(messages, row.Content)
+		}
+	}
+	if len(messages) != 1 || messages[0] != "备用线路正式回复" {
+		t.Fatalf("timeline messages=%v want only final reply", messages)
+	}
+}
