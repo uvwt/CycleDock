@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -225,14 +227,14 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 	if strings.EqualFold(event.Sender.SenderType, "app") || msgID == "" {
 		return
 	}
-	text := extractFeishuText(event.Message.Content)
+	text, atts := a.extractFeishuContentAndAttachments(ctx, msgID, event.Message.MsgType, event.Message.Content)
 	for _, m := range event.Message.Mentions {
 		if strings.TrimSpace(m.Key) != "" {
 			text = strings.ReplaceAll(text, m.Key, "")
 		}
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(atts) == 0 {
 		return
 	}
 
@@ -272,10 +274,205 @@ func (a *FeishuAdapter) handleWSFrame(ctx context.Context, conn *wsConn, data []
 			ChatType:          chatType,
 			ThreadID:          threadID,
 			Content:           text,
+			Attachments:       atts,
 			Mentioned:         mentioned,
 			Timestamp:         time.Now().UTC(),
 		})
 	}
+}
+
+func (a *FeishuAdapter) extractFeishuContentAndAttachments(
+	ctx context.Context,
+	msgID, msgType, rawContent string,
+) (string, []InboundAttachment) {
+	msgType = strings.ToLower(strings.TrimSpace(msgType))
+	switch msgType {
+	case "", "text":
+		return extractFeishuText(rawContent), nil
+
+	case "image":
+		var payload struct {
+			ImageKey string `json:"image_key"`
+		}
+		_ = json.Unmarshal([]byte(rawContent), &payload)
+		return "", []InboundAttachment{a.fetchFeishuImageAttachment(ctx, msgID, payload.ImageKey)}
+
+	case "file":
+		var payload struct {
+			FileKey  string `json:"file_key"`
+			FileName string `json:"file_name"`
+		}
+		_ = json.Unmarshal([]byte(rawContent), &payload)
+		fileName := strings.TrimSpace(payload.FileName)
+		kind := classifyAttachmentKind("", fileName)
+		att := InboundAttachment{
+			Kind:     kind,
+			FileName: fileName,
+		}
+		if strings.TrimSpace(payload.FileKey) != "" &&
+			(kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, ""))) {
+			if data, respMime, err := a.downloadFeishuResource(ctx, msgID, payload.FileKey, "file", attachments.DefaultMaxUploadBytes); err == nil {
+				att.RawData = data
+				if att.MimeType == "" {
+					att.MimeType = respMime
+				}
+			} else {
+				att.Note = "飞书文件下载失败：" + err.Error()
+			}
+		}
+		return "", []InboundAttachment{att}
+
+	case "audio":
+		var payload struct {
+			FileKey  string    `json:"file_key"`
+			Duration flexInt64 `json:"duration"`
+		}
+		_ = json.Unmarshal([]byte(rawContent), &payload)
+		note := ""
+		if ms := payload.Duration.Int64(); ms > 0 {
+			sec := (ms + 500) / 1000
+			if sec <= 0 {
+				sec = 1
+			}
+			note = fmt.Sprintf("时长约 %d 秒", sec)
+		}
+		return "", []InboundAttachment{{
+			Kind: InboundAttachmentAudio,
+			Note: note,
+		}}
+
+	case "media":
+		var payload struct {
+			FileName string    `json:"file_name"`
+			Duration flexInt64 `json:"duration"`
+		}
+		_ = json.Unmarshal([]byte(rawContent), &payload)
+		note := ""
+		if ms := payload.Duration.Int64(); ms > 0 {
+			sec := (ms + 500) / 1000
+			if sec <= 0 {
+				sec = 1
+			}
+			note = fmt.Sprintf("时长约 %d 秒", sec)
+		}
+		return "", []InboundAttachment{{
+			Kind:     InboundAttachmentVideo,
+			FileName: strings.TrimSpace(payload.FileName),
+			Note:     note,
+		}}
+
+	case "post":
+		return a.extractFeishuPost(ctx, msgID, rawContent)
+
+	case "sticker":
+		return "", []InboundAttachment{{
+			Kind: InboundAttachmentOther,
+			Note: "飞书表情贴纸",
+		}}
+
+	default:
+		if text := extractFeishuText(rawContent); text != "" {
+			return text, nil
+		}
+		return "", []InboundAttachment{{
+			Kind: InboundAttachmentOther,
+			Note: fmt.Sprintf("飞书 %s 消息", msgType),
+		}}
+	}
+}
+
+func (a *FeishuAdapter) extractFeishuPost(ctx context.Context, msgID, rawContent string) (string, []InboundAttachment) {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(rawContent), &parsed); err != nil {
+		return extractFeishuText(rawContent), nil
+	}
+	postBody := parsed
+	if _, hasContent := parsed["content"]; !hasContent {
+		for _, loc := range []string{"zh_cn", "en_us", "ja_jp"} {
+			if sub, ok := parsed[loc].(map[string]any); ok {
+				postBody = sub
+				break
+			}
+		}
+	}
+	var lines []string
+	if title, ok := postBody["title"].(string); ok && strings.TrimSpace(title) != "" {
+		lines = append(lines, strings.TrimSpace(title))
+	}
+	var atts []InboundAttachment
+	if paragraphs, ok := postBody["content"].([]any); ok {
+		for _, para := range paragraphs {
+			elems, ok := para.([]any)
+			if !ok {
+				continue
+			}
+			var parts []string
+			for _, rawElem := range elems {
+				elem, ok := rawElem.(map[string]any)
+				if !ok {
+					continue
+				}
+				tag, _ := elem["tag"].(string)
+				switch strings.ToLower(strings.TrimSpace(tag)) {
+				case "text", "a":
+					if t, ok := elem["text"].(string); ok && strings.TrimSpace(t) != "" {
+						parts = append(parts, strings.TrimSpace(t))
+					}
+				case "img":
+					if imgKey, ok := elem["image_key"].(string); ok && strings.TrimSpace(imgKey) != "" {
+						atts = append(atts, a.fetchFeishuImageAttachment(ctx, msgID, imgKey))
+					}
+				}
+			}
+			if len(parts) > 0 {
+				lines = append(lines, strings.Join(parts, " "))
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")), atts
+}
+
+func (a *FeishuAdapter) fetchFeishuImageAttachment(ctx context.Context, msgID, imageKey string) InboundAttachment {
+	att := InboundAttachment{
+		Kind:     InboundAttachmentImage,
+		FileName: "image.png",
+		MimeType: "image/png",
+	}
+	imageKey = strings.TrimSpace(imageKey)
+	if imageKey == "" {
+		att.Note = "飞书图片缺少 image_key"
+		return att
+	}
+	data, respMime, err := a.downloadFeishuResource(ctx, msgID, imageKey, "image", attachments.DefaultMaxUploadBytes)
+	if err != nil {
+		att.Note = "飞书图片下载失败：" + err.Error()
+		return att
+	}
+	att.RawData = data
+	if respMime != "" {
+		att.MimeType = respMime
+	}
+	return att
+}
+
+func (a *FeishuAdapter) downloadFeishuResource(
+	ctx context.Context,
+	msgID, fileKey, resourceType string,
+	maxBytes int64,
+) ([]byte, string, error) {
+	token, err := a.tenantAccessToken(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	endpoint := fmt.Sprintf("%s/open-apis/im/v1/messages/%s/resources/%s?type=%s",
+		a.baseURL,
+		url.PathEscape(strings.TrimSpace(msgID)),
+		url.PathEscape(strings.TrimSpace(fileKey)),
+		url.QueryEscape(strings.TrimSpace(resourceType)),
+	)
+	return downloadInboundAttachment(ctx, a.httpClient, endpoint, map[string]string{
+		"Authorization": "Bearer " + token,
+	}, maxBytes)
 }
 
 func extractFeishuText(rawContent string) string {

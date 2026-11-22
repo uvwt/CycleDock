@@ -45,6 +45,24 @@ type QQAdapter struct {
 	lastMsgID   string
 	lastMsgAt   time.Time
 	msgSeq      int
+	saveState   StatePersister
+}
+
+// qqLastSeedSeq 保证同进程内短时间重建 QQAdapter 时 msg_seq 种子仍严格递增，避免同秒重建与旧 msg_id+msg_seq 碰撞。
+var qqLastSeedSeq atomic.Int64
+
+func nextQQSeedSeq() int {
+	base := time.Now().Unix()%900000 + 1000
+	for {
+		prev := qqLastSeedSeq.Load()
+		next := base
+		if next <= prev {
+			next = prev + 100
+		}
+		if qqLastSeedSeq.CompareAndSwap(prev, next) {
+			return int(next)
+		}
+	}
 }
 
 func NewQQAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, client *http.Client) *QQAdapter {
@@ -71,8 +89,8 @@ func NewQQAdapter(ch store.RemoteChannel, secrets store.RemoteChannelSecrets, cl
 	if ch.RuntimeState.LastMessageAt > 0 {
 		lastMsgAt = time.Unix(ch.RuntimeState.LastMessageAt, 0).UTC()
 	}
-	// 使用基于当前时间戳的高位种子初始化 msgSeq，防止进程重启后从 1 重新开始与旧 msg_id+msg_seq 碰撞被 QQ 拒收。
-	seedSeq := int(time.Now().Unix()%900000) + 1000
+	// 使用严格递增的高位种子初始化 msgSeq，防止进程重启或同秒重建实例后与旧 msg_id+msg_seq 碰撞被 QQ 拒收。
+	seedSeq := nextQQSeedSeq()
 	return &QQAdapter{
 		channel:    ch,
 		secrets:    secrets,
@@ -202,6 +220,10 @@ func (a *QQAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 	}
 	defer conn.Close()
 
+	a.mu.Lock()
+	a.saveState = rt.SaveState
+	a.mu.Unlock()
+
 	var lastSeq atomic.Int64
 	hbStop := make(chan struct{})
 	defer close(hbStop)
@@ -299,12 +321,39 @@ func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string,
 			MemberOpenID flexString `json:"member_openid"`
 			ID           flexString `json:"id"`
 		} `json:"author"`
+		Attachments []struct {
+			ContentType string     `json:"content_type"`
+			FileName    string     `json:"filename"`
+			URL         string     `json:"url"`
+			Size        flexInt64  `json:"size"`
+			Width       flexInt64  `json:"width"`
+			Height      flexInt64  `json:"height"`
+		} `json:"attachments"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
 	}
 	text := strings.TrimSpace(msg.Content)
-	if text == "" {
+	atts := make([]InboundAttachment, 0, len(msg.Attachments))
+	for _, rawAtt := range msg.Attachments {
+		fileName := strings.TrimSpace(rawAtt.FileName)
+		mimeType := strings.TrimSpace(rawAtt.ContentType)
+		kind := classifyAttachmentKind(mimeType, fileName)
+		att := InboundAttachment{
+			Kind:      kind,
+			FileName:  fileName,
+			MimeType:  mimeType,
+			SizeBytes: rawAtt.Size.Int64(),
+		}
+		// 仅图片与文件类型保留下载地址交由公共层受限拉取；语音/视频不盲目下载，直接由公共层生成明确占位说明。
+		if kind == InboundAttachmentImage || kind == InboundAttachmentFile {
+			if dlURL := strings.TrimSpace(rawAtt.URL); dlURL != "" {
+				att.DownloadURL = dlURL
+			}
+		}
+		atts = append(atts, att)
+	}
+	if text == "" && len(atts) == 0 {
 		return
 	}
 	groupOpenID := strings.TrimSpace(msg.GroupOpenID.String())
@@ -349,6 +398,7 @@ func (a *QQAdapter) handleDispatchMessage(ctx context.Context, eventType string,
 			ChatID:            chatID,
 			ChatType:          chatType,
 			Content:           text,
+			Attachments:       atts,
 			Mentioned:         true, // QQ 群聊仅投递 GROUP_AT_MESSAGE_CREATE
 			Timestamp:         now,
 		})
@@ -396,13 +446,23 @@ func (a *QQAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 			if replyMsgID == "" {
 				return err
 			}
-			// 被动回复 msg_id 可能已过期或达到单 msg_id 回复上限，清空过期 msg_id 后自动降级为主动消息重试一次。
+			// 被动回复 msg_id 可能已过期或达到单 msg_id 回复上限（如 5 条），清空过期 msg_id 后自动降级为主动消息重试一次。
+			expiredMsgID := replyMsgID
 			a.mu.Lock()
-			if a.lastMsgID == replyMsgID {
+			if a.lastMsgID == expiredMsgID {
 				a.lastMsgID = ""
 				a.lastMsgAt = time.Time{}
 			}
+			saveState := a.saveState
 			a.mu.Unlock()
+			if saveState != nil {
+				_ = saveState(ctx, func(st *store.RemoteChannelRuntimeState) {
+					if st.LastMessageID == expiredMsgID {
+						st.LastMessageID = ""
+						st.LastMessageAt = 0
+					}
+				})
+			}
 			replyMsgID = ""
 			if fallbackErr := a.sendChunk(ctx, token, endpoint, chunk, ""); fallbackErr != nil {
 				return fmt.Errorf("%v (fallback proactive send failed: %w)", err, fallbackErr)

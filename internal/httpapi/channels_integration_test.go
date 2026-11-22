@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/channels"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
@@ -288,8 +293,8 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("loopback guard violated: expected 0 outbound messages for own inbound comment, got %+v", got)
 	}
 
-	// 5. 模拟 Agent 认领并回复：先发中间进度气泡 (end_turn=false)，再发最终气泡 (end_turn=true)
-	// 验证：中间进度气泡绝不推送，只推送最终气泡，且日常回复不附带冗余 CardURL。
+	// 5. 模拟 Agent 认领并回复：先发中间进度气泡 (end_turn=false)，再发空文本气泡，再发最终气泡 (end_turn=true)
+	// 验证：通道专属普通讨论卡放开多气泡推送（非空中间气泡与最终气泡按序全部推送，空文本气泡自动跳过），且日常回复不附带冗余 CardURL。
 	claim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
 	if err != nil {
 		t.Fatalf("claim channel conversation turn attempt: %v", err)
@@ -310,12 +315,27 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	}); err != nil {
 		t.Fatalf("publish progress bubble: %v", err)
 	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         convCardID,
+		AttemptID:      attemptID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "empty-bubble-1",
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "   ",
+			EndTurn: false,
+		},
+	}); err != nil {
+		t.Fatalf("publish empty bubble: %v", err)
+	}
 
 	if err := dispatcher.DeliverOnce(ctx); err != nil {
 		t.Fatalf("deliver after progress bubble: %v", err)
 	}
-	if got := mainStub.SentMessages(); len(got) != 0 {
-		t.Fatalf("end_turn=false progress bubble must NEVER be pushed to IM, got %+v", got)
+	gotAfterProgress := mainStub.SentMessages()
+	if len(gotAfterProgress) != 1 || !strings.Contains(gotAfterProgress[0].Text, "中间进度：正在查询日志") || gotAfterProgress[0].CardURL != "" {
+		t.Fatalf("expected own conversation card to deliver non-empty end_turn=false bubble and skip empty bubble, got %+v", gotAfterProgress)
 	}
 
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
@@ -338,12 +358,13 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after final bubble: %v", err)
 	}
 	sentMain := mainStub.SentMessages()
-	if len(sentMain) != 1 || !strings.Contains(sentMain[0].Text, "今日全部服务运行正常") || sentMain[0].CardURL != "" {
-		t.Fatalf("expected 1 clean daily reply without redundant card link, got %+v", sentMain)
+	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "今日全部服务运行正常") || sentMain[1].CardURL != "" {
+		t.Fatalf("expected 2 sequential bubbles on own conversation card without duplicate push, got %+v", sentMain)
 	}
 
 	// 6. 验证项目主聊天单向推送（不污染本通道专属讨论卡）：
 	// - 不回传 Web 端人类评论原文；
+	// - 项目主聊天单向镜像继续严格过滤 end_turn=false 中间进度气泡；
 	// - mirror_web_messages=true 时，主聊天 AI 最终回复附带【主聊天】标识单向推送到 IM，不附带冗余 CardURL。
 	mainDisc, _, err := dataStore.EnsureMainDiscussion(ctx, workspaceID, projectID, uuid.MustParse(identity.Source.ID))
 	if err != nil {
@@ -361,12 +382,32 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after web comment: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 1 {
+	if len(sentMain) != 2 {
 		t.Fatalf("web human comment must NEVER be echoed back to IM even when mirror_web_messages=true, got %+v", sentMain)
 	}
 	webClaim, err := dataStore.ClaimNextTurnAttempt(ctx, workspaceID, agentSrc.ID, time.Now().UTC(), 5*time.Minute)
 	if err != nil {
 		t.Fatalf("claim web human turn attempt: %v", err)
+	}
+	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+		WorkspaceID:    workspaceID,
+		CardID:         mainCardID,
+		AttemptID:      webClaim.Attempt.ID,
+		RunnerSourceID: agentSrc.ID,
+		IdempotencyKey: "web-reply-mirror-progress-1",
+		Message: store.ReplyMessage{
+			Type:    "text",
+			Content: "主聊天中间进度：正在后台排查...",
+			EndTurn: false,
+		},
+	}); err != nil {
+		t.Fatalf("publish web progress reply (mirror on): %v", err)
+	}
+	if err := dispatcher.DeliverOnce(ctx); err != nil {
+		t.Fatalf("deliver after web progress reply (mirror on): %v", err)
+	}
+	if got := mainStub.SentMessages(); len(got) != 2 {
+		t.Fatalf("main chat mirror must continue filtering end_turn=false progress bubbles, got %+v", got)
 	}
 	if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
 		WorkspaceID:    workspaceID,
@@ -387,7 +428,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after web reply (mirror on): %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 2 || !strings.Contains(sentMain[1].Text, "【主聊天】") || !strings.Contains(sentMain[1].Text, "已收到你在 Web 端的补充消息") || sentMain[1].CardURL != "" {
+	if len(sentMain) != 3 || !strings.Contains(sentMain[2].Text, "【主聊天】") || !strings.Contains(sentMain[2].Text, "已收到你在 Web 端的补充消息") || sentMain[2].CardURL != "" {
 		t.Fatalf("expected mirrored main-chat AI reply with 【主聊天】 tag and no redundant card link, got %+v", sentMain)
 	}
 
@@ -428,7 +469,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	if err := dispatcher.DeliverOnce(ctx); err != nil {
 		t.Fatalf("deliver after web reply (mirror off): %v", err)
 	}
-	if got := mainStub.SentMessages(); len(got) != 2 {
+	if got := mainStub.SentMessages(); len(got) != 3 {
 		t.Fatalf("expected web human reply filtered when mirror_web_messages=false, got %+v", got)
 	}
 
@@ -463,7 +504,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after proactive reply on main chat: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 3 || !strings.Contains(sentMain[2].Text, "早安，昨晚所有巡检都已平稳通过") {
+	if len(sentMain) != 4 || !strings.Contains(sentMain[3].Text, "早安，昨晚所有巡检都已平稳通过") {
 		t.Fatalf("expected proactive reply delivered with mirror_web_messages=false, got %+v", sentMain)
 	}
 
@@ -497,7 +538,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	if err := dispatcher.DeliverOnce(ctx); err != nil {
 		t.Fatalf("deliver after todo review: %v", err)
 	}
-	if got := mainStub.SentMessages(); len(got) != 3 {
+	if got := mainStub.SentMessages(); len(got) != 4 {
 		t.Fatalf("expected no duplicate template review alert when supervisor callback targets main chat, got %+v", got)
 	}
 	// 接着主聊天认领该 system 终态回调并回复总结：即便 mirror_web_messages=false，也必须推送给 IM。
@@ -524,7 +565,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after supervisor callback summary: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 4 || !strings.Contains(sentMain[3].Text, "修复微信长轮询解码") {
+	if len(sentMain) != 5 || !strings.Contains(sentMain[4].Text, "修复微信长轮询解码") {
 		t.Fatalf("expected system callback summary delivered with mirror_web_messages=false, got %+v", sentMain)
 	}
 
@@ -560,7 +601,7 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 		t.Fatalf("deliver after other discussion todo review: %v", err)
 	}
 	sentMain = mainStub.SentMessages()
-	if len(sentMain) != 5 || !strings.Contains(sentMain[4].Text, "【待验收】专项子任务") || !strings.Contains(sentMain[4].CardURL, "/cards/") {
+	if len(sentMain) != 6 || !strings.Contains(sentMain[5].Text, "【待验收】专项子任务") || !strings.Contains(sentMain[5].CardURL, "/cards/") {
 		t.Fatalf("expected template review reminder with direct card link for non-main-chat todo, got %+v", sentMain)
 	}
 
@@ -946,5 +987,121 @@ func TestRemoteChannels_EndToEnd_EncryptionDedupMainChatAndScheduledPush(t *test
 	gotCh, err := dataStore.GetRemoteChannel(ctx, workspaceID, autoChID)
 	if err != nil || gotCh.Config.TargetChatID != "-100777888" || gotCh.Config.TargetChatType != "group" || gotCh.Config.MessageThreadID != 42 {
 		t.Fatalf("expected target_chat_id auto persisted, got %+v err=%v", gotCh.Config, err)
+	}
+
+	// 11. 验证远程通道纯图片/语音入站通过 attachments.Service 落盘并绑定 Turn（含重复 external_message_id 去重）
+	attSvc, err := attachments.New(pool, attachments.Config{
+		Dir:           t.TempDir(),
+		TTL:           time.Hour,
+		MaxTotalBytes: attachments.DefaultMaxTotalBytes,
+	})
+	if err != nil {
+		t.Fatalf("new attachment service: %v", err)
+	}
+	autoMgr.SetAttachmentsService(attSvc)
+
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: 10, G: 180, B: 90, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	pngBytes := pngBuf.Bytes()
+	mediaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes)
+	}))
+	defer mediaSrv.Close()
+
+	// 发送一条无文字正文、仅带图片 URL + 语音占位的入站消息
+	autoStub.inbound <- channels.InboundMessage{
+		ExternalMessageID: "auto-att-img-voice-1",
+		SenderID:          "tg-u-9",
+		ChatID:            "-100777888",
+		ChatType:          "group",
+		ThreadID:          "42",
+		Mentioned:         true,
+		Content:           "",
+		Attachments: []channels.InboundAttachment{
+			{
+				Kind:        channels.InboundAttachmentImage,
+				FileName:    "screen.png",
+				MimeType:    "image/png",
+				DownloadURL: mediaSrv.URL + "/screen.png",
+			},
+			{
+				Kind: channels.InboundAttachmentAudio,
+				Note: "时长 5 秒",
+			},
+		},
+	}
+
+	var autoConvCardID uuid.UUID
+	var boundAttCount int
+	var lastCommentContent string
+	var lastCommentRaw []byte
+	attDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(attDeadline) {
+		chNow, err := dataStore.GetRemoteChannel(ctx, workspaceID, autoChID)
+		if err == nil && chNow.ConversationCardID.Valid {
+			autoConvCardID = chNow.ConversationCardID.UUID
+			_ = pool.QueryRow(ctx, `
+				SELECT COUNT(*) FROM workspace_attachments
+				WHERE workspace_id = $1 AND card_id = $2
+			`, workspaceID, autoConvCardID).Scan(&boundAttCount)
+			if boundAttCount == 1 {
+				_ = pool.QueryRow(ctx, `
+					SELECT content, message FROM events
+					WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'comment'
+					ORDER BY seq DESC LIMIT 1
+				`, workspaceID, autoConvCardID).Scan(&lastCommentContent, &lastCommentRaw)
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if autoConvCardID == uuid.Nil || boundAttCount != 1 {
+		t.Fatalf("expected 1 bound image attachment on channel conversation card %s, got count=%d", autoConvCardID, boundAttCount)
+	}
+	var commentPayload store.CommentMessagePayload
+	if err := json.Unmarshal(lastCommentRaw, &commentPayload); err != nil {
+		t.Fatalf("decode comment payload: %v raw=%s", err, string(lastCommentRaw))
+	}
+	if len(commentPayload.Attachments) != 1 || commentPayload.Attachments[0].FileName != "screen.png" {
+		t.Fatalf("expected screen.png attachment ref on comment event, got %+v", commentPayload.Attachments)
+	}
+	if !strings.Contains(lastCommentContent, "收到语音消息") || !strings.Contains(lastCommentContent, "时长 5 秒") {
+		t.Fatalf("expected voice fallback note in comment content, got %q", lastCommentContent)
+	}
+
+	// 验证同 external_message_id 重复投递不会重复下载/重复落盘产生孤立附件
+	autoStub.inbound <- channels.InboundMessage{
+		ExternalMessageID: "auto-att-img-voice-1",
+		SenderID:          "tg-u-9",
+		ChatID:            "-100777888",
+		ChatType:          "group",
+		ThreadID:          "42",
+		Mentioned:         true,
+		Content:           "",
+		Attachments: []channels.InboundAttachment{
+			{
+				Kind:        channels.InboundAttachmentImage,
+				FileName:    "screen.png",
+				MimeType:    "image/png",
+				DownloadURL: mediaSrv.URL + "/screen.png",
+			},
+		},
+	}
+	time.Sleep(200 * time.Millisecond)
+	var totalWorkspaceAtts int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM workspace_attachments WHERE workspace_id = $1`, workspaceID).Scan(&totalWorkspaceAtts); err != nil {
+		t.Fatalf("count workspace_attachments: %v", err)
+	}
+	if totalWorkspaceAtts != 1 {
+		t.Fatalf("expected dedup short-circuit to avoid duplicate attachment uploads, got total=%d", totalWorkspaceAtts)
 	}
 }

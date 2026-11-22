@@ -1110,24 +1110,74 @@ func (s *Store) ListRemoteChannelConversationBindings(
 	return out, rows.Err()
 }
 
-// IngestRemoteChannelMessage 将已通过白名单与群策略校验的外部 IM 消息幂等写入该通道专属普通讨论卡。
-// 严格遵守：
-// 1. 仅 role=main_chat 允许入站建 Turn；scheduled_push 绝不接收入站。
-// 2. 通过 remote_channel_inbound_dedup 唯一索引防重连重复建 Turn。
-// 3. 自动懒创建/复用通道专属普通讨论卡（绝不污染项目主聊天 main_discussion_id）；若专属卡已删或归档则自动重建。
-// 4. 复用 SubmitSessionComment 写入 human comment + human Turn，并记录 card_id/event_id/turn_id 供出站与 Web Push 抑制。
+// HasIngestedRemoteChannelMessage 只读查询外部消息是否已入库，供通道层在拉取大体积远端附件前提前短路去重。
+func (s *Store) HasIngestedRemoteChannelMessage(
+	ctx context.Context,
+	workspaceID, channelID uuid.UUID,
+	externalMessageID string,
+) (ChannelInboundResult, bool, error) {
+	externalMessageID = strings.TrimSpace(externalMessageID)
+	if externalMessageID == "" {
+		return ChannelInboundResult{}, false, nil
+	}
+	var existing CardEventTurnRef
+	err := s.pool.QueryRow(ctx, `
+		SELECT card_id, event_id, turn_id
+		FROM remote_channel_inbound_dedup
+		WHERE workspace_id = $1 AND channel_id = $2 AND external_message_id = $3
+	`, workspaceID, channelID, externalMessageID).Scan(&existing.CardID, &existing.EventID, &existing.TurnID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChannelInboundResult{}, false, nil
+	}
+	if err != nil {
+		return ChannelInboundResult{}, false, err
+	}
+	return ChannelInboundResult{
+		Reused:  true,
+		CardID:  existing.CardID.UUID,
+		EventID: existing.EventID.UUID,
+		TurnID:  existing.TurnID.UUID,
+	}, true, nil
+}
+
+// ResolveChannelHumanSource 返回通道入站消息与附件归属的人类 Source ID（优先使用通道创建者）。
+func (s *Store) ResolveChannelHumanSource(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	preferred uuid.NullUUID,
+) (uuid.UUID, error) {
+	return s.resolveChannelHumanSource(ctx, workspaceID, preferred)
+}
+
+// IngestRemoteChannelMessage 将已通过白名单与群策略校验的外部 IM 纯文本消息幂等写入该通道专属普通讨论卡。
 func (s *Store) IngestRemoteChannelMessage(
 	ctx context.Context,
 	channel RemoteChannel,
 	externalMessageID, senderID, chatID, content string,
+) (ChannelInboundResult, error) {
+	return s.IngestRemoteChannelMessageWithAttachments(ctx, channel, externalMessageID, senderID, chatID, content, nil)
+}
+
+// IngestRemoteChannelMessageWithAttachments 将已通过白名单与群策略校验的外部 IM 消息（含可选图片/文本附件）
+// 幂等写入该通道专属普通讨论卡。
+// 严格遵守：
+// 1. 仅 role=main_chat 允许入站建 Turn；scheduled_push 绝不接收入站。
+// 2. 通过 remote_channel_inbound_dedup 唯一索引防重连重复建 Turn。
+// 3. 自动懒创建/复用通道专属普通讨论卡（绝不污染项目主聊天 main_discussion_id）；若专属卡已删或归档则自动重建。
+// 4. 复用 SubmitSessionComment 写入 human comment（透传 AttachmentIDs，支持纯附件触发 Turn）+ human Turn。
+func (s *Store) IngestRemoteChannelMessageWithAttachments(
+	ctx context.Context,
+	channel RemoteChannel,
+	externalMessageID, senderID, chatID, content string,
+	attachmentIDs []uuid.UUID,
 ) (ChannelInboundResult, error) {
 	if channel.Role != domain.ChannelRoleMainChat {
 		return ChannelInboundResult{}, fmt.Errorf("%w: only main_chat channels accept inbound messages", domain.ErrConflict)
 	}
 	externalMessageID = strings.TrimSpace(externalMessageID)
 	content = strings.TrimSpace(content)
-	if externalMessageID == "" || content == "" {
-		return ChannelInboundResult{}, fmt.Errorf("%w: external_message_id and content are required", domain.ErrConflict)
+	if externalMessageID == "" || (content == "" && len(attachmentIDs) == 0) {
+		return ChannelInboundResult{}, fmt.Errorf("%w: external_message_id and content or attachments are required", domain.ErrConflict)
 	}
 
 	// 第一步：原子占位去重记录，防止并发重连重复写入。
@@ -1183,6 +1233,7 @@ func (s *Store) IngestRemoteChannelMessage(
 		CardID:         convCard.ID,
 		AuthorSourceID: humanSourceID,
 		Content:        content,
+		AttachmentIDs:  attachmentIDs,
 		IdempotencyKey: idemKey,
 		DispatchMode:   domain.DispatchModeEnqueue,
 	})

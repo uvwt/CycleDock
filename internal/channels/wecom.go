@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -176,6 +177,41 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 				Text struct {
 					Content string `json:"content"`
 				} `json:"text"`
+				Image struct {
+					URL    string `json:"url"`
+					AESKey string `json:"aeskey"`
+				} `json:"image"`
+				File struct {
+					URL      string `json:"url"`
+					AESKey   string `json:"aeskey"`
+					FileName string `json:"filename"`
+					Name     string `json:"name"`
+				} `json:"file"`
+				Voice struct {
+					Content string `json:"content"`
+				} `json:"voice"`
+				Video struct {
+					URL      string `json:"url"`
+					FileName string `json:"filename"`
+				} `json:"video"`
+				Mixed struct {
+					MsgItem []struct {
+						MsgType string `json:"msgtype"`
+						Text    struct {
+							Content string `json:"content"`
+						} `json:"text"`
+						Image struct {
+							URL    string `json:"url"`
+							AESKey string `json:"aeskey"`
+						} `json:"image"`
+						File struct {
+							URL      string `json:"url"`
+							AESKey   string `json:"aeskey"`
+							FileName string `json:"filename"`
+							Name     string `json:"name"`
+						} `json:"file"`
+					} `json:"msg_item"`
+				} `json:"mixed"`
 				Content string `json:"content"`
 			} `json:"body"`
 		}
@@ -204,7 +240,83 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 		if text == "" {
 			text = strings.TrimSpace(frame.Body.Content)
 		}
-		if text == "" {
+		atts := make([]InboundAttachment, 0, 2)
+		msgType := strings.ToLower(strings.TrimSpace(frame.Body.MsgType.String()))
+		switch msgType {
+		case "image":
+			atts = append(atts, a.fetchWeComAttachment(ctx, InboundAttachmentImage, frame.Body.Image.URL, frame.Body.Image.AESKey, "image.png"))
+		case "file":
+			fileName := strings.TrimSpace(frame.Body.File.FileName)
+			if fileName == "" {
+				fileName = strings.TrimSpace(frame.Body.File.Name)
+			}
+			kind := classifyAttachmentKind("", fileName)
+			if kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, "")) {
+				atts = append(atts, a.fetchWeComAttachment(ctx, kind, frame.Body.File.URL, frame.Body.File.AESKey, fileName))
+			} else {
+				atts = append(atts, InboundAttachment{
+					Kind:     kind,
+					FileName: fileName,
+				})
+			}
+		case "voice":
+			atts = append(atts, InboundAttachment{
+				Kind:       InboundAttachmentAudio,
+				Transcript: strings.TrimSpace(frame.Body.Voice.Content),
+			})
+		case "video":
+			atts = append(atts, InboundAttachment{
+				Kind:     InboundAttachmentVideo,
+				FileName: strings.TrimSpace(frame.Body.Video.FileName),
+			})
+		case "mixed":
+			textParts := make([]string, 0, len(frame.Body.Mixed.MsgItem))
+			for _, item := range frame.Body.Mixed.MsgItem {
+				switch strings.ToLower(strings.TrimSpace(item.MsgType)) {
+				case "text":
+					if t := strings.TrimSpace(item.Text.Content); t != "" {
+						textParts = append(textParts, t)
+					}
+				case "image":
+					atts = append(atts, a.fetchWeComAttachment(ctx, InboundAttachmentImage, item.Image.URL, item.Image.AESKey, "image.png"))
+				case "file":
+					fileName := strings.TrimSpace(item.File.FileName)
+					if fileName == "" {
+						fileName = strings.TrimSpace(item.File.Name)
+					}
+					kind := classifyAttachmentKind("", fileName)
+					if kind == InboundAttachmentImage || (kind == InboundAttachmentFile && isCandidateUploadableFile(fileName, "")) {
+						atts = append(atts, a.fetchWeComAttachment(ctx, kind, item.File.URL, item.File.AESKey, fileName))
+					} else {
+						atts = append(atts, InboundAttachment{
+							Kind:     kind,
+							FileName: fileName,
+						})
+					}
+				}
+			}
+			if text == "" {
+				text = strings.TrimSpace(strings.Join(textParts, "\n"))
+			}
+		default:
+			// 兼容未标明 msgtype 但携带了 image/voice/file 字段的回调帧。
+			if strings.TrimSpace(frame.Body.Image.URL) != "" {
+				atts = append(atts, a.fetchWeComAttachment(ctx, InboundAttachmentImage, frame.Body.Image.URL, frame.Body.Image.AESKey, "image.png"))
+			}
+			if strings.TrimSpace(frame.Body.Voice.Content) != "" {
+				atts = append(atts, InboundAttachment{
+					Kind:       InboundAttachmentAudio,
+					Transcript: strings.TrimSpace(frame.Body.Voice.Content),
+				})
+			}
+			if text == "" && len(atts) == 0 && msgType != "" && msgType != "text" {
+				atts = append(atts, InboundAttachment{
+					Kind: InboundAttachmentOther,
+					Note: fmt.Sprintf("企业微信 %s 消息", msgType),
+				})
+			}
+		}
+		if text == "" && len(atts) == 0 {
 			continue
 		}
 		senderID := strings.TrimSpace(frame.Body.From.UserID.String())
@@ -246,11 +358,52 @@ func (a *WeComAdapter) Run(ctx context.Context, rt AdapterRuntime) error {
 				ChatID:            chatID,
 				ChatType:          chatType,
 				Content:           text,
+				Attachments:       atts,
 				Mentioned:         true, // 企微 AI Bot 群聊仅在 @ 机器人时回调
 				Timestamp:         time.Now().UTC(),
 			})
 		}
 	}
+}
+
+// fetchWeComAttachment 下载企业微信 AI Bot 媒体文件；若携带 aeskey 则执行 AES-256-CBC 解密，失败时保留明确占位说明。
+func (a *WeComAdapter) fetchWeComAttachment(
+	ctx context.Context,
+	kind InboundAttachmentKind,
+	rawURL, aesKey, fileName string,
+) InboundAttachment {
+	att := InboundAttachment{
+		Kind:     kind,
+		FileName: strings.TrimSpace(fileName),
+	}
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		att.Note = "企业微信消息未提供下载链接"
+		return att
+	}
+	aesKey = strings.TrimSpace(aesKey)
+	if aesKey == "" {
+		att.DownloadURL = rawURL
+		return att
+	}
+	raw, respMime, err := downloadInboundAttachment(ctx, a.httpClient, rawURL, nil, attachments.DefaultMaxUploadBytes)
+	if err != nil {
+		att.Note = "企业微信媒体下载失败：" + err.Error()
+		return att
+	}
+	if _, _, isImg := attachments.DetectImageFormat(raw); isImg {
+		att.RawData = raw
+		att.MimeType = respMime
+		return att
+	}
+	plain, err := decryptWeComAES256CBC(raw, aesKey)
+	if err != nil {
+		att.Note = "企业微信加密媒体解密失败：" + err.Error()
+		return att
+	}
+	att.RawData = plain
+	att.MimeType = respMime
+	return att
 }
 
 func (a *WeComAdapter) Send(ctx context.Context, msg OutboundMessage) error {
