@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -51,6 +52,14 @@ type AdapterRuntime struct {
 	OnInbound InboundHandler
 	OnStatus  StatusReporter
 	SaveState StatePersister
+	Logger    *slog.Logger
+}
+
+func rtLogger(rt AdapterRuntime) *slog.Logger {
+	if rt.Logger != nil {
+		return rt.Logger
+	}
+	return slog.Default()
 }
 
 // Adapter 是 6 大 IM 平台的统一协议抽象。
@@ -175,9 +184,10 @@ func findSplitPoint(window []rune) int {
 	return n
 }
 
-// FormatOutboundWithLink 统一将卡片直达链接附在消息末尾，避免重复拼接。
+// FormatOutboundWithLink 自动清洗正文中的站内 cycledock:// 卡片引用，仅在存在直达链接时追加链接；
+// 日常回复传入空 CardURL 即输出干净文本。
 func FormatOutboundWithLink(text, cardURL string) string {
-	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(SanitizeExternalCardLinks(text))
 	cardURL = strings.TrimSpace(cardURL)
 	if cardURL == "" {
 		return text
@@ -191,14 +201,55 @@ func FormatOutboundWithLink(text, cardURL string) string {
 	return text + "\n\n查看卡片：" + cardURL
 }
 
-// ChannelCardURL 构造 CycleDock 卡片直达链接。
+// ChannelCardURL 构造 CycleDock 卡片直达链接（对齐前端 /cards/:projectID/:cardID 路由）。
 func ChannelCardURL(baseURL string, projectID, cardID uuid.UUID) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" || cardID == uuid.Nil {
 		return ""
 	}
 	if projectID != uuid.Nil {
-		return base + "/projects/" + projectID.String() + "/cards/" + cardID.String()
+		return base + "/cards/" + projectID.String() + "/" + cardID.String()
 	}
 	return base + "/cards/" + cardID.String()
+}
+
+// SanitizeExternalCardLinks 将 AI 正文中的 CycleDock 站内卡片引用 [标题](cycledock://card/<uuid>)
+// 清洗为适合外部 IM 阅读的形式，避免裸露内部 cycledock:// 协议链接。
+func SanitizeExternalCardLinks(text string) string {
+	if !strings.Contains(text, "cycledock://card/") {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text))
+	rest := text
+	for {
+		openBracket := strings.IndexByte(rest, '[')
+		if openBracket < 0 {
+			out.WriteString(rest)
+			break
+		}
+		out.WriteString(rest[:openBracket])
+		afterOpen := rest[openBracket+1:]
+		mid := strings.Index(afterOpen, "](cycledock://card/")
+		if mid < 0 {
+			out.WriteByte('[')
+			rest = afterOpen
+			continue
+		}
+		title := strings.TrimSpace(afterOpen[:mid])
+		afterPrefix := afterOpen[mid+len("](cycledock://card/"):]
+		closeParen := strings.IndexByte(afterPrefix, ')')
+		if closeParen < 0 || strings.ContainsAny(title, "\r\n") {
+			out.WriteByte('[')
+			rest = afterOpen
+			continue
+		}
+		if title != "" {
+			out.WriteString("「")
+			out.WriteString(title)
+			out.WriteString("」")
+		}
+		rest = afterPrefix[closeParen+1:]
+	}
+	return strings.TrimSpace(out.String())
 }

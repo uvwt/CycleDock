@@ -16,8 +16,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 // RemoteChannelConfig 保存非敏感通道配置（明文 JSONB）。
@@ -98,35 +100,37 @@ type RemoteChannelRuntimeState struct {
 	LastThreadID        string            `json:"last_thread_id,omitempty"`
 	LastSessionWebhook  string            `json:"last_session_webhook,omitempty"`
 	LastMessageID       string            `json:"last_message_id,omitempty"`
+	LastMessageAt       int64             `json:"last_message_at,omitempty"`
 }
 
 // RemoteChannel 是持久化的远程通道实体。
 type RemoteChannel struct {
-	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
-	Name              string
-	Platform          domain.ChannelPlatform
-	Role              domain.ChannelRole
-	Transport         domain.ChannelTransport
-	Enabled           bool
-	ProjectID         uuid.UUID
-	TargetCardID      uuid.NullUUID
-	PushFilter        domain.ChannelPushFilter
-	MirrorWebMessages bool
-	GroupPolicy       domain.ChannelGroupPolicy
-	AllowFrom         []string
-	Config            RemoteChannelConfig
-	SecretCiphertext  []byte
-	SecretHints       map[string]string
-	RuntimeStatus     domain.ChannelRuntimeStatus
-	LastError         string
-	LastHeartbeatAt   *time.Time
-	LastInboundAt     *time.Time
-	LastOutboundAt    *time.Time
-	RuntimeState      RemoteChannelRuntimeState
-	CreatedBySourceID uuid.NullUUID
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               string
+	Platform           domain.ChannelPlatform
+	Role               domain.ChannelRole
+	Transport          domain.ChannelTransport
+	Enabled            bool
+	ProjectID          uuid.UUID
+	TargetCardID       uuid.NullUUID
+	ConversationCardID uuid.NullUUID
+	PushFilter         domain.ChannelPushFilter
+	MirrorWebMessages  bool
+	GroupPolicy        domain.ChannelGroupPolicy
+	AllowFrom          []string
+	Config             RemoteChannelConfig
+	SecretCiphertext   []byte
+	SecretHints        map[string]string
+	RuntimeStatus      domain.ChannelRuntimeStatus
+	LastError          string
+	LastHeartbeatAt    *time.Time
+	LastInboundAt      *time.Time
+	LastOutboundAt     *time.Time
+	RuntimeState       RemoteChannelRuntimeState
+	CreatedBySourceID  uuid.NullUUID
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // HasSecrets 返回该通道是否已在服务端加密保存凭据。
@@ -466,7 +470,7 @@ func (s *Store) validateChannelTargetScope(ctx context.Context, workspaceID, pro
 
 const remoteChannelSelectCols = `
 	id, workspace_id, name, platform, role, transport, enabled,
-	project_id, target_card_id, push_filter, mirror_web_messages,
+	project_id, target_card_id, conversation_card_id, push_filter, mirror_web_messages,
 	group_policy, allow_from, config_json, secret_ciphertext, secret_hints,
 	runtime_status, last_error, last_heartbeat_at, last_inbound_at, last_outbound_at,
 	runtime_state_json, created_by_source_id, created_at, updated_at
@@ -480,7 +484,7 @@ func scanRemoteChannel(row interface {
 	var configBytes, hintsBytes, runtimeStateBytes []byte
 	if err := row.Scan(
 		&ch.ID, &ch.WorkspaceID, &ch.Name, &platform, &role, &transport, &ch.Enabled,
-		&ch.ProjectID, &ch.TargetCardID, &pushFilter, &ch.MirrorWebMessages,
+		&ch.ProjectID, &ch.TargetCardID, &ch.ConversationCardID, &pushFilter, &ch.MirrorWebMessages,
 		&groupPolicy, &ch.AllowFrom, &configBytes, &ch.SecretCiphertext, &hintsBytes,
 		&runtimeStatus, &ch.LastError, &ch.LastHeartbeatAt, &ch.LastInboundAt, &ch.LastOutboundAt,
 		&runtimeStateBytes, &ch.CreatedBySourceID, &ch.CreatedAt, &ch.UpdatedAt,
@@ -671,6 +675,7 @@ func (s *Store) UpdateRemoteChannel(
 		    enabled = $6,
 		    project_id = $7,
 		    target_card_id = $8,
+		    conversation_card_id = CASE WHEN project_id <> $7 OR $4 <> 'main_chat' THEN NULL ELSE conversation_card_id END,
 		    push_filter = $9,
 		    mirror_web_messages = $10,
 		    group_policy = $11,
@@ -690,7 +695,27 @@ func (s *Store) UpdateRemoteChannel(
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RemoteChannel{}, domain.ErrNotFound
 	}
-	return updated, err
+	if err != nil {
+		return RemoteChannel{}, err
+	}
+	// 通道改名时同步已绑定专属讨论卡的标题，保持左侧讨论列表与通道名称一致。
+	if updated.ConversationCardID.Valid {
+		syncTitle := strings.TrimSpace(updated.Name)
+		if syncTitle == "" {
+			syncTitle = defaultPlatformTitle(updated.Platform)
+		}
+		syncDesc := defaultChannelConversationDescription(updated.Platform, syncTitle)
+		if _, syncErr := s.pool.Exec(ctx, `
+			UPDATE cards
+			SET title = $3,
+			    description = $4,
+			    updated_at = now()
+			WHERE workspace_id = $1 AND id = $2
+		`, workspaceID, updated.ConversationCardID.UUID, syncTitle, syncDesc); syncErr == nil {
+			s.notifyWorkspaceChanged(workspaceID)
+		}
+	}
+	return updated, nil
 }
 
 // SetRemoteChannelEnabled 启停远程通道。
@@ -796,8 +821,7 @@ func (s *Store) UpdateRemoteChannelRuntime(
 		UPDATE remote_channels
 		SET runtime_status = $3,
 		    last_error = $4,
-		    last_heartbeat_at = CASE WHEN $5 THEN now() ELSE last_heartbeat_at END,
-		    updated_at = now()
+		    last_heartbeat_at = CASE WHEN $5 THEN now() ELSE last_heartbeat_at END
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, channelID, string(status), lastError, heartbeat)
 	return err
@@ -815,8 +839,7 @@ func (s *Store) UpdateRemoteChannelRuntimeState(
 	}
 	_, err = s.pool.Exec(ctx, `
 		UPDATE remote_channels
-		SET runtime_state_json = $3,
-		    updated_at = now()
+		SET runtime_state_json = $3
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, channelID, raw)
 	return err
@@ -833,8 +856,7 @@ func (s *Store) TouchRemoteChannelOutbound(ctx context.Context, workspaceID, cha
 			UPDATE remote_channels
 			SET last_outbound_at = now(),
 			    last_error = CASE WHEN transport = 'webhook' THEN '' ELSE last_error END,
-			    runtime_status = CASE WHEN transport = 'webhook' THEN 'connected' ELSE runtime_status END,
-			    updated_at = now()
+			    runtime_status = CASE WHEN transport = 'webhook' THEN 'connected' ELSE runtime_status END
 			WHERE workspace_id = $1 AND id = $2
 		`, workspaceID, channelID)
 		return err
@@ -842,19 +864,258 @@ func (s *Store) TouchRemoteChannelOutbound(ctx context.Context, workspaceID, cha
 	_, err := s.pool.Exec(ctx, `
 		UPDATE remote_channels
 		SET last_error = $3,
-		    runtime_status = CASE WHEN transport = 'webhook' THEN 'error' ELSE runtime_status END,
-		    updated_at = now()
+		    runtime_status = CASE WHEN transport = 'webhook' THEN 'error' ELSE runtime_status END
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, channelID, lastError)
 	return err
 }
 
-// IngestRemoteChannelMessage 将已通过白名单与群策略校验的外部 IM 消息幂等写入目标项目主聊天。
+// EnsureChannelConversationCard 为双向远程通道懒创建并绑定专属普通讨论卡（绝不复用项目主聊天）。
+// 若当前已绑定的讨论卡仍存在、归属同一项目且处于 active 状态则直接复用；
+// 若已被删除或归档，则在事务行锁保护下原子创建一张新普通讨论卡并回写 remote_channels.conversation_card_id。
+func (s *Store) EnsureChannelConversationCard(
+	ctx context.Context,
+	workspaceID, channelID, humanSourceID uuid.UUID,
+) (db.Card, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return db.Card{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var (
+		chName, chPlatform, chRole string
+		projectID                  uuid.UUID
+		convCardID                 uuid.NullUUID
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT name, platform, role, project_id, conversation_card_id
+		FROM remote_channels
+		WHERE workspace_id = $1 AND id = $2
+		FOR UPDATE
+	`, workspaceID, channelID).Scan(&chName, &chPlatform, &chRole, &projectID, &convCardID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, false, domain.ErrNotFound
+	}
+	if err != nil {
+		return db.Card{}, false, err
+	}
+	if chRole != string(domain.ChannelRoleMainChat) {
+		return db.Card{}, false, fmt.Errorf("%w: only main_chat channels own a conversation card", domain.ErrConflict)
+	}
+
+	if convCardID.Valid {
+		existing, ok, err := loadUsableChannelConversationCardTx(ctx, tx, workspaceID, projectID, convCardID.UUID)
+		if err != nil {
+			return db.Card{}, false, err
+		}
+		if ok {
+			if err := tx.Commit(ctx); err != nil {
+				return db.Card{}, false, err
+			}
+			return existing, false, nil
+		}
+	}
+
+	title := strings.TrimSpace(chName)
+	if title == "" {
+		title = defaultPlatformTitle(domain.ChannelPlatform(chPlatform))
+	}
+	desc := defaultChannelConversationDescription(domain.ChannelPlatform(chPlatform), title)
+	q := db.New(tx)
+	card, err := q.CreateCard(ctx, db.CreateCardParams{
+		ID:                    uuid.New(),
+		WorkspaceID:           workspaceID,
+		ProjectID:             projectID,
+		Kind:                  string(domain.CardKindDiscussion),
+		Title:                 title,
+		Description:           desc,
+		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
+		RequiredConfirmations: 1,
+		CreatedBySourceID:     humanSourceID,
+	})
+	if err != nil {
+		return db.Card{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE remote_channels
+		SET conversation_card_id = $3
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, channelID, card.ID); err != nil {
+		return db.Card{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Card{}, false, err
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return card, true, nil
+}
+
+func loadUsableChannelConversationCardTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, projectID, cardID uuid.UUID,
+) (db.Card, bool, error) {
+	q := db.New(tx)
+	card, err := q.GetCard(ctx, db.GetCardParams{
+		WorkspaceID: workspaceID,
+		ID:          cardID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Card{}, false, nil
+	}
+	if err != nil {
+		return db.Card{}, false, err
+	}
+	if card.ProjectID != projectID || card.Kind != string(domain.CardKindDiscussion) {
+		return db.Card{}, false, nil
+	}
+	if !card.DiscussionState.Valid || card.DiscussionState.String != string(domain.DiscussionStateActive) {
+		return db.Card{}, false, nil
+	}
+	// 兜底防止误绑定到项目主聊天。
+	var mainForProject uuid.NullUUID
+	if err := tx.QueryRow(ctx, `
+		SELECT main_discussion_id
+		FROM projects
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, projectID).Scan(&mainForProject); err != nil {
+		return db.Card{}, false, err
+	}
+	if mainForProject.Valid && mainForProject.UUID == card.ID {
+		return db.Card{}, false, nil
+	}
+	return card, true, nil
+}
+
+func defaultPlatformTitle(platform domain.ChannelPlatform) string {
+	switch platform {
+	case domain.ChannelPlatformWeixin:
+		return "微信"
+	case domain.ChannelPlatformWeCom:
+		return "企业微信"
+	case domain.ChannelPlatformFeishu:
+		return "飞书"
+	case domain.ChannelPlatformDingTalk:
+		return "钉钉"
+	case domain.ChannelPlatformQQ:
+		return "QQ"
+	case domain.ChannelPlatformTelegram:
+		return "Telegram"
+	default:
+		return "远程通道"
+	}
+}
+
+// defaultChannelConversationDescription 生成通道专属讨论卡的系统托管描述，
+// 同时向 Agent 明确该平台最适合的排版风格，减少外部 IM 出现乱码符号或复杂表格。
+func defaultChannelConversationDescription(platform domain.ChannelPlatform, title string) string {
+	var styleHint string
+	switch platform {
+	case domain.ChannelPlatformWeixin, domain.ChannelPlatformQQ:
+		styleHint = "回复格式要求：该渠道仅展示纯文本，请直接用自然流畅的纯文本分段作答，不要使用 Markdown 标题、表格、代码块围栏或加粗星号，链接直接写纯 URL 或自然文字。"
+	case domain.ChannelPlatformTelegram:
+		styleHint = "回复格式要求：支持简洁 Markdown（加粗、斜体、行内代码、代码块与链接），避免宽表格，保持消息精炼易读。"
+	case domain.ChannelPlatformFeishu:
+		styleHint = "回复格式要求：消息会以飞书卡片 Markdown 展示，可适度使用加粗、列表、代码块与链接，保持段落清晰。"
+	case domain.ChannelPlatformDingTalk, domain.ChannelPlatformWeCom:
+		styleHint = "回复格式要求：支持轻量 Markdown（标题、加粗、列表、行内代码与链接），避免复杂表格和深层嵌套语法。"
+	default:
+		styleHint = "回复格式要求：请保持表达简洁清晰，避免复杂排版。"
+	}
+	return fmt.Sprintf(
+		"远程通道「%s」的专属对话讨论卡（由系统托管，标题与描述随通道配置自动同步）。通过该通道发送的消息与子任务回调均在此卡片中独立沉淀，不会混入项目主聊天上下文。\n\n%s",
+		title,
+		styleHint,
+	)
+}
+
+// RemoteChannelConversationBinding 描述某张讨论卡被远程通道托管的绑定元信息。
+type RemoteChannelConversationBinding struct {
+	ChannelID   uuid.UUID
+	ChannelName string
+	Platform    domain.ChannelPlatform
+}
+
+type queryRower interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func isRemoteChannelConversationCard(
+	ctx context.Context,
+	q queryRower,
+	workspaceID, cardID uuid.UUID,
+) (bool, error) {
+	var exists bool
+	if err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM remote_channels
+			WHERE workspace_id = $1 AND conversation_card_id = $2
+		)
+	`, workspaceID, cardID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// GetRemoteChannelForConversationCard 查询某张卡片是否正作为某个远程通道的专属讨论卡被系统托管。
+func (s *Store) GetRemoteChannelForConversationCard(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+) (RemoteChannelConversationBinding, bool, error) {
+	var b RemoteChannelConversationBinding
+	var platformStr string
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, platform
+		FROM remote_channels
+		WHERE workspace_id = $1 AND conversation_card_id = $2
+		LIMIT 1
+	`, workspaceID, cardID).Scan(&b.ChannelID, &b.ChannelName, &platformStr)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RemoteChannelConversationBinding{}, false, nil
+	}
+	if err != nil {
+		return RemoteChannelConversationBinding{}, false, err
+	}
+	b.Platform = domain.ChannelPlatform(platformStr)
+	return b, true, nil
+}
+
+// ListRemoteChannelConversationBindings 批量返回工作区内全部“专属讨论卡 -> 通道绑定”映射，供列表接口 O(1) 装配。
+func (s *Store) ListRemoteChannelConversationBindings(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+) (map[uuid.UUID]RemoteChannelConversationBinding, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT conversation_card_id, id, name, platform
+		FROM remote_channels
+		WHERE workspace_id = $1 AND conversation_card_id IS NOT NULL
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]RemoteChannelConversationBinding)
+	for rows.Next() {
+		var cardID uuid.UUID
+		var b RemoteChannelConversationBinding
+		var platformStr string
+		if err := rows.Scan(&cardID, &b.ChannelID, &b.ChannelName, &platformStr); err != nil {
+			return nil, err
+		}
+		b.Platform = domain.ChannelPlatform(platformStr)
+		out[cardID] = b
+	}
+	return out, rows.Err()
+}
+
+// IngestRemoteChannelMessage 将已通过白名单与群策略校验的外部 IM 消息幂等写入该通道专属普通讨论卡。
 // 严格遵守：
-// 1. 仅 role=main_chat 允许入站建 Turn；scheduled_push 绝不污染主聊天 Session。
+// 1. 仅 role=main_chat 允许入站建 Turn；scheduled_push 绝不接收入站。
 // 2. 通过 remote_channel_inbound_dedup 唯一索引防重连重复建 Turn。
-// 3. 目标项目缺少主聊天时自动 EnsureMainDiscussion。
-// 4. 复用 SubmitSessionComment 写入 human comment + human Turn，并记录 event_id/turn_id 供出站防回环。
+// 3. 自动懒创建/复用通道专属普通讨论卡（绝不污染项目主聊天 main_discussion_id）；若专属卡已删或归档则自动重建。
+// 4. 复用 SubmitSessionComment 写入 human comment + human Turn，并记录 card_id/event_id/turn_id 供出站与 Web Push 抑制。
 func (s *Store) IngestRemoteChannelMessage(
 	ctx context.Context,
 	channel RemoteChannel,
@@ -869,7 +1130,7 @@ func (s *Store) IngestRemoteChannelMessage(
 		return ChannelInboundResult{}, fmt.Errorf("%w: external_message_id and content are required", domain.ErrConflict)
 	}
 
-	// 第一步：原子占位去重记录，防止并发重连重复写入主聊天。
+	// 第一步：原子占位去重记录，防止并发重连重复写入。
 	dedupID := uuid.New()
 	var insertedID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
@@ -911,15 +1172,15 @@ func (s *Store) IngestRemoteChannelMessage(
 	if err != nil {
 		return ChannelInboundResult{}, err
 	}
-	mainCard, _, err := s.EnsureMainDiscussion(ctx, channel.WorkspaceID, channel.ProjectID, humanSourceID)
+	convCard, _, err := s.EnsureChannelConversationCard(ctx, channel.WorkspaceID, channel.ID, humanSourceID)
 	if err != nil {
-		return ChannelInboundResult{}, fmt.Errorf("ensure main discussion: %w", err)
+		return ChannelInboundResult{}, fmt.Errorf("ensure channel conversation card: %w", err)
 	}
 
 	idemKey := fmt.Sprintf("remote-channel:%s:%s", channel.ID.String(), externalMessageID)
 	submitted, err := s.SubmitSessionComment(ctx, SubmitSessionCommentParams{
 		WorkspaceID:    channel.WorkspaceID,
-		CardID:         mainCard.ID,
+		CardID:         convCard.ID,
 		AuthorSourceID: humanSourceID,
 		Content:        content,
 		IdempotencyKey: idemKey,
@@ -933,19 +1194,19 @@ func (s *Store) IngestRemoteChannelMessage(
 		UPDATE remote_channel_inbound_dedup
 		SET card_id = $2, event_id = $3, turn_id = $4
 		WHERE id = $1
-	`, dedupID, mainCard.ID, submitted.EventID, submitted.TurnID); err != nil {
+	`, dedupID, convCard.ID, submitted.EventID, submitted.TurnID); err != nil {
 		return ChannelInboundResult{}, err
 	}
 	_, _ = s.pool.Exec(ctx, `
 		UPDATE remote_channels
-		SET last_inbound_at = now(), updated_at = now()
+		SET last_inbound_at = now()
 		WHERE workspace_id = $1 AND id = $2
 	`, channel.WorkspaceID, channel.ID)
 	committed = true
 
 	return ChannelInboundResult{
 		Reused:  submitted.Reused,
-		CardID:  mainCard.ID,
+		CardID:  convCard.ID,
 		EventID: submitted.EventID,
 		TurnID:  submitted.TurnID,
 	}, nil

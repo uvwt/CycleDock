@@ -2,6 +2,10 @@ package channels
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,10 +41,42 @@ type Manager struct {
 }
 
 type channelRunner struct {
-	channel store.RemoteChannel
-	adapter Adapter
-	cancel  context.CancelFunc
-	done    chan struct{}
+	channel    store.RemoteChannel
+	configHash string
+	adapter    Adapter
+	cancel     context.CancelFunc
+	done       chan struct{}
+}
+
+// channelConfigFingerprint 计算影响通道长连接运行的配置指纹（不含运行态游标与心跳时间戳）。
+// 用于避免心跳/出站/游标持久化触发 SyncAll 误判配置变更并重启正在长轮询的连接。
+func channelConfigFingerprint(ch store.RemoteChannel) string {
+	type snapshot struct {
+		Platform         domain.ChannelPlatform    `json:"platform"`
+		Role             domain.ChannelRole        `json:"role"`
+		Transport        domain.ChannelTransport   `json:"transport"`
+		Enabled          bool                      `json:"enabled"`
+		ProjectID        uuid.UUID                 `json:"project_id"`
+		TargetCardID     uuid.NullUUID             `json:"target_card_id"`
+		GroupPolicy      domain.ChannelGroupPolicy `json:"group_policy"`
+		AllowFrom        []string                  `json:"allow_from"`
+		Config           store.RemoteChannelConfig `json:"config"`
+		SecretCiphertext []byte                    `json:"secret_ciphertext"`
+	}
+	raw, _ := json.Marshal(snapshot{
+		Platform:         ch.Platform,
+		Role:             ch.Role,
+		Transport:        ch.Transport,
+		Enabled:          ch.Enabled,
+		ProjectID:        ch.ProjectID,
+		TargetCardID:     ch.TargetCardID,
+		GroupPolicy:      ch.GroupPolicy,
+		AllowFrom:        ch.AllowFrom,
+		Config:           ch.Config,
+		SecretCiphertext: ch.SecretCiphertext,
+	})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func NewManager(st *store.Store, logger *slog.Logger, publicURL string) *Manager {
@@ -177,7 +213,7 @@ func (m *Manager) SyncAll(ctx context.Context) error {
 	var toStop []uuid.UUID
 	for id, runner := range m.runners {
 		next, ok := wanted[id]
-		if !ok || !next.UpdatedAt.Equal(runner.channel.UpdatedAt) {
+		if !ok || channelConfigFingerprint(next) != runner.configHash {
 			toStop = append(toStop, id)
 		}
 	}
@@ -262,10 +298,11 @@ func (m *Manager) StartChannel(ch store.RemoteChannel) error {
 	}
 	runCtx, cancel := context.WithCancel(baseCtx)
 	r := &channelRunner{
-		channel: ch,
-		adapter: adapter,
-		cancel:  cancel,
-		done:    make(chan struct{}),
+		channel:    ch,
+		configHash: channelConfigFingerprint(ch),
+		adapter:    adapter,
+		cancel:     cancel,
+		done:       make(chan struct{}),
 	}
 	m.runners[ch.ID] = r
 	m.wg.Add(1)
@@ -283,26 +320,60 @@ func (m *Manager) superviseRunner(ctx context.Context, r *channelRunner) {
 	backoff := 2 * time.Second
 	const maxBackoff = 60 * time.Second
 
+	chLogger := m.logger.With(
+		"channel_id", ch.ID,
+		"platform", ch.Platform,
+		"channel_name", ch.Name,
+		"role", ch.Role,
+		"transport", ch.Transport,
+	)
+	chLogger.Info("remote channel runner started")
+
+	var statusMu sync.Mutex
+	var lastReportedStatus domain.ChannelRuntimeStatus
+	var lastReportedErr string
+
 	rt := AdapterRuntime{
+		Logger: chLogger,
 		OnInbound: func(inCtx context.Context, msg InboundMessage) error {
 			return m.handleInbound(inCtx, ch.WorkspaceID, ch.ID, msg)
 		},
 		OnStatus: func(stCtx context.Context, status domain.ChannelRuntimeStatus, lastErr string, heartbeat bool) {
+			statusMu.Lock()
+			changed := status != lastReportedStatus || lastErr != lastReportedErr
+			if changed {
+				lastReportedStatus = status
+				lastReportedErr = lastErr
+			}
+			statusMu.Unlock()
+			if changed {
+				if lastErr != "" {
+					chLogger.Warn("remote channel status changed with error", "status", status, "err", lastErr)
+				} else {
+					chLogger.Info("remote channel status changed", "status", status)
+				}
+			}
 			_ = m.store.UpdateRemoteChannelRuntime(stCtx, ch.WorkspaceID, ch.ID, status, lastErr, heartbeat)
 		},
 		SaveState: func(stCtx context.Context, mutate func(*store.RemoteChannelRuntimeState)) error {
 			latest, err := m.store.GetRemoteChannel(stCtx, ch.WorkspaceID, ch.ID)
 			if err != nil {
+				chLogger.Warn("load remote channel before saving runtime state failed", "err", err)
 				return err
 			}
 			state := latest.RuntimeState
 			mutate(&state)
-			return m.store.UpdateRemoteChannelRuntimeState(stCtx, ch.WorkspaceID, ch.ID, state)
+			if err := m.store.UpdateRemoteChannelRuntimeState(stCtx, ch.WorkspaceID, ch.ID, state); err != nil {
+				chLogger.Warn("save remote channel runtime state failed", "err", err)
+				return err
+			}
+			return nil
 		},
 	}
 
 	for {
 		if ctx.Err() != nil {
+			chLogger.Info("remote channel runner stopped")
 			_ = m.store.UpdateRemoteChannelRuntime(context.Background(), ch.WorkspaceID, ch.ID, domain.ChannelRuntimeDisconnected, "", false)
 			return
 		}
@@ -310,19 +381,22 @@ func (m *Manager) superviseRunner(ctx context.Context, r *channelRunner) {
 		startedAt := time.Now()
 		err := r.adapter.Run(ctx, rt)
 		if ctx.Err() != nil {
+			chLogger.Info("remote channel runner stopped")
 			_ = m.store.UpdateRemoteChannelRuntime(context.Background(), ch.WorkspaceID, ch.ID, domain.ChannelRuntimeDisconnected, "", false)
 			return
 		}
 		if err != nil {
-			m.logger.Warn("remote channel disconnected, will retry",
-				"channel_id", ch.ID, "platform", ch.Platform, "backoff", backoff.String(), "err", err)
+			chLogger.Warn("remote channel disconnected, will retry", "backoff", backoff.String(), "err", err)
 			_ = m.store.UpdateRemoteChannelRuntime(ctx, ch.WorkspaceID, ch.ID, domain.ChannelRuntimeError, err.Error(), false)
+		} else {
+			chLogger.Info("remote channel adapter run exited cleanly, will reconnect", "backoff", backoff.String())
 		}
 		if time.Since(startedAt) > 30*time.Second {
 			backoff = 2 * time.Second
 		}
 		select {
 		case <-ctx.Done():
+			chLogger.Info("remote channel runner stopped during backoff")
 			_ = m.store.UpdateRemoteChannelRuntime(context.Background(), ch.WorkspaceID, ch.ID, domain.ChannelRuntimeDisconnected, "", false)
 			return
 		case <-time.After(backoff):
@@ -337,11 +411,30 @@ func (m *Manager) superviseRunner(ctx context.Context, r *channelRunner) {
 func (m *Manager) handleInbound(ctx context.Context, workspaceID, channelID uuid.UUID, msg InboundMessage) error {
 	latest, err := m.store.GetRemoteChannel(ctx, workspaceID, channelID)
 	if err != nil {
+		m.logger.Warn("load remote channel for inbound message failed",
+			"channel_id", channelID, "err", err)
 		return err
 	}
-	if !latest.Enabled || !PolicyAllows(latest, msg) {
+	chLogger := m.logger.With(
+		"channel_id", channelID,
+		"platform", latest.Platform,
+		"channel_name", latest.Name,
+		"chat_type", msg.ChatType,
+		"chat_id_hint", MaskRemoteIdentifier(msg.ChatID),
+		"sender_hint", MaskRemoteIdentifier(msg.SenderID),
+		"external_msg_id", msg.ExternalMessageID,
+		"content_len", len([]rune(strings.TrimSpace(msg.Content))),
+	)
+	if !latest.Enabled {
+		chLogger.Debug("ignore inbound message because remote channel is disabled")
 		return nil
 	}
+	if !PolicyAllows(latest, msg) {
+		chLogger.Info("remote channel inbound message ignored by policy",
+			"role", latest.Role, "group_policy", latest.GroupPolicy, "mentioned", msg.Mentioned, "allow_from_count", len(latest.AllowFrom))
+		return nil
+	}
+	chLogger.Info("remote channel inbound message received")
 	// 收到首条合法入站消息且未配置默认推送目标时，自动记忆 target_chat_id（及飞书/Telegram 等会话类型/Thread），
 	// 这样无论扫码建卡还是 Telegram 单填 Bot Token，都不需要用户手填 Chat ID / OpenID。
 	chatID := strings.TrimSpace(msg.ChatID)
@@ -366,14 +459,26 @@ func (m *Manager) handleInbound(ctx context.Context, workspaceID, channelID uuid
 			},
 		); saveErr == nil {
 			latest = updated
+			m.mu.Lock()
+			if r, ok := m.runners[channelID]; ok {
+				r.channel = updated
+				r.configHash = channelConfigFingerprint(updated)
+			}
+			m.mu.Unlock()
+			chLogger.Info("auto-bound remote channel target_chat_id from first inbound message")
+		} else {
+			chLogger.Warn("auto-bind remote channel target_chat_id failed", "err", saveErr)
 		}
 	}
-	_, err = m.store.IngestRemoteChannelMessage(ctx, latest, msg.ExternalMessageID, msg.SenderID, msg.ChatID, msg.Content)
+	res, err := m.store.IngestRemoteChannelMessage(ctx, latest, msg.ExternalMessageID, msg.SenderID, msg.ChatID, msg.Content)
 	if err != nil {
-		m.logger.Warn("ingest remote channel inbound message failed",
-			"channel_id", channelID, "platform", latest.Platform, "err", err)
+		chLogger.Warn("ingest remote channel inbound message failed", "err", err)
+		_ = m.store.UpdateRemoteChannelRuntime(ctx, workspaceID, channelID, latest.RuntimeStatus, "入站消息处理失败："+err.Error(), false)
+		return err
 	}
-	return err
+	chLogger.Info("remote channel inbound message ingested",
+		"card_id", res.CardID, "turn_id", res.TurnID, "reused", res.Reused)
+	return nil
 }
 
 // SendToChannel 通过已运行或按需构造的适配器向指定通道发送一条出站消息，并更新健康状态。
@@ -428,7 +533,9 @@ func (m *Manager) SendToChannel(ctx context.Context, ch store.RemoteChannel, msg
 
 	err := adapter.Send(ctx, msg)
 	if err != nil {
-		_ = m.store.TouchRemoteChannelOutbound(ctx, ch.WorkspaceID, ch.ID, err.Error())
+		if !errors.Is(err, ErrTargetNotBound) {
+			_ = m.store.TouchRemoteChannelOutbound(ctx, ch.WorkspaceID, ch.ID, err.Error())
+		}
 		return err
 	}
 	_ = m.store.TouchRemoteChannelOutbound(ctx, ch.WorkspaceID, ch.ID, "")

@@ -33,6 +33,7 @@ type cardNotificationFacts struct {
 	MessageTurnSource         string
 	MessageTurnIdempotencyKey string
 	MessageTurnContent        string
+	FromRemoteChannel         bool
 	ReviewEventSeq            int64
 	ReviewAttemptID           uuid.NullUUID
 	SupervisorID              uuid.NullUUID
@@ -94,6 +95,15 @@ SELECT
   COALESCE(mt.source, ''),
   COALESCE(mt.idempotency_key, ''),
   COALESCE(mt.content, ''),
+  EXISTS (
+    SELECT 1
+    FROM remote_channel_inbound_dedup rcd
+    JOIN remote_channels rc
+      ON rc.id = rcd.channel_id AND rc.workspace_id = c.workspace_id
+    WHERE ma.turn_id IS NOT NULL
+      AND rcd.turn_id = ma.turn_id
+      AND rc.enabled = true
+  ) AS from_remote_channel,
   COALESCE(rv.sequence, 0),
   rv.attempt_id,
   sup.id,
@@ -196,6 +206,7 @@ LEFT JOIN LATERAL (
 			&facts.MessageTurnSource,
 			&facts.MessageTurnIdempotencyKey,
 			&facts.MessageTurnContent,
+			&facts.FromRemoteChannel,
 			&facts.ReviewEventSeq,
 			&facts.ReviewAttemptID,
 			&facts.SupervisorID,
@@ -212,14 +223,23 @@ LEFT JOIN LATERAL (
 	return rows.Err()
 }
 
-// isSupervisorNotificationSuppressed 执行监督回调去重的 3 条核心收口规则：
-// 1. 存在待工具审批或选择题（人工介入请求）时，任何卡片都不抑制推送；
-// 2. 子任务（Todo / Ongoing）进入 Review 或触发失败/超时终态回调，且活跃监督讨论未静音并已成功创建对应回调 Turn 时，
+// isSupervisorNotificationSuppressed 执行 Web Push / 桌面通知的静默收口规则：
+// 1. 存在待工具审批（tool_approval）时，任何卡片都不抑制推送，确保人工审批不会漏看；
+// 2. 源自已启用远程通道入站 Turn 的回复（无论普通文本还是选择题）均已由对应 IM 通道回推，
+//    不再重复弹出 Web Push（但上述 tool_approval 仍穿透）；
+// 3. 非远程通道消息存在选择题（choice）时不抑制推送；
+// 4. 子任务（Todo / Ongoing）进入 Review 或触发失败/超时终态回调，且活跃监督讨论未静音并已成功创建对应回调 Turn 时，
 //    子任务本次终态更新静默收口（防漏兜底：无活跃监督讨论或监督讨论已静音时照常推送；进 Review 后用户再追问产生的后续回复照常推送）；
-// 3. 讨论卡处理“非熔断自动自愈重试”失败回调且未发出 choice / tool_approval 时静默收口；
+// 5. 讨论卡处理“非熔断自动自愈重试”失败回调且未发出 choice / tool_approval 时静默收口；
 //    Review 完成汇总、熔断终态汇报或普通对话/定时消息照常推送。
 func isSupervisorNotificationSuppressed(f cardNotificationFacts) bool {
-	if f.PendingApprovalCount > 0 || f.EventType == "tool_approval" || f.MessageType == "choice" {
+	if f.PendingApprovalCount > 0 || f.EventType == "tool_approval" {
+		return false
+	}
+	if f.FromRemoteChannel {
+		return true
+	}
+	if f.MessageType == "choice" {
 		return false
 	}
 

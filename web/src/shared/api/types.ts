@@ -52,6 +52,10 @@ export type Card = {
   pinned_at?: string;
   notifications_muted?: boolean;
   preferred_model_route_id?: string | null;
+  /** 若该讨论卡由某个远程通道自动创建并托管，返回关联通道信息；标题与描述只读。 */
+  managed_by_remote_channel_id?: string;
+  managed_by_remote_channel_name?: string;
+  managed_by_remote_channel_platform?: string;
   created_at: string;
   updated_at: string;
 };
@@ -654,6 +658,7 @@ export type RemoteChannel = {
   enabled: boolean;
   project_id: string;
   target_card_id?: string | null;
+  conversation_card_id?: string | null;
   push_filter: RemoteChannelPushFilter;
   mirror_web_messages: boolean;
   group_policy: RemoteChannelGroupPolicy;
