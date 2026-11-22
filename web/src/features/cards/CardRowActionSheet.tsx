@@ -1,6 +1,7 @@
 import {
   Bell,
   BellOff,
+  CheckCircle2,
   Mail,
   MailOpen,
   Pencil,
@@ -11,6 +12,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { Card } from "../../shared/api/types";
 import { isCardUnread } from "../../shared/lib/card-read-state";
+import { isReviewTodoCard } from "../../shared/lib/review-acceptance";
 import {
   Sheet as UISheet,
   SheetContent,
@@ -24,10 +26,12 @@ export function CardRowActionSheet({
   onOpenChange,
   preserve = false,
   isActive = false,
+  completePending = false,
   readPending = false,
   pinPending = false,
   mutePending = false,
   deletePending = false,
+  onComplete,
   onToggleRead,
   onTogglePin,
   onToggleMute,
@@ -39,10 +43,12 @@ export function CardRowActionSheet({
   onOpenChange: (open: boolean) => void;
   preserve?: boolean;
   isActive?: boolean;
+  completePending?: boolean;
   readPending?: boolean;
   pinPending?: boolean;
   mutePending?: boolean;
   deletePending?: boolean;
+  onComplete?: (card: Card) => void;
   onToggleRead: (card: Card, nextUnread: boolean) => void;
   onTogglePin?: (card: Card) => void;
   onToggleMute: (card: Card) => void;
@@ -54,6 +60,7 @@ export function CardRowActionSheet({
   if (!card) return null;
 
   const unread = isCardUnread(card, isActive);
+  const canComplete = !preserve && isReviewTodoCard(card) && Boolean(onComplete);
   const cardKindLabel =
     card.kind === "discussion"
       ? t("讨论")
@@ -75,6 +82,24 @@ export function CardRowActionSheet({
           </SheetTitle>
         </SheetHeader>
         <div className="flex flex-col gap-1 p-2">
+          {canComplete && onComplete && (
+            <>
+              <button
+                type="button"
+                disabled={completePending}
+                onClick={() => {
+                  onOpenChange(false);
+                  onComplete(card);
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-emerald-600 transition active:bg-emerald-500/10 disabled:opacity-50 dark:text-emerald-400"
+              >
+                <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                <span>{t("验收完成")}</span>
+              </button>
+              <div className="my-1 h-px bg-line/60" />
+            </>
+          )}
+
           <button
             type="button"
             disabled={readPending}

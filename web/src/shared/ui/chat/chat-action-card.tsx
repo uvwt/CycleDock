@@ -15,6 +15,8 @@ import { cn } from "@/shared/lib/utils";
 import { api, APIError } from "@/shared/api/client";
 import { keys } from "@/app/query";
 import type { Card, CardDetail } from "@/shared/api/types";
+import { isReviewTodoCard } from "@/shared/lib/review-acceptance";
+import { useCompleteReviewCard } from "@/shared/lib/useCompleteReviewCard";
 import { CardStatusDot, getCardVisualStatus } from "@/shared/ui/CardStatusDot";
 
 const chatCardVariants = cva(
@@ -69,6 +71,7 @@ export const ChatActionCard = React.forwardRef<
   ) => {
     const { t } = useTranslation();
     const navigate = useNavigate();
+    const completeReview = useCompleteReviewCard();
 
     const {
       data: cardDetail,
@@ -198,7 +201,7 @@ export const ChatActionCard = React.forwardRef<
       return (
         <span
           className={cn(
-            "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border leading-none shrink-0",
+            "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium border leading-none whitespace-nowrap shrink-0",
             s.color,
           )}
         >
@@ -263,6 +266,7 @@ export const ChatActionCard = React.forwardRef<
     }
 
     const title = card?.title || fallbackTitle || cardId;
+    const canCompleteReview = isReviewTodoCard(card);
     const kindLabel =
       card?.kind === "todo"
         ? t("任务")
@@ -300,10 +304,10 @@ export const ChatActionCard = React.forwardRef<
           {/* 中间信息区 */}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h4 className="truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors">
+              <h4 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors sm:flex-initial">
                 {title}
               </h4>
-              <div className="flex items-center gap-1.5 shrink-0 ml-auto sm:ml-0">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {statusBadge}
                 {card && (
                   <CardStatusDot
@@ -328,8 +332,41 @@ export const ChatActionCard = React.forwardRef<
           </div>
 
           {/* 右侧微交互跳转指示 */}
-          <div className="shrink-0 pt-0.5 text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
-            <ArrowUpRight className="size-4" />
+          <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+            {canCompleteReview && card && (
+              <button
+                type="button"
+                data-chat-card-complete="true"
+                disabled={completeReview.isPending}
+                title={t("验收完成")}
+                aria-label={t("验收完成")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (completeReview.isPending) return;
+                  completeReview.mutate({
+                    id: card.id,
+                    projectID: card.project_id || projectId,
+                  });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.stopPropagation();
+                  }
+                }}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium leading-none whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/20 active:scale-95 disabled:opacity-60 dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
+              >
+                {completeReview.isPending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="size-3" />
+                )}
+                <span>{t("完成")}</span>
+              </button>
+            )}
+            <div className="text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
+              <ArrowUpRight className="size-4" />
+            </div>
           </div>
         </div>
       </div>

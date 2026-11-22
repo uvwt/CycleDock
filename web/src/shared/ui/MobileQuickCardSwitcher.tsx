@@ -4,8 +4,11 @@ import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BellOff,
+  Check,
   Layers,
+  ListChecks,
   ListTodo,
+  Loader2,
   MessageSquare,
   PlayCircle,
   Search,
@@ -35,6 +38,17 @@ import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
 import { useCardNotificationMute } from "../lib/useCardNotificationMute";
 import { activeCardAutoReadSuppression } from "../lib/card-read-state";
 import { useCardReadState } from "../lib/useCardReadState";
+import {
+  isAllReviewSelected,
+  isReviewTodoCard,
+  reconcileReviewSelection,
+  toggleReviewSelection,
+  toggleSelectAllReview,
+} from "../lib/review-acceptance";
+import {
+  useBatchCompleteReviewCards,
+  useCompleteReviewCard,
+} from "../lib/useCompleteReviewCard";
 import { CardRowActionSheet } from "../../features/cards/CardRowActionSheet";
 import { buildCardSwipeActions } from "../../features/cards/card-swipe-actions";
 import { ConfirmDialog } from "./components";
@@ -218,6 +232,10 @@ export function QuickCardSwitcherModal({
 
   const [selectedTab, setSelectedTab] = useState<SwitcherTab | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [batchProjectID, setBatchProjectID] = useState<string | null>(null);
+  const [selectedReviewIDs, setSelectedReviewIDs] = useState<Set<string>>(
+    () => new Set(),
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const defaultTab = useMemo((): SwitcherTab => {
@@ -243,17 +261,32 @@ export function QuickCardSwitcherModal({
   }, [activeCardID, cards, focusCards.length]);
 
   const activeTab = selectedTab || defaultTab;
-  const setActiveTab = setSelectedTab;
+
+  const exitBatchMode = useCallback(() => {
+    setBatchProjectID(null);
+    setSelectedReviewIDs(new Set());
+  }, []);
+
+  const handleTabChange = useCallback(
+    (tab: SwitcherTab) => {
+      setSelectedTab(tab);
+      if (tab !== "review") {
+        exitBatchMode();
+      }
+    },
+    [exitBatchMode],
+  );
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen) {
         setSelectedTab(null);
         setSearchQuery("");
+        exitBatchMode();
       }
       onOpenChange(nextOpen);
     },
-    [onOpenChange],
+    [exitBatchMode, onOpenChange],
   );
 
   useEffect(() => {
@@ -327,6 +360,8 @@ export function QuickCardSwitcherModal({
 
   const muteMutation = useCardNotificationMute();
   const readStateMutation = useCardReadState();
+  const completeReviewMutation = useCompleteReviewCard();
+  const batchComplete = useBatchCompleteReviewCards(projectID);
   const sheetTarget = useMemo(
     () => cards.find((item) => item.id === sheetTargetID) || null,
     [cards, sheetTargetID],
@@ -387,6 +422,42 @@ export function QuickCardSwitcherModal({
     ongoingCards,
     doneCards,
   ]);
+
+  const visibleReviewIDs = useMemo(
+    () =>
+      activeTab === "review"
+        ? currentList.filter((card) => isReviewTodoCard(card)).map((card) => card.id)
+        : [],
+    [activeTab, currentList],
+  );
+  // 仅在「待验收」Tab 且存在待验收卡片时保持批量验收态，切换 Tab 或列表清空后自动退出
+  const isBatchMode =
+    Boolean(projectID) &&
+    batchProjectID === projectID &&
+    activeTab === "review" &&
+    reviewCards.length > 0;
+  const effectiveSelectedIDs = useMemo(
+    () =>
+      isBatchMode
+        ? reconcileReviewSelection(selectedReviewIDs, visibleReviewIDs)
+        : new Set<string>(),
+    [isBatchMode, selectedReviewIDs, visibleReviewIDs],
+  );
+  const allVisibleReviewSelected = isAllReviewSelected(
+    effectiveSelectedIDs,
+    visibleReviewIDs,
+  );
+
+  const handleBatchSubmit = useCallback(async () => {
+    const ids = Array.from(effectiveSelectedIDs);
+    if (ids.length === 0) return;
+    const result = await batchComplete.completeBatch(ids);
+    if (result.failedIDs.length === 0) {
+      exitBatchMode();
+    } else {
+      setSelectedReviewIDs(new Set(result.failedIDs));
+    }
+  }, [batchComplete, effectiveSelectedIDs, exitBatchMode]);
 
   const tabFocusMeta = useMemo(() => {
     const summarize = (list: Card[]) => {
@@ -618,34 +689,58 @@ export function QuickCardSwitcherModal({
           </div>
 
           {/* 搜索过滤框 */}
-          <div className="relative mt-2.5">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && currentList.length > 0) {
-                  e.preventDefault();
-                  handleSelectCard(currentList[0]);
-                }
-              }}
-              placeholder={t("搜索卡片标题或描述...")}
-              aria-label={t("搜索卡片标题或描述...")}
-              className="h-8 w-full rounded-lg border border-line/80 bg-canvas/80 pr-8 pl-8 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:bg-surface focus:ring-2 focus:ring-primary/15 focus:outline-none"
-            />
-            {searchQuery && (
+          <div className="mt-2.5 flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && currentList.length > 0 && !isBatchMode) {
+                    e.preventDefault();
+                    handleSelectCard(currentList[0]);
+                  }
+                }}
+                placeholder={t("搜索卡片标题或描述...")}
+                aria-label={t("搜索卡片标题或描述...")}
+                className="h-8 w-full rounded-lg border border-line/80 bg-canvas/80 pr-8 pl-8 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:bg-surface focus:ring-2 focus:ring-primary/15 focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  aria-label={t("清空搜索")}
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchInputRef.current?.focus();
+                  }}
+                  className="absolute top-1/2 right-2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
+            {activeTab === "review" && reviewCards.length > 0 && (
               <button
                 type="button"
-                aria-label={t("清空搜索")}
                 onClick={() => {
-                  setSearchQuery("");
-                  searchInputRef.current?.focus();
+                  if (isBatchMode) {
+                    exitBatchMode();
+                  } else {
+                    setSelectedReviewIDs(new Set());
+                    setBatchProjectID(projectID);
+                  }
                 }}
-                className="absolute top-1/2 right-2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                className={cn(
+                  "inline-flex h-8 shrink-0 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
+                  isBatchMode
+                    ? "border-emerald-500/40 bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+                    : "border-line/80 bg-surface text-muted-foreground hover:border-emerald-500/40 hover:bg-emerald-500/8 hover:text-emerald-700 dark:hover:text-emerald-300",
+                )}
               >
-                <X className="size-3.5" />
+                <ListChecks className="size-3.5" />
+                <span>{isBatchMode ? t("取消") : t("批量验收")}</span>
               </button>
             )}
           </div>
@@ -660,7 +755,7 @@ export function QuickCardSwitcherModal({
                   key={tab.id}
                   type="button"
                   data-state={isActive ? "active" : "inactive"}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => handleTabChange(tab.id)}
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition",
                     isActive
@@ -743,6 +838,15 @@ export function QuickCardSwitcherModal({
                   isMain,
                   isActive,
                   t,
+                  onComplete:
+                    !isMain && isReviewTodoCard(card)
+                      ? () => {
+                          completeReviewMutation.mutate({
+                            id: card.id,
+                            projectID: card.project_id,
+                          });
+                        }
+                      : undefined,
                   onToggleRead: (nextUnread) => {
                     readStateMutation.mutate({
                       id: card.id,
@@ -772,33 +876,68 @@ export function QuickCardSwitcherModal({
                       }
                     : undefined,
                 });
+                const isSelectedInBatch =
+                  isBatchMode && effectiveSelectedIDs.has(card.id);
 
                 return (
                   <SwipeableRow
                     key={card.id}
                     id={card.id}
                     actions={swipeActions}
-                    onLongPress={() => setSheetTargetID(card.id)}
+                    disabled={isBatchMode}
+                    onLongPress={
+                      isBatchMode ? undefined : () => setSheetTargetID(card.id)
+                    }
                     className="rounded-xl"
                   >
                     <div
-                      role="button"
+                      role={isBatchMode ? "checkbox" : "button"}
+                      aria-checked={isBatchMode ? isSelectedInBatch : undefined}
                       tabIndex={0}
-                      onClick={() => handleSelectCard(card)}
+                      onClick={() => {
+                        if (isBatchMode) {
+                          setSelectedReviewIDs((prev) =>
+                            toggleReviewSelection(prev, card.id),
+                          );
+                          return;
+                        }
+                        handleSelectCard(card);
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          handleSelectCard(card);
+                          if (isBatchMode) {
+                            setSelectedReviewIDs((prev) =>
+                              toggleReviewSelection(prev, card.id),
+                            );
+                          } else {
+                            handleSelectCard(card);
+                          }
                         }
                       }}
                       className={cn(
                         "group relative flex w-full select-none items-center justify-between rounded-xl border px-3.5 py-2.5 text-left transition active:scale-[0.99] cursor-pointer",
-                        isActive
-                          ? "border-primary/40 bg-primary/5 text-foreground ring-1 ring-primary/25 shadow-xs"
-                          : "border-line/60 bg-canvas/70 hover:border-line hover:bg-muted/70",
+                        isSelectedInBatch
+                          ? "border-emerald-500/50 bg-emerald-500/8 text-foreground ring-1 ring-emerald-500/25 shadow-xs"
+                          : isActive
+                            ? "border-primary/40 bg-primary/5 text-foreground ring-1 ring-primary/25 shadow-xs"
+                            : "border-line/60 bg-canvas/70 hover:border-line hover:bg-muted/70",
                       )}
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        {isBatchMode && (
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "grid size-4.5 shrink-0 place-items-center rounded-md border transition-colors",
+                              isSelectedInBatch
+                                ? "border-emerald-600 bg-emerald-600 text-white"
+                                : "border-line bg-surface text-transparent",
+                            )}
+                          >
+                            <Check className="size-3 stroke-[2.5]" />
+                          </span>
+                        )}
                         <div className="flex shrink-0 items-center gap-1.5">
                           {visualStatus !== "idle" ? (
                             <CardStatusDot
@@ -859,6 +998,26 @@ export function QuickCardSwitcherModal({
 
                       {/* 状态徽标与当前标记 */}
                       <div className="ml-2 flex shrink-0 items-center gap-1.5">
+                        {!isBatchMode && isReviewTodoCard(card) && (
+                          <button
+                            type="button"
+                            disabled={completeReviewMutation.isPending}
+                            title={t("验收完成")}
+                            aria-label={t("验收完成")}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              completeReviewMutation.mutate({
+                                id: card.id,
+                                projectID: card.project_id,
+                              });
+                            }}
+                            className="hidden [@media(hover:hover)]:group-hover:inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-300"
+                          >
+                            <CheckCircle2 className="size-3" />
+                            <span>{t("完成")}</span>
+                          </button>
+                        )}
                         {focusReason === "approval" && (
                           <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-700 dark:text-orange-300">
                             {t("待确认")}
@@ -918,6 +1077,69 @@ export function QuickCardSwitcherModal({
           )}
         </div>
 
+        {isBatchMode && (
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-divider bg-surface/95 px-4 py-2.5 pb-[calc(env(safe-area-inset-bottom,0px)+0.625rem)] backdrop-blur-xs">
+            <button
+              type="button"
+              disabled={batchComplete.isPending || visibleReviewIDs.length === 0}
+              onClick={() =>
+                setSelectedReviewIDs((prev) =>
+                  toggleSelectAllReview(
+                    reconcileReviewSelection(prev, visibleReviewIDs),
+                    visibleReviewIDs,
+                  ),
+                )
+              }
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "grid size-4 place-items-center rounded border transition-colors",
+                  allVisibleReviewSelected
+                    ? "border-emerald-600 bg-emerald-600 text-white"
+                    : "border-line bg-canvas text-transparent",
+                )}
+              >
+                <Check className="size-3 stroke-[2.5]" />
+              </span>
+              <span>
+                {allVisibleReviewSelected ? t("取消全选") : t("全选")}
+              </span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={batchComplete.isPending}
+                onClick={exitBatchMode}
+                className="inline-flex h-8 items-center rounded-lg border border-line bg-surface px-3 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+              >
+                {t("取消")}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  batchComplete.isPending || effectiveSelectedIDs.size === 0
+                }
+                onClick={() => void handleBatchSubmit()}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-medium text-white shadow-xs transition hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-50"
+              >
+                {batchComplete.isPending ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="size-3.5" />
+                )}
+                <span>
+                  {t("完成所选 ({{count}})", {
+                    count: effectiveSelectedIDs.size,
+                  })}
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <ConfirmDialog
           open={Boolean(deleteTarget)}
           onOpenChange={(isOpen) => !isOpen && setDeleteTarget(null)}
@@ -944,10 +1166,17 @@ export function QuickCardSwitcherModal({
           onOpenChange={(isOpen) => !isOpen && setSheetTargetID(null)}
           preserve={Boolean(sheetTarget && sheetTarget.id === mainDiscussionID)}
           isActive={Boolean(sheetTarget && sheetTarget.id === activeCardID)}
+          completePending={completeReviewMutation.isPending}
           readPending={readStateMutation.isPending}
           pinPending={pinMutation.isPending}
           mutePending={muteMutation.isPending}
           deletePending={deleteMutation.isPending}
+          onComplete={(target) => {
+            completeReviewMutation.mutate({
+              id: target.id,
+              projectID: target.project_id,
+            });
+          }}
           onToggleRead={(target, nextUnread) => {
             readStateMutation.mutate({
               id: target.id,

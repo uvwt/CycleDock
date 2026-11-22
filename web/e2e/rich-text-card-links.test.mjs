@@ -226,3 +226,48 @@ test("RichText SSR 渲染：卡片独立渲染为块级组件，消除 <p> 嵌�
   assert.match(html, /保持原样/);
   assert.doesNotMatch(html, /代码内示例[\s\S]*role="button"/);
 });
+
+test("ChatActionCard SSR 渲染：仅 review 状态的 Todo 卡片显示右上角快捷完成按钮", () => {
+  queryClient.setQueryData(["card", "card-review"], {
+    card: {
+      id: "card-review",
+      project_id: "proj-1",
+      kind: "todo",
+      title: "待验收卡片示例",
+      description: "验证完成后可直接在聊天内点击完成",
+      todo_state: "review",
+      created_at: "2026-04-17T00:00:00Z",
+      updated_at: "2026-04-17T00:00:00Z",
+    },
+  });
+  queryClient.setQueryData(["card", "card-done"], {
+    card: {
+      id: "card-done",
+      project_id: "proj-1",
+      kind: "todo",
+      title: "已完成卡片示例",
+      description: "已经完成不应再显示完成按钮",
+      todo_state: "done",
+      created_at: "2026-04-17T00:00:00Z",
+      updated_at: "2026-04-17T00:00:00Z",
+    },
+  });
+
+  const reviewHtml = renderRichText(
+    "[待验收卡片示例](cycledock://card/card-review)",
+  );
+  assert.match(reviewHtml, /data-chat-card-complete="true"/);
+  assert.match(reviewHtml, /待确认/);
+  assert.match(reviewHtml, /完成/);
+
+  const doneHtml = renderRichText(
+    "[已完成卡片示例](cycledock://card/card-done)",
+  );
+  assert.doesNotMatch(doneHtml, /data-chat-card-complete="true"/);
+  assert.match(doneHtml, /已完成/);
+
+  const workingHtml = renderRichText(
+    "[修复登录超时](cycledock://card/card-1)",
+  );
+  assert.doesNotMatch(workingHtml, /data-chat-card-complete="true"/);
+});
