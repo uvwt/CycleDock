@@ -5,6 +5,7 @@ import type {
   APICredentialInput,
   AttachmentMeta,
   AuthorizedAIClient,
+  CommentQuote,
   DeviceTarget,
   Card,
   CardDetail,
@@ -307,6 +308,7 @@ export const api = {
     device_target?: DeviceTarget | null,
     preferred_model_route_id?: string | null,
     attachment_ids?: string[],
+    quote?: CommentQuote | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/comments`,
@@ -320,6 +322,7 @@ export const api = {
           attachment_ids && attachment_ids.length > 0
             ? attachment_ids
             : undefined,
+        quote: quote ?? undefined,
       },
       idempotencyKey || true,
     ),
@@ -331,6 +334,7 @@ export const api = {
     device_target?: DeviceTarget | null,
     preferred_model_route_id?: string | null,
     attachment_ids?: string[],
+    quote?: CommentQuote | null,
   ) =>
     request<{ event_id: string; turn_id: string }>(
       `/cards/${id}/reply`,
@@ -345,6 +349,7 @@ export const api = {
           attachment_ids && attachment_ids.length > 0
             ? attachment_ids
             : undefined,
+        quote: quote ?? undefined,
       },
       true,
     ),

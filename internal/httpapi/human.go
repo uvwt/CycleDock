@@ -1363,23 +1363,55 @@ func (api *API) setCardModelRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cardToResponse(card))
 }
 
+type commentQuoteRequest struct {
+	EventID string `json:"event_id"`
+	Sender  string `json:"sender"`
+	Text    string `json:"text"`
+}
+
+func parseCommentQuote(w http.ResponseWriter, raw *commentQuoteRequest) (*store.CommentQuote, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	eventID, err := uuid.Parse(strings.TrimSpace(raw.EventID))
+	if err != nil || eventID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "invalid_quote", "quote event_id must be a valid UUID")
+		return nil, false
+	}
+	text := strings.TrimSpace(raw.Text)
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "invalid_quote", "quote text is required")
+		return nil, false
+	}
+	return &store.CommentQuote{
+		EventID: eventID,
+		Sender:  strings.TrimSpace(raw.Sender),
+		Text:    raw.Text,
+	}, true
+}
+
 func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 	cardID, ok := parseUUIDParam(w, r, "cardID")
 	if !ok {
 		return
 	}
 	var request struct {
-		Content               string              `json:"content"`
-		AttachmentIDs         []string            `json:"attachment_ids,omitempty"`
-		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
-		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
-		DispatchMode          string              `json:"dispatch_mode"`
+		Content               string               `json:"content"`
+		AttachmentIDs         []string             `json:"attachment_ids,omitempty"`
+		Quote                 *commentQuoteRequest `json:"quote,omitempty"`
+		DeviceTarget          *store.DeviceTarget  `json:"device_target,omitempty"`
+		PreferredModelRouteID *string              `json:"preferred_model_route_id,omitempty"`
+		DispatchMode          string               `json:"dispatch_mode"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
 	request.Content = strings.TrimSpace(request.Content)
 	attachmentIDs, ok := parseAttachmentIDs(w, request.AttachmentIDs)
+	if !ok {
+		return
+	}
+	quote, ok := parseCommentQuote(w, request.Quote)
 	if !ok {
 		return
 	}
@@ -1417,6 +1449,7 @@ func (api *API) submitComment(w http.ResponseWriter, r *http.Request) {
 		AuthorSourceID:        identity.SourceID,
 		Content:               request.Content,
 		AttachmentIDs:         attachmentIDs,
+		Quote:                 quote,
 		IdempotencyKey:        idempotencyKey,
 		DeviceTarget:          request.DeviceTarget,
 		PreferredModelRouteID: preferredRouteID,
@@ -1529,18 +1562,23 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Content               string              `json:"content"`
-		AttachmentIDs         []string            `json:"attachment_ids,omitempty"`
-		DeviceTarget          *store.DeviceTarget `json:"device_target,omitempty"`
-		PreferredModelRouteID *string             `json:"preferred_model_route_id,omitempty"`
-		AttemptID             string              `json:"attempt_id"`
-		MessageID             string              `json:"message_id,omitempty"`
+		Content               string               `json:"content"`
+		AttachmentIDs         []string             `json:"attachment_ids,omitempty"`
+		Quote                 *commentQuoteRequest `json:"quote,omitempty"`
+		DeviceTarget          *store.DeviceTarget  `json:"device_target,omitempty"`
+		PreferredModelRouteID *string              `json:"preferred_model_route_id,omitempty"`
+		AttemptID             string               `json:"attempt_id"`
+		MessageID             string               `json:"message_id,omitempty"`
 	}
 	if !decodeJSON(w, r, &request) {
 		return
 	}
 	request.Content = strings.TrimSpace(request.Content)
 	attachmentIDs, ok := parseAttachmentIDs(w, request.AttachmentIDs)
+	if !ok {
+		return
+	}
+	quote, ok := parseCommentQuote(w, request.Quote)
 	if !ok {
 		return
 	}
@@ -1584,6 +1622,7 @@ func (api *API) replyAndContinue(w http.ResponseWriter, r *http.Request) {
 		AuthorSourceID:        identity.SourceID,
 		Content:               request.Content,
 		AttachmentIDs:         attachmentIDs,
+		Quote:                 quote,
 		IdempotencyKey:        idempotencyKey,
 		DeviceTarget:          request.DeviceTarget,
 		PreferredModelRouteID: preferredRouteID,

@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   ArrowDown,
@@ -9,6 +17,7 @@ import {
   MoreHorizontal,
   Pencil,
   Play,
+  Quote,
   Reply,
   ClipboardCheck,
   AlertCircle,
@@ -31,6 +40,7 @@ import type {
   Attempt,
   Card,
   CardKind,
+  CommentQuote,
   PendingTurn,
   TimelineEvent,
 } from "../../shared/api/types";
@@ -57,6 +67,12 @@ import { RichText } from "./RichText";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 import { MessageAttachmentGrid } from "./AttachmentGallery";
 import { usePacedTimeline } from "./usePacedTimeline";
+import {
+  computeSelectionPopoverPosition,
+  formatQuotePreview,
+  normalizeQuoteText,
+  resolveSelectionQuote,
+} from "./selectionQuote";
 import { cn } from "../../shared/lib/utils";
 import {
   TWO_HOURS_MS,
@@ -252,6 +268,8 @@ export type QuotedMessage = {
   text: string;
 };
 
+const MAX_QUOTE_JUMP_HISTORY_PAGES = 10;
+
 type ExecutionActions = {
   retryingAttemptID?: string;
   regeneratingEventID?: string;
@@ -265,6 +283,7 @@ type ExecutionActions = {
   ) => Promise<void>;
   onOpenTrace?: (attemptID: string) => void;
   onReply?: (quote: QuotedMessage) => void;
+  onJumpToEvent?: (eventID: string) => void;
   onEditMessage?: (eventID: string, content: string) => Promise<void>;
   canApproveReview?: boolean;
   approvingReview?: boolean;
@@ -276,6 +295,61 @@ type ExecutionActions = {
   startingCard?: boolean;
   onStartCard?: () => void;
 };
+
+/** 展示已发送消息顶部的结构化引用预览块，点击平滑回跳并高亮原消息。 */
+function MessageQuoteBlock({
+  quote,
+  onJump,
+}: {
+  quote: CommentQuote;
+  onJump?: (eventID: string) => void;
+}) {
+  const { t } = useTranslation();
+  const preview = formatQuotePreview(quote.text, 240);
+  if (!preview) return null;
+  const sender = quote.sender.trim() || "Cycle";
+  const interactive = Boolean(quote.event_id && onJump);
+  const content = (
+    <>
+      <span className="block truncate text-[11px] font-semibold text-primary">
+        {sender}
+      </span>
+      <span className="mt-0.5 line-clamp-2 break-words text-xs leading-snug text-muted-foreground">
+        {preview}
+      </span>
+    </>
+  );
+
+  if (!interactive) {
+    return (
+      <div
+        data-quote-ignore="true"
+        data-testid="message-quote-block"
+        className="mb-2 max-w-full rounded-lg border border-line/60 border-l-3 border-l-primary/70 bg-surface/75 px-2.5 py-1.5 text-left dark:bg-canvas/55"
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-quote-ignore="true"
+      data-testid="message-quote-block"
+      data-quote-target-event-id={quote.event_id}
+      onClick={(event) => {
+        event.stopPropagation();
+        onJump?.(quote.event_id);
+      }}
+      title={t("点击查看原消息")}
+      aria-label={t("引用自 {{sender}}，点击查看原消息", { sender })}
+      className="mb-2 block w-full max-w-full cursor-pointer rounded-lg border border-line/60 border-l-3 border-l-primary/80 bg-surface/80 px-2.5 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface active:scale-[0.99] dark:bg-canvas/55 dark:hover:bg-canvas/80"
+    >
+      {content}
+    </button>
+  );
+}
 
 function TimeSeparator({ value }: { value: string }) {
   const { i18n } = useTranslation();
@@ -621,6 +695,10 @@ function EventRow({
       : undefined;
 
   const rawText = formatEventContent(event);
+  const messageQuote = event.message?.quote;
+  const displaySender =
+    senderLabel(event.actor_kind, event.actor_name) ||
+    (human ? t("你") : "Cycle");
 
   async function handleCopy() {
     if (!rawText) return;
@@ -635,13 +713,12 @@ function EventRow({
   }
 
   function handleReply() {
-    if (!rawText || !actions.onReply) return;
+    const normalized = normalizeQuoteText(rawText);
+    if (!normalized || !actions.onReply) return;
     actions.onReply({
       id: event.id,
-      sender:
-        senderLabel(event.actor_kind, event.actor_name) ||
-        (human ? t("你") : "Cycle"),
-      text: rawText,
+      sender: displaySender,
+      text: normalized,
     });
   }
 
@@ -755,6 +832,7 @@ function EventRow({
       <ChatBubble
         ref={bubbleRef}
         id={"event-" + event.id}
+        data-event-id={event.id}
         data-sequence={event.sequence}
         data-message-group-start={showSender}
         variant={human ? "sent" : "received"}
@@ -856,19 +934,37 @@ function EventRow({
                   : ""
               }`}
             >
+            {messageQuote && (
+              <MessageQuoteBlock
+                quote={messageQuote}
+                onJump={actions.onJumpToEvent}
+              />
+            )}
             {(event.type === "finding" || event.type === "result") && (
               <p
+                data-quote-ignore="true"
                 className={`mb-1 text-xs font-semibold ${event.type === "finding" ? "text-sky-700 dark:text-sky-400" : "text-emerald-700 dark:text-emerald-400"}`}
               >
                 {t(event.type === "finding" ? "发现" : "结果")}
               </p>
             )}
-            {rawText && <RichText content={rawText} />}
+            {rawText && (
+              <div
+                data-quote-message-body="true"
+                data-quote-event-id={!isStreamingPreview ? event.id : undefined}
+                data-quote-sender={displaySender}
+              >
+                <RichText content={rawText} />
+              </div>
+            )}
             {commentAttachments && commentAttachments.length > 0 && (
-              <MessageAttachmentGrid attachments={commentAttachments} />
+              <div data-quote-ignore="true">
+                <MessageAttachmentGrid attachments={commentAttachments} />
+              </div>
             )}
             {message?.type === "attachment" && message.url && (
               <a
+                data-quote-ignore="true"
                 href={message.url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -878,7 +974,7 @@ function EventRow({
               </a>
             )}
             {message?.images && message.images.length > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-2">
+              <div data-quote-ignore="true" className="mt-3 grid grid-cols-2 gap-2">
                 {message.images.map((src) => (
                   <a
                     key={src}
@@ -898,10 +994,12 @@ function EventRow({
               </div>
             )}
             {showTime && formattedTime && (
-              <ChatBubbleTimestamp
-                timestamp={formattedTime}
-                status={human ? "read" : undefined}
-              />
+              <div data-quote-ignore="true">
+                <ChatBubbleTimestamp
+                  timestamp={formattedTime}
+                  status={human ? "read" : undefined}
+                />
+              </div>
             )}
           </ChatBubbleMessage>
           {activeDeviceName && (
@@ -1120,6 +1218,7 @@ export function ConversationView({
   hasMoreBefore = false,
   loadingMoreBefore = false,
   onLoadMoreBefore,
+  onSelectionQuoteChange,
   ...actions
 }: {
   card?: Card;
@@ -1134,13 +1233,34 @@ export function ConversationView({
   compact?: boolean;
   hasMoreBefore?: boolean;
   loadingMoreBefore?: boolean;
-  onLoadMoreBefore?: () => void;
+  onLoadMoreBefore?: () => Promise<boolean> | void;
+  /** 移动端触屏选区变化回调；桌面端使用选区浮钮，不通过此回调展示底部动作条。 */
+  onSelectionQuoteChange?: (quote: QuotedMessage | null) => void;
 } & ExecutionActions) {
   const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
+  const [desktopSelectionPopover, setDesktopSelectionPopover] = useState<{
+    quote: QuotedMessage;
+    top: number;
+    left: number;
+    placement: "top" | "bottom";
+  } | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const highlightedElRef = useRef<HTMLElement | null>(null);
+  const jumpRequestRef = useRef(0);
+  const onReplyRef = useRef(actions.onReply);
+  const onSelectionQuoteChangeRef = useRef(onSelectionQuoteChange);
+  const onLoadMoreBeforeRef = useRef(onLoadMoreBefore);
+  const hasMoreBeforeRef = useRef(hasMoreBefore);
+  useEffect(() => {
+    onReplyRef.current = actions.onReply;
+    onSelectionQuoteChangeRef.current = onSelectionQuoteChange;
+    onLoadMoreBeforeRef.current = onLoadMoreBefore;
+    hasMoreBeforeRef.current = hasMoreBefore;
+  });
 
   const executions = useMemo(
     () => [...attemptHistory, ...(currentAttempt ? [currentAttempt] : [])],
@@ -1426,12 +1546,226 @@ export function ConversationView({
     if (list.current) {
       prevScrollHeightRef.current = list.current.scrollHeight;
     }
-    onLoadMoreBefore();
+    void onLoadMoreBefore();
   }
+
+  /**
+   * 判定当前交互是否属于触屏/移动端模式：
+   * 优先参考 pointer: coarse / hover: none 媒体查询，避免在触屏设备上弹出浮钮与原生复制菜单打架。
+   */
+  const isTouchSelectionMode = useCallback(() => {
+    if (typeof window === "undefined") return false;
+    if (window.matchMedia?.("(pointer: coarse), (hover: none)").matches) {
+      return true;
+    }
+    return window.innerWidth < 640 && navigator.maxTouchPoints > 0;
+  }, []);
+
+  const clearSelectionQuoteUI = useCallback(() => {
+    setDesktopSelectionPopover(null);
+    onSelectionQuoteChangeRef.current?.(null);
+  }, []);
+
+  const syncSelectionQuote = useCallback(() => {
+    if (!onReplyRef.current || !list.current || typeof window === "undefined") {
+      clearSelectionQuoteUI();
+      return;
+    }
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      clearSelectionQuoteUI();
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const candidate = resolveSelectionQuote(
+      {
+        startContainer: range.startContainer,
+        endContainer: range.endContainer,
+        text: selection.toString(),
+      },
+      list.current,
+    );
+    if (!candidate) {
+      clearSelectionQuoteUI();
+      return;
+    }
+
+    const quote: QuotedMessage = {
+      id: candidate.eventId,
+      sender: candidate.sender,
+      text: candidate.text,
+    };
+
+    if (isTouchSelectionMode()) {
+      setDesktopSelectionPopover(null);
+      onSelectionQuoteChangeRef.current?.(quote);
+      return;
+    }
+
+    const rect = range.getBoundingClientRect();
+    const fallbackRect =
+      rect.width === 0 && rect.height === 0
+        ? range.getClientRects()[0]
+        : rect;
+    if (!fallbackRect || (fallbackRect.width === 0 && fallbackRect.height === 0)) {
+      clearSelectionQuoteUI();
+      return;
+    }
+
+    const pos = computeSelectionPopoverPosition(
+      {
+        top: fallbackRect.top,
+        left: fallbackRect.left,
+        width: fallbackRect.width,
+        height: fallbackRect.height,
+      },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    onSelectionQuoteChangeRef.current?.(null);
+    setDesktopSelectionPopover({
+      quote,
+      top: pos.top,
+      left: pos.left,
+      placement: pos.placement,
+    });
+  }, [clearSelectionQuoteUI, isTouchSelectionMode]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let rafId: number | null = null;
+    const scheduleSync = () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        syncSelectionQuote();
+      });
+    };
+    const handlePointerUp = () => {
+      scheduleSync();
+    };
+    const handleKeyUp = () => {
+      scheduleSync();
+    };
+    const handleResize = () => {
+      scheduleSync();
+    };
+
+    document.addEventListener("selectionchange", scheduleSync);
+    document.addEventListener("mouseup", handlePointerUp);
+    document.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      document.removeEventListener("selectionchange", scheduleSync);
+      document.removeEventListener("mouseup", handlePointerUp);
+      document.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("resize", handleResize);
+      onSelectionQuoteChangeRef.current?.(null);
+    };
+  }, [syncSelectionQuote]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  const flashTargetMessage = useCallback((target: HTMLElement) => {
+    if (highlightedElRef.current) {
+      highlightedElRef.current.classList.remove("quote-jump-highlight");
+    }
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    target.classList.remove("quote-jump-highlight");
+    // 强制重排以支持连续多次点击同一引用时重新触发闪烁动画。
+    void target.offsetWidth;
+    target.classList.add("quote-jump-highlight");
+    highlightedElRef.current = target;
+    highlightTimerRef.current = window.setTimeout(() => {
+      target.classList.remove("quote-jump-highlight");
+      if (highlightedElRef.current === target) {
+        highlightedElRef.current = null;
+      }
+      highlightTimerRef.current = null;
+    }, 1700);
+  }, []);
+
+  const findEventElement = useCallback((eventID: string): HTMLElement | null => {
+    const container = list.current;
+    if (!container || !eventID) return null;
+    const byId = document.getElementById(`event-${eventID}`);
+    if (byId && container.contains(byId)) return byId;
+    const candidates = container.querySelectorAll<HTMLElement>("[data-event-id]");
+    for (const el of candidates) {
+      if (el.getAttribute("data-event-id") === eventID) return el;
+    }
+    return null;
+  }, []);
+
+  const waitNextFrame = () =>
+    new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+
+  const handleJumpToEvent = useCallback(
+    async (eventID: string) => {
+      if (!eventID) return;
+      const requestID = ++jumpRequestRef.current;
+
+      const focusTarget = (el: HTMLElement) => {
+        stick.current = false;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        flashTargetMessage(el);
+      };
+
+      const existing = findEventElement(eventID);
+      if (existing) {
+        focusTarget(existing);
+        return;
+      }
+
+      if (!onLoadMoreBeforeRef.current || !hasMoreBeforeRef.current) {
+        toast.info(t("未找到原消息，可能已被删除或超出当前会话记录"));
+        return;
+      }
+
+      for (let page = 0; page < MAX_QUOTE_JUMP_HISTORY_PAGES; page++) {
+        if (jumpRequestRef.current !== requestID) return;
+        if (!hasMoreBeforeRef.current || !onLoadMoreBeforeRef.current) break;
+        if (list.current) {
+          prevScrollHeightRef.current = list.current.scrollHeight;
+        }
+        const loaded = await onLoadMoreBeforeRef.current();
+        if (jumpRequestRef.current !== requestID) return;
+        await waitNextFrame();
+        const found = findEventElement(eventID);
+        if (found) {
+          focusTarget(found);
+          return;
+        }
+        if (loaded === false) {
+          break;
+        }
+      }
+
+      if (jumpRequestRef.current === requestID) {
+        toast.info(t("未找到原消息，可能位于更早的历史记录或已被移除"));
+      }
+    },
+    [findEventElement, flashTargetMessage, t],
+  );
 
   function onScroll() {
     const element = list.current;
     if (!element) return;
+    if (desktopSelectionPopover) {
+      setDesktopSelectionPopover(null);
+    }
     if (element.scrollTop < 60 && hasMoreBefore && !loadingMoreBefore && onLoadMoreBefore) {
       handleLoadMoreBefore();
     }
@@ -1735,6 +2069,9 @@ export function ConversationView({
                 cardRunning={Boolean(running)}
                 compact={compact}
                 {...actions}
+                onJumpToEvent={(targetEventID) => {
+                  void handleJumpToEvent(targetEventID);
+                }}
                 canApproveReview={
                   Boolean(actions.canApproveReview) &&
                   event.id === latestConfirmID
@@ -1805,6 +2142,41 @@ export function ConversationView({
           <ArrowDown className="size-4" />
         </button>
       </div>
+
+      {desktopSelectionPopover &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            data-testid="desktop-selection-quote-popover"
+            data-placement={desktopSelectionPopover.placement}
+            style={{
+              position: "fixed",
+              top: `${desktopSelectionPopover.top}px`,
+              left: `${desktopSelectionPopover.left}px`,
+              transform: "translateX(-50%)",
+            }}
+            className="z-50"
+          >
+            <button
+              type="button"
+              onMouseDown={(event) => {
+                // 拦截 mousedown，避免点击瞬间浏览器先清空选区导致浮钮卸载、无法触发引用。
+                event.preventDefault();
+              }}
+              onClick={() => {
+                const selectedQuote = desktopSelectionPopover.quote;
+                onReplyRef.current?.(selectedQuote);
+                window.getSelection()?.removeAllRanges();
+                setDesktopSelectionPopover(null);
+              }}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line-strong/80 bg-surface px-3 py-1.5 text-xs font-medium text-foreground shadow-md backdrop-blur-sm transition hover:border-primary/60 hover:text-primary active:scale-95"
+            >
+              <Quote className="size-3.5 text-primary" />
+              <span>{t("引用")}</span>
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
