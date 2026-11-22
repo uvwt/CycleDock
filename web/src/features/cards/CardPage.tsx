@@ -23,6 +23,7 @@ import type {
   Attempt,
   Card,
   CardDetail,
+  CommentQuote,
   DeviceTarget,
   Identity,
   PendingTurn,
@@ -314,6 +315,10 @@ function CardPageContent({
   const [comment, setComment] = useState("");
   const composerImages = useComposerImages({ cardID, disabled: blocked });
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
+  const [selectionQuote, setSelectionQuote] = useState<QuotedMessage | null>(
+    null,
+  );
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
@@ -322,6 +327,15 @@ function CardPageContent({
   const composerDockRef = useRef<HTMLDivElement>(null);
   const [composerDockHeight, setComposerDockHeight] = useState(96);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+
+  const applyQuoteToComposer = useCallback((quote: QuotedMessage) => {
+    setReplyTo(quote);
+    setSelectionQuote(null);
+    window.getSelection()?.removeAllRanges();
+    window.requestAnimationFrame(() => {
+      composerInputRef.current?.focus();
+    });
+  }, []);
 
   // 手机端聊天框区域上滑手势：快速呼出卡片切换面板
   useSwipeUpGesture({
@@ -371,6 +385,7 @@ function CardPageContent({
     card?.todo_state,
     blocked,
     replyTo?.id,
+    selectionQuote?.id,
     detail.data?.pending_turns?.length,
   ]);
 
@@ -378,6 +393,13 @@ function CardPageContent({
   const [olderAttempts, setOlderAttempts] = useState<Attempt[]>([]);
   const [hasMoreBefore, setHasMoreBefore] = useState(false);
   const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
+  const loadingMoreBeforeRef = useRef(false);
+  const hasMoreBeforeRef = useRef(false);
+  const olderEventsRef = useRef<TimelineEvent[]>([]);
+  useEffect(() => {
+    hasMoreBeforeRef.current = hasMoreBefore;
+    olderEventsRef.current = olderEvents;
+  }, [hasMoreBefore, olderEvents]);
 
   // 当切换卡片时重置向前分页状态
   useEffect(() => {
@@ -385,34 +407,57 @@ function CardPageContent({
     setOlderAttempts([]);
     setHasMoreBefore(false);
     setLoadingMoreBefore(false);
+    loadingMoreBeforeRef.current = false;
+    hasMoreBeforeRef.current = false;
+    olderEventsRef.current = [];
+    setSelectionQuote(null);
   }, [cardID]);
 
   // 当卡片详情更新时，若尚未加载过更早历史批次，则同步后端基于真实数据量判断的 has_more_before 分页标识
   useEffect(() => {
     if (detail.data && olderEvents.length === 0) {
-      setHasMoreBefore(Boolean(detail.data.has_more_before));
+      const nextHasMore = Boolean(detail.data.has_more_before);
+      setHasMoreBefore(nextHasMore);
+      hasMoreBeforeRef.current = nextHasMore;
     }
   }, [detail.data, olderEvents.length]);
 
-  const loadMoreBefore = async () => {
-    if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
-    const allCurrentEvents = [...olderEvents, ...(detail.data?.timeline || [])];
-    const minSeq = allCurrentEvents.reduce((min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min), allCurrentEvents[0]?.sequence || 0);
-    if (!minSeq || minSeq <= 1) {
-      setHasMoreBefore(false);
-      return;
+  const loadMoreBefore = async (): Promise<boolean> => {
+    if (!cardID || loadingMoreBeforeRef.current || !hasMoreBeforeRef.current) {
+      return false;
     }
+    const allCurrentEvents = [
+      ...olderEventsRef.current,
+      ...(detail.data?.timeline || []),
+    ];
+    const minSeq = allCurrentEvents.reduce(
+      (min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min),
+      allCurrentEvents[0]?.sequence || 0,
+    );
+    if (!minSeq || minSeq <= 1) {
+      hasMoreBeforeRef.current = false;
+      setHasMoreBefore(false);
+      return false;
+    }
+    loadingMoreBeforeRef.current = true;
     setLoadingMoreBefore(true);
     try {
       const res = await api.cardTimelineBefore(cardID, minSeq, 50);
-      if (res.timeline && res.timeline.length > 0) {
-        setOlderEvents((prev) => [...res.timeline, ...prev]);
+      const loadedEvents = res.timeline || [];
+      if (loadedEvents.length > 0) {
+        const nextOlder = [...loadedEvents, ...olderEventsRef.current];
+        olderEventsRef.current = nextOlder;
+        setOlderEvents(nextOlder);
       }
       setOlderAttempts((prev) => [...(res.attempt_history || []), ...prev]);
+      hasMoreBeforeRef.current = res.has_more_before;
       setHasMoreBefore(res.has_more_before);
+      return loadedEvents.length > 0;
     } catch (err) {
       console.error("Failed to load older timeline events", err);
+      return false;
     } finally {
+      loadingMoreBeforeRef.current = false;
       setLoadingMoreBefore(false);
     }
   };
@@ -540,20 +585,25 @@ function CardPageContent({
     mutationFn: async () => {
       const text = comment.trim();
       const attachments = composerImages.readyAttachments;
-      const content = replyTo
-        ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
-        : text;
+      const quote: CommentQuote | null = replyTo
+        ? {
+            event_id: replyTo.id,
+            sender: replyTo.sender,
+            text: replyTo.text,
+          }
+        : null;
       const deviceTarget = target;
       const result = await api.send(
         cardID,
-        content,
+        text,
         "enqueue",
         undefined,
         deviceTarget,
         card?.preferred_model_route_id || undefined,
         attachments.map((att) => att.id),
+        quote,
       );
-      return { ...result, content, attachments, deviceTarget };
+      return { ...result, content: text, attachments, quote, deviceTarget };
     },
     onSuccess: (result) => {
       activeCardAutoReadSuppression.clearSuppressed(cardID);
@@ -562,6 +612,7 @@ function CardPageContent({
       }
       setComment("");
       setReplyTo(null);
+      setSelectionQuote(null);
       composerImages.clear();
       const me = queryClient.getQueryData<Identity>(keys.me);
       applyOptimisticSentTurn(queryClient, cardID, {
@@ -569,6 +620,7 @@ function CardPageContent({
         turnID: result.turn_id,
         content: result.content,
         attachments: result.attachments,
+        quote: result.quote,
         actorName: me?.display_name,
         deviceTarget: result.deviceTarget,
       });
@@ -1165,7 +1217,8 @@ function CardPageContent({
                 canStartCard={canStartCard}
                 startingCard={startCard.isPending}
                 onStartCard={() => startCard.mutate()}
-                onReply={(quote) => setReplyTo(quote)}
+                onReply={applyQuoteToComposer}
+                onSelectionQuoteChange={setSelectionQuote}
                 onEditMessage={
                   !blocked && card.todo_state !== "done"
                     ? async (eventID, content) => {
@@ -1313,6 +1366,9 @@ function CardPageContent({
                     onRemoveImage={composerImages.removeItem}
                     replyTo={replyTo}
                     onCancelReply={() => setReplyTo(null)}
+                    selectionQuote={selectionQuote}
+                    onApplySelectionQuote={applyQuoteToComposer}
+                    inputRef={composerInputRef}
                     blocked={blocked}
                     hasCurrent={hasCurrent}
                     sendPending={send.isPending}

@@ -52,6 +52,7 @@ type AgentCardContext struct {
 	TurnSource         domain.TurnSource
 	TurnContent        string
 	TurnAttachments    []CommentAttachmentRef
+	TurnQuote          *CommentQuote
 	DispatchMode       domain.DispatchMode
 	TurnCreatedAt      time.Time
 	IsBuiltInProactive bool
@@ -152,8 +153,13 @@ func (s *Store) LoadAgentCardContext(
 	}
 	if len(sourceEventMessage) > 0 {
 		var payload CommentMessagePayload
-		if err := json.Unmarshal(sourceEventMessage, &payload); err == nil && len(payload.Attachments) > 0 {
-			out.TurnAttachments = payload.Attachments
+		if err := json.Unmarshal(sourceEventMessage, &payload); err == nil {
+			if len(payload.Attachments) > 0 {
+				out.TurnAttachments = payload.Attachments
+			}
+			if payload.Quote != nil && strings.TrimSpace(payload.Quote.Text) != "" {
+				out.TurnQuote = payload.Quote
+			}
 		}
 	}
 	// 加载卡片本身附带的图片（例如新建待办时附带的参考图）。

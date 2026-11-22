@@ -93,6 +93,11 @@ export type AttachmentMeta = {
   created_at?: string;
   expires_at?: string;
 };
+export type CommentQuote = {
+  event_id: string;
+  sender: string;
+  text: string;
+};
 export type TimelineEvent = {
   id: string;
   sequence: number;
@@ -123,6 +128,7 @@ export type TimelineEvent = {
     alt?: string;
     images?: string[];
     attachments?: AttachmentMeta[];
+    quote?: CommentQuote;
     widget?: { question: string; options: { value: string; label: string }[] };
     end_turn?: boolean;
     preview_id?: string;

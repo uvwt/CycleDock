@@ -1,4 +1,12 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Bell, BellOff, Expand, X } from "lucide-react";
@@ -12,6 +20,7 @@ import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMut
 import type {
   Attempt,
   CardDetail,
+  CommentQuote,
   Identity,
   TimelineEvent,
 } from "../../shared/api/types";
@@ -88,6 +97,19 @@ export function MainChatDock() {
   const [peek, setPeek] = useState<DockPeekMessage | null>(null);
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
+  const [selectionQuote, setSelectionQuote] = useState<QuotedMessage | null>(
+    null,
+  );
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const applyQuoteToComposer = useCallback((quote: QuotedMessage) => {
+    setReplyTo(quote);
+    setSelectionQuote(null);
+    window.getSelection()?.removeAllRanges();
+    window.requestAnimationFrame(() => {
+      composerInputRef.current?.focus();
+    });
+  }, []);
   const [cancelingTurnID, setCancelingTurnID] = useState("");
   const [steeringTurnID, setSteeringTurnID] = useState("");
   const [retryingAttemptID, setRetryingAttemptID] = useState("");
@@ -271,43 +293,70 @@ export function MainChatDock() {
   const [olderAttempts, setOlderAttempts] = useState<Attempt[]>([]);
   const [hasMoreBefore, setHasMoreBefore] = useState(false);
   const [loadingMoreBefore, setLoadingMoreBefore] = useState(false);
+  const loadingMoreBeforeRef = useRef(false);
+  const hasMoreBeforeRef = useRef(false);
+  const olderEventsRef = useRef<TimelineEvent[]>([]);
+  useEffect(() => {
+    hasMoreBeforeRef.current = hasMoreBefore;
+    olderEventsRef.current = olderEvents;
+  }, [hasMoreBefore, olderEvents]);
 
   useEffect(() => {
     setOlderEvents([]);
     setOlderAttempts([]);
     setHasMoreBefore(false);
     setLoadingMoreBefore(false);
+    loadingMoreBeforeRef.current = false;
+    hasMoreBeforeRef.current = false;
+    olderEventsRef.current = [];
+    setSelectionQuote(null);
   }, [cardID]);
 
   // 当卡片详情更新时，若尚未加载过更早历史批次，则同步后端基于真实数据量判断的 has_more_before 分页标识
   useEffect(() => {
     if (detail.data && olderEvents.length === 0) {
-      setHasMoreBefore(Boolean(detail.data.has_more_before));
+      const nextHasMore = Boolean(detail.data.has_more_before);
+      setHasMoreBefore(nextHasMore);
+      hasMoreBeforeRef.current = nextHasMore;
     }
   }, [detail.data, olderEvents.length]);
 
-  const loadMoreBefore = async () => {
-    if (!cardID || loadingMoreBefore || !hasMoreBefore) return;
-    const allCurrentEvents = [...olderEvents, ...(detail.data?.timeline || [])];
+  const loadMoreBefore = async (): Promise<boolean> => {
+    if (!cardID || loadingMoreBeforeRef.current || !hasMoreBeforeRef.current) {
+      return false;
+    }
+    const allCurrentEvents = [
+      ...olderEventsRef.current,
+      ...(detail.data?.timeline || []),
+    ];
     const minSeq = allCurrentEvents.reduce(
       (min, ev) => (ev.sequence && ev.sequence < min ? ev.sequence : min),
       allCurrentEvents[0]?.sequence || 0,
     );
     if (!minSeq || minSeq <= 1) {
+      hasMoreBeforeRef.current = false;
       setHasMoreBefore(false);
-      return;
+      return false;
     }
+    loadingMoreBeforeRef.current = true;
     setLoadingMoreBefore(true);
     try {
       const res = await api.cardTimelineBefore(cardID, minSeq, 50);
-      if (res.timeline && res.timeline.length > 0) {
-        setOlderEvents((prev) => [...res.timeline, ...prev]);
+      const loadedEvents = res.timeline || [];
+      if (loadedEvents.length > 0) {
+        const nextOlder = [...loadedEvents, ...olderEventsRef.current];
+        olderEventsRef.current = nextOlder;
+        setOlderEvents(nextOlder);
       }
       setOlderAttempts((prev) => [...(res.attempt_history || []), ...prev]);
+      hasMoreBeforeRef.current = res.has_more_before;
       setHasMoreBefore(res.has_more_before);
+      return loadedEvents.length > 0;
     } catch (err) {
       console.error("Failed to load older timeline events", err);
+      return false;
     } finally {
+      loadingMoreBeforeRef.current = false;
       setLoadingMoreBefore(false);
     }
   };
@@ -361,24 +410,30 @@ export function MainChatDock() {
     mutationFn: async () => {
       const text = comment.trim();
       const attachments = composerImages.readyAttachments;
-      const content = replyTo
-        ? `> ${replyTo.sender}：\n> ${replyTo.text.trim().split("\n").join("\n> ")}\n\n${text}`
-        : text;
+      const quote: CommentQuote | null = replyTo
+        ? {
+            event_id: replyTo.id,
+            sender: replyTo.sender,
+            text: replyTo.text,
+          }
+        : null;
       const deviceTarget = target;
       const result = await api.send(
         cardID,
-        content,
+        text,
         "enqueue",
         undefined,
         deviceTarget,
         main.data?.preferred_model_route_id || undefined,
         attachments.map((att) => att.id),
+        quote,
       );
-      return { ...result, content, attachments, deviceTarget };
+      return { ...result, content: text, attachments, quote, deviceTarget };
     },
     onSuccess: (result) => {
       setComment("");
       setReplyTo(null);
+      setSelectionQuote(null);
       composerImages.clear();
       const me = queryClient.getQueryData<Identity>(keys.me);
       applyOptimisticSentTurn(queryClient, cardID, {
@@ -386,6 +441,7 @@ export function MainChatDock() {
         turnID: result.turn_id,
         content: result.content,
         attachments: result.attachments,
+        quote: result.quote,
         actorName: me?.display_name,
         deviceTarget: result.deviceTarget,
       });
@@ -906,7 +962,8 @@ export function MainChatDock() {
                       : undefined
                   }
                   onOpenTrace={(attemptID) => setTraceAttemptID(attemptID)}
-                  onReply={setReplyTo}
+                  onReply={applyQuoteToComposer}
+                  onSelectionQuoteChange={setSelectionQuote}
                   onEditMessage={async (eventID, content) => {
                     await api.editComment(cardID, eventID, content);
                     setOlderEvents([]);
@@ -965,6 +1022,9 @@ export function MainChatDock() {
                 onRemoveImage={composerImages.removeItem}
                 replyTo={replyTo}
                 onCancelReply={() => setReplyTo(null)}
+                selectionQuote={selectionQuote}
+                onApplySelectionQuote={applyQuoteToComposer}
+                inputRef={composerInputRef}
                 blocked={Boolean(blocked) || !cardID}
                 hasCurrent={hasCurrent}
                 sendPending={send.isPending}

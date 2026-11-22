@@ -4,6 +4,7 @@ import type {
   AttachmentMeta,
   Card,
   CardDetail,
+  CommentQuote,
   DeviceTarget,
   PendingTurn,
   TimelineEvent,
@@ -127,6 +128,7 @@ export function applyOptimisticSentTurn(
     turnID: string;
     content: string;
     attachments?: AttachmentMeta[];
+    quote?: CommentQuote | null;
     actorName?: string;
     deviceTarget?: DeviceTarget | null;
   },
@@ -173,6 +175,15 @@ export function applyOptimisticSentTurn(
     if (old.timeline.some((item) => item.id === params.eventID)) {
       return old;
     }
+    const nextMessage: TimelineEvent["message"] =
+      (params.attachments && params.attachments.length > 0) || params.quote
+        ? {
+            ...(params.attachments && params.attachments.length > 0
+              ? { attachments: params.attachments }
+              : {}),
+            ...(params.quote ? { quote: params.quote } : {}),
+          }
+        : undefined;
     const nextEvent: TimelineEvent = {
       id: params.eventID,
       sequence: maxEventSeq + 1,
@@ -180,10 +191,7 @@ export function applyOptimisticSentTurn(
       actor_kind: "human",
       actor_name: params.actorName || "Human",
       content: params.content,
-      message:
-        params.attachments && params.attachments.length > 0
-          ? { attachments: params.attachments }
-          : undefined,
+      message: nextMessage,
       created_at: now,
     };
     return {

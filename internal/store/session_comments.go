@@ -15,7 +15,11 @@ import (
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
-const MaxCommentAttachments = 8
+const (
+	MaxCommentAttachments      = 8
+	MaxCommentQuoteSenderRunes = 100
+	MaxCommentQuoteTextRunes   = 1000
+)
 
 // CommentAttachmentRef 是写入 events.message 的轻量附件引用元数据（图片或纯文本/日志/代码），严禁包含原始文件二进制或 base64。
 type CommentAttachmentRef struct {
@@ -32,9 +36,55 @@ type CommentAttachmentRef struct {
 	Status          string    `json:"status,omitempty"`
 }
 
-// CommentMessagePayload 是人类 comment 事件可选的轻量结构化载荷（仅存附件引用）。
+// CommentQuote 是人类消息引用某条历史消息（整条或划选片段）的结构化元数据。
+// 与 Attachments 一并序列化到 events.message，零数据库迁移，同时供前端点击回跳和 Agent 理解引用上下文。
+type CommentQuote struct {
+	EventID uuid.UUID `json:"event_id"`
+	Sender  string    `json:"sender"`
+	Text    string    `json:"text"`
+}
+
+// CommentMessagePayload 是人类 comment 事件可选的轻量结构化载荷（附件引用与消息引用元数据）。
 type CommentMessagePayload struct {
 	Attachments []CommentAttachmentRef `json:"attachments,omitempty"`
+	Quote       *CommentQuote          `json:"quote,omitempty"`
+}
+
+// truncateRunesWithEllipsis 按 Unicode rune 截断文本，超过上限时保留末尾省略号，避免切坏多字节字符。
+func truncateRunesWithEllipsis(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 1 {
+		return string(runes[:maxRunes])
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-1])) + "…"
+}
+
+func normalizeCommentQuote(raw *CommentQuote) (*CommentQuote, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if raw.EventID == uuid.Nil {
+		return nil, fmt.Errorf("%w: quote event_id is required", domain.ErrConflict)
+	}
+	text := strings.ReplaceAll(raw.Text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text, _ = agentdata.NormalizeText(strings.TrimSpace(text))
+	if text == "" {
+		return nil, fmt.Errorf("%w: quote text is required", domain.ErrConflict)
+	}
+	text = truncateRunesWithEllipsis(text, MaxCommentQuoteTextRunes)
+
+	sender, _ := agentdata.NormalizeText(strings.TrimSpace(raw.Sender))
+	sender = truncateRunesWithEllipsis(sender, MaxCommentQuoteSenderRunes)
+
+	return &CommentQuote{
+		EventID: raw.EventID,
+		Sender:  sender,
+		Text:    text,
+	}, nil
 }
 
 func formatAttachmentOnlyTurnContent(refs []CommentAttachmentRef) string {
@@ -103,6 +153,7 @@ type SubmitSessionCommentParams struct {
 	AuthorSourceID        uuid.UUID
 	Content               string
 	AttachmentIDs         []uuid.UUID
+	Quote                 *CommentQuote
 	IdempotencyKey        string
 	DispatchMode          domain.DispatchMode
 	// 回复绑定已完成的执行；选择回复还须绑定具体消息，防止旧页面误答。
@@ -462,6 +513,8 @@ func (s *Store) EditSessionCommentAndRerun(
 	); err != nil {
 		return SubmitSessionCommentResult{}, err
 	}
+	// 仅更新正文与请求哈希，保留 events.message 中的既有附件引用与结构化 quote 元数据，
+	// 以便前端继续展示原引用块，且后续重新执行时模型仍能读到同一引用上下文。
 	if _, err := tx.Exec(ctx, `
 		UPDATE events
 		SET content = $4,
@@ -674,6 +727,10 @@ func (s *Store) submitSessionComment(
 	if err != nil {
 		return SubmitSessionCommentResult{}, err
 	}
+	quote, err := normalizeCommentQuote(p.Quote)
+	if err != nil {
+		return SubmitSessionCommentResult{}, err
+	}
 	if p.Content == "" && len(attachmentIDs) == 0 {
 		return SubmitSessionCommentResult{}, fmt.Errorf("%w: comment content or image attachment is required", domain.ErrConflict)
 	}
@@ -718,6 +775,10 @@ func (s *Store) submitSessionComment(
 
 	if p.PreferredModelRouteID != nil && *p.PreferredModelRouteID != uuid.Nil {
 		requestHash = stableRequestHash(requestHash, "preferred_model_route", p.PreferredModelRouteID.String())
+	}
+
+	if quote != nil {
+		requestHash = stableRequestHash(requestHash, "quote", quote.EventID.String(), quote.Sender, quote.Text)
 	}
 
 	if replyToMessage {
@@ -814,8 +875,24 @@ func (s *Store) submitSessionComment(
 		}
 	}
 
+	if quote != nil {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM events
+				WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+			)
+		`, p.WorkspaceID, p.CardID, quote.EventID).Scan(&exists); err != nil {
+			return SubmitSessionCommentResult{}, err
+		}
+		if !exists {
+			return SubmitSessionCommentResult{}, fmt.Errorf("%w: quoted event not found in card", domain.ErrNotFound)
+		}
+	}
+
 	var rawMessage []byte
 	var attachmentRefs []CommentAttachmentRef
+	var payload CommentMessagePayload
 	if len(attachmentIDs) > 0 {
 		attachmentRefs, err = resolveAndBindCommentAttachmentsTx(
 			ctx, tx, p.WorkspaceID, p.CardID, attachmentIDs,
@@ -823,9 +900,15 @@ func (s *Store) submitSessionComment(
 		if err != nil {
 			return SubmitSessionCommentResult{}, err
 		}
-		rawMessage, err = json.Marshal(CommentMessagePayload{Attachments: attachmentRefs})
+		payload.Attachments = attachmentRefs
+	}
+	if quote != nil {
+		payload.Quote = quote
+	}
+	if len(payload.Attachments) > 0 || payload.Quote != nil {
+		rawMessage, err = json.Marshal(payload)
 		if err != nil {
-			return SubmitSessionCommentResult{}, fmt.Errorf("marshal comment attachments: %w", err)
+			return SubmitSessionCommentResult{}, fmt.Errorf("marshal comment message payload: %w", err)
 		}
 	}
 

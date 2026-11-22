@@ -2,9 +2,10 @@ import { useRef, useState } from "react";
 import { ModelSetupNotice } from "../models/ModelSetupNotice";
 import { useAgentStatus } from "../models/useAgentStatus";
 import { ChatInput, ChatReplyBar } from "../../shared/ui/chat";
-import { ArrowUp, LoaderCircle, Paperclip, Square } from "lucide-react";
+import { ArrowUp, LoaderCircle, Paperclip, Quote, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { QuotedMessage } from "../timeline/ConversationView";
+import { formatQuotePreview } from "../timeline/selectionQuote";
 import { ModelMenu } from "../models/ModelMenu";
 import { ComposerImageTray } from "../timeline/AttachmentGallery";
 import {
@@ -25,6 +26,9 @@ export function ConversationComposer({
   onRemoveImage,
   replyTo,
   onCancelReply,
+  selectionQuote,
+  onApplySelectionQuote,
+  inputRef,
   blocked,
   hasCurrent,
   sendPending,
@@ -45,6 +49,10 @@ export function ConversationComposer({
   onRemoveImage?: (localID: string) => void;
   replyTo?: QuotedMessage | null;
   onCancelReply?: () => void;
+  /** 移动端触屏选区临时浮现的「引用所选」候选，无选区时为 null、零占位。 */
+  selectionQuote?: QuotedMessage | null;
+  onApplySelectionQuote?: (quote: QuotedMessage) => void;
+  inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   expanded?: boolean;
   setExpanded?: (value: boolean) => void;
   blocked: boolean;
@@ -83,7 +91,34 @@ export function ConversationComposer({
     imageList.length < MAX_COMPOSER_IMAGES;
 
   return (
-    <form
+    <div className="flex flex-col">
+      {selectionQuote && onApplySelectionQuote && !blocked && (
+        <div
+          data-testid="mobile-selection-quote-bar"
+          className="mb-1.5 flex items-center"
+        >
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              // 拦截指针按下，避免点击瞬间选区先清空导致按钮消失或触发失败。
+              event.preventDefault();
+            }}
+            onClick={() => {
+              onApplySelectionQuote(selectionQuote);
+            }}
+            className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-xl border border-primary/25 bg-surface/95 px-3 py-1.5 text-left text-xs text-foreground shadow-sm backdrop-blur-sm transition hover:border-primary/50 hover:bg-muted/70 active:scale-[0.99]"
+          >
+            <Quote className="size-3.5 shrink-0 text-primary" />
+            <span className="shrink-0 font-medium text-primary">
+              {t("引用所选")}：
+            </span>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+              “{formatQuotePreview(selectionQuote.text, 64)}”
+            </span>
+          </button>
+        </div>
+      )}
+      <form
       onSubmit={(event) => {
         event.preventDefault();
         if (!sendDisabled && !cancelPending) onSubmit();
@@ -132,6 +167,7 @@ export function ConversationComposer({
       {/* 文本输入区域：占满行宽自适应高度，并监听剪贴板图片粘贴 */}
       <div className="min-w-0 flex-1 px-1">
         <ChatInput
+          ref={inputRef}
           value={comment}
           onChange={setComment}
           placeholder={placeholder}
@@ -222,6 +258,7 @@ export function ConversationComposer({
           </button>
         </div>
       </div>
-    </form>
+      </form>
+    </div>
   );
 }
