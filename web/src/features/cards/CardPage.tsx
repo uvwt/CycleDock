@@ -154,14 +154,25 @@ export default function CardPage() {
       />
     ) : null;
 
+  function openPlansOverview() {
+    setContextSidebarOpen(false);
+    navigate(
+      actualProjectID
+        ? `/plans?project=${encodeURIComponent(actualProjectID)}`
+        : "/plans",
+    );
+  }
+
   const contextSidebar = isDiscussion ? (
     discussionSidebar
   ) : isOngoing ? (
     <PlanSidebar
       cards={projectCards.data || []}
+      projectID={actualProjectID}
       activeCardID={cardID}
       activeAttemptStatus={activeAttemptStatus}
       onSelect={openWork}
+      onOpenOverview={openPlansOverview}
       loading={projectCards.isPending}
     />
   ) : (

@@ -437,11 +437,20 @@ export function Shell({ children }: { children: ReactNode }) {
                       cards={projectCards.filter(
                         (card) => card.kind === "ongoing",
                       )}
+                      projectID={projectID}
                       activeCardID=""
                       onSelect={(card: Card) => {
                         setMobileDrawerOpen(false);
                         navigate(
                           `/plans/${encodeURIComponent(card.project_id)}/${encodeURIComponent(card.id)}`,
+                        );
+                      }}
+                      onOpenOverview={() => {
+                        setMobileDrawerOpen(false);
+                        navigate(
+                          projectID
+                            ? `/plans?project=${encodeURIComponent(projectID)}`
+                            : "/plans",
                         );
                       }}
                       loading={cardsQuery.isPending}

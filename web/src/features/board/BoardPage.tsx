@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -14,7 +14,16 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { BellOff, ImagePlus, ListPlus, Pin } from "lucide-react";
+import {
+  BellOff,
+  Check,
+  CheckCircle2,
+  ImagePlus,
+  ListChecks,
+  ListPlus,
+  Loader2,
+  Pin,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -36,6 +45,13 @@ import {
 } from "../../shared/ui/CardStatusDot";
 import { loadCardPage } from "../../app/route-preload";
 import { upsertCachedProjectCard } from "../../shared/lib/card-cache";
+import {
+  isAllReviewSelected,
+  reconcileReviewSelection,
+  toggleReviewSelection,
+  toggleSelectAllReview,
+} from "../../shared/lib/review-acceptance";
+import { useBatchCompleteReviewCards } from "../../shared/lib/useCompleteReviewCard";
 import type { Card, Project, TodoState } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
 import {
@@ -92,6 +108,18 @@ function formatRelativeTime(dateStr?: string) {
   if (diffDays < 7) return `${diffDays}d`;
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
+interface LaneBatchAcceptance {
+  active: boolean;
+  selectedIDs: ReadonlySet<string>;
+  allSelected: boolean;
+  pending: boolean;
+  onToggleMode: () => void;
+  onToggleCard: (cardID: string) => void;
+  onToggleSelectAll: () => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}
+
 function Lane({
   state,
   cards,
@@ -100,6 +128,7 @@ function Lane({
   hasMoreDone,
   loadingMoreDone,
   onLoadMoreDone,
+  batchAcceptance,
 }: {
   state: TodoState;
   cards: Card[];
@@ -108,10 +137,12 @@ function Lane({
   hasMoreDone?: boolean;
   loadingMoreDone?: boolean;
   onLoadMoreDone?: () => void;
+  batchAcceptance?: LaneBatchAcceptance;
 }) {
   const { t } = useTranslation();
   const { setNodeRef, isOver } = useDroppable({ id: state });
   const accent = laneAccentMap[state];
+  const isBatchActive = Boolean(batchAcceptance?.active);
 
   return (
     <section
@@ -125,21 +156,100 @@ function Lane({
       }
     >
       <header className="mb-2 flex shrink-0 items-center justify-between px-1">
-        <h2 className="text-sm font-semibold tracking-tight text-foreground">
-          {t(labels[state])}
-        </h2>
-        <span
-          className={
-            "inline-flex h-5 min-w-5 items-center justify-center rounded-full border px-1.5 text-xs font-medium tabular-nums " +
-            accent.badge
-          }
-        >
-          {cards.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold tracking-tight text-foreground">
+            {t(labels[state])}
+          </h2>
+          <span
+            className={
+              "inline-flex h-5 min-w-5 items-center justify-center rounded-full border px-1.5 text-xs font-medium tabular-nums " +
+              accent.badge
+            }
+          >
+            {cards.length}
+          </span>
+        </div>
+        {batchAcceptance && cards.length > 0 && (
+          <button
+            type="button"
+            onClick={batchAcceptance.onToggleMode}
+            className={
+              "inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-xs font-medium whitespace-nowrap transition-colors " +
+              (isBatchActive
+                ? "border-emerald-500/40 bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+                : "border-line bg-surface text-muted-foreground hover:border-emerald-500/40 hover:bg-emerald-500/8 hover:text-emerald-700 dark:hover:text-emerald-300")
+            }
+          >
+            <ListChecks className="size-3.5" />
+            <span>{isBatchActive ? t("取消") : t("批量验收")}</span>
+          </button>
+        )}
       </header>
+      {isBatchActive && batchAcceptance && (
+        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-2.5 py-2">
+          <button
+            type="button"
+            disabled={batchAcceptance.pending}
+            onClick={batchAcceptance.onToggleSelectAll}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-foreground transition hover:bg-surface/80 disabled:opacity-50"
+          >
+            <span
+              aria-hidden="true"
+              className={
+                "grid size-4 place-items-center rounded border transition-colors " +
+                (batchAcceptance.allSelected
+                  ? "border-emerald-600 bg-emerald-600 text-white"
+                  : "border-line bg-surface text-transparent")
+              }
+            >
+              <Check className="size-3 stroke-[2.5]" />
+            </span>
+            <span>
+              {batchAcceptance.allSelected ? t("取消全选") : t("全选")}
+            </span>
+          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={batchAcceptance.pending}
+              onClick={batchAcceptance.onCancel}
+              className="inline-flex h-7 items-center rounded-lg border border-line bg-surface px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+            >
+              {t("取消")}
+            </button>
+            <button
+              type="button"
+              disabled={
+                batchAcceptance.pending ||
+                batchAcceptance.selectedIDs.size === 0
+              }
+              onClick={batchAcceptance.onSubmit}
+              className="inline-flex h-7 items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {batchAcceptance.pending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-3.5" />
+              )}
+              <span>
+                {t("完成所选 ({{count}})", {
+                  count: batchAcceptance.selectedIDs.size,
+                })}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
       <div className="scrollbar-thin flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto px-1 pt-1.5 pb-24 lg:pb-2">
         {cards.map((c) => (
-          <TaskCard key={c.id} card={c} onOpen={onOpen} />
+          <TaskCard
+            key={c.id}
+            card={c}
+            onOpen={onOpen}
+            selectable={isBatchActive}
+            selected={Boolean(batchAcceptance?.selectedIDs.has(c.id))}
+            onToggleSelect={batchAcceptance?.onToggleCard}
+          />
         ))}
         {state === "done" && hasMoreDone && (
           <div className="pt-2 pb-1 text-center">
@@ -174,14 +284,21 @@ function TaskCard({
   card,
   onOpen,
   isOverlay = false,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   card: Card;
   onOpen?: (c: Card) => void;
   isOverlay?: boolean;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (cardID: string) => void;
 }) {
   const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: card.id,
+    disabled: selectable,
   });
   const visualStatus = getCardVisualStatus(card);
   const updatedTime = formatRelativeTime(card.updated_at);
@@ -225,18 +342,43 @@ function TaskCard({
   return (
     <button
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
-      onClick={() => onOpen?.(card)}
+      {...(selectable ? {} : attributes)}
+      {...(selectable ? {} : listeners)}
+      role={selectable ? "checkbox" : undefined}
+      aria-checked={selectable ? selected : undefined}
+      onClick={() => {
+        if (selectable) {
+          onToggleSelect?.(card.id);
+          return;
+        }
+        onOpen?.(card);
+      }}
       className={
-        "group relative w-full rounded-xl border border-line bg-surface p-3 text-left shadow-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md dark:hover:border-sky-700/80 " +
+        "group relative w-full rounded-xl border p-3 text-left shadow-xs transition-all duration-150 " +
+        (selected
+          ? "border-emerald-500/60 bg-emerald-500/8 ring-1 ring-emerald-500/25 "
+          : "border-line bg-surface hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md dark:hover:border-sky-700/80 ") +
         (isDragging ? "opacity-25 border-dashed border-sky-400/80" : "")
       }
     >
       <div className="flex items-start gap-2.5">
-        <div className="mt-1 shrink-0">
-          <CardStatusDot status={visualStatus} />
-        </div>
+        {selectable ? (
+          <span
+            aria-hidden="true"
+            className={
+              "mt-0.5 grid size-4 shrink-0 place-items-center rounded border transition-colors " +
+              (selected
+                ? "border-emerald-600 bg-emerald-600 text-white"
+                : "border-line bg-canvas text-transparent")
+            }
+          >
+            <Check className="size-3 stroke-[2.5]" />
+          </span>
+        ) : (
+          <div className="mt-1 shrink-0">
+            <CardStatusDot status={visualStatus} />
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -391,6 +533,79 @@ export default function BoardPage() {
 
   // 默认激活用户最需要关注的列：working > todo > 首个非空列 > working
   const [selectedTab, setSelectedTab] = useState<TodoState | null>(null);
+  const [reviewBatchProjectID, setReviewBatchProjectID] = useState<string | null>(
+    null,
+  );
+  const [selectedReviewIDs, setSelectedReviewIDs] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const batchComplete = useBatchCompleteReviewCards(projectID || undefined);
+  const reviewCardIDs = useMemo(
+    () => cardsByState.review.map((card) => card.id),
+    [cardsByState.review],
+  );
+  const isReviewBatchMode =
+    Boolean(projectID) &&
+    reviewBatchProjectID === projectID &&
+    reviewCardIDs.length > 0;
+  const effectiveSelectedReviewIDs = useMemo(
+    () =>
+      isReviewBatchMode
+        ? reconcileReviewSelection(selectedReviewIDs, reviewCardIDs)
+        : new Set<string>(),
+    [isReviewBatchMode, reviewCardIDs, selectedReviewIDs],
+  );
+  const allReviewSelected = isAllReviewSelected(
+    effectiveSelectedReviewIDs,
+    reviewCardIDs,
+  );
+
+  const exitReviewBatchMode = useCallback(() => {
+    setReviewBatchProjectID(null);
+    setSelectedReviewIDs(new Set());
+  }, []);
+
+  const handleReviewBatchSubmit = useCallback(async () => {
+    const ids = Array.from(effectiveSelectedReviewIDs);
+    if (ids.length === 0) return;
+    const result = await batchComplete.completeBatch(ids);
+    if (result.failedIDs.length === 0) {
+      exitReviewBatchMode();
+    } else {
+      setSelectedReviewIDs(new Set(result.failedIDs));
+    }
+  }, [batchComplete, effectiveSelectedReviewIDs, exitReviewBatchMode]);
+
+  const reviewBatchAcceptance: LaneBatchAcceptance = {
+    active: isReviewBatchMode,
+    selectedIDs: effectiveSelectedReviewIDs,
+    allSelected: allReviewSelected,
+    pending: batchComplete.isPending,
+    onToggleMode: () => {
+      if (isReviewBatchMode) {
+        exitReviewBatchMode();
+      } else if (projectID) {
+        setSelectedReviewIDs(new Set());
+        setReviewBatchProjectID(projectID);
+      }
+    },
+    onToggleCard: (cardID: string) => {
+      setSelectedReviewIDs((prev) => toggleReviewSelection(prev, cardID));
+    },
+    onToggleSelectAll: () => {
+      setSelectedReviewIDs((prev) =>
+        toggleSelectAllReview(
+          reconcileReviewSelection(prev, reviewCardIDs),
+          reviewCardIDs,
+        ),
+      );
+    },
+    onCancel: exitReviewBatchMode,
+    onSubmit: () => {
+      void handleReviewBatchSubmit();
+    },
+  };
+
   const activeTab: TodoState = useMemo(() => {
     if (selectedTab) return selectedTab;
     if (cardsByState.working.length > 0) return "working";
@@ -421,6 +636,9 @@ export default function BoardPage() {
 
   function handleTabSelect(state: TodoState) {
     setSelectedTab(state);
+    if (state !== "review" && isReviewBatchMode) {
+      exitReviewBatchMode();
+    }
     const container = mobileContainerRef.current;
     if (!container) return;
     const targetIndex = states.indexOf(state);
@@ -448,6 +666,9 @@ export default function BoardPage() {
       const state = states[index];
       if (state !== activeTab) {
         setSelectedTab(state);
+        if (state !== "review" && isReviewBatchMode) {
+          exitReviewBatchMode();
+        }
       }
     }
   }
@@ -714,6 +935,9 @@ export default function BoardPage() {
                           hasMoreDone={state === "done" && hasMoreDone}
                           loadingMoreDone={state === "done" && loadingMoreDone}
                           onLoadMoreDone={handleLoadMoreDone}
+                          batchAcceptance={
+                            state === "review" ? reviewBatchAcceptance : undefined
+                          }
                         />
                       </div>
                     ))}
@@ -740,6 +964,9 @@ export default function BoardPage() {
                           hasMoreDone={state === "done" && hasMoreDone}
                           loadingMoreDone={state === "done" && loadingMoreDone}
                           onLoadMoreDone={handleLoadMoreDone}
+                          batchAcceptance={
+                            state === "review" ? reviewBatchAcceptance : undefined
+                          }
                         />
                       ))}
                     </div>

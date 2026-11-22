@@ -13,39 +13,13 @@ import {
 } from "../../shared/ui/CardStatusDot";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { PlanSkeleton } from "./PlanSkeleton";
+import { summarizePlanSchedules } from "./schedule-summary";
 
 const planStateLabels: Record<OngoingState, string> = {
   active: "运行中",
   paused: "已暂停",
   archived: "已归档",
 };
-
-const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-function timeText(item: ProjectSchedule) {
-  return `${String(item.hour).padStart(2, "0")}:${String(item.minute).padStart(2, "0")}`;
-}
-
-function scheduleText(item: ProjectSchedule) {
-  if (item.frequency === "interval") {
-    return `每 ${item.interval_minutes ?? 5} 分钟`;
-  }
-  if (item.frequency === "daily") return `每天 ${timeText(item)}`;
-  if (item.frequency === "weekly") {
-    return `每${weekdays[item.day_of_week ?? 0]} ${timeText(item)}`;
-  }
-  return `每月 ${item.day_of_month ?? 1} 日 ${timeText(item)}`;
-}
-
-function localTime(value?: string) {
-  if (!value) return "";
-  return new Date(value).toLocaleString([], {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export default function PlanPage() {
   const { t } = useTranslation();
@@ -104,6 +78,15 @@ export default function PlanPage() {
         (view === "all" || card.ongoing_state === view),
     )
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const schedulesByCard = new Map<string, ProjectSchedule[]>();
+  for (const item of schedules.data || []) {
+    const existing = schedulesByCard.get(item.card_id);
+    if (existing) {
+      existing.push(item);
+    } else {
+      schedulesByCard.set(item.card_id, [item]);
+    }
+  }
   const filters = [
     { id: "all", label: t("全部定时任务") },
     { id: "active", label: t("运行中") },
@@ -170,15 +153,17 @@ export default function PlanPage() {
           {items.map((card) => {
             const active = card.ongoing_state === "active";
             const visualStatus = getCardVisualStatus(card);
-            const cardSchedules = (schedules.data || []).filter(
-              (item) => item.card_id === card.id,
-            );
+            const cardSchedules = schedulesByCard.get(card.id) || [];
+            const summary = summarizePlanSchedules(cardSchedules, {
+              ongoingState: card.ongoing_state || "active",
+              t,
+            });
             return (
               <button
                 key={card.id}
                 type="button"
                 onClick={() => navigate(`/plans/${projectID}/${card.id}`)}
-                className="flex w-full items-start gap-4 border-b border-divider px-5 py-4 text-left transition last:border-b-0 hover:bg-canvas"
+                className="flex w-full items-start gap-3 border-b border-divider px-4 py-3.5 text-left transition last:border-b-0 hover:bg-canvas md:gap-4 md:px-5 md:py-4"
               >
                 <span className="relative mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-foreground">
                   {active ? (
@@ -193,8 +178,9 @@ export default function PlanPage() {
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="flex min-w-0 items-center gap-1.5">
+                  {/* 第一行固定为单行：左侧截断标题与小图标，右侧状态徽章保持稳定对齐不掉行 */}
+                  <span className="flex items-center justify-between gap-2.5">
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
                       <span className="truncate text-sm font-semibold text-heading">
                         {card.title || t("未命名定时任务")}
                       </span>
@@ -205,59 +191,73 @@ export default function PlanPage() {
                         <span
                           title={t("通知已静音")}
                           aria-label={t("通知已静音")}
+                          className="inline-flex shrink-0"
                         >
                           <BellOff className="size-3.5 shrink-0 text-muted-foreground/75" />
                         </span>
                       )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
                       {visualStatus === "answering" && (
-                        <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                           {t("正在执行")}
                         </span>
                       )}
                       {visualStatus === "unread" && (
-                        <span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
                           {t("新消息")}
                         </span>
                       )}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2">
                       {(card.health === "healthy" ||
                         card.health === "warning" ||
                         card.health === "critical" ||
                         card.health === "acknowledged") && (
-                        <OngoingHealthBadge health={card.health} size="xs" />
+                        <OngoingHealthBadge
+                          health={card.health}
+                          size="xs"
+                          className="whitespace-nowrap"
+                        />
                       )}
                       {card.ongoing_state && card.ongoing_state !== "active" && (
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                           {t(planStateLabels[card.ongoing_state])}
                         </span>
                       )}
                     </span>
                   </span>
-                  {cardSchedules.length ? (
-                    cardSchedules.map((item) => (
-                      <span
-                        key={item.id}
-                        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-faint"
-                      >
-                        <span>{scheduleText(item)}</span>
-                        {!item.enabled ? (
-                          <span>· {t("已停用")}</span>
-                        ) : active && item.next_trigger_at ? (
-                          <span>
-                            · {t("下次")} {localTime(item.next_trigger_at)}
-                          </span>
-                        ) : null}
-                        {item.last_attempt_status === "failed" && (
-                          <span className="text-danger">
-                            · {t("上次执行失败")}
-                          </span>
-                        )}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="mt-1 block text-xs text-faint">
+                  {summary.isEmpty ? (
+                    <span className="mt-1 block text-xs leading-5 text-faint">
                       {t("未设置自动执行时间")}
+                    </span>
+                  ) : (
+                    <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-5 text-faint tabular-nums">
+                      <span className="min-w-0 break-words text-muted-foreground">
+                        {summary.rulesText}
+                      </span>
+                      {summary.nextTriggerText && (
+                        <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                          <span aria-hidden className="text-faint">
+                            ·
+                          </span>
+                          <span>{summary.nextTriggerText}</span>
+                        </span>
+                      )}
+                      {summary.statusHint && (
+                        <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                          <span aria-hidden className="text-faint">
+                            ·
+                          </span>
+                          <span>{summary.statusHint}</span>
+                        </span>
+                      )}
+                      {summary.hasFailedAttempt && (
+                        <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-danger">
+                          <span aria-hidden className="text-danger/75">
+                            ·
+                          </span>
+                          <span>{t("上次执行失败")}</span>
+                        </span>
+                      )}
                     </span>
                   )}
                 </span>

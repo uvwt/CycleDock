@@ -311,6 +311,8 @@ export function ContextSidebarItem({
   muted = false,
   icon,
   title,
+  subtitle,
+  subtitleTitle,
   description,
   meta,
   metaHoverOnly = false,
@@ -324,6 +326,8 @@ export function ContextSidebarItem({
   muted?: boolean;
   icon?: ReactNode;
   title: ReactNode;
+  subtitle?: ReactNode;
+  subtitleTitle?: string;
   description?: ReactNode;
   meta?: ReactNode;
   metaHoverOnly?: boolean;
@@ -333,6 +337,7 @@ export function ContextSidebarItem({
   onClick: () => void;
 }) {
   const { t } = useTranslation();
+  const hasSecondaryLine = Boolean(description || subtitle);
   const content = (
     <div
       className={`group relative flex w-full items-center rounded-xl transition-all duration-150 ${
@@ -351,8 +356,22 @@ export function ContextSidebarItem({
             : ""
         }`}
       >
-        <div className={`flex gap-2.5 ${description ? "items-start" : "items-center"}`}>
-          {icon ? <div className={`shrink-0 ${description ? "mt-0.5" : ""}`}>{icon}</div> : null}
+        <div
+          className={`flex gap-2.5 ${hasSecondaryLine ? "items-start" : "items-center"}`}
+        >
+          {icon ? (
+            <div
+              className={`shrink-0 ${
+                description
+                  ? "mt-0.5"
+                  : subtitle
+                    ? "flex h-5 items-center"
+                    : ""
+              }`}
+            >
+              {icon}
+            </div>
+          ) : null}
           <div className="min-w-0 flex-1">
             <div
               className={`flex items-center justify-between gap-1.5 ${
@@ -386,6 +405,14 @@ export function ContextSidebarItem({
                 </span>
               ) : null}
             </div>
+            {subtitle ? (
+              <div
+                title={subtitleTitle}
+                className="mt-0.5 truncate text-[11px] font-normal leading-4 tabular-nums text-faint"
+              >
+                {subtitle}
+              </div>
+            ) : null}
             {description ? (
               <p className="mt-0.5 line-clamp-2 text-xs font-normal leading-normal text-muted-foreground">
                 {description}

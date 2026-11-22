@@ -60,7 +60,7 @@ export interface SwipeActionItem {
   icon?: React.ReactNode;
   onClick: (e: React.MouseEvent) => void;
   className?: string;
-  variant?: "default" | "destructive" | "warning" | "primary" | "danger" | "secondary";
+  variant?: "default" | "destructive" | "warning" | "primary" | "danger" | "secondary" | "success";
 }
 
 export interface SwipeableRowProps {
@@ -459,13 +459,15 @@ export function SwipeableRow({
           const variantClasses =
             act.variant === "destructive" || act.variant === "danger"
               ? "bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white"
-              : act.variant === "warning"
-                ? "bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white"
-                : act.variant === "primary"
-                  ? "bg-primary hover:bg-primary/90 active:bg-primary/80 text-primary-foreground"
-                  : act.variant === "secondary"
-                    ? "bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white"
-                    : "bg-muted text-foreground hover:bg-muted/80 active:bg-muted";
+              : act.variant === "success"
+                ? "bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white"
+                : act.variant === "warning"
+                  ? "bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white"
+                  : act.variant === "primary"
+                    ? "bg-primary hover:bg-primary/90 active:bg-primary/80 text-primary-foreground"
+                    : act.variant === "secondary"
+                      ? "bg-slate-600 hover:bg-slate-700 active:bg-slate-800 text-white"
+                      : "bg-muted text-foreground hover:bg-muted/80 active:bg-muted";
 
           return (
             <button

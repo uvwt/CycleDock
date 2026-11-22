@@ -909,6 +909,28 @@ const en = {
   删除讨论: "Delete discussion",
   删除任务: "Delete task",
   删除定时任务: "Delete scheduled task",
+  下次: "Next",
+  今天: "Today",
+  明天: "Tomorrow",
+  上次执行失败: "Last run failed",
+  需关注: "Needs attention",
+  "已暂停 / 已归档": "Paused / Archived",
+  总览: "Overview",
+  查看定时任务总览: "View scheduled tasks overview",
+  "搜索定时任务…": "Search scheduled tasks...",
+  没有匹配的定时任务: "No matching scheduled tasks",
+  完成: "Done",
+  验收完成: "Accept & complete",
+  已验收完成: "Accepted and completed",
+  验收失败: "Failed to accept",
+  批量验收: "Batch accept",
+  全选: "Select all",
+  取消全选: "Deselect all",
+  "完成所选 ({{count}})": "Complete selected ({{count}})",
+  "已完成 {{count}} 张卡片": "Completed {{count}} cards",
+  "已完成 {{succeeded}} 张卡片，{{failed}} 张失败":
+    "Completed {{succeeded}} cards, {{failed}} failed",
+  "批量验收失败（{{failed}} 张）": "Batch accept failed ({{failed}})",
 } as const;
 
 void i18n.use(initReactI18next).init({
