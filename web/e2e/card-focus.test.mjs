@@ -523,7 +523,7 @@ test("导航分类状态点：静音定时卡按 approval > critical > warning �
   );
 });
 
-test("所有未归档的置顶卡片均进入焦点列表，按更高动态原因优先、纯置顶按置顶时间倒序，不触发额外状态点", () => {
+test("所有未归档的置顶卡片均进入焦点列表并排在最上方（按置顶时间倒序），保留真实状态原因且不触发额外状态点", () => {
   const pinnedDiscussion = makeCard({
     id: "disc-pinned-older",
     kind: "discussion",
@@ -600,16 +600,16 @@ test("所有未归档的置顶卡片均进入焦点列表，按更高动态原�
     pinnedArchivedOngoing,
   ]);
 
-  // 同为 working 时已置顶排在前面；其后纯 pinned 按 pinned_at 倒序
+  // 所有已置顶卡片均排在未置顶卡片上方，并按 pinned_at 倒序稳定排列
   assert.deepEqual(
     summary.cards.map((c) => c.id),
     [
-      "todo-pinned-working",
-      "todo-unpinned-working",
       "ongoing-pinned-healthy",
       "todo-pinned-newer",
       "todo-pinned-done",
       "disc-pinned-older",
+      "todo-pinned-working",
+      "todo-unpinned-working",
     ],
   );
   assert.equal(summary.workingCount, 2);
@@ -618,6 +618,128 @@ test("所有未归档的置顶卡片均进入焦点列表，按更高动态原�
   assert.equal(summary.highestVisualStatus, "idle");
   assert.equal(getKindVisualStatus([pinnedDiscussion], "discussion"), "idle");
   assert.equal(getKindVisualStatus([pinnedOngoing], "ongoing"), "idle");
+});
+
+test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之上，多张置顶按 pinned_at 倒序稳定排列", () => {
+  const pinnedPlainNewer = makeCard({
+    id: "pinned-plain-newer",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T08:00:00Z",
+    updated_at: "2026-11-08T01:00:00Z",
+  });
+  const pinnedCriticalSameTimeOlderUpdate = makeCard({
+    id: "pinned-critical-same-pin-older-update",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "critical",
+    pinned_at: "2026-11-08T06:00:00Z",
+    updated_at: "2026-11-08T03:00:00Z",
+  });
+  const pinnedUnreadSameTimeNewerUpdate = makeCard({
+    id: "pinned-unread-same-pin-newer-update",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    pinned_at: "2026-11-08T06:00:00Z",
+    updated_at: "2026-11-08T09:00:00Z",
+  });
+  const unpinnedApproval = makeCard({
+    id: "unpinned-approval",
+    kind: "todo",
+    todo_state: "working",
+    pending_tool_approval_count: 1,
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedCritical = makeCard({
+    id: "unpinned-critical",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "critical",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedWarning = makeCard({
+    id: "unpinned-warning",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "warning",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedAnswering = makeCard({
+    id: "unpinned-answering",
+    kind: "discussion",
+    discussion_state: "active",
+    current_attempt_status: "running",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedUnread = makeCard({
+    id: "unpinned-unread",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedReview = makeCard({
+    id: "unpinned-review",
+    kind: "todo",
+    todo_state: "review",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+  const unpinnedWorking = makeCard({
+    id: "unpinned-working",
+    kind: "todo",
+    todo_state: "working",
+    updated_at: "2026-11-08T10:00:00Z",
+  });
+
+  // 置顶卡片仍保留其真实状态理由与视觉状态，不被降级
+  assert.equal(getCardFocusReason(pinnedPlainNewer), "pinned");
+  assert.equal(
+    getCardFocusReason(pinnedCriticalSameTimeOlderUpdate),
+    "critical",
+  );
+  assert.equal(
+    getCardFocusReason(pinnedUnreadSameTimeNewerUpdate),
+    "unread",
+  );
+
+  const summary = buildFocusSummary([
+    unpinnedWorking,
+    unpinnedReview,
+    unpinnedUnread,
+    unpinnedAnswering,
+    unpinnedWarning,
+    unpinnedCritical,
+    unpinnedApproval,
+    pinnedCriticalSameTimeOlderUpdate,
+    pinnedUnreadSameTimeNewerUpdate,
+    pinnedPlainNewer,
+  ]);
+
+  assert.deepEqual(
+    summary.cards.map((c) => c.id),
+    [
+      "pinned-plain-newer",
+      "pinned-unread-same-pin-newer-update",
+      "pinned-critical-same-pin-older-update",
+      "unpinned-approval",
+      "unpinned-critical",
+      "unpinned-warning",
+      "unpinned-answering",
+      "unpinned-unread",
+      "unpinned-review",
+      "unpinned-working",
+    ],
+  );
+  assert.equal(summary.pinnedCount, 1);
+  assert.equal(summary.approvalCount, 1);
+  assert.equal(summary.criticalCount, 2);
+  assert.equal(summary.warningCount, 1);
+  assert.equal(summary.answeringCount, 1);
+  assert.equal(summary.unreadCount, 2);
+  assert.equal(summary.reviewCount, 1);
+  assert.equal(summary.workingCount, 1);
+  assert.equal(summary.highestVisualStatus, "answering");
 });
 
 test("已静音但被置顶的未归档卡片仍保留在焦点列表中（按 pinned 入列，不误报运行中/未读）", () => {

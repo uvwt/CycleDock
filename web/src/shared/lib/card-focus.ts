@@ -208,17 +208,25 @@ export function buildFocusSummary(
     counts[reason]++;
   }
 
+  // 置顶卡片固定排在焦点列表最上方，避免被新消息或状态变化打乱常驻入口位置：
+  // 1. 已置顶始终优先于未置顶；同为已置顶时按 pinned_at 倒序保持稳定顺序（相同时按 updated_at 倒序兜底）
+  // 2. 未置顶卡片保持原有规则：按紧急程度（approval > critical > warning > answering > unread > review > working）与 updated_at 倒序排列
   focusCards.sort((a, b) => {
-    const priDiff =
-      focusReasonPriority[a.reason] - focusReasonPriority[b.reason];
-    if (priDiff !== 0) return priDiff;
-
     const aPinned = Boolean(a.card.pinned_at);
     const bPinned = Boolean(b.card.pinned_at);
     if (aPinned !== bPinned) return aPinned ? -1 : 1;
     if (aPinned && bPinned) {
-      return (b.card.pinned_at || "").localeCompare(a.card.pinned_at || "");
+      const pinDiff = (b.card.pinned_at || "").localeCompare(
+        a.card.pinned_at || "",
+      );
+      if (pinDiff !== 0) return pinDiff;
+      return b.card.updated_at.localeCompare(a.card.updated_at);
     }
+
+    const priDiff =
+      focusReasonPriority[a.reason] - focusReasonPriority[b.reason];
+    if (priDiff !== 0) return priDiff;
+
     return b.card.updated_at.localeCompare(a.card.updated_at);
   });
 
