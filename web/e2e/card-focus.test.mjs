@@ -4,7 +4,9 @@ import {
   buildFocusSummary,
   getCardFocusReason,
   getCardVisualStatus,
+  getFocusCardVisualStatus,
   getKindVisualStatus,
+  groupFocusCards,
 } from "../src/shared/lib/card-focus.ts";
 
 function makeCard(overrides) {
@@ -523,7 +525,7 @@ test("导航分类状态点：静音定时卡按 approval > critical > warning �
   );
 });
 
-test("所有未归档的置顶卡片均进入焦点列表并排在最上方（按置顶时间倒序），保留真实状态原因且不触发额外状态点", () => {
+test("所有未归档的置顶卡片均进入焦点列表，纯置顶按 pinned_at 倒序排在 working 之前且不触发额外状态点", () => {
   const pinnedDiscussion = makeCard({
     id: "disc-pinned-older",
     kind: "discussion",
@@ -600,7 +602,8 @@ test("所有未归档的置顶卡片均进入焦点列表并排在最上方（�
     pinnedArchivedOngoing,
   ]);
 
-  // 所有已置顶卡片均排在未置顶卡片上方，并按 pinned_at 倒序稳定排列
+  // 纯置顶层（priority 6）排在进行中层（priority 7）之前且按 pinned_at 倒序；
+  // 进行中层内已置顶任务优先于未置顶任务
   assert.deepEqual(
     summary.cards.map((c) => c.id),
     [
@@ -620,29 +623,14 @@ test("所有未归档的置顶卡片均进入焦点列表并排在最上方（�
   assert.equal(getKindVisualStatus([pinnedOngoing], "ongoing"), "idle");
 });
 
-test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之上，多张置顶按 pinned_at 倒序稳定排列", () => {
-  const pinnedPlainNewer = makeCard({
-    id: "pinned-plain-newer",
-    kind: "discussion",
-    discussion_state: "active",
-    pinned_at: "2026-11-08T08:00:00Z",
+test("焦点排序按紧急度分层（静默置顶不跨层抢占动态焦点），同层置顶优先，纯置顶按 pinned_at 倒序", () => {
+  const pinnedApprovalOlderUpdate = makeCard({
+    id: "pinned-approval-older-update",
+    kind: "todo",
+    todo_state: "working",
+    pending_tool_approval_count: 1,
+    pinned_at: "2026-11-08T02:00:00Z",
     updated_at: "2026-11-08T01:00:00Z",
-  });
-  const pinnedCriticalSameTimeOlderUpdate = makeCard({
-    id: "pinned-critical-same-pin-older-update",
-    kind: "ongoing",
-    ongoing_state: "active",
-    health: "critical",
-    pinned_at: "2026-11-08T06:00:00Z",
-    updated_at: "2026-11-08T03:00:00Z",
-  });
-  const pinnedUnreadSameTimeNewerUpdate = makeCard({
-    id: "pinned-unread-same-pin-newer-update",
-    kind: "discussion",
-    discussion_state: "active",
-    unread: true,
-    pinned_at: "2026-11-08T06:00:00Z",
-    updated_at: "2026-11-08T09:00:00Z",
   });
   const unpinnedApproval = makeCard({
     id: "unpinned-approval",
@@ -650,6 +638,14 @@ test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之�
     todo_state: "working",
     pending_tool_approval_count: 1,
     updated_at: "2026-11-08T10:00:00Z",
+  });
+  const pinnedCriticalOlderUpdate = makeCard({
+    id: "pinned-critical-older-update",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "critical",
+    pinned_at: "2026-11-08T02:00:00Z",
+    updated_at: "2026-11-08T03:00:00Z",
   });
   const unpinnedCritical = makeCard({
     id: "unpinned-critical",
@@ -672,6 +668,30 @@ test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之�
     current_attempt_status: "running",
     updated_at: "2026-11-08T10:00:00Z",
   });
+  const pinnedUnreadNewerUpdate = makeCard({
+    id: "pinned-unread-newer-update",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    pinned_at: "2026-11-08T02:00:00Z",
+    updated_at: "2026-11-08T09:00:00Z",
+  });
+  const pinnedUnreadSameUpdateNewerPin = makeCard({
+    id: "pinned-unread-same-update-newer-pin",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    pinned_at: "2026-11-08T08:00:00Z",
+    updated_at: "2026-11-08T05:00:00Z",
+  });
+  const pinnedUnreadSameUpdateOlderPin = makeCard({
+    id: "pinned-unread-same-update-older-pin",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    pinned_at: "2026-11-08T04:00:00Z",
+    updated_at: "2026-11-08T05:00:00Z",
+  });
   const unpinnedUnread = makeCard({
     id: "unpinned-unread",
     kind: "discussion",
@@ -685,6 +705,34 @@ test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之�
     todo_state: "review",
     updated_at: "2026-11-08T10:00:00Z",
   });
+  const pinnedPlainNewer = makeCard({
+    id: "pinned-plain-newer",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T08:00:00Z",
+    updated_at: "2026-11-08T01:00:00Z",
+  });
+  const pinnedPlainSamePinNewerUpdate = makeCard({
+    id: "pinned-plain-same-pin-newer-update",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T06:00:00Z",
+    updated_at: "2026-11-08T09:00:00Z",
+  });
+  const pinnedPlainSamePinOlderUpdate = makeCard({
+    id: "pinned-plain-same-pin-older-update",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T06:00:00Z",
+    updated_at: "2026-11-08T03:00:00Z",
+  });
+  const pinnedWorkingOlderUpdate = makeCard({
+    id: "pinned-working-older-update",
+    kind: "todo",
+    todo_state: "working",
+    pinned_at: "2026-11-08T01:00:00Z",
+    updated_at: "2026-11-08T01:00:00Z",
+  });
   const unpinnedWorking = makeCard({
     id: "unpinned-working",
     kind: "todo",
@@ -694,51 +742,58 @@ test("焦点排序将置顶卡片固定置顶于所有未置顶动态状态之�
 
   // 置顶卡片仍保留其真实状态理由与视觉状态，不被降级
   assert.equal(getCardFocusReason(pinnedPlainNewer), "pinned");
-  assert.equal(
-    getCardFocusReason(pinnedCriticalSameTimeOlderUpdate),
-    "critical",
-  );
-  assert.equal(
-    getCardFocusReason(pinnedUnreadSameTimeNewerUpdate),
-    "unread",
-  );
+  assert.equal(getCardFocusReason(pinnedCriticalOlderUpdate), "critical");
+  assert.equal(getCardFocusReason(pinnedUnreadNewerUpdate), "unread");
+  assert.equal(getCardFocusReason(pinnedWorkingOlderUpdate), "working");
 
   const summary = buildFocusSummary([
     unpinnedWorking,
+    pinnedWorkingOlderUpdate,
     unpinnedReview,
+    pinnedPlainSamePinOlderUpdate,
+    pinnedPlainSamePinNewerUpdate,
+    pinnedPlainNewer,
     unpinnedUnread,
+    pinnedUnreadSameUpdateOlderPin,
+    pinnedUnreadSameUpdateNewerPin,
+    pinnedUnreadNewerUpdate,
     unpinnedAnswering,
     unpinnedWarning,
     unpinnedCritical,
+    pinnedCriticalOlderUpdate,
     unpinnedApproval,
-    pinnedCriticalSameTimeOlderUpdate,
-    pinnedUnreadSameTimeNewerUpdate,
-    pinnedPlainNewer,
+    pinnedApprovalOlderUpdate,
   ]);
 
   assert.deepEqual(
     summary.cards.map((c) => c.id),
     [
-      "pinned-plain-newer",
-      "pinned-unread-same-pin-newer-update",
-      "pinned-critical-same-pin-older-update",
+      "pinned-approval-older-update",
       "unpinned-approval",
+      "pinned-critical-older-update",
       "unpinned-critical",
       "unpinned-warning",
       "unpinned-answering",
+      "pinned-unread-newer-update",
+      "pinned-unread-same-update-newer-pin",
+      "pinned-unread-same-update-older-pin",
       "unpinned-unread",
       "unpinned-review",
+      "pinned-plain-newer",
+      "pinned-plain-same-pin-newer-update",
+      "pinned-plain-same-pin-older-update",
+      "pinned-working-older-update",
       "unpinned-working",
     ],
   );
-  assert.equal(summary.pinnedCount, 1);
-  assert.equal(summary.approvalCount, 1);
+  assert.equal(summary.pinnedCount, 3);
+  assert.equal(summary.approvalCount, 2);
   assert.equal(summary.criticalCount, 2);
   assert.equal(summary.warningCount, 1);
   assert.equal(summary.answeringCount, 1);
-  assert.equal(summary.unreadCount, 2);
+  assert.equal(summary.unreadCount, 4);
   assert.equal(summary.reviewCount, 1);
-  assert.equal(summary.workingCount, 1);
+  assert.equal(summary.workingCount, 2);
   assert.equal(summary.highestVisualStatus, "answering");
 });
 
@@ -752,6 +807,14 @@ test("已静音但被置顶的未归档卡片仍保留在焦点列表中（按 p
     notifications_muted: true,
     pinned_at: "2026-11-08T04:00:00Z",
   });
+  const mutedPinnedUnread = makeCard({
+    id: "disc-muted-pinned-unread",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    notifications_muted: true,
+    pinned_at: "2026-11-08T03:00:00Z",
+  });
   const mutedPinnedArchived = makeCard({
     id: "disc-muted-pinned-archived",
     kind: "discussion",
@@ -761,15 +824,129 @@ test("已静音但被置顶的未归档卡片仍保留在焦点列表中（按 p
   });
 
   assert.equal(getCardFocusReason(mutedPinnedRunning), "pinned");
+  assert.equal(getCardFocusReason(mutedPinnedUnread), "pinned");
   assert.equal(getCardFocusReason(mutedPinnedArchived), null);
 
-  const summary = buildFocusSummary([mutedPinnedRunning, mutedPinnedArchived]);
+  // 焦点列表左侧视觉状态点与焦点降级保持一致：静音置顶不亮绿点或蓝点，消除“蓝点 + 静音 + 已置顶”冲突
+  assert.equal(getFocusCardVisualStatus(mutedPinnedRunning), "idle");
+  assert.equal(getFocusCardVisualStatus(mutedPinnedUnread), "idle");
+  // 普通分类视图仍依赖 getCardVisualStatus 展示真实状态
+  assert.equal(getCardVisualStatus(mutedPinnedRunning), "answering");
+  assert.equal(getCardVisualStatus(mutedPinnedUnread), "unread");
+
+  const summary = buildFocusSummary([
+    mutedPinnedUnread,
+    mutedPinnedRunning,
+    mutedPinnedArchived,
+  ]);
   assert.deepEqual(
     summary.cards.map((c) => c.id),
-    ["disc-muted-pinned-running"],
+    ["disc-muted-pinned-running", "disc-muted-pinned-unread"],
   );
-  assert.equal(summary.pinnedCount, 1);
+  assert.equal(summary.pinnedCount, 2);
   assert.equal(summary.answeringCount, 0);
   assert.equal(summary.unreadCount, 0);
   assert.equal(summary.highestVisualStatus, "idle");
+});
+
+test("焦点视觉状态点在静音硬豁免场景（待审批 / 异常 / 需留意）下保留对应状态点，不破坏未静音卡片", () => {
+  const mutedPinnedApprovalRunning = makeCard({
+    id: "muted-pinned-approval-running",
+    kind: "todo",
+    todo_state: "working",
+    current_attempt_status: "running",
+    pending_tool_approval_count: 1,
+    notifications_muted: true,
+    pinned_at: "2026-11-08T04:00:00Z",
+  });
+  const mutedPinnedCriticalRunning = makeCard({
+    id: "muted-pinned-critical-running",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "critical",
+    current_attempt_status: "running",
+    notifications_muted: true,
+    pinned_at: "2026-11-08T03:00:00Z",
+  });
+  const mutedPinnedWarning = makeCard({
+    id: "muted-pinned-warning",
+    kind: "ongoing",
+    ongoing_state: "active",
+    health: "warning",
+    notifications_muted: true,
+    pinned_at: "2026-11-08T02:00:00Z",
+  });
+  const unmutedPinnedUnread = makeCard({
+    id: "unmuted-pinned-unread",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    pinned_at: "2026-11-08T01:00:00Z",
+  });
+
+  assert.equal(getFocusCardVisualStatus(mutedPinnedApprovalRunning), "approval");
+  assert.equal(getFocusCardVisualStatus(mutedPinnedCriticalRunning), "critical");
+  assert.equal(getFocusCardVisualStatus(mutedPinnedWarning), "warning");
+  assert.equal(getFocusCardVisualStatus(unmutedPinnedUnread), "unread");
+  // 当前正在查看未静音未读卡时依然按既有规则抑制蓝点
+  assert.equal(getFocusCardVisualStatus(unmutedPinnedUnread, true), "idle");
+});
+
+test("groupFocusCards 按 需要关注 / 置顶常驻 / 进行中 切分轻量分组，单组时不产生冗余空组", () => {
+  const unread = makeCard({
+    id: "unread-1",
+    kind: "discussion",
+    discussion_state: "active",
+    unread: true,
+    updated_at: "2026-11-08T05:00:00Z",
+  });
+  const review = makeCard({
+    id: "review-1",
+    kind: "todo",
+    todo_state: "review",
+    updated_at: "2026-11-08T04:00:00Z",
+  });
+  const pinned = makeCard({
+    id: "pinned-1",
+    kind: "discussion",
+    discussion_state: "active",
+    pinned_at: "2026-11-08T06:00:00Z",
+    notifications_muted: true,
+    unread: true,
+    updated_at: "2026-11-08T07:00:00Z",
+  });
+  const working = makeCard({
+    id: "working-1",
+    kind: "todo",
+    todo_state: "working",
+    updated_at: "2026-11-08T03:00:00Z",
+  });
+
+  const summary = buildFocusSummary([working, pinned, review, unread]);
+  const sections = groupFocusCards(summary.cards);
+  assert.deepEqual(
+    sections.map((section) => ({
+      key: section.key,
+      ids: section.cards.map((c) => c.id),
+    })),
+    [
+      { key: "attention", ids: ["unread-1", "review-1"] },
+      { key: "pinned", ids: ["pinned-1"] },
+      { key: "working", ids: ["working-1"] },
+    ],
+  );
+
+  // 只有动态焦点时仅返回一个分组
+  const attentionOnly = groupFocusCards(buildFocusSummary([unread, review]).cards);
+  assert.deepEqual(
+    attentionOnly.map((s) => s.key),
+    ["attention"],
+  );
+
+  // 只有静默置顶时仅返回一个分组
+  const pinnedOnly = groupFocusCards(buildFocusSummary([pinned]).cards);
+  assert.deepEqual(
+    pinnedOnly.map((s) => s.key),
+    ["pinned"],
+  );
 });

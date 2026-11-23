@@ -24,13 +24,11 @@ import { api } from "../../shared/api/client";
 import { keys } from "../../app/query";
 import { ErrorView, Sheet, Skeleton } from "../../shared/ui/components";
 import { ContextSidebarSkeleton } from "../../shared/ui/ContextSidebar";
-import {
-  CardStatusDot,
-  getCardVisualStatus,
-} from "../../shared/ui/CardStatusDot";
+import { CardStatusDot } from "../../shared/ui/CardStatusDot";
 import {
   buildFocusSummary,
   getCardFocusReason,
+  getFocusCardVisualStatus,
 } from "../../shared/lib/card-focus";
 import type { Card } from "../../shared/api/types";
 import { useProject } from "../../app/project-context";
@@ -295,7 +293,7 @@ export default function ChatHome() {
 
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       {focusSummary.cards.slice(0, 6).map((card, index) => {
-                        const visualStatus = getCardVisualStatus(card);
+                        const visualStatus = getFocusCardVisualStatus(card);
                         const reason = getCardFocusReason(card);
                         const kindLabel =
                           card.kind === "discussion"
