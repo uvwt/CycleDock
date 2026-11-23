@@ -106,4 +106,20 @@ func TestScheduleToolsDiscoveredByOfficialMCPClient(t *testing.T) {
 			t.Errorf("missing %s in MCP tool discovery", name)
 		}
 	}
+
+	var foundReply bool
+	for _, candidate := range discovered.Tools {
+		if candidate.Name != "reply_message" {
+			continue
+		}
+		foundReply = true
+		for _, want := range []string{"images", "![alt](url)", "type=attachment", "image-only"} {
+			if !strings.Contains(candidate.Description, want) {
+				t.Fatalf("MCP reply_message description missing %q: %s", want, candidate.Description)
+			}
+		}
+	}
+	if !foundReply {
+		t.Fatal("missing reply_message in MCP tool discovery")
+	}
 }

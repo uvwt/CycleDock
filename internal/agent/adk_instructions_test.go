@@ -152,3 +152,49 @@ func TestMCPConnectionWarningUsesSafeActionableReasons(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildADKInstructionsAndToolDefinitions_图片发送规范(t *testing.T) {
+	card := store.AgentCardContext{CardKind: domain.CardKindDiscussion, CardTitle: "普通讨论"}
+	instructions := buildADKInstructions(card, "", "")
+	for _, want := range []string{
+		"reply_message 的 images 字段",
+		"纯图片气泡",
+		"不要在 Markdown 正文中使用 ![alt](url)",
+		`不要用 type="attachment" 发图片`,
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("系统提示词缺少图片发送约束 %q", want)
+		}
+	}
+
+	var replyToolDesc string
+	var imagesDesc string
+	var contentDesc string
+	for _, def := range internalToolDefinitions() {
+		if def.Function.Name != "reply_message" {
+			continue
+		}
+		replyToolDesc = def.Function.Description
+		props, _ := def.Function.Parameters["properties"].(map[string]any)
+		if imgField, ok := props["images"].(map[string]any); ok {
+			imagesDesc, _ = imgField["description"].(string)
+		}
+		if contentField, ok := props["content"].(map[string]any); ok {
+			contentDesc, _ = contentField["description"].(string)
+		}
+	}
+	if replyToolDesc == "" {
+		t.Fatal("coreToolDefinitions 缺少 reply_message 工具定义")
+	}
+	for _, want := range []string{"images", "![alt](url)", "type=attachment", "image-only"} {
+		if !strings.Contains(replyToolDesc, want) {
+			t.Fatalf("reply_message 工具描述缺少 %q: %s", want, replyToolDesc)
+		}
+	}
+	if !strings.Contains(imagesDesc, "HTTPS") || !strings.Contains(imagesDesc, "image-only") {
+		t.Fatalf("reply_message images 参数描述未清晰说明纯图片与 HTTPS 用法: %s", imagesDesc)
+	}
+	if !strings.Contains(contentDesc, "unless images is provided") {
+		t.Fatalf("reply_message content 参数描述未说明纯图片气泡可留空: %s", contentDesc)
+	}
+}

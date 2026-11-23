@@ -626,6 +626,8 @@ const en = {
   "附带 {{count}} 张图片": "{{count}} attached images",
   "附带 {{count}} 个附件": "{{count}} attachments",
   "点击查看大图": "Click to view full size",
+  "打开原图": "Open original",
+  "图片加载失败": "Failed to load image",
   "消息图片": "Message image",
   "图片大图预览": "Full-size image preview",
   "关闭预览": "Close preview",

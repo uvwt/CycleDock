@@ -160,6 +160,8 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 	}
 	for _, message := range []store.ReplyMessage{
 		{Type: "attachment", URL: "https://example.com/report.pdf", Alt: "检查报告", EndTurn: true},
+		{Type: "text", Images: []string{"https://example.com/chart-1.png"}, EndTurn: true},
+		{Type: "text", Images: []string{"https://example.com/chart-1.png", "https://example.com/chart-2.png"}, EndTurn: true},
 		{Type: "choice", EndTurn: true, Widget: &store.ChoiceWidget{Question: "继续执行吗？", Options: []store.ChoiceOption{
 			{Value: "yes", Label: "继续"}, {Value: "no", Label: "停止"},
 		}}},
@@ -177,6 +179,10 @@ func TestCardUpdatesScopeAndDurableRevisions(t *testing.T) {
 		want := message.Alt
 		if message.Widget != nil {
 			want = message.Widget.Question
+		} else if want == "" && len(message.Images) == 1 {
+			want = "[图片]"
+		} else if want == "" && len(message.Images) > 1 {
+			want = "[2 张图片]"
 		}
 		var target cardUpdate
 		for _, candidate := range updates {

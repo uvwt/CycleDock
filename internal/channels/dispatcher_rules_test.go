@@ -190,3 +190,47 @@ func TestSupervisorCallbackTargetsMainChat(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendOutboundImageLinks(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		alt    string
+		images []string
+		want   string
+	}{
+		{
+			name:   "no_images_keeps_body",
+			body:   "纯文本回复",
+			images: nil,
+			want:   "纯文本回复",
+		},
+		{
+			name:   "image_only_single",
+			body:   "",
+			images: []string{"https://example.com/a.png"},
+			want:   "https://example.com/a.png",
+		},
+		{
+			name:   "image_only_with_alt_and_multiple",
+			body:   "",
+			alt:    "页面截图",
+			images: []string{" https://example.com/a.png ", "", "https://example.com/b.png"},
+			want:   "页面截图\nhttps://example.com/a.png\nhttps://example.com/b.png",
+		},
+		{
+			name:   "mixed_text_and_images",
+			body:   "这是结果截图",
+			alt:    "忽略 alt",
+			images: []string{"https://example.com/a.png"},
+			want:   "这是结果截图\nhttps://example.com/a.png",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := appendOutboundImageLinks(tc.body, tc.alt, tc.images); got != tc.want {
+				t.Fatalf("appendOutboundImageLinks() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
