@@ -312,7 +312,10 @@ function TaskCard({
       >
         <div className="flex items-start gap-2.5">
           <div className="mt-1 shrink-0">
-            <CardStatusDot status={visualStatus} />
+            <CardStatusDot
+              status={visualStatus}
+              muted={Boolean(card.notifications_muted)}
+            />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
@@ -376,7 +379,10 @@ function TaskCard({
           </span>
         ) : (
           <div className="mt-1 shrink-0">
-            <CardStatusDot status={visualStatus} />
+            <CardStatusDot
+              status={visualStatus}
+              muted={Boolean(card.notifications_muted)}
+            />
           </div>
         )}
         <div className="min-w-0 flex-1">

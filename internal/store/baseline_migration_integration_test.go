@@ -86,8 +86,86 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	`).Scan(&migrationVersion); err != nil {
 		t.Fatal(err)
 	}
-	if migrationVersion != 50 {
-		t.Fatalf("migration version=%d want 50", migrationVersion)
+	if migrationVersion != 51 {
+		t.Fatalf("migration version=%d want 51", migrationVersion)
+	}
+}
+
+func TestMigration000051CompositeSetNullFKsUpDownUp(t *testing.T) {
+	s := requireIntegration(t)
+	ctx := context.Background()
+
+	schema := "mig51_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+	})
+
+	cfg := s.pool.Config().ConnConfig.Copy()
+	cfg.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*cfg)
+	defer sqlDB.Close()
+
+	_, filename, _, _ := runtime.Caller(0)
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("initial goose up: %v", err)
+	}
+
+	// 检查整个 schema 中不存在 ON DELETE SET NULL 命中 NOT NULL 列的联合外键。
+	queryBrokenFKs := `
+		SELECT c.conrelid::regclass::text || '.' || c.conname || '(' || a.attname || ')'
+		FROM pg_constraint c
+		JOIN pg_namespace n ON n.oid = c.connamespace
+		JOIN pg_attribute a
+		  ON a.attrelid = c.conrelid
+		 AND a.attnum = ANY(COALESCE(c.confdelsetcols, c.conkey))
+		WHERE n.nspname = $1
+		  AND c.contype = 'f'
+		  AND c.confdeltype = 'n'
+		  AND a.attnotnull
+		ORDER BY 1
+	`
+	listBrokenFKs := func() []string {
+		rows, err := sqlDB.QueryContext(ctx, queryBrokenFKs, schema)
+		if err != nil {
+			t.Fatalf("query broken set-null FKs: %v", err)
+		}
+		defer rows.Close()
+		var broken []string
+		for rows.Next() {
+			var item string
+			if err := rows.Scan(&item); err != nil {
+				t.Fatal(err)
+			}
+			broken = append(broken, item)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return broken
+	}
+
+	if broken := listBrokenFKs(); len(broken) != 0 {
+		t.Fatalf("unexpected ON DELETE SET NULL FKs targeting NOT NULL columns after up to 51: %v", broken)
+	}
+	if err := goose.DownTo(sqlDB, migrations, 50); err != nil {
+		t.Fatalf("goose down-to 50: %v", err)
+	}
+	if broken := listBrokenFKs(); len(broken) == 0 {
+		t.Fatalf("expected legacy broken composite SET NULL FKs to be restored at version 50")
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("goose re-up to 51: %v", err)
+	}
+	if broken := listBrokenFKs(); len(broken) != 0 {
+		t.Fatalf("unexpected ON DELETE SET NULL FKs targeting NOT NULL columns after re-up to 51: %v", broken)
 	}
 }
 

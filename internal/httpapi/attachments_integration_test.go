@@ -402,4 +402,14 @@ func TestCreateTodoWithImageAttachmentsEndToEnd(t *testing.T) {
 	if goneRec.Code != http.StatusGone {
 		t.Fatalf("expected 410 Gone for purged todo attachment, got %d", goneRec.Code)
 	}
+
+	// 7. 删除带有附件的卡片应正常返回 204，且卡片不再存在、保留的 workspace_attachments.card_id 被置空。
+	deleteRec := doJSON(t, handler, http.MethodDelete, "/api/v1/cards/"+created.ID, nil, cookie, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete todo with attachments status = %d body = %s", deleteRec.Code, deleteRec.Body.String())
+	}
+	afterDeleteRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+created.ID, nil, cookie, nil)
+	if afterDeleteRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 after deleting card with attachments, got %d body = %s", afterDeleteRec.Code, afterDeleteRec.Body.String())
+	}
 }

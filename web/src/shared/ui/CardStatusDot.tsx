@@ -4,10 +4,12 @@ export { getCardVisualStatus, type CardVisualStatus };
 
 export function CardStatusDot({
   status,
+  muted = false,
   className = "",
   animateAnswering = true,
 }: {
   status: CardVisualStatus;
+  muted?: boolean;
   className?: string;
   animateAnswering?: boolean;
 }) {
@@ -27,6 +29,19 @@ export function CardStatusDot({
   }
 
   if (status === "unread") {
+    // 免打扰卡片的未读降噪为浅灰小圆点，与普通未读的亮蓝点一眼区分。
+    if (muted) {
+      return (
+        <span
+          className={`flex size-2.5 shrink-0 items-center justify-center ${className}`}
+          title="免打扰未读"
+          aria-label="免打扰未读"
+          data-muted-unread="true"
+        >
+          <span className="inline-flex size-2 rounded-full bg-muted-foreground/45" />
+        </span>
+      );
+    }
     return (
       <span
         className={`flex size-2.5 shrink-0 items-center justify-center ${className}`}

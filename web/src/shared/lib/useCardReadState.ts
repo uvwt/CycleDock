@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
@@ -6,6 +7,13 @@ import { api } from "../api/client";
 import type { Card, CardDetail } from "../api/types";
 import { patchCachedCard } from "./card-cache";
 import { activeCardAutoReadSuppression } from "./card-read-state";
+
+const DEFAULT_BATCH_MARK_READ_CONCURRENCY = 5;
+
+export interface BatchMarkReadResult {
+  succeededIDs: string[];
+  failedIDs: string[];
+}
 
 function computeMaxMessageSequence(detail?: CardDetail): number {
   if (!detail?.timeline?.length) return 0;
@@ -126,4 +134,146 @@ export function useCardReadState(card?: Card | null) {
       );
     },
   });
+}
+
+/**
+ * 批量将多张卡片一键标为已读（如「免打扰」分组的「全部已读」操作）。
+ * 复用单卡 `api.markCardRead`，限制并发并做乐观更新；单卡失败时只回滚失败项并给出明确提示。
+ */
+export function useBatchMarkCardsRead(projectID?: string) {
+  const { t } = useTranslation();
+  const [isPending, setIsPending] = useState(false);
+
+  const markBatchRead = useCallback(
+    async (cardIDs: readonly string[]): Promise<BatchMarkReadResult> => {
+      const uniqueIDs = Array.from(new Set(cardIDs.filter(Boolean)));
+      if (uniqueIDs.length === 0 || isPending) {
+        return { succeededIDs: [], failedIDs: [] };
+      }
+
+      setIsPending(true);
+      const cachedCards = projectID
+        ? queryClient.getQueryData<Card[]>(keys.cards(projectID))
+        : undefined;
+      const prevByID = new Map<
+        string,
+        {
+          projectID?: string;
+          unread?: boolean;
+          marked_unread?: boolean;
+          last_read_message_sequence?: number;
+        }
+      >();
+      const touchedProjects = new Set<string>();
+      if (projectID) touchedProjects.add(projectID);
+
+      try {
+        await Promise.all([
+          ...uniqueIDs.map((id) =>
+            queryClient.cancelQueries({ queryKey: keys.card(id) }),
+          ),
+          ...(projectID
+            ? [
+                queryClient.cancelQueries({ queryKey: keys.cards(projectID) }),
+                queryClient.cancelQueries({
+                  queryKey: keys.mainDiscussion(projectID),
+                }),
+              ]
+            : []),
+        ]);
+
+        // 先乐观清零未读状态，让列表里的免打扰未读点与计数立即响应。
+        for (const id of uniqueIDs) {
+          const detail = queryClient.getQueryData<CardDetail>(keys.card(id));
+          const targetCard =
+            cachedCards?.find((item) => item.id === id) || detail?.card;
+          const targetProjectID = targetCard?.project_id || projectID;
+          if (targetProjectID) touchedProjects.add(targetProjectID);
+
+          const baselineSeq = Math.max(
+            targetCard?.latest_message_sequence ?? 0,
+            computeMaxMessageSequence(detail),
+          );
+          activeCardAutoReadSuppression.clearSuppressed(id);
+          prevByID.set(id, {
+            projectID: targetProjectID,
+            unread: targetCard?.unread,
+            marked_unread: targetCard?.marked_unread,
+            last_read_message_sequence: targetCard?.last_read_message_sequence,
+          });
+
+          patchCachedCard(queryClient, id, targetProjectID, {
+            unread: false,
+            marked_unread: false,
+            last_read_message_sequence: Math.max(
+              targetCard?.last_read_message_sequence ?? 0,
+              baselineSeq,
+            ),
+          });
+        }
+
+        const succeededIDs: string[] = [];
+        const failedIDs: string[] = [];
+        let cursor = 0;
+        const workerCount = Math.min(
+          DEFAULT_BATCH_MARK_READ_CONCURRENCY,
+          uniqueIDs.length,
+        );
+
+        await Promise.all(
+          Array.from({ length: workerCount }, async () => {
+            while (cursor < uniqueIDs.length) {
+              const id = uniqueIDs[cursor++];
+              const prev = prevByID.get(id);
+              try {
+                const result = await api.markCardRead(id);
+                succeededIDs.push(id);
+                patchCachedCard(queryClient, id, prev?.projectID, {
+                  last_read_message_sequence: result.last_read_message_sequence,
+                  unread: result.unread,
+                  marked_unread: result.marked_unread,
+                });
+              } catch {
+                failedIDs.push(id);
+                patchCachedCard(queryClient, id, prev?.projectID, {
+                  unread: prev?.unread,
+                  marked_unread: prev?.marked_unread,
+                  last_read_message_sequence: prev?.last_read_message_sequence,
+                });
+              }
+            }
+          }),
+        );
+
+        if (failedIDs.length === 0) {
+          toast.success(
+            t("已全部标为已读 ({{count}})", { count: succeededIDs.length }),
+          );
+        } else if (succeededIDs.length > 0) {
+          toast.warning(
+            t("已标为已读 {{succeeded}} 条，{{failed}} 条失败", {
+              succeeded: succeededIDs.length,
+              failed: failedIDs.length,
+            }),
+          );
+        } else {
+          toast.error(t("批量标为已读失败"));
+        }
+
+        for (const pid of touchedProjects) {
+          void queryClient.invalidateQueries({ queryKey: keys.cards(pid) });
+          void queryClient.invalidateQueries({
+            queryKey: keys.mainDiscussion(pid),
+          });
+        }
+
+        return { succeededIDs, failedIDs };
+      } finally {
+        setIsPending(false);
+      }
+    },
+    [isPending, projectID, t],
+  );
+
+  return { markBatchRead, isPending };
 }
