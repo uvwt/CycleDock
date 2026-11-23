@@ -42,6 +42,8 @@ let workerRequest: Promise<ServiceWorkerRegistration> | undefined;
 let cachedPublicKey: string | undefined;
 let pushKeyRequest: Promise<string> | undefined;
 let pushEndpoint = readStoredPushEndpoint();
+let lastWorkerUpdateCheckAt = 0;
+const WORKER_UPDATE_CHECK_INTERVAL_MS = 5 * 60_000;
 
 function readStoredPushEndpoint() {
   try {
@@ -77,8 +79,13 @@ export function currentPushEndpoint() {
 export function notificationWorker() {
   if (!workerRequest) {
     workerRequest = navigator.serviceWorker
-      .register("/notifications-sw.js")
-      .then(() => navigator.serviceWorker.ready)
+      // 绕过 HTTP 缓存校验 SW 脚本，避免 iOS WebKit 长期停留在旧版本 Service Worker。
+      .register("/notifications-sw.js", { updateViaCache: "none" })
+      .then((registration) => {
+        lastWorkerUpdateCheckAt = Date.now();
+        void registration.update().catch(() => undefined);
+        return navigator.serviceWorker.ready;
+      })
       .then((registration) => {
         cachedRegistration = registration;
         return registration;
@@ -89,6 +96,25 @@ export function notificationWorker() {
       });
   }
   return workerRequest;
+}
+
+// 对已注册的通知 Service Worker 执行节流更新检查，确保新版本能及时通过 skipWaiting/clients.claim 生效。
+export async function checkNotificationWorkerUpdate(force = false) {
+  if (!("serviceWorker" in navigator)) return;
+  const now = Date.now();
+  if (!force && now - lastWorkerUpdateCheckAt < WORKER_UPDATE_CHECK_INTERVAL_MS) {
+    return;
+  }
+  lastWorkerUpdateCheckAt = now;
+  try {
+    const registration =
+      cachedRegistration ?? (await navigator.serviceWorker.getRegistration());
+    if (!registration) return;
+    cachedRegistration = registration;
+    await registration.update();
+  } catch {
+    // 离线或弱网时静默忽略 SW 更新检查失败。
+  }
 }
 
 export function loadPushPublicKey() {
