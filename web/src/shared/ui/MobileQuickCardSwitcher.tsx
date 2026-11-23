@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { Fragment, useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -33,7 +33,12 @@ import {
   getCardVisualStatus,
   type CardVisualStatus,
 } from "./CardStatusDot";
-import { buildFocusSummary, getCardFocusReason } from "../lib/card-focus";
+import {
+  buildFocusSummary,
+  getCardFocusReason,
+  getFocusCardVisualStatus,
+  groupFocusCards,
+} from "../lib/card-focus";
 import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
 import { useCardNotificationMute } from "../lib/useCardNotificationMute";
 import { activeCardAutoReadSuppression } from "../lib/card-read-state";
@@ -574,6 +579,17 @@ export function QuickCardSwitcherModal({
       QUICK_SWITCHER_TAB_ORDER.indexOf(b.id),
   );
 
+  // 仅在「焦点」Tab 且未输入搜索词时按语义轻分组（需要关注 / 置顶常驻 / 进行中）；
+  // 只有同时存在至少 2 个分组时才显示分隔标题，避免单一分组时出现多余小标题。
+  const focusSections = useMemo(() => {
+    if (activeTab !== "focus" || searchQuery.trim() !== "") {
+      return [];
+    }
+    return groupFocusCards(focusCards, activeCardID, activeAttemptStatus);
+  }, [activeTab, searchQuery, focusCards, activeCardID, activeAttemptStatus]);
+
+  const showFocusSectionHeaders = focusSections.length > 1;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // 桌面端快捷键：Cmd+K (macOS) 或 Ctrl+K (Windows/Linux)
@@ -809,23 +825,23 @@ export function QuickCardSwitcherModal({
                     : t("该分类下暂无卡片")}
               </p>
             </div>
-          ) : (
-            <SwipeActionGroup className="flex flex-col gap-2 p-1">
-              {currentList.map((card) => {
-                const isActive = card.id === activeCardID;
-                const isMain = card.id === mainDiscussionID;
-                const isPinned = isMain || Boolean(card.pinned_at);
-                const isMuted = Boolean(card.notifications_muted);
-                const visualStatus = getCardVisualStatus(
-                  card,
-                  isActive,
-                  isActive ? activeAttemptStatus : undefined,
-                );
-                const focusReason = getCardFocusReason(
-                  card,
-                  isActive,
-                  isActive ? activeAttemptStatus : undefined,
-                );
+          ) : (() => {
+            const renderCardRow = (card: Card) => {
+              const isActive = card.id === activeCardID;
+              const isMain = card.id === mainDiscussionID;
+              const isPinned = isMain || Boolean(card.pinned_at);
+              const isMuted = Boolean(card.notifications_muted);
+              const attemptStatus = isActive ? activeAttemptStatus : undefined;
+              // 焦点 Tab 左侧状态点与焦点入选原因保持一致：静音置顶降级为 pinned 时不亮蓝/绿点
+              const visualStatus =
+                activeTab === "focus"
+                  ? getFocusCardVisualStatus(card, isActive, attemptStatus)
+                  : getCardVisualStatus(card, isActive, attemptStatus);
+              const focusReason = getCardFocusReason(
+                card,
+                isActive,
+                attemptStatus,
+              );
                 const kindLabel =
                   card.kind === "discussion"
                     ? t("讨论")
@@ -1071,10 +1087,46 @@ export function QuickCardSwitcherModal({
                       </div>
                     </div>
                   </SwipeableRow>
-                );
-              })}
-            </SwipeActionGroup>
-          )}
+              );
+            };
+
+            return (
+              <SwipeActionGroup className="flex flex-col gap-2 p-1">
+                {showFocusSectionHeaders
+                  ? focusSections.map((section, sectionIndex) => {
+                      const sectionLabel =
+                        section.key === "attention"
+                          ? t("需要关注")
+                          : section.key === "pinned"
+                            ? t("置顶常驻")
+                            : t("进行中");
+                      return (
+                        <Fragment key={section.key}>
+                          <div
+                            role="presentation"
+                            data-focus-section={section.key}
+                            className={cn(
+                              "flex items-center gap-2 px-1.5 text-[11px] font-medium text-muted-foreground",
+                              sectionIndex > 0 ? "mt-2 pt-1" : "pt-0.5",
+                            )}
+                          >
+                            <span>{sectionLabel}</span>
+                            <span className="tabular-nums text-[10px] text-muted-foreground/75">
+                              {section.cards.length}
+                            </span>
+                            <span
+                              className="h-px flex-1 bg-divider/80"
+                              aria-hidden="true"
+                            />
+                          </div>
+                          {section.cards.map((card) => renderCardRow(card))}
+                        </Fragment>
+                      );
+                    })
+                  : currentList.map((card) => renderCardRow(card))}
+              </SwipeActionGroup>
+            );
+          })()}
         </div>
 
         {isBatchMode && (

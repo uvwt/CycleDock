@@ -535,6 +535,8 @@ const en = {
   定时任务标题: "Scheduled task title",
   焦点: "Focus",
   当前焦点: "In focus",
+  需要关注: "Needs attention",
+  置顶常驻: "Pinned",
   待确认: "Needs approval",
   "{{count}} 待确认": "{{count}} awaiting approval",
   "{{count}} 异常": "{{count}} critical",

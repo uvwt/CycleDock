@@ -17,8 +17,8 @@ export type CardVisualStatus =
 // 4. answering: Agent 正在运行或排队执行中
 // 5. unread: 有尚未阅读的新回复
 // 6. review: Todo 已由 Agent 推进到待人工验收
-// 7. working: Todo 处于进行中
-// 8. pinned: 用户主动置顶的常驻卡片（未归档，穿透静音，便于随时在焦点列表中直达）
+// 7. pinned: 用户主动置顶的静默常驻卡片（未归档，穿透静音，紧接动态焦点之下保持常驻入口）
+// 8. working: 其余处于进行中但暂无更高动态事件的 Todo
 export type CardFocusReason =
   | "approval"
   | "critical"
@@ -26,8 +26,15 @@ export type CardFocusReason =
   | "answering"
   | "unread"
   | "review"
-  | "working"
-  | "pinned";
+  | "pinned"
+  | "working";
+
+export type FocusSectionKey = "attention" | "pinned" | "working";
+
+export interface FocusCardSection {
+  key: FocusSectionKey;
+  cards: Card[];
+}
 
 export interface FocusSummary {
   cards: Card[];
@@ -167,6 +174,67 @@ export function getCardFocusReason(
   return null;
 }
 
+/**
+ * 计算卡片在焦点列表与首页焦点中的视觉状态点。
+ * 与普通分类列表不同，焦点视图必须与焦点入选原因保持一致：
+ * 已静音卡片仅在触发硬豁免（待确认审批、巡检异常、巡检需留意）时亮起对应状态点；
+ * 当其因静音降级为纯置顶（pinned）时返回 idle，避免左侧继续亮起未读蓝点或运行绿点造成视觉冲突。
+ */
+export function getFocusCardVisualStatus(
+  card: FocusCardFields,
+  isActive: boolean = false,
+  activeAttemptStatus?: string,
+): CardVisualStatus {
+  if (card.notifications_muted) {
+    if (hasPendingApproval(card)) {
+      return "approval";
+    }
+    return getOngoingAlertReason(card) ?? "idle";
+  }
+  return getCardVisualStatus(card, isActive, activeAttemptStatus);
+}
+
+export function getFocusSectionKey(reason: CardFocusReason): FocusSectionKey {
+  if (reason === "pinned") return "pinned";
+  if (reason === "working") return "working";
+  return "attention";
+}
+
+/**
+ * 将已按 buildFocusSummary 排序的焦点卡片按语义切分为轻分组：
+ * - attention: 动态焦点（待确认 / 巡检异常 / 需留意 / 运行中 / 未读 / 待验收）
+ * - pinned: 纯置顶常驻卡片
+ * - working: 其余进行中任务
+ * 保持输入顺序不变，仅返回非空分组；调用方可据此在多分组时渲染紧凑分隔标题。
+ */
+export function groupFocusCards(
+  cards: Card[],
+  activeCardID?: string,
+  activeAttemptStatus?: string,
+): FocusCardSection[] {
+  const buckets: Record<FocusSectionKey, Card[]> = {
+    attention: [],
+    pinned: [],
+    working: [],
+  };
+
+  for (const card of cards) {
+    const isActive = Boolean(activeCardID && card.id === activeCardID);
+    const reason = getCardFocusReason(card, isActive, activeAttemptStatus);
+    if (!reason) continue;
+    buckets[getFocusSectionKey(reason)].push(card);
+  }
+
+  const order: FocusSectionKey[] = ["attention", "pinned", "working"];
+  const sections: FocusCardSection[] = [];
+  for (const key of order) {
+    if (buckets[key].length > 0) {
+      sections.push({ key, cards: buckets[key] });
+    }
+  }
+  return sections;
+}
+
 const focusReasonPriority: Record<CardFocusReason, number> = {
   approval: 0,
   critical: 1,
@@ -174,8 +242,8 @@ const focusReasonPriority: Record<CardFocusReason, number> = {
   answering: 3,
   unread: 4,
   review: 5,
-  working: 6,
-  pinned: 7,
+  pinned: 6,
+  working: 7,
 };
 
 /**
@@ -208,14 +276,21 @@ export function buildFocusSummary(
     counts[reason]++;
   }
 
-  // 置顶卡片固定排在焦点列表最上方，避免被新消息或状态变化打乱常驻入口位置：
-  // 1. 已置顶始终优先于未置顶；同为已置顶时按 pinned_at 倒序保持稳定顺序（相同时按 updated_at 倒序兜底）
-  // 2. 未置顶卡片保持原有规则：按紧急程度（approval > critical > warning > answering > unread > review > working）与 updated_at 倒序排列
+  // 焦点排序规则（避免静默置顶霸屏遮挡待处理动态）：
+  // 1. 先按紧急度分层：approval > critical > warning > answering > unread > review > pinned > working
+  // 2. 同紧急度内，已置顶（pinned_at 非空）优先于未置顶
+  // 3. 纯 pinned 层按 pinned_at 倒序排列（相同时按 updated_at 倒序兜底），保持常驻入口位置稳定
+  // 4. 其余动态层按 updated_at 倒序排列（相同时按 pinned_at 倒序兜底）
   focusCards.sort((a, b) => {
+    const priDiff =
+      focusReasonPriority[a.reason] - focusReasonPriority[b.reason];
+    if (priDiff !== 0) return priDiff;
+
     const aPinned = Boolean(a.card.pinned_at);
     const bPinned = Boolean(b.card.pinned_at);
     if (aPinned !== bPinned) return aPinned ? -1 : 1;
-    if (aPinned && bPinned) {
+
+    if (a.reason === "pinned") {
       const pinDiff = (b.card.pinned_at || "").localeCompare(
         a.card.pinned_at || "",
       );
@@ -223,11 +298,9 @@ export function buildFocusSummary(
       return b.card.updated_at.localeCompare(a.card.updated_at);
     }
 
-    const priDiff =
-      focusReasonPriority[a.reason] - focusReasonPriority[b.reason];
-    if (priDiff !== 0) return priDiff;
-
-    return b.card.updated_at.localeCompare(a.card.updated_at);
+    const updatedDiff = b.card.updated_at.localeCompare(a.card.updated_at);
+    if (updatedDiff !== 0) return updatedDiff;
+    return (b.card.pinned_at || "").localeCompare(a.card.pinned_at || "");
   });
 
   const highestVisualStatus: CardVisualStatus =
