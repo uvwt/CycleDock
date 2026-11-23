@@ -231,6 +231,15 @@ const (
 	ChannelRuntimeError        ChannelRuntimeStatus = "error"
 )
 
+// ProjectPrimaryPushMode 定义项目级远程通道唯一主推路由策略。
+type ProjectPrimaryPushMode string
+
+const (
+	PrimaryPushModeLastActive ProjectPrimaryPushMode = "last_active"
+	PrimaryPushModeChannel    ProjectPrimaryPushMode = "channel"
+	PrimaryPushModeNone       ProjectPrimaryPushMode = "none"
+)
+
 var (
 	ErrNotFound            = errors.New("not found")
 	ErrConflict            = errors.New("conflict")

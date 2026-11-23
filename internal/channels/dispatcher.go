@@ -38,17 +38,17 @@ type channelBackoffState struct {
 // Dispatcher 挂在与 Web Push 一致的消息扫描分发链路：
 // 1. main_chat（双向对话通道）：
 //
-//   - 通道专属普通讨论卡（ch.ConversationCardID）：放开多气泡推送，将同一 Turn 内的全部非空用户可见回复气泡
-//     （含 end_turn=false 中间进度/分段气泡与 end_turn=true 终态气泡）按序推送到对应外部 IM；
-//   - 项目主聊天（card.IsMainChat 且非本通道专属讨论卡）：单向推送主聊天终态回复（绝不写回本通道专属讨论卡上下文），
-//     推送时带「【主聊天】」标识，继续严格过滤 end_turn=false 中间进度气泡避免后台执行刷屏；
-//     其中系统/定时/触发器/子任务回调终态回复默认推送，Web 主聊天的人工问答最终回复在开启 mirror_web_messages 时单向推送。
-//   - 项目内高价值提醒：仅当 Todo/Ongoing 的监督回调目标既不是本通道专属讨论卡也不是项目主聊天时推送【待验收】/【执行异常】模板提醒，
-//     【安全审批挂起】始终保留并附带卡片直达链接；日常对话回复不附带冗余卡片链接。
+//   - 通道专属普通讨论卡（ch.ConversationCardID）：完全独立于项目主推路由，放开多气泡推送，
+//     将同一 Turn 内的全部非空用户可见回复气泡（含 end_turn=false 中间进度/分段气泡与 end_turn=true 终态气泡）
+//     按序只回推给对应通道自身；
+//   - 项目级主动推送与高价值提醒（仅推唯一主推通道）：按项目配置的 primary_push_mode（last_active / channel / none）
+//     解析出最多 1 个生效主推通道；项目主聊天单向镜像（带「【主聊天】」标识）、【待验收】、【执行异常】以及
+//     【安全审批挂起】提醒全部仅投递给该唯一主推通道，其余非主推 main_chat 通道一律跳过发送并静默推进游标，
+//     彻底防止多通道轰炸以及切换主推后灌爆历史积压。
 //   - 每成功发送或跳过一条事件即刻落盘出站游标，避免中途报错导致已发送消息重复刷屏。
 //
 // 2. scheduled_push（定时推送）：
-//   - 仅同步所选项目或指定 Ongoing 卡片的定时巡检/最终执行汇报（支持 all / warnings_only），
+//   - 不受项目主推路由影响，仅同步所选项目或指定 Ongoing 卡片的定时巡检/最终执行汇报（支持 all / warnings_only），
 //     正常健康巡检与普通汇报精简不附冗余链接，WARNING/CRITICAL 与执行异常告警附带直达链接。
 type Dispatcher struct {
 	store     *store.Store
@@ -124,22 +124,7 @@ func (d *Dispatcher) now() time.Time {
 // 双向通道刚启用但用户尚未发来首条消息且未手填 target_chat_id 时返回 false，
 // 以便 Dispatcher 优雅跳过并推进初始化游标，避免每 2 秒狂打 WARN 日志。
 func channelHasOutboundTarget(ch store.RemoteChannel) bool {
-	if ch.Transport == domain.ChannelTransportWebhook {
-		return true
-	}
-	if strings.TrimSpace(ch.Config.TargetChatID) != "" {
-		return true
-	}
-	if strings.TrimSpace(ch.Config.WeixinUserID) != "" {
-		return true
-	}
-	if strings.TrimSpace(ch.RuntimeState.LastChatID) != "" {
-		return true
-	}
-	if strings.TrimSpace(ch.RuntimeState.LastSessionWebhook) != "" {
-		return true
-	}
-	return false
+	return ch.HasOutboundTarget()
 }
 
 func channelInboundTimestamp(ch store.RemoteChannel) time.Time {
@@ -312,6 +297,10 @@ func (d *Dispatcher) DeliverOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	primaryByProject, err := d.resolvePrimaryPushChannels(ctx, channels)
+	if err != nil {
+		return err
+	}
 	for _, ch := range channels {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -326,7 +315,9 @@ func (d *Dispatcher) DeliverOnce(ctx context.Context) error {
 		var deliverErr error
 		switch ch.Role {
 		case domain.ChannelRoleMainChat:
-			deliverErr = d.deliverMainChatChannel(ctx, ch)
+			key := store.ProjectPrimaryPushKey{WorkspaceID: ch.WorkspaceID, ProjectID: ch.ProjectID}
+			primaryID, hasPrimary := primaryByProject[key]
+			deliverErr = d.deliverMainChatChannel(ctx, ch, hasPrimary && primaryID == ch.ID)
 		case domain.ChannelRoleScheduledPush:
 			deliverErr = d.deliverScheduledPushChannel(ctx, ch)
 		default:
@@ -350,6 +341,44 @@ func (d *Dispatcher) DeliverOnce(ctx context.Context) error {
 		)
 	}
 	return nil
+}
+
+// resolvePrimaryPushChannels 按项目主推策略为本轮扫描解析出每个项目唯一生效的远程主推通道 ID。
+// 未命中（例如 mode=none、channel 目标停用/缺失、或 last_active 尚无入站记录）的项目不会出现在返回 map 中。
+func (d *Dispatcher) resolvePrimaryPushChannels(
+	ctx context.Context,
+	enabledChannels []store.RemoteChannel,
+) (map[store.ProjectPrimaryPushKey]uuid.UUID, error) {
+	byProject := make(map[store.ProjectPrimaryPushKey][]store.RemoteChannel)
+	for _, ch := range enabledChannels {
+		if ch.Role != domain.ChannelRoleMainChat {
+			continue
+		}
+		key := store.ProjectPrimaryPushKey{WorkspaceID: ch.WorkspaceID, ProjectID: ch.ProjectID}
+		byProject[key] = append(byProject[key], ch)
+	}
+	resolved := make(map[store.ProjectPrimaryPushKey]uuid.UUID, len(byProject))
+	if len(byProject) == 0 {
+		return resolved, nil
+	}
+	routes, err := d.store.ListProjectPrimaryPushRoutesForEnabledMainChat(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for key, candidates := range byProject {
+		route, ok := routes[key]
+		if !ok {
+			route = store.ProjectPrimaryPushRoute{
+				WorkspaceID: key.WorkspaceID,
+				ProjectID:   key.ProjectID,
+				Mode:        domain.PrimaryPushModeLastActive,
+			}
+		}
+		if primary, matched := store.ResolveProjectPrimaryPushChannel(route, candidates); matched {
+			resolved[key] = primary.ID
+		}
+	}
+	return resolved, nil
 }
 
 // handleUnboundChannel 对尚未绑定目标会话的通道静默推进初始水位并跳过投递，
@@ -699,7 +728,7 @@ func prioritizeMainChatCards(ch store.RemoteChannel, cards []cardSummary) []card
 	return reordered
 }
 
-func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.RemoteChannel) error {
+func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.RemoteChannel, isPrimaryPush bool) error {
 	cards, err := d.listProjectCards(ctx, ch.WorkspaceID, ch.ProjectID)
 	if err != nil {
 		return err
@@ -710,7 +739,7 @@ func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.Remote
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := d.deliverMainChatCard(ctx, ch, card); err != nil {
+		if err := d.deliverMainChatCard(ctx, ch, card, isPrimaryPush); err != nil {
 			d.logger.Warn("deliver main_chat card failed",
 				"channel_id", ch.ID, "card_id", card.ID, "err", err)
 			if firstCardErr == nil {
@@ -728,7 +757,7 @@ func (d *Dispatcher) deliverMainChatChannel(ctx context.Context, ch store.Remote
 	return firstCardErr
 }
 
-func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteChannel, card cardSummary) error {
+func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteChannel, card cardSummary, isPrimaryPush bool) error {
 	cursor, exists, err := d.store.GetChannelOutboundCursor(ctx, ch.WorkspaceID, ch.ID, card.ID)
 	if err != nil {
 		return err
@@ -779,6 +808,15 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					if running {
 						break
 					}
+					cursor.LastMessageSeq = ev.Seq
+					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
+						return saveErr
+					}
+					continue
+				}
+				// 非主推通道绝不发送项目主聊天消息，但必须同步静默推进游标水位，
+				// 防止后续切为主推通道时将此前积压的主聊天消息一次性灌爆。
+				if !isOwnConversation && !isPrimaryPush {
 					cursor.LastMessageSeq = ev.Seq
 					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
 						return saveErr
@@ -853,20 +891,23 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 	// 2. 项目内关键高价值提醒：Todo 进入 Review 待验收（保留卡片直达链接，方便去 Web 验收）。
 	// 当 Todo 的监督回调目标落到本通道专属讨论卡或项目主聊天时，对应讨论卡会收到系统终态回调并回复总结，
 	// 因此跳过重复的纯模板提醒；仅当回调落到其它普通讨论卡（或无活跃目标讨论）时发送模板提醒。
+	// 非主推通道跳过发送并静默推进状态游标，防止多通道重复提醒与切换主推后灌爆。
 	if statuses, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, string(domain.EventTypeStatusChange), cursor.LastStatusSeq); err == nil {
 		for _, ev := range statuses {
-			lower := strings.ToLower(strings.TrimSpace(ev.Content))
-			if strings.HasSuffix(lower, "-> review") || strings.Contains(lower, "-> review") {
-				_, handledByChannel := supervisorCallbackHandledByChannel(ch, card)
-				if !(card.Kind == domain.CardKindTodo && handledByChannel) {
-					text := fmt.Sprintf("【待验收】%s 已进入 Review，请及时核查确认。", card.Title)
-					eventKey := fmt.Sprintf("status:%s:%s:%d", ch.ID, card.ID, ev.Seq)
-					if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-						Text:      text,
-						CardURL:   cardURL,
-						Proactive: true,
-					}); err != nil {
-						return err
+			if isPrimaryPush {
+				lower := strings.ToLower(strings.TrimSpace(ev.Content))
+				if strings.HasSuffix(lower, "-> review") || strings.Contains(lower, "-> review") {
+					_, handledByChannel := supervisorCallbackHandledByChannel(ch, card)
+					if !(card.Kind == domain.CardKindTodo && handledByChannel) {
+						text := fmt.Sprintf("【待验收】%s 已进入 Review，请及时核查确认。", card.Title)
+						eventKey := fmt.Sprintf("status:%s:%s:%d", ch.ID, card.ID, ev.Seq)
+						if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
+							Text:      text,
+							CardURL:   cardURL,
+							Proactive: true,
+						}); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -879,9 +920,10 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 
 	// 3. 项目内关键高价值提醒：任务失败/超时熔断（保留卡片直达链接）。
 	// 若该失败 Attempt 已成功入队回调到本通道专属讨论卡或项目主聊天，则跳过重复模板提醒。
+	// 非主推通道跳过发送并静默推进 Attempt 游标。
 	if attemptID, status, errSummary, ok := d.latestCardAttempt(ctx, ch.WorkspaceID, card.ID); ok {
 		if !cursor.LastAttemptID.Valid || attemptID != cursor.LastAttemptID.UUID || status != cursor.LastAttemptStatus {
-			if status == string(domain.AttemptStatusFailed) || status == string(domain.AttemptStatusExpired) {
+			if isPrimaryPush && (status == string(domain.AttemptStatusFailed) || status == string(domain.AttemptStatusExpired)) {
 				targetDiscID, handledByChannel := supervisorCallbackHandledByChannel(ch, card)
 				if !(handledByChannel && d.hasSupervisorFailureCallbackOnDiscussion(ctx, ch.WorkspaceID, targetDiscID, card.ID, attemptID)) {
 					reason := strings.TrimSpace(errSummary)
@@ -907,17 +949,20 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 		}
 	}
 
-	// 4. 项目内关键高价值提醒：Tool Guard 审批挂起（始终保留卡片直达链接）。
+	// 4. 项目内关键高价值提醒：Tool Guard 审批挂起（仅推项目唯一主推通道，保留卡片直达链接；
+	// Web 端与 Web Push 照常触发，非主推通道跳过发送并静默推进审批游标）。
 	if approvalID, toolName, reason, ok := d.latestPendingApproval(ctx, ch.WorkspaceID, card.ID); ok {
 		if !cursor.LastApprovalID.Valid || cursor.LastApprovalID.UUID != approvalID {
-			text := fmt.Sprintf("【安全审批挂起】%s 请求执行受保护工具 `%s`：%s", card.Title, toolName, strings.TrimSpace(reason))
-			eventKey := fmt.Sprintf("approval:%s:%s:%s", ch.ID, card.ID, approvalID)
-			if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
-				Text:      text,
-				CardURL:   cardURL,
-				Proactive: !isOwnConversation,
-			}); err != nil {
-				return err
+			if isPrimaryPush {
+				text := fmt.Sprintf("【安全审批挂起】%s 请求执行受保护工具 `%s`：%s", card.Title, toolName, strings.TrimSpace(reason))
+				eventKey := fmt.Sprintf("approval:%s:%s:%s", ch.ID, card.ID, approvalID)
+				if _, err := d.sendOutboundEvent(ctx, ch, card.ID, eventKey, OutboundMessage{
+					Text:      text,
+					CardURL:   cardURL,
+					Proactive: !isOwnConversation,
+				}); err != nil {
+					return err
+				}
 			}
 			cursor.LastApprovalID = uuid.NullUUID{UUID: approvalID, Valid: true}
 			if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {

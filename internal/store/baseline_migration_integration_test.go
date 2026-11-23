@@ -86,8 +86,67 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 	`).Scan(&migrationVersion); err != nil {
 		t.Fatal(err)
 	}
-	if migrationVersion != 49 {
-		t.Fatalf("migration version=%d want 49", migrationVersion)
+	if migrationVersion != 50 {
+		t.Fatalf("migration version=%d want 50", migrationVersion)
+	}
+}
+
+func TestMigration000050PrimaryPushRouteUpDownUp(t *testing.T) {
+	s := requireIntegration(t)
+	ctx := context.Background()
+
+	schema := "mig50_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
+	})
+
+	cfg := s.pool.Config().ConnConfig.Copy()
+	cfg.RuntimeParams["search_path"] = schema
+	sqlDB := stdlib.OpenDB(*cfg)
+	defer sqlDB.Close()
+
+	_, filename, _, _ := runtime.Caller(0)
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("initial goose up: %v", err)
+	}
+	if err := goose.DownTo(sqlDB, migrations, 49); err != nil {
+		t.Fatalf("goose down-to 49: %v", err)
+	}
+	var colCount int
+	if err := sqlDB.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'projects'
+		  AND column_name IN ('primary_push_mode', 'primary_push_channel_id')
+	`, schema).Scan(&colCount); err != nil {
+		t.Fatal(err)
+	}
+	if colCount != 0 {
+		t.Fatalf("primary_push columns still exist after down-to 49: count=%d", colCount)
+	}
+	if err := goose.Up(sqlDB, migrations); err != nil {
+		t.Fatalf("goose re-up to 50: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM information_schema.columns
+		WHERE table_schema = $1
+		  AND table_name = 'projects'
+		  AND column_name IN ('primary_push_mode', 'primary_push_channel_id')
+	`, schema).Scan(&colCount); err != nil {
+		t.Fatal(err)
+	}
+	if colCount != 2 {
+		t.Fatalf("primary_push columns missing after re-up to 50: count=%d", colCount)
 	}
 }
 

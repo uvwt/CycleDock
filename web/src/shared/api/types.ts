@@ -631,6 +631,17 @@ export type RemoteChannelRuntimeStatus =
   | "reconnecting"
   | "error";
 
+export type ProjectPrimaryPushMode = "last_active" | "channel" | "none";
+
+export type ProjectPrimaryPushRoute = {
+  project_id: string;
+  mode: ProjectPrimaryPushMode;
+  channel_id?: string | null;
+  effective_channel_id?: string | null;
+  effective_channel_name?: string;
+  effective_channel_platform?: RemoteChannelPlatform;
+};
+
 export type RemoteChannelConfig = {
   base_url?: string;
   domain?: string;

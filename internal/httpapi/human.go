@@ -92,6 +92,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 
 	r.Get("/channels", api.listRemoteChannels)
 	r.Post("/channels", api.createRemoteChannel)
+	r.Get("/projects/{projectID}/primary-push-route", api.getProjectPrimaryPushRoute)
+	r.Put("/projects/{projectID}/primary-push-route", api.updateProjectPrimaryPushRoute)
 	r.Put("/channels/{channelID}", api.updateRemoteChannel)
 	r.Post("/channels/{channelID}/enabled", api.toggleRemoteChannel)
 	r.Post("/channels/{channelID}/test", api.testRemoteChannel)
@@ -141,11 +143,13 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 }
 
 type projectResponse struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description"`
+	PrimaryPushMode      string    `json:"primary_push_mode,omitempty"`
+	PrimaryPushChannelID string    `json:"primary_push_channel_id,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type cardResponse struct {
@@ -1918,10 +1922,18 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request, name string) (uuid.U
 }
 
 func projectToResponse(project db.Project) projectResponse {
-	return projectResponse{
-		ID: project.ID.String(), Name: project.Name, Description: project.Description,
-		CreatedAt: project.CreatedAt.Time, UpdatedAt: project.UpdatedAt.Time,
+	resp := projectResponse{
+		ID:              project.ID.String(),
+		Name:            project.Name,
+		Description:     project.Description,
+		PrimaryPushMode: project.PrimaryPushMode,
+		CreatedAt:       project.CreatedAt.Time,
+		UpdatedAt:       project.UpdatedAt.Time,
 	}
+	if project.PrimaryPushChannelID.Valid {
+		resp.PrimaryPushChannelID = project.PrimaryPushChannelID.UUID.String()
+	}
+	return resp
 }
 
 func cardToResponse(card db.Card) cardResponse {

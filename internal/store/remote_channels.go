@@ -138,6 +138,27 @@ func (c RemoteChannel) HasSecrets() bool {
 	return len(c.SecretCiphertext) > 0 && len(c.SecretHints) > 0
 }
 
+// HasOutboundTarget 判断通道是否已经具备可发送的目标会话（或 Webhook URL）。
+// 双向通道刚启用但用户尚未发来首条消息且未手填 target_chat_id 时返回 false。
+func (c RemoteChannel) HasOutboundTarget() bool {
+	if c.Transport == domain.ChannelTransportWebhook {
+		return true
+	}
+	if strings.TrimSpace(c.Config.TargetChatID) != "" {
+		return true
+	}
+	if strings.TrimSpace(c.Config.WeixinUserID) != "" {
+		return true
+	}
+	if strings.TrimSpace(c.RuntimeState.LastChatID) != "" {
+		return true
+	}
+	if strings.TrimSpace(c.RuntimeState.LastSessionWebhook) != "" {
+		return true
+	}
+	return false
+}
+
 // RemoteChannelInput 用于创建或更新远程通道。
 type RemoteChannelInput struct {
 	Name              string
@@ -631,6 +652,10 @@ func (s *Store) UpdateRemoteChannel(
 	if err != nil {
 		return RemoteChannel{}, err
 	}
+	var oldEffectiveID uuid.NullUUID
+	if oldRoute, routeErr := s.GetProjectPrimaryPushRoute(ctx, workspaceID, existing.ProjectID); routeErr == nil {
+		oldEffectiveID = oldRoute.EffectiveChannelID
+	}
 	if input.Platform == "" {
 		input.Platform = existing.Platform
 	}
@@ -698,6 +723,17 @@ func (s *Store) UpdateRemoteChannel(
 	if err != nil {
 		return RemoteChannel{}, err
 	}
+	// 若通道切换为 scheduled_push 或迁移到其他项目，立即解除原项目对其的显式主推引用，
+	// 保留原项目 primary_push_mode='channel' 使其安全静默，绝不退化为全量广播。
+	if updated.Role != domain.ChannelRoleMainChat || updated.ProjectID != existing.ProjectID {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE projects
+			SET primary_push_channel_id = NULL,
+			    updated_at = now()
+			WHERE workspace_id = $1 AND primary_push_channel_id = $2
+		`, workspaceID, channelID)
+	}
+	s.alignEffectivePrimaryAfterChannelMutation(ctx, workspaceID, existing.ProjectID, oldEffectiveID)
 	// 通道改名时同步已绑定专属讨论卡的标题，保持左侧讨论列表与通道名称一致。
 	if updated.ConversationCardID.Valid {
 		syncTitle := strings.TrimSpace(updated.Name)
@@ -720,6 +756,14 @@ func (s *Store) UpdateRemoteChannel(
 
 // SetRemoteChannelEnabled 启停远程通道。
 func (s *Store) SetRemoteChannelEnabled(ctx context.Context, workspaceID, channelID uuid.UUID, enabled bool) (RemoteChannel, error) {
+	existing, err := s.GetRemoteChannel(ctx, workspaceID, channelID)
+	if err != nil {
+		return RemoteChannel{}, err
+	}
+	var oldEffectiveID uuid.NullUUID
+	if oldRoute, routeErr := s.GetProjectPrimaryPushRoute(ctx, workspaceID, existing.ProjectID); routeErr == nil {
+		oldEffectiveID = oldRoute.EffectiveChannelID
+	}
 	statusSQL := "runtime_status"
 	if !enabled {
 		statusSQL = "'disconnected'"
@@ -737,6 +781,9 @@ func (s *Store) SetRemoteChannelEnabled(ctx context.Context, workspaceID, channe
 	ch, err := scanRemoteChannel(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RemoteChannel{}, domain.ErrNotFound
+	}
+	if err == nil {
+		s.alignEffectivePrimaryAfterChannelMutation(ctx, workspaceID, ch.ProjectID, oldEffectiveID)
 	}
 	return ch, err
 }
@@ -792,6 +839,14 @@ func (s *Store) UpdateRemoteChannelSecretsAndConfig(
 
 // DeleteRemoteChannel 删除远程通道。
 func (s *Store) DeleteRemoteChannel(ctx context.Context, workspaceID, channelID uuid.UUID) error {
+	existing, err := s.GetRemoteChannel(ctx, workspaceID, channelID)
+	if err != nil {
+		return err
+	}
+	var oldEffectiveID uuid.NullUUID
+	if oldRoute, routeErr := s.GetProjectPrimaryPushRoute(ctx, workspaceID, existing.ProjectID); routeErr == nil {
+		oldEffectiveID = oldRoute.EffectiveChannelID
+	}
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM remote_channels
 		WHERE workspace_id = $1 AND id = $2
@@ -802,6 +857,7 @@ func (s *Store) DeleteRemoteChannel(ctx context.Context, workspaceID, channelID 
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
 	}
+	s.alignEffectivePrimaryAfterChannelMutation(ctx, workspaceID, existing.ProjectID, oldEffectiveID)
 	return nil
 }
 
@@ -1248,6 +1304,15 @@ func (s *Store) IngestRemoteChannelMessageWithAttachments(
 	`, dedupID, convCard.ID, submitted.EventID, submitted.TurnID); err != nil {
 		return ChannelInboundResult{}, err
 	}
+	// 在 last_active 模式下，若本通道即将因本次入站消息接管项目主推位置，
+	// 先将其非专属卡片游标水位对齐至当前时刻，避免切换主推瞬间补发历史积压。
+	s.alignCursorsOnLastActiveTakeover(
+		ctx,
+		channel.WorkspaceID,
+		channel.ProjectID,
+		channel.ID,
+		uuid.NullUUID{UUID: convCard.ID, Valid: true},
+	)
 	_, _ = s.pool.Exec(ctx, `
 		UPDATE remote_channels
 		SET last_inbound_at = now()
