@@ -65,7 +65,10 @@ import {
 import { BubbleRetryMenu } from "./BubbleRetryMenu";
 import { RichText } from "./RichText";
 import { ToolApprovalCard } from "./ToolApprovalCard";
-import { MessageAttachmentGrid } from "./AttachmentGallery";
+import {
+  MessageAttachmentGrid,
+  MessageImageGallery,
+} from "./AttachmentGallery";
 import { usePacedTimeline } from "./usePacedTimeline";
 import {
   computeSelectionPopoverPosition,
@@ -974,24 +977,18 @@ function EventRow({
               </a>
             )}
             {message?.images && message.images.length > 0 && (
-              <div data-quote-ignore="true" className="mt-3 grid grid-cols-2 gap-2">
-                {message.images.map((src) => (
-                  <a
-                    key={src}
-                    href={src}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <img
-                      src={src}
-                      alt={message.alt || t("消息图片")}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="max-h-72 w-full rounded-lg object-cover"
-                    />
-                  </a>
-                ))}
-              </div>
+              <MessageImageGallery
+                images={message.images}
+                alt={message.alt}
+                hasContentAbove={Boolean(
+                  messageQuote ||
+                    event.type === "finding" ||
+                    event.type === "result" ||
+                    rawText ||
+                    (commentAttachments && commentAttachments.length > 0) ||
+                    (message?.type === "attachment" && message.url),
+                )}
+              />
             )}
             {showTime && formattedTime && (
               <div data-quote-ignore="true">

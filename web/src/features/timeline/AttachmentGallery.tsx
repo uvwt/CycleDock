@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   Download,
+  ExternalLink,
   FileCode2,
   FileText,
   FileX2,
@@ -524,6 +525,204 @@ function TextAttachmentPreviewModal({
   );
 }
 
+/** 复用的应用内图片灯箱组件：支持 Escape 关闭、外链 referrerPolicy="no-referrer" 与可选原图打开入口。 */
+export function ImageLightboxModal({
+  src,
+  alt,
+  openOriginalUrl,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  openOriginalUrl?: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("图片大图预览")}
+      data-testid="attachment-lightbox"
+      onClick={onClose}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs"
+    >
+      <div
+        className="absolute top-4 right-4 flex items-center gap-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {openOriginalUrl && (
+          <a
+            href={openOriginalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={t("打开原图")}
+            title={t("打开原图")}
+            data-testid="lightbox-open-original"
+            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-medium text-white transition hover:bg-white/25"
+          >
+            <ExternalLink className="size-3.5" />
+            <span>{t("打开原图")}</span>
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t("关闭预览")}
+          className="grid size-9 cursor-pointer place-items-center rounded-full bg-white/15 text-white transition hover:bg-white/25"
+        >
+          <X className="size-5" />
+        </button>
+      </div>
+      <img
+        src={src}
+        alt={alt}
+        referrerPolicy="no-referrer"
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[88vh] max-w-[92vw] rounded-xl object-contain shadow-2xl"
+      />
+    </div>,
+    document.body,
+  );
+}
+
+/** 单张外链消息图片卡片：支持加载失败回退到可点击的外链提示，点击正常图片打开应用内灯箱。 */
+function MessageExternalImageCard({
+  src,
+  alt,
+  single,
+  onPreview,
+}: {
+  src: string;
+  alt: string;
+  single: boolean;
+  onPreview: (src: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <div
+        data-testid="message-image-fallback"
+        className={`flex flex-col items-start justify-center gap-1.5 rounded-xl border border-dashed border-border/80 bg-muted/40 px-3 py-3 text-xs text-muted-foreground ${
+          single ? "min-w-[220px] max-w-sm" : "min-h-28"
+        }`}
+      >
+        <div className="flex items-center gap-1.5 font-medium text-foreground/80">
+          <ImageOff className="size-4 shrink-0 opacity-75" />
+          <span>{t("图片加载失败")}</span>
+        </div>
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex max-w-full items-center gap-1 break-all text-[11px] text-primary underline underline-offset-2 hover:opacity-80"
+        >
+          <ExternalLink className="size-3 shrink-0" />
+          <span className="truncate">{t("打开原图")}</span>
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onPreview(src)}
+      data-testid="message-image-item"
+      aria-label={t("点击查看大图")}
+      className={`group relative overflow-hidden rounded-xl border border-border/60 bg-muted/30 p-0 text-left transition hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-zoom-in ${
+        single ? "block max-w-full" : "block w-full"
+      }`}
+    >
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className={
+          single
+            ? "block max-h-96 max-w-full w-auto rounded-xl object-contain"
+            : "h-40 w-full object-cover sm:h-48"
+        }
+      />
+      <span className="pointer-events-none absolute right-2 bottom-2 grid size-7 place-items-center rounded-full bg-black/50 text-white opacity-0 transition group-hover:opacity-100">
+        <ZoomIn className="size-3.5" />
+      </span>
+    </button>
+  );
+}
+
+/** Agent 通过 reply_message.images 发送的外链图片展示区：单图自适应、多图网格，支持灯箱预览与失败回退。 */
+export function MessageImageGallery({
+  images,
+  alt,
+  hasContentAbove,
+}: {
+  images: string[];
+  alt?: string;
+  hasContentAbove: boolean;
+}) {
+  const { t } = useTranslation();
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  if (!images || images.length === 0) return null;
+
+  const isSingle = images.length === 1;
+  const gridCols = isSingle
+    ? "grid-cols-1"
+    : images.length === 2
+      ? "grid-cols-2"
+      : "grid-cols-2 sm:grid-cols-3";
+  const imageAlt = alt?.trim() || t("消息图片");
+
+  return (
+    <>
+      <div
+        data-quote-ignore="true"
+        data-testid="message-image-gallery"
+        data-image-count={images.length}
+        data-has-above={hasContentAbove ? "true" : "false"}
+        className={`${hasContentAbove ? "mt-3" : ""} ${
+          isSingle ? "flex" : `grid gap-2 ${gridCols}`
+        }`}
+      >
+        {images.map((src, index) => (
+          <MessageExternalImageCard
+            key={`${src}-${index}`}
+            src={src}
+            alt={imageAlt}
+            single={isSingle}
+            onPreview={setLightboxSrc}
+          />
+        ))}
+      </div>
+
+      {lightboxSrc && (
+        <ImageLightboxModal
+          src={lightboxSrc}
+          alt={alt?.trim() || t("消息图片大图")}
+          openOriginalUrl={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+        />
+      )}
+    </>
+  );
+}
+
 /** 聊天气泡与待办详情内的附件展示区：图片网格+大图灯箱、纯文本/代码文件卡片+在线预览与下载。 */
 export function MessageAttachmentGrid({
   attachments,
@@ -536,15 +735,6 @@ export function MessageAttachmentGrid({
   const [runtimeExpiredIDs, setRuntimeExpiredIDs] = useState<
     Record<string, boolean>
   >({});
-
-  useEffect(() => {
-    if (!lightbox) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setLightbox(null);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [lightbox]);
 
   if (!attachments || attachments.length === 0) return null;
 
@@ -595,34 +785,14 @@ export function MessageAttachmentGrid({
         </div>
       )}
 
-      {lightbox &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("图片大图预览")}
-            data-testid="attachment-lightbox"
-            onClick={() => setLightbox(null)}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs"
-          >
-            <button
-              type="button"
-              onClick={() => setLightbox(null)}
-              aria-label={t("关闭预览")}
-              className="absolute top-4 right-4 grid size-9 cursor-pointer place-items-center rounded-full bg-white/15 text-white transition hover:bg-white/25"
-            >
-              <X className="size-5" />
-            </button>
-            <img
-              src={lightbox.url}
-              alt={t("消息图片大图")}
-              onClick={(e) => e.stopPropagation()}
-              className="max-h-[88vh] max-w-[92vw] rounded-xl object-contain shadow-2xl"
-            />
-          </div>,
-          document.body,
-        )}
+      {lightbox && (
+        <ImageLightboxModal
+          src={lightbox.url}
+          alt={t("消息图片大图")}
+          openOriginalUrl={lightbox.url}
+          onClose={() => setLightbox(null)}
+        />
+      )}
 
       {previewText && (
         <TextAttachmentPreviewModal

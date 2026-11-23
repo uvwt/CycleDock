@@ -479,12 +479,15 @@ func (r attemptToolRuntime) internalHandler(
 
 			type bubbleItem struct {
 				Author    string    `json:"author"`
-				Content   string    `json:"content"`
+				Content   string    `json:"content,omitempty"`
+				Images    []string  `json:"images,omitempty"`
 				Timestamp time.Time `json:"timestamp"`
 			}
 			type timelineMessage struct {
-				Type    string `json:"type"`
-				Content string `json:"content"`
+				Type    string   `json:"type"`
+				Content string   `json:"content"`
+				Alt     string   `json:"alt"`
+				Images  []string `json:"images"`
 				Widget  *struct {
 					Question string `json:"question"`
 					Options  []struct {
@@ -507,10 +510,12 @@ func (r attemptToolRuntime) internalHandler(
 				}
 
 				var content string
+				var images []string
 				if len(event.Message) > 0 {
 					var msg timelineMessage
 					if err := json.Unmarshal(event.Message, &msg); err == nil {
 						content = msg.Content
+						images = msg.Images
 						if msg.Type == "choice" && msg.Widget != nil {
 							var choiceLines []string
 							if strings.TrimSpace(content) != "" {
@@ -527,19 +532,28 @@ func (r attemptToolRuntime) internalHandler(
 								choiceLines = append(choiceLines, fmt.Sprintf("%d. %s", i+1, label))
 							}
 							content = strings.Join(choiceLines, "\n")
+						} else if strings.TrimSpace(content) == "" && len(images) > 0 {
+							if alt := strings.TrimSpace(msg.Alt); alt != "" {
+								content = alt
+							} else if len(images) == 1 {
+								content = "[图片]"
+							} else {
+								content = fmt.Sprintf("[%d 张图片]", len(images))
+							}
 						}
 					}
 				}
 				if strings.TrimSpace(content) == "" && strings.TrimSpace(event.Content) != "" {
 					content = event.Content
 				}
-				if strings.TrimSpace(content) == "" {
+				if strings.TrimSpace(content) == "" && len(images) == 0 {
 					continue
 				}
 
 				bubbles = append(bubbles, bubbleItem{
 					Author:    author,
 					Content:   content,
+					Images:    images,
 					Timestamp: event.CreatedAt.Time,
 				})
 			}

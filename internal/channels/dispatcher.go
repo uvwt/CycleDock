@@ -782,10 +782,12 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 		if msgs, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, "message", cursor.LastMessageSeq); err == nil {
 			for _, ev := range msgs {
 				var payload struct {
-					Type    string `json:"type"`
-					Content string `json:"content"`
-					EndTurn bool   `json:"end_turn"`
-					Preview bool   `json:"preview"`
+					Type    string   `json:"type"`
+					Content string   `json:"content"`
+					Alt     string   `json:"alt"`
+					Images  []string `json:"images"`
+					EndTurn bool     `json:"end_turn"`
+					Preview bool     `json:"preview"`
 					Widget  *struct {
 						Question string `json:"question"`
 					} `json:"widget"`
@@ -852,6 +854,7 @@ func (d *Dispatcher) deliverMainChatCard(ctx context.Context, ch store.RemoteCha
 					body = strings.TrimSpace(payload.Widget.Question)
 				}
 				body = SanitizeExternalCardLinks(body)
+				body = appendOutboundImageLinks(body, payload.Alt, payload.Images)
 				if body == "" {
 					cursor.LastMessageSeq = ev.Seq
 					if saveErr := d.persistCursor(ctx, cursor); saveErr != nil {
@@ -1051,9 +1054,11 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 	if msgs, err := d.listCardEventsAfter(ctx, ch.WorkspaceID, card.ID, "message", cursor.LastMessageSeq); err == nil {
 		for _, ev := range msgs {
 			var payload struct {
-				Content string `json:"content"`
-				EndTurn bool   `json:"end_turn"`
-				Preview bool   `json:"preview"`
+				Content string   `json:"content"`
+				Alt     string   `json:"alt"`
+				Images  []string `json:"images"`
+				EndTurn bool     `json:"end_turn"`
+				Preview bool     `json:"preview"`
 			}
 			if err := json.Unmarshal(ev.Message, &payload); err == nil {
 				if payload.Preview {
@@ -1076,6 +1081,7 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 						body = strings.TrimSpace(ev.Content)
 					}
 					body = SanitizeExternalCardLinks(body)
+					body = appendOutboundImageLinks(body, payload.Alt, payload.Images)
 					if body != "" {
 						text := fmt.Sprintf("【定时任务汇报】%s\n%s", card.Title, body)
 						eventKey := fmt.Sprintf("sched_msg:%s:%s:%d", ch.ID, card.ID, ev.Seq)
@@ -1122,6 +1128,30 @@ func (d *Dispatcher) deliverScheduledPushCard(ctx context.Context, ch store.Remo
 	}
 
 	return nil
+}
+
+// appendOutboundImageLinks 将 reply_message.images 拼入远程通道的纯文本出站消息，
+// 避免纯图片气泡（content 为空、images 非空）在 Telegram / Discord 等通道中被静默跳过。
+func appendOutboundImageLinks(body, alt string, images []string) string {
+	var clean []string
+	for _, raw := range images {
+		if trimmed := strings.TrimSpace(raw); trimmed != "" {
+			clean = append(clean, trimmed)
+		}
+	}
+	if len(clean) == 0 {
+		return body
+	}
+	var lines []string
+	if body != "" {
+		lines = append(lines, body)
+	} else if trimmedAlt := strings.TrimSpace(alt); trimmedAlt != "" {
+		lines = append(lines, trimmedAlt)
+	}
+	for _, imgURL := range clean {
+		lines = append(lines, imgURL)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // seedInitialCursor 在首次初始化某卡片游标时，仅跳过早于通道创建时间之前的旧历史事件，

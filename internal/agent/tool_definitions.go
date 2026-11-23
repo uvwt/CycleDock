@@ -87,13 +87,18 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "reply_message",
-				Description: "Publish exactly one user-visible message bubble. For text, send type, content, end_turn and idempotency_key; omit widget and url. Only type=choice accepts widget. Set end_turn=true for your last message. Choice messages also complete this Turn; the human answer starts a new Turn. Do not send a second final answer.",
+				Description: "Publish exactly one user-visible message bubble. For text, send type, end_turn, idempotency_key, and content and/or images; omit widget and url. To send images to the user, always use the images field with direct HTTPS image URLs (up to 8; omit or leave content empty for an image-only bubble, or provide a short caption)—never embed images using Markdown ![alt](url) in content, and never use type=attachment for images (attachment is only for non-image file download links). Only type=choice accepts widget. Set end_turn=true for your last message. Choice messages also complete this Turn; the human answer starts a new Turn. Do not send a second final answer.",
 				Parameters: object(map[string]any{
 					"type":    map[string]any{"type": "string", "enum": []string{"text", "attachment", "choice"}},
-					"content": stringField("Markdown content. Required for text. Any [Card Title](cycledock://card/<card_id>) reference renders as a standalone block card with live status, so put it on its own line with blank lines around it and never attach adjacent punctuation or parenthetical notes."),
-					"url":     stringField("HTTPS attachment URL, for attachment."),
+					"content": stringField("Markdown content. Required for type=text unless images is provided (omit or leave empty for an image-only bubble). Do not embed images via Markdown ![alt](url); use the images field instead. Any [Card Title](cycledock://card/<card_id>) reference renders as a standalone block card with live status, so put it on its own line with blank lines around it and never attach adjacent punctuation or parenthetical notes."),
+					"url":     stringField("HTTPS file download URL for type=attachment only (do not use attachment for images; use the images field instead)."),
 					"alt":     stringField("Attachment description."),
-					"images":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 8},
+					"images": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"maxItems":    8,
+						"description": "Direct HTTPS image URLs (up to 8) rendered in the bubble. Always use this field to send images instead of Markdown ![alt](url) or type=attachment; may be sent alone with type=text for an image-only bubble or alongside short content.",
+					},
 					"widget": map[string]any{"type": "object", "properties": map[string]any{
 						"question": stringField("Question shown to the human."),
 						"options": map[string]any{"type": "array", "items": object(map[string]any{
