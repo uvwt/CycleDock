@@ -5,6 +5,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BellOff,
   Check,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
   Layers,
   ListChecks,
   ListTodo,
@@ -42,7 +45,21 @@ import {
 import { patchCachedCard, removeCachedCard } from "../lib/card-cache";
 import { useCardNotificationMute } from "../lib/useCardNotificationMute";
 import { activeCardAutoReadSuppression } from "../lib/card-read-state";
-import { useCardReadState } from "../lib/useCardReadState";
+import {
+  useBatchMarkCardsRead,
+  useCardReadState,
+} from "../lib/useCardReadState";
+import {
+  buildDiscussionListSections,
+  getUnreadDiscussionCardIDs,
+  shouldDefaultExpandMutedDiscussions,
+} from "../../features/chat/discussion-sidebar-model";
+import {
+  buildPlanSidebarGroups,
+  getDefaultExpandedPlanGroups,
+  getUnreadPlanCardIDs,
+  type PlanSidebarGroupKey,
+} from "../../features/plans/plan-sidebar-model";
 import {
   isAllReviewSelected,
   isReviewTodoCard,
@@ -365,6 +382,7 @@ export function QuickCardSwitcherModal({
 
   const muteMutation = useCardNotificationMute();
   const readStateMutation = useCardReadState();
+  const batchMarkRead = useBatchMarkCardsRead(projectID);
   const completeReviewMutation = useCompleteReviewCard();
   const batchComplete = useBatchCompleteReviewCards(projectID);
   const sheetTarget = useMemo(
@@ -589,6 +607,78 @@ export function QuickCardSwitcherModal({
   }, [activeTab, searchQuery, focusCards, activeCardID, activeAttemptStatus]);
 
   const showFocusSectionHeaders = focusSections.length > 1;
+
+  // 讨论与定时任务 Tab 在非搜索态复用与侧边栏一致的免打扰折叠分组与置顶外留规则。
+  const hasSearch = searchQuery.trim().length > 0;
+  const discussionSections = useMemo(
+    () =>
+      activeTab === "discussion" && !hasSearch
+        ? buildDiscussionListSections(discussionCards, {
+            mainDiscussionID,
+            activeCardID,
+            activeAttemptStatus,
+          })
+        : null,
+    [
+      activeTab,
+      hasSearch,
+      discussionCards,
+      mainDiscussionID,
+      activeCardID,
+      activeAttemptStatus,
+    ],
+  );
+  const mutedDiscussionUnreadIDs = useMemo(
+    () =>
+      discussionSections
+        ? getUnreadDiscussionCardIDs(discussionSections.muted, activeCardID)
+        : [],
+    [discussionSections, activeCardID],
+  );
+  const discussionMutedContextKey = `${open ? "open" : "closed"}:${projectID}:${activeCardID || ""}:${discussionSections?.muted.some((c) => c.id === activeCardID) ? "muted" : "normal"}`;
+  const [manualDiscussionMuted, setManualDiscussionMuted] = useState<{
+    contextKey: string;
+    expanded: boolean;
+  } | null>(null);
+  const discussionMutedExpanded =
+    manualDiscussionMuted?.contextKey === discussionMutedContextKey
+      ? manualDiscussionMuted.expanded
+      : discussionSections
+        ? shouldDefaultExpandMutedDiscussions(discussionSections.muted, {
+            activeCardID,
+          })
+        : false;
+
+  const ongoingGroups = useMemo(
+    () =>
+      activeTab === "ongoing" && !hasSearch
+        ? buildPlanSidebarGroups(ongoingCards, {
+            activeCardID,
+            activeAttemptStatus,
+          })
+        : [],
+    [activeTab, hasSearch, ongoingCards, activeCardID, activeAttemptStatus],
+  );
+  const ongoingActiveGroupKey =
+    ongoingGroups.find((group) =>
+      group.cards.some((card) => card.id === activeCardID),
+    )?.key || "";
+  const ongoingExpansionContextKey = `${open ? "open" : "closed"}:${projectID}:${activeCardID || ""}:${ongoingActiveGroupKey}`;
+  const defaultOngoingExpanded = useMemo(
+    () =>
+      getDefaultExpandedPlanGroups(ongoingGroups, {
+        activeCardID,
+      }),
+    [ongoingGroups, activeCardID],
+  );
+  const [manualOngoingExpanded, setManualOngoingExpanded] = useState<{
+    contextKey: string;
+    expandedGroups: PlanSidebarGroupKey[];
+  } | null>(null);
+  const ongoingExpandedGroups =
+    manualOngoingExpanded?.contextKey === ongoingExpansionContextKey
+      ? manualOngoingExpanded.expandedGroups
+      : defaultOngoingExpanded;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -958,6 +1048,7 @@ export function QuickCardSwitcherModal({
                           {visualStatus !== "idle" ? (
                             <CardStatusDot
                               status={visualStatus}
+                              muted={isMuted}
                               className="size-2.5"
                             />
                           ) : card.kind === "discussion" ? (
@@ -1090,6 +1181,19 @@ export function QuickCardSwitcherModal({
               );
             };
 
+            const labelForOngoingGroup = (key: PlanSidebarGroupKey) => {
+              switch (key) {
+                case "attention":
+                  return t("需关注");
+                case "active":
+                  return t("运行中");
+                case "muted":
+                  return t("免打扰");
+                case "inactive":
+                  return t("已暂停 / 已归档");
+              }
+            };
+
             return (
               <SwipeActionGroup className="flex flex-col gap-2 p-1">
                 {showFocusSectionHeaders
@@ -1123,7 +1227,226 @@ export function QuickCardSwitcherModal({
                         </Fragment>
                       );
                     })
-                  : currentList.map((card) => renderCardRow(card))}
+                  : discussionSections && discussionSections.muted.length > 0
+                    ? (
+                      <>
+                        {discussionSections.pinned.map((card) =>
+                          renderCardRow(card),
+                        )}
+                        <section
+                          data-switcher-discussion-group="muted"
+                          className="rounded-xl border border-line/70 bg-muted/35 p-1"
+                        >
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              aria-expanded={discussionMutedExpanded}
+                              onClick={() =>
+                                setManualDiscussionMuted({
+                                  contextKey: discussionMutedContextKey,
+                                  expanded: !discussionMutedExpanded,
+                                })
+                              }
+                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-muted-foreground transition hover:bg-surface/70 hover:text-foreground"
+                            >
+                              {discussionMutedExpanded ? (
+                                <ChevronDown className="size-3.5 shrink-0 text-faint" />
+                              ) : (
+                                <ChevronRight className="size-3.5 shrink-0 text-faint" />
+                              )}
+                              <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                              <span className="min-w-0 flex-1 truncate">
+                                {t("免打扰")}
+                              </span>
+                              {mutedDiscussionUnreadIDs.length > 0 && (
+                                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface/90 px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-muted-foreground">
+                                  <span
+                                    aria-hidden="true"
+                                    className="inline-flex size-1.5 rounded-full bg-muted-foreground/50"
+                                  />
+                                  {t("{{count}} 未读", {
+                                    count: mutedDiscussionUnreadIDs.length,
+                                  })}
+                                </span>
+                              )}
+                              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-faint">
+                                {discussionSections.muted.length}
+                              </span>
+                            </button>
+                            {mutedDiscussionUnreadIDs.length > 0 && (
+                              <button
+                                type="button"
+                                disabled={batchMarkRead.isPending}
+                                aria-label={t("全部已读")}
+                                onClick={() =>
+                                  void batchMarkRead.markBatchRead(
+                                    mutedDiscussionUnreadIDs,
+                                  )
+                                }
+                                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground transition hover:bg-surface/80 hover:text-foreground disabled:opacity-50"
+                              >
+                                {batchMarkRead.isPending ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <CheckCheck className="size-3.5" />
+                                )}
+                                <span>{t("全部已读")}</span>
+                              </button>
+                            )}
+                          </div>
+                          {discussionMutedExpanded && (
+                            <div className="mt-1.5 flex flex-col gap-1.5 border-t border-divider/70 pt-1.5">
+                              {discussionSections.muted.map((card) =>
+                                renderCardRow(card),
+                              )}
+                            </div>
+                          )}
+                        </section>
+                        {discussionSections.regular.map((card) =>
+                          renderCardRow(card),
+                        )}
+                      </>
+                    )
+                    : activeTab === "ongoing" &&
+                        !hasSearch &&
+                        ongoingGroups.length > 0
+                      ? ongoingGroups.map((group, groupIndex) => {
+                          const isMutedGroup = group.key === "muted";
+                          const isInactiveGroup = group.key === "inactive";
+                          const isCollapsible = isMutedGroup || isInactiveGroup;
+                          const isExpanded =
+                            !isCollapsible ||
+                            ongoingExpandedGroups.includes(group.key);
+                          const isAttention = group.key === "attention";
+                          const hasCritical =
+                            isAttention &&
+                            group.cards.some(
+                              (card) => card.health === "critical",
+                            );
+                          const groupUnreadIDs = isMutedGroup
+                            ? getUnreadPlanCardIDs(group.cards, activeCardID)
+                            : [];
+
+                          if (isCollapsible) {
+                            return (
+                              <section
+                                key={group.key}
+                                data-switcher-plan-group={group.key}
+                                className={cn(
+                                  "rounded-xl border border-line/70 bg-muted/35 p-1",
+                                  groupIndex > 0 ? "mt-1" : "",
+                                )}
+                              >
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    aria-expanded={isExpanded}
+                                    onClick={() =>
+                                      setManualOngoingExpanded({
+                                        contextKey: ongoingExpansionContextKey,
+                                        expandedGroups: isExpanded
+                                          ? ongoingExpandedGroups.filter(
+                                              (k) => k !== group.key,
+                                            )
+                                          : [
+                                              ...ongoingExpandedGroups,
+                                              group.key,
+                                            ],
+                                      })
+                                    }
+                                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-muted-foreground transition hover:bg-surface/70 hover:text-foreground"
+                                  >
+                                    {isExpanded ? (
+                                      <ChevronDown className="size-3.5 shrink-0 text-faint" />
+                                    ) : (
+                                      <ChevronRight className="size-3.5 shrink-0 text-faint" />
+                                    )}
+                                    {isMutedGroup && (
+                                      <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                                    )}
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {labelForOngoingGroup(group.key)}
+                                    </span>
+                                    {isMutedGroup &&
+                                      groupUnreadIDs.length > 0 && (
+                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface/90 px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-muted-foreground">
+                                          <span
+                                            aria-hidden="true"
+                                            className="inline-flex size-1.5 rounded-full bg-muted-foreground/50"
+                                          />
+                                          {t("{{count}} 未读", {
+                                            count: groupUnreadIDs.length,
+                                          })}
+                                        </span>
+                                      )}
+                                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-faint">
+                                      {group.cards.length}
+                                    </span>
+                                  </button>
+                                  {isMutedGroup &&
+                                    groupUnreadIDs.length > 0 && (
+                                      <button
+                                        type="button"
+                                        disabled={batchMarkRead.isPending}
+                                        aria-label={t("全部已读")}
+                                        onClick={() =>
+                                          void batchMarkRead.markBatchRead(
+                                            groupUnreadIDs,
+                                          )
+                                        }
+                                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-muted-foreground transition hover:bg-surface/80 hover:text-foreground disabled:opacity-50"
+                                      >
+                                        {batchMarkRead.isPending ? (
+                                          <Loader2 className="size-3.5 animate-spin" />
+                                        ) : (
+                                          <CheckCheck className="size-3.5" />
+                                        )}
+                                        <span>{t("全部已读")}</span>
+                                      </button>
+                                    )}
+                                </div>
+                                {isExpanded && (
+                                  <div className="mt-1.5 flex flex-col gap-1.5 border-t border-divider/70 pt-1.5">
+                                    {group.cards.map((card) =>
+                                      renderCardRow(card),
+                                    )}
+                                  </div>
+                                )}
+                              </section>
+                            );
+                          }
+
+                          return (
+                            <Fragment key={group.key}>
+                              {ongoingGroups.length > 1 && (
+                                <div
+                                  role="presentation"
+                                  data-switcher-plan-group={group.key}
+                                  className={cn(
+                                    "flex items-center gap-2 px-1.5 text-[11px] font-medium",
+                                    isAttention
+                                      ? hasCritical
+                                        ? "text-rose-600 dark:text-rose-400"
+                                        : "text-amber-700 dark:text-amber-400"
+                                      : "text-muted-foreground",
+                                    groupIndex > 0 ? "mt-2 pt-1" : "pt-0.5",
+                                  )}
+                                >
+                                  <span>{labelForOngoingGroup(group.key)}</span>
+                                  <span className="tabular-nums text-[10px] opacity-75">
+                                    {group.cards.length}
+                                  </span>
+                                  <span
+                                    className="h-px flex-1 bg-divider/80"
+                                    aria-hidden="true"
+                                  />
+                                </div>
+                              )}
+                              {group.cards.map((card) => renderCardRow(card))}
+                            </Fragment>
+                          );
+                        })
+                      : currentList.map((card) => renderCardRow(card))}
               </SwipeActionGroup>
             );
           })()}

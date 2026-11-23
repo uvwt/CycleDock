@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  BellOff,
   CalendarClock,
+  CheckCheck,
   ChevronDown,
   ChevronRight,
   CirclePause,
   LayoutGrid,
+  Loader2,
   Pin,
   PinOff,
   Search,
@@ -22,7 +25,10 @@ import {
 } from "../../shared/lib/card-cache";
 import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import { activeCardAutoReadSuppression } from "../../shared/lib/card-read-state";
-import { useCardReadState } from "../../shared/lib/useCardReadState";
+import {
+  useBatchMarkCardsRead,
+  useCardReadState,
+} from "../../shared/lib/useCardReadState";
 import {
   ContextSidebar,
   ContextSidebarItem,
@@ -48,6 +54,7 @@ import {
   buildPlanSidebarGroups,
   buildPlanSidebarSubtitle,
   getDefaultExpandedPlanGroups,
+  getUnreadPlanCardIDs,
   groupSchedulesByCard,
   type PlanSidebarGroupKey,
 } from "./plan-sidebar-model";
@@ -156,6 +163,7 @@ export function PlanSidebar({
 
   const muteMutation = useCardNotificationMute();
   const readStateMutation = useCardReadState();
+  const batchMarkRead = useBatchMarkCardsRead(resolvedProjectID);
   const sheetTarget = useMemo(
     () => cards.find((item) => item.id === sheetTargetID) || null,
     [cards, sheetTargetID],
@@ -201,6 +209,8 @@ export function PlanSidebar({
         return t("需关注");
       case "active":
         return t("运行中");
+      case "muted":
+        return t("免打扰");
       case "inactive":
         return t("已暂停 / 已归档");
     }
@@ -291,58 +301,100 @@ export function PlanSidebar({
             const isExpanded = expandedGroups.includes(group.key);
             const containsActive = activeGroupKey === group.key;
             const isAttention = group.key === "attention";
+            const isMutedGroup = group.key === "muted";
             const hasCritical =
               isAttention &&
               group.cards.some((card) => card.health === "critical");
+            const groupUnreadIDs = isMutedGroup
+              ? getUnreadPlanCardIDs(group.cards, activeCardID)
+              : [];
 
             return (
               <section key={group.key} data-plan-group={group.key}>
-                <button
-                  type="button"
-                  aria-expanded={isExpanded}
-                  onClick={() =>
-                    setManualExpansion({
-                      contextKey: expansionContextKey,
-                      expandedGroups: isExpanded
-                        ? expandedGroups.filter((key) => key !== group.key)
-                        : [...expandedGroups, group.key],
-                    })
-                  }
-                  className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition ${
-                    containsActive
-                      ? "text-heading"
-                      : "text-secondary-foreground hover:bg-surface/70"
-                  }`}
-                >
-                  {isExpanded ? (
-                    <ChevronDown className="size-3.5 shrink-0 text-faint" />
-                  ) : (
-                    <ChevronRight className="size-3.5 shrink-0 text-faint" />
-                  )}
-                  <span
-                    className={`min-w-0 flex-1 truncate text-xs font-medium ${
-                      isAttention
-                        ? hasCritical
-                          ? "text-rose-600 dark:text-rose-400"
-                          : "text-amber-700 dark:text-amber-400"
-                        : ""
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-expanded={isExpanded}
+                    onClick={() =>
+                      setManualExpansion({
+                        contextKey: expansionContextKey,
+                        expandedGroups: isExpanded
+                          ? expandedGroups.filter((key) => key !== group.key)
+                          : [...expandedGroups, group.key],
+                      })
+                    }
+                    className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-xl px-2.5 py-2 text-left transition ${
+                      containsActive
+                        ? "text-heading"
+                        : "text-secondary-foreground hover:bg-surface/70"
                     }`}
                   >
-                    {labelForGroup(group.key)}
-                  </span>
-                  <Badge
-                    variant="secondary"
-                    className={`px-1.5 py-0 text-[11px] font-normal tabular-nums ${
-                      isAttention
-                        ? hasCritical
-                          ? "bg-rose-500/12 text-rose-600 dark:text-rose-400"
-                          : "bg-amber-500/12 text-amber-700 dark:text-amber-400"
-                        : "text-faint"
-                    }`}
-                  >
-                    {group.cards.length}
-                  </Badge>
-                </button>
+                    {isExpanded ? (
+                      <ChevronDown className="size-3.5 shrink-0 text-faint" />
+                    ) : (
+                      <ChevronRight className="size-3.5 shrink-0 text-faint" />
+                    )}
+                    {isMutedGroup ? (
+                      <BellOff className="size-3 shrink-0 text-muted-foreground/70" />
+                    ) : null}
+                    <span
+                      className={`min-w-0 flex-1 truncate text-xs font-medium ${
+                        isAttention
+                          ? hasCritical
+                            ? "text-rose-600 dark:text-rose-400"
+                            : "text-amber-700 dark:text-amber-400"
+                          : isMutedGroup
+                            ? "text-muted-foreground"
+                            : ""
+                      }`}
+                    >
+                      {labelForGroup(group.key)}
+                    </span>
+                    {isMutedGroup && groupUnreadIDs.length > 0 ? (
+                      <span
+                        data-muted-unread-summary="true"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted/90 px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-muted-foreground"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="inline-flex size-1.5 rounded-full bg-muted-foreground/50"
+                        />
+                        {t("{{count}} 未读", { count: groupUnreadIDs.length })}
+                      </span>
+                    ) : null}
+                    <Badge
+                      variant="secondary"
+                      className={`px-1.5 py-0 text-[11px] font-normal tabular-nums ${
+                        isAttention
+                          ? hasCritical
+                            ? "bg-rose-500/12 text-rose-600 dark:text-rose-400"
+                            : "bg-amber-500/12 text-amber-700 dark:text-amber-400"
+                          : "text-faint"
+                      }`}
+                    >
+                      {group.cards.length}
+                    </Badge>
+                  </button>
+                  {isMutedGroup && groupUnreadIDs.length > 0 ? (
+                    <HintTooltip content={t("全部已读")} side="top">
+                      <button
+                        type="button"
+                        disabled={batchMarkRead.isPending}
+                        aria-label={t("全部已读")}
+                        onClick={() =>
+                          void batchMarkRead.markBatchRead(groupUnreadIDs)
+                        }
+                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[11px] font-medium text-muted-foreground transition hover:bg-surface/80 hover:text-foreground disabled:opacity-50"
+                      >
+                        {batchMarkRead.isPending ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <CheckCheck className="size-3.5" />
+                        )}
+                      </button>
+                    </HintTooltip>
+                  ) : null}
+                </div>
 
                 {isExpanded ? (
                   <div className="mt-0.5 space-y-0.5 pl-1.5">
@@ -415,7 +467,7 @@ export function PlanSidebar({
                           <CirclePause className="size-4 text-faint" />
                         )
                       ) : visualStatus !== "idle" ? (
-                        <CardStatusDot status={visualStatus} />
+                        <CardStatusDot status={visualStatus} muted={isMuted} />
                       ) : (
                         <CalendarClock className="size-4 text-faint" />
                       );
