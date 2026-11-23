@@ -47,6 +47,8 @@ import type {
   RemoteChannelInput,
   RemoteChannelPlatform,
   RemoteChannelRole,
+  ProjectPrimaryPushMode,
+  ProjectPrimaryPushRoute,
   WeixinLoginSession,
   QRConnectSession,
 } from "./types";
@@ -596,9 +598,26 @@ export const api = {
       reason ? { reason } : {},
     ).then((res) => res.watcher),
   channels: () =>
-    request<{ channels: RemoteChannel[] }>("/channels").then(
-      (res) => res.channels ?? [],
-    ),
+    request<{
+      channels: RemoteChannel[];
+      primary_push_routes?: ProjectPrimaryPushRoute[];
+    }>("/channels").then((res) => ({
+      channels: res.channels ?? [],
+      primary_push_routes: res.primary_push_routes ?? [],
+    })),
+  projectPrimaryPushRoute: (projectID: string) =>
+    request<{ route: ProjectPrimaryPushRoute }>(
+      `/projects/${encodeURIComponent(projectID)}/primary-push-route`,
+    ).then((res) => res.route),
+  updateProjectPrimaryPushRoute: (
+    projectID: string,
+    value: { mode: ProjectPrimaryPushMode; channel_id?: string | null },
+  ) =>
+    request<{ route: ProjectPrimaryPushRoute }>(
+      `/projects/${encodeURIComponent(projectID)}/primary-push-route`,
+      "PUT",
+      value,
+    ).then((res) => res.route),
   createChannel: (value: RemoteChannelInput) =>
     request<{ channel: RemoteChannel }>("/channels", "POST", value).then(
       (res) => res.channel,

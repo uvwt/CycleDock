@@ -118,7 +118,7 @@ func (q *Queries) GetCardSchedule(ctx context.Context, arg GetCardScheduleParams
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, workspace_id, name, description, created_at, updated_at, main_discussion_id
+SELECT id, workspace_id, name, description, created_at, updated_at, main_discussion_id, primary_push_mode, primary_push_channel_id
 FROM projects
 WHERE workspace_id = $1
   AND id = $2
@@ -140,6 +140,8 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MainDiscussionID,
+		&i.PrimaryPushMode,
+		&i.PrimaryPushChannelID,
 	)
 	return i, err
 }
@@ -1306,7 +1308,7 @@ func (q *Queries) ListProjectSchedules(ctx context.Context, arg ListProjectSched
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, workspace_id, name, description, created_at, updated_at, main_discussion_id
+SELECT id, workspace_id, name, description, created_at, updated_at, main_discussion_id, primary_push_mode, primary_push_channel_id
 FROM projects
 WHERE workspace_id = $1
 ORDER BY created_at, id
@@ -1329,6 +1331,8 @@ func (q *Queries) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]Pr
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MainDiscussionID,
+			&i.PrimaryPushMode,
+			&i.PrimaryPushChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -1684,7 +1688,7 @@ SET name = $1,
     updated_at = now()
 WHERE workspace_id = $3
   AND id = $4
-RETURNING id, workspace_id, name, description, created_at, updated_at, main_discussion_id
+RETURNING id, workspace_id, name, description, created_at, updated_at, main_discussion_id, primary_push_mode, primary_push_channel_id
 `
 
 type UpdateProjectParams struct {
@@ -1710,6 +1714,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MainDiscussionID,
+		&i.PrimaryPushMode,
+		&i.PrimaryPushChannelID,
 	)
 	return i, err
 }

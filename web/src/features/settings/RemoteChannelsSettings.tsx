@@ -10,15 +10,18 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Globe,
   LoaderCircle,
   MessageCircle,
   MessageSquare,
   Pencil,
   Plus,
   QrCode,
+  Radio,
   RefreshCw,
   Send,
   ShieldCheck,
+  Star,
   Trash2,
   Webhook,
 } from "lucide-react";
@@ -26,6 +29,8 @@ import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { api } from "../../shared/api/client";
 import type {
+  ProjectPrimaryPushMode,
+  ProjectPrimaryPushRoute,
   QRConnectSession,
   RemoteChannel,
   RemoteChannelGroupPolicy,
@@ -336,6 +341,7 @@ export function RemoteChannelsSettings() {
   const [roleFilter, setRoleFilter] = useState<"all" | RemoteChannelRole>(
     "all",
   );
+  const [routeProjectID, setRouteProjectID] = useState<string>("");
   const [editorOpen, setEditorOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
@@ -361,7 +367,61 @@ export function RemoteChannelsSettings() {
     [projectsQuery.data],
   );
 
-  const channels = useMemo(() => channelsQuery.data ?? [], [channelsQuery.data]);
+  const channels = useMemo(
+    () => channelsQuery.data?.channels ?? [],
+    [channelsQuery.data],
+  );
+  const primaryPushRoutes = useMemo(
+    () => channelsQuery.data?.primary_push_routes ?? [],
+    [channelsQuery.data],
+  );
+  const primaryRoutesByProject = useMemo(
+    () =>
+      Object.fromEntries(
+        primaryPushRoutes.map((r) => [r.project_id, r]),
+      ) as Record<string, ProjectPrimaryPushRoute>,
+    [primaryPushRoutes],
+  );
+
+  const projects = useMemo(
+    () => projectsQuery.data ?? [],
+    [projectsQuery.data],
+  );
+  const activeRouteProjectID = useMemo(() => {
+    if (routeProjectID && projects.some((p) => p.id === routeProjectID)) {
+      return routeProjectID;
+    }
+    // 优先选中当前已配置了双向对话通道的项目，避免默认落在空白项目上导致控制条找不到已有通道
+    const firstMainChatProjectID = channels.find(
+      (c) =>
+        c.role === "main_chat" && projects.some((p) => p.id === c.project_id),
+    )?.project_id;
+    if (firstMainChatProjectID) {
+      return firstMainChatProjectID;
+    }
+    return projects[0]?.id ?? "";
+  }, [projects, routeProjectID, channels]);
+
+  const activeProjectMainChatChannels = useMemo(
+    () =>
+      channels.filter(
+        (c) =>
+          c.role === "main_chat" && c.project_id === activeRouteProjectID,
+      ),
+    [channels, activeRouteProjectID],
+  );
+
+  const activePrimaryRoute: ProjectPrimaryPushRoute | null = useMemo(() => {
+    if (!activeRouteProjectID) {
+      return null;
+    }
+    return (
+      primaryRoutesByProject[activeRouteProjectID] ?? {
+        project_id: activeRouteProjectID,
+        mode: "last_active",
+      }
+    );
+  }, [activeRouteProjectID, primaryRoutesByProject]);
   const filteredChannels = useMemo(
     () =>
       roleFilter === "all"
@@ -476,6 +536,80 @@ export function RemoteChannelsSettings() {
     },
   });
 
+  const updatePrimaryRouteMutation = useMutation({
+    mutationFn: ({
+      projectID,
+      mode,
+      channelID,
+    }: {
+      projectID: string;
+      mode: ProjectPrimaryPushMode;
+      channelID?: string | null;
+    }) =>
+      api.updateProjectPrimaryPushRoute(projectID, {
+        mode,
+        channel_id: mode === "channel" ? (channelID ?? null) : null,
+      }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: keys.channels });
+      if (updated.mode === "none") {
+        toast.success("已切换为仅网页端接收主聊天与系统通知");
+      } else if (updated.mode === "last_active") {
+        toast.success("已切换为自动跟随最近活跃通道");
+      } else if (updated.effective_channel_name) {
+        toast.success(`已设「${updated.effective_channel_name}」为主推通道`);
+      } else {
+        toast.success("已更新项目主推通道配置");
+      }
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "更新主推策略失败");
+    },
+  });
+
+  const handleSelectPrimaryMode = (nextMode: ProjectPrimaryPushMode) => {
+    if (!activeRouteProjectID) return;
+    if (nextMode === "channel") {
+      const preferred =
+        activePrimaryRoute?.channel_id &&
+        activeProjectMainChatChannels.some(
+          (c) => c.id === activePrimaryRoute.channel_id,
+        )
+          ? activePrimaryRoute.channel_id
+          : (activePrimaryRoute?.effective_channel_id &&
+              activeProjectMainChatChannels.some(
+                (c) => c.id === activePrimaryRoute.effective_channel_id,
+              )
+              ? activePrimaryRoute.effective_channel_id
+              : (activeProjectMainChatChannels.find((c) => c.enabled)?.id ??
+                activeProjectMainChatChannels[0]?.id));
+      if (!preferred) {
+        toast.info("当前项目暂无双向对话通道，请先接入一个双向通道");
+        return;
+      }
+      updatePrimaryRouteMutation.mutate({
+        projectID: activeRouteProjectID,
+        mode: "channel",
+        channelID: preferred,
+      });
+      return;
+    }
+    updatePrimaryRouteMutation.mutate({
+      projectID: activeRouteProjectID,
+      mode: nextMode,
+      channelID: null,
+    });
+  };
+
+  const handleSetChannelAsPrimary = (ch: RemoteChannel) => {
+    setRouteProjectID(ch.project_id);
+    updatePrimaryRouteMutation.mutate({
+      projectID: ch.project_id,
+      mode: "channel",
+      channelID: ch.id,
+    });
+  };
+
   const handleTest = async (ch: RemoteChannel) => {
     setTestingID(ch.id);
     try {
@@ -550,10 +684,175 @@ export function RemoteChannelsSettings() {
     );
   }
 
-  const projects = projectsQuery.data ?? [];
-
   return (
     <div className="min-w-0 space-y-5">
+      {/* 项目级「主聊天与系统通知推送」唯一主推控制条 */}
+      {activePrimaryRoute && (
+        <div
+          data-testid="primary-push-route-bar"
+          className="rounded-xl border border-line bg-surface p-4 shadow-xs"
+        >
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                  <Radio className="size-3.5" />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-sm font-semibold text-heading">
+                      主聊天与系统通知推送
+                    </h3>
+                    <Badge variant="outline" className="text-[11px]">
+                      唯一主推防轰炸
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    主聊天主动消息、系统提醒与安全审批挂起仅推往 1 个主力通道；各通道专属对话仍独立回复。
+                  </p>
+                </div>
+              </div>
+              {projects.length > 1 && (
+                <div className="w-full sm:w-44">
+                  <Select
+                    aria-label="选择主推路由项目"
+                    value={activeRouteProjectID}
+                    onChange={(e) => setRouteProjectID(e.target.value)}
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+              <div
+                role="group"
+                aria-label="主推路由模式"
+                className="inline-flex w-full flex-wrap items-center gap-1 rounded-lg border border-line bg-muted/40 p-1 sm:w-auto"
+              >
+                {(
+                  [
+                    {
+                      id: "last_active",
+                      label: "自动跟随最近活跃",
+                      icon: Radio,
+                    },
+                    {
+                      id: "channel",
+                      label: "指定主力通道",
+                      icon: Star,
+                    },
+                    {
+                      id: "none",
+                      label: "仅网页端",
+                      icon: Globe,
+                    },
+                  ] as const
+                ).map((item) => {
+                  const Icon = item.icon;
+                  const selected = activePrimaryRoute.mode === item.id;
+                  const disabled =
+                    updatePrimaryRouteMutation.isPending ||
+                    (item.id === "channel" &&
+                      activeProjectMainChatChannels.length === 0);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-testid={`primary-mode-${item.id}`}
+                      disabled={disabled}
+                      onClick={() => handleSelectPrimaryMode(item.id)}
+                      className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:flex-none ${
+                        selected
+                          ? "bg-surface text-heading shadow-xs"
+                          : "text-muted-foreground hover:text-heading"
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      <Icon className="size-3.5 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex min-w-0 flex-1 items-center sm:justify-end">
+                {activePrimaryRoute.mode === "channel" && (
+                  <div className="w-full sm:max-w-xs">
+                    <Select
+                      aria-label="选择指定主力通道"
+                      data-testid="primary-channel-select"
+                      value={activePrimaryRoute.channel_id ?? ""}
+                      disabled={
+                        updatePrimaryRouteMutation.isPending ||
+                        activeProjectMainChatChannels.length === 0
+                      }
+                      onChange={(e) => {
+                        const nextID = e.target.value;
+                        if (!nextID) return;
+                        updatePrimaryRouteMutation.mutate({
+                          projectID: activeRouteProjectID,
+                          mode: "channel",
+                          channelID: nextID,
+                        });
+                      }}
+                    >
+                      {!activePrimaryRoute.channel_id && (
+                        <option value="">请选择主力双向通道（当前已静默）</option>
+                      )}
+                      {activeProjectMainChatChannels.map((ch) => (
+                        <option key={ch.id} value={ch.id}>
+                          {ch.name}
+                          {!ch.enabled ? "（已停用）" : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+
+                {activePrimaryRoute.mode === "last_active" && (
+                  <div
+                    data-testid="primary-last-active-hint"
+                    className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    {activePrimaryRoute.effective_channel_id ? (
+                      <>
+                        <span>当前跟随：</span>
+                        <Badge
+                          variant="default"
+                          className="gap-1 text-[11px]"
+                        >
+                          <Radio className="size-3" />
+                          {activePrimaryRoute.effective_channel_name ||
+                            activePrimaryRoute.effective_channel_id.slice(0, 8)}
+                        </Badge>
+                      </>
+                    ) : (
+                      <span>
+                        暂无活跃通道，在任意已启用的双向通道发一条消息即可自动生效
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {activePrimaryRoute.mode === "none" && (
+                  <span
+                    data-testid="primary-none-hint"
+                    className="text-xs text-muted-foreground"
+                  >
+                    免打扰中：主聊天通知与审批仅在网页端 / Web Push 提醒
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 顶部工作台总览与平台网格 */}
       <Section
         title="远程通道工作台"
@@ -720,6 +1019,22 @@ export function RemoteChannelsSettings() {
                 const status =
                   STATUS_META[ch.runtime_status] ?? STATUS_META.disabled;
                 const project = projectsByID[ch.project_id];
+                const projectRoute = primaryRoutesByProject[ch.project_id];
+                const isEffectivePrimary =
+                  ch.role === "main_chat" &&
+                  projectRoute?.effective_channel_id === ch.id;
+                const isConfiguredPrimaryDisabled =
+                  ch.role === "main_chat" &&
+                  projectRoute?.mode === "channel" &&
+                  projectRoute?.channel_id === ch.id &&
+                  !isEffectivePrimary;
+                const canQuickSetPrimary =
+                  ch.role === "main_chat" &&
+                  ch.enabled &&
+                  !(
+                    projectRoute?.mode === "channel" &&
+                    projectRoute?.channel_id === ch.id
+                  );
                 const secretEntries = Object.entries(ch.secret_hints ?? {});
                 return (
                   <div
@@ -754,6 +1069,26 @@ export function RemoteChannelsSettings() {
                             <Badge variant="outline" className="text-[11px]">
                               {transportLabel(ch.transport)}
                             </Badge>
+                            {isEffectivePrimary && (
+                              <Badge
+                                variant="default"
+                                data-testid={`primary-badge-${ch.id}`}
+                                className="gap-1 bg-amber-500/15 text-[11px] text-amber-700 border-amber-500/30 dark:text-amber-300"
+                              >
+                                <Star className="size-3 fill-current" />
+                                {projectRoute?.mode === "last_active"
+                                  ? "当前活跃主推"
+                                  : "主推"}
+                              </Badge>
+                            )}
+                            {isConfiguredPrimaryDisabled && (
+                              <Badge
+                                variant="outline"
+                                className="gap-1 border-amber-500/35 text-[11px] text-amber-700 dark:text-amber-300"
+                              >
+                                已设主推（停用中）
+                              </Badge>
+                            )}
                           </div>
 
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -830,6 +1165,18 @@ export function RemoteChannelsSettings() {
                             toggleMutation.mutate({ id: ch.id, enabled: checked })
                           }
                         />
+                        {canQuickSetPrimary && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            data-testid={`set-primary-${ch.id}`}
+                            disabled={updatePrimaryRouteMutation.isPending}
+                            onClick={() => handleSetChannelAsPrimary(ch)}
+                          >
+                            <Star className="size-3.5" />
+                            设为主推
+                          </Button>
+                        )}
                         {meta.supportsQRLogin && ch.transport !== "webhook" && (
                           <Button
                             size="sm"

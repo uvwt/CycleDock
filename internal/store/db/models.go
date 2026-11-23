@@ -339,13 +339,15 @@ type OidcIdentity struct {
 }
 
 type Project struct {
-	ID               uuid.UUID          `json:"id"`
-	WorkspaceID      uuid.UUID          `json:"workspace_id"`
-	Name             string             `json:"name"`
-	Description      string             `json:"description"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	MainDiscussionID uuid.NullUUID      `json:"main_discussion_id"`
+	ID                   uuid.UUID          `json:"id"`
+	WorkspaceID          uuid.UUID          `json:"workspace_id"`
+	Name                 string             `json:"name"`
+	Description          string             `json:"description"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	MainDiscussionID     uuid.NullUUID      `json:"main_discussion_id"`
+	PrimaryPushMode      string             `json:"primary_push_mode"`
+	PrimaryPushChannelID uuid.NullUUID      `json:"primary_push_channel_id"`
 }
 
 type PushCardRevision struct {

@@ -42,6 +42,36 @@ type remoteChannelDTO struct {
 	UpdatedAt          time.Time                   `json:"updated_at"`
 }
 
+type projectPrimaryPushRouteDTO struct {
+	ProjectID                uuid.UUID                     `json:"project_id"`
+	Mode                     domain.ProjectPrimaryPushMode `json:"mode"`
+	ChannelID                *uuid.UUID                    `json:"channel_id,omitempty"`
+	EffectiveChannelID       *uuid.UUID                    `json:"effective_channel_id,omitempty"`
+	EffectiveChannelName     string                        `json:"effective_channel_name,omitempty"`
+	EffectiveChannelPlatform domain.ChannelPlatform        `json:"effective_channel_platform,omitempty"`
+}
+
+func toProjectPrimaryPushRouteDTO(r store.ResolvedProjectPrimaryPushRoute) projectPrimaryPushRouteDTO {
+	var channelID *uuid.UUID
+	if r.ChannelID.Valid {
+		id := r.ChannelID.UUID
+		channelID = &id
+	}
+	var effectiveID *uuid.UUID
+	if r.EffectiveChannelID.Valid {
+		id := r.EffectiveChannelID.UUID
+		effectiveID = &id
+	}
+	return projectPrimaryPushRouteDTO{
+		ProjectID:                r.ProjectID,
+		Mode:                     r.Mode,
+		ChannelID:                channelID,
+		EffectiveChannelID:       effectiveID,
+		EffectiveChannelName:     r.EffectiveChannelName,
+		EffectiveChannelPlatform: r.EffectiveChannelPlatform,
+	}
+}
+
 func toRemoteChannelDTO(ch store.RemoteChannel) remoteChannelDTO {
 	var targetCardID *uuid.UUID
 	if ch.TargetCardID.Valid {
@@ -154,11 +184,79 @@ func (a *API) listRemoteChannels(w http.ResponseWriter, r *http.Request) {
 		a.handleError(w, err)
 		return
 	}
+	routes, err := a.store.ListWorkspaceProjectPrimaryPushRoutes(r.Context(), session.WorkspaceID, list)
+	if err != nil {
+		a.handleError(w, err)
+		return
+	}
 	items := make([]remoteChannelDTO, 0, len(list))
 	for _, ch := range list {
 		items = append(items, toRemoteChannelDTO(ch))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"channels": items})
+	routeItems := make([]projectPrimaryPushRouteDTO, 0, len(routes))
+	for _, route := range routes {
+		routeItems = append(routeItems, toProjectPrimaryPushRouteDTO(route))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"channels":            items,
+		"primary_push_routes": routeItems,
+	})
+}
+
+func (a *API) getProjectPrimaryPushRoute(w http.ResponseWriter, r *http.Request) {
+	session := identityFromRequest(r)
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	route, err := a.store.GetProjectPrimaryPushRoute(r.Context(), session.WorkspaceID, projectID)
+	if err != nil {
+		a.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"route": toProjectPrimaryPushRouteDTO(route),
+	})
+}
+
+type updateProjectPrimaryPushRouteRequest struct {
+	Mode      domain.ProjectPrimaryPushMode `json:"mode"`
+	ChannelID *string                       `json:"channel_id"`
+}
+
+func (a *API) updateProjectPrimaryPushRoute(w http.ResponseWriter, r *http.Request) {
+	session := identityFromRequest(r)
+	projectID, ok := parseUUIDParam(w, r, "projectID")
+	if !ok {
+		return
+	}
+	var req updateProjectPrimaryPushRouteRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	var channelID uuid.NullUUID
+	if req.ChannelID != nil && strings.TrimSpace(*req.ChannelID) != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.ChannelID))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid channel_id"})
+			return
+		}
+		channelID = uuid.NullUUID{UUID: parsed, Valid: true}
+	}
+	route, err := a.store.UpdateProjectPrimaryPushRoute(
+		r.Context(),
+		session.WorkspaceID,
+		projectID,
+		req.Mode,
+		channelID,
+	)
+	if err != nil {
+		a.handleError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"route": toProjectPrimaryPushRouteDTO(route),
+	})
 }
 
 func (a *API) createRemoteChannel(w http.ResponseWriter, r *http.Request) {

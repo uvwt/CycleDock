@@ -83,7 +83,7 @@ func (q *Queries) CreateCard(ctx context.Context, arg CreateCardParams) (Card, e
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (id, workspace_id, name, description)
 VALUES ($1, $2, $3, $4)
-RETURNING id, workspace_id, name, description, created_at, updated_at, main_discussion_id
+RETURNING id, workspace_id, name, description, created_at, updated_at, main_discussion_id, primary_push_mode, primary_push_channel_id
 `
 
 type CreateProjectParams struct {
@@ -109,6 +109,8 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.MainDiscussionID,
+		&i.PrimaryPushMode,
+		&i.PrimaryPushChannelID,
 	)
 	return i, err
 }

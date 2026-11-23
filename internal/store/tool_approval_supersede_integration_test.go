@@ -314,26 +314,81 @@ func TestMigration38CleansLegacyZombiePendingApprovals(t *testing.T) {
 
 	// 在版本 37 约束下制造两条历史僵尸 pending 审批记录与一条仍有效的最新 pending 审批记录，
 	// 由于新版 Store 会在推进时直接标为 superseded，测试里直接以旧版语义插入后续 turn/状态或置回 pending 验证迁移 SQL。
-	todoWithNewerTurn := newFixture(t, s, domain.CardKindTodo)
-	zombieTurnApproval := createPendingApprovalFixture(t, s, todoWithNewerTurn, "exec_command")
+	// 注意：版本 37 尚未引入后续迁移（如 projects.primary_push_mode 等），不能复用依赖最新列结构的 newFixture/Store 方法，
+	// 直接按版本 37 表结构写入最小夹具，确保历史迁移测试对未来新增列天然免疫。
+	insertLegacyV37TodoFixture := func() (workspaceID, humanID, cardID, turnID, attemptID uuid.UUID) {
+		workspaceID = uuid.New()
+		projectID := uuid.New()
+		humanID = uuid.New()
+		agentID := uuid.New()
+		cardID = uuid.New()
+		turnID = uuid.New()
+		attemptID = uuid.New()
+		if _, err := s.pool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'v37-ws')`, workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO projects (id, workspace_id, name, description) VALUES ($1, $2, 'v37-proj', '')`, projectID, workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO sources (id, workspace_id, kind, name) VALUES ($1, $2, 'human', 'v37-human')`, humanID, workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO sources (id, workspace_id, kind, name) VALUES ($1, $2, 'cycle_agent', 'v37-agent')`, agentID, workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO cards (id, workspace_id, project_id, kind, title, description, created_by_source_id, todo_state, required_confirmations)
+			VALUES ($1, $2, $3, 'todo', 'v37-todo', '', $4, 'working', 1)
+		`, cardID, workspaceID, projectID, humanID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO card_turns (id, workspace_id, card_id, source, content, created_by_source_id, dispatch_mode)
+			VALUES ($1, $2, $3, 'human', 'initial', $4, 'enqueue')
+		`, turnID, workspaceID, cardID, humanID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO turn_attempts (id, workspace_id, card_id, turn_id, attempt_number, reason, runner_source_id, status, started_at, heartbeat_at, lease_expires_at)
+			VALUES ($1, $2, $3, $4, 1, 'initial', $5, 'running', now(), now(), now() + interval '5 minutes')
+		`, attemptID, workspaceID, cardID, turnID, agentID); err != nil {
+			t.Fatal(err)
+		}
+		return workspaceID, humanID, cardID, turnID, attemptID
+	}
+	insertLegacyV37Approval := func(workspaceID, cardID, turnID, attemptID uuid.UUID, toolName string) uuid.UUID {
+		id := uuid.New()
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO card_tool_approvals (
+				id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name,
+				arguments, risk_level, reason, status
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, 'high', 'legacy-test', 'pending')
+		`, id, workspaceID, cardID, turnID, attemptID, "call-"+id.String(), toolName); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	ws1, human1, card1, turn1, att1 := insertLegacyV37TodoFixture()
+	zombieTurnApproval := insertLegacyV37Approval(ws1, card1, turn1, att1, "exec_command")
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO card_turns (id, workspace_id, card_id, source, content, created_by_source_id, dispatch_mode)
 		VALUES ($1, $2, $3, 'human', '旧版迁移前发出的后续对话', $4, 'enqueue')
-	`, uuid.New(), todoWithNewerTurn.WorkspaceID, todoWithNewerTurn.CardID, todoWithNewerTurn.HumanID); err != nil {
+	`, uuid.New(), ws1, card1, human1); err != nil {
 		t.Fatal(err)
 	}
 
-	doneCard := newFixture(t, s, domain.CardKindTodo)
-	zombieDoneApproval := createPendingApprovalFixture(t, s, doneCard, "file_edit")
+	ws2, _, card2, turn2, att2 := insertLegacyV37TodoFixture()
+	zombieDoneApproval := insertLegacyV37Approval(ws2, card2, turn2, att2, "file_edit")
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE cards SET todo_state = 'done', updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-	`, doneCard.WorkspaceID, doneCard.CardID); err != nil {
+	`, ws2, card2); err != nil {
 		t.Fatal(err)
 	}
 
-	activeCard := newFixture(t, s, domain.CardKindTodo)
-	livePendingApproval := createPendingApprovalFixture(t, s, activeCard, "exec_command")
+	ws3, _, card3, turn3, att3 := insertLegacyV37TodoFixture()
+	livePendingApproval := insertLegacyV37Approval(ws3, card3, turn3, att3, "exec_command")
 
 	if err := goose.Up(database, migrations); err != nil {
 		t.Fatal(err)
