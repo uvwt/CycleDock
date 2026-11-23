@@ -65,8 +65,20 @@ func (api *API) cardUpdatesForSource(ctx context.Context, workspaceID, sourceID 
        WHEN event_type = 'tool_approval' THEN
          COALESCE(NULLIF(left(btrim(content), 181), ''), '需要你审批敏感工具调用')
        ELSE
-         left(COALESCE(NULLIF(btrim(content), ''), message->'widget'->>'question',
-           NULLIF(message->>'alt', ''), message->>'url', ''), 181)
+         left(COALESCE(
+           NULLIF(btrim(content), ''),
+           message->'widget'->>'question',
+           NULLIF(message->>'alt', ''),
+           CASE
+             WHEN jsonb_typeof(message->'images') = 'array' AND jsonb_array_length(message->'images') > 0 THEN
+               CASE
+                 WHEN jsonb_array_length(message->'images') = 1 THEN '[图片]'
+                 ELSE '[' || jsonb_array_length(message->'images')::text || ' 张图片]'
+               END
+           END,
+           message->>'url',
+           ''
+         ), 181)
      END AS preview,
      event_type AS notification_kind
    FROM events WHERE workspace_id=c.workspace_id AND card_id=c.id

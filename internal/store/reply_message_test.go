@@ -20,6 +20,15 @@ func TestReplyMessageValidate(t *testing.T) {
 	}{
 		{"text", ReplyMessage{Type: "text", Content: "hello"}, true},
 		{"empty text", ReplyMessage{Type: "text"}, false},
+		{"image-only text single", ReplyMessage{Type: "text", Images: []string{"https://example.com/a.png"}}, true},
+		{"image-only text multiple", ReplyMessage{Type: "text", Images: []string{"https://example.com/a.png", "https://example.com/b.jpg"}}, true},
+		{"image-only text whitespace content", ReplyMessage{Type: "text", Content: "   \n ", Images: []string{"https://example.com/a.png"}}, true},
+		{"image-only text too many images", ReplyMessage{Type: "text", Images: []string{
+			"https://example.com/1.png", "https://example.com/2.png", "https://example.com/3.png",
+			"https://example.com/4.png", "https://example.com/5.png", "https://example.com/6.png",
+			"https://example.com/7.png", "https://example.com/8.png", "https://example.com/9.png",
+		}}, false},
+		{"image-only text unsafe image", ReplyMessage{Type: "text", Images: []string{"http://example.com/a.png"}}, false},
 		{"attachment", ReplyMessage{Type: "attachment", URL: "https://example.com/a.png"}, true},
 		{"javascript URL", ReplyMessage{Type: "attachment", URL: "javascript:alert(1)"}, false},
 		{"credentials in URL", ReplyMessage{Type: "attachment", URL: "https://user:pass@example.com"}, false},

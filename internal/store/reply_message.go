@@ -76,8 +76,9 @@ func (m *ReplyMessage) Validate() error {
 	}
 	switch m.Type {
 	case "text":
-		if m.Content == "" {
-			return fmt.Errorf("%w: text reply requires content", domain.ErrConflict)
+		// 允许发送纯图片气泡（images 非空时 content 可留空）；未附图片时仍强制要求正文非空。
+		if m.Content == "" && len(m.Images) == 0 {
+			return fmt.Errorf("%w: text reply requires content or images", domain.ErrConflict)
 		}
 		if m.URL != "" {
 			return fmt.Errorf("%w: text reply must omit url; use type=attachment for attachments", domain.ErrConflict)

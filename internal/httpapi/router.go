@@ -148,9 +148,11 @@ func (api *API) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		// 允许前端加载 Agent 通过 reply_message.images 发送的 HTTPS 外链图片；
+		// 配合 Referrer-Policy: no-referrer 与 img 标签的 referrerPolicy="no-referrer" 避免来源泄漏。
 		w.Header().Set(
 			"Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 		)
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		if strings.HasPrefix(r.URL.Path, "/api/") ||

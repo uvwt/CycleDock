@@ -10,12 +10,13 @@ import {
   type AnchorHTMLAttributes,
   type ComponentProps,
   type DetailedHTMLProps,
+  type ImgHTMLAttributes,
   type MouseEvent,
   type ReactElement,
   type ReactNode,
   type TdHTMLAttributes,
 } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, ExternalLink, ImageOff } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -27,6 +28,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "../../app/project-context";
 import { ChatActionCard } from "../../shared/ui/chat";
+import { ImageLightboxModal } from "./AttachmentGallery";
 import {
   normalizeCardMentions,
   parseCardLink,
@@ -143,6 +145,59 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         {children}
       </pre>
     </div>
+  );
+}
+
+/** Markdown 内嵌兜底图片组件：补充 no-referrer、lazy、合理尺寸圆角，并支持灯箱放大与失败回退。 */
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  if (!src) return null;
+  const label = alt?.trim() || t("消息图片");
+
+  if (failed) {
+    return (
+      <span
+        data-testid="markdown-image-fallback"
+        className="my-2 inline-flex max-w-full items-center gap-2 rounded-xl border border-dashed border-border/80 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <ImageOff className="size-3.5 shrink-0 opacity-75" />
+        <span>{t("图片加载失败")}</span>
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-primary underline underline-offset-2 hover:opacity-80"
+        >
+          <ExternalLink className="size-3 shrink-0" />
+          <span>{t("打开原图")}</span>
+        </a>
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <img
+        src={src}
+        alt={label}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        onClick={() => setLightboxOpen(true)}
+        className="my-2 block max-h-96 max-w-full cursor-zoom-in rounded-xl border border-border/60 bg-muted/30 object-contain"
+      />
+      {lightboxOpen && (
+        <ImageLightboxModal
+          src={src}
+          alt={label}
+          openOriginalUrl={src}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -296,6 +351,13 @@ export const RichText = memo(function RichText({
           </a>
         );
       },
+      img: ({
+        src,
+        alt,
+      }: DetailedHTMLProps<
+        ImgHTMLAttributes<HTMLImageElement>,
+        HTMLImageElement
+      >) => <MarkdownImage src={src} alt={alt} />,
       blockquote: ({ children }: { children?: React.ReactNode }) => (
         <div className="my-2 flex overflow-hidden rounded-lg border-l-3 border-primary bg-surface/80 dark:bg-surface/50 px-3 py-1.5 text-xs text-muted-foreground shadow-2xs">
           <div className="min-w-0 flex-1 leading-relaxed">{children}</div>

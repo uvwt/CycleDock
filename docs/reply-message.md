@@ -7,9 +7,9 @@ Agent 对用户的每一条可见气泡都由 `reply_message` 创建；一次工
 参数：
 
 - `type`：`text` / `attachment` / `choice`。
-- `content`：Markdown 正文，`text` 时必填。
-- `url` / `alt`：`attachment` 的 HTTPS 下载地址和说明。
-- `images`：可选 HTTPS 图片 URL 数组，最多 8 张，显示在正文下方。
+- `content`：Markdown 正文；`text` 且未传 `images` 时必填，当同时传入 `images` 时可留空以发送纯图片气泡。
+- `url` / `alt`：`attachment` 的 HTTPS 文件下载链接和说明（仅用于普通文件下载，不用于发图片）。
+- `images`：可选 HTTPS 图片直链数组，最多 8 张；向用户发送图片时必须使用该字段（可单独发纯图片气泡，也可配合简短说明显示在正文下方），不要在 Markdown 正文中使用 `![alt](url)`。
 - `widget`：`choice` 的 `question` 和 2~8 条 `{value,label}` 选项。
 - `end_turn`：默认 false。true 表示当前 Turn 的 Agent 回复已结束。
 - `idempotency_key`：一条逻辑消息一个唯一键；重试同键只复用已有消息。

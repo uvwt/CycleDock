@@ -76,3 +76,40 @@ func TestRouterStaticCacheControlAndGzipCompression(t *testing.T) {
 		t.Fatalf("healthz Content-Encoding=%q, want gzip", got)
 	}
 }
+
+func TestRouterSecurityHeadersAllowHTTPSImages(t *testing.T) {
+	handler := NewRouter(nil, nil, nil, Config{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz status=%d", rec.Code)
+	}
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{
+		"default-src 'self'",
+		"script-src 'self'",
+		"img-src 'self' data: blob: https:",
+		"connect-src 'self'",
+		"frame-ancestors 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("Content-Security-Policy=%q missing %q", csp, want)
+		}
+	}
+	if strings.Contains(csp, "img-src 'self' data: blob: https: http:") || strings.Contains(csp, "img-src *") {
+		t.Fatalf("Content-Security-Policy=%q must not allow http: or wildcard images", csp)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy=%q, want no-referrer", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options=%q, want nosniff", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options=%q, want DENY", got)
+	}
+}
