@@ -451,6 +451,7 @@ export function WorkSidebar({
                                   active,
                                   activeAttemptStatus,
                                 )}
+                                muted={isMuted}
                               />
                             )
                           }

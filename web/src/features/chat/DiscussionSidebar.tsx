@@ -1,6 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  BellOff,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
   MessageSquareText,
   Pin,
   PinOff,
@@ -18,7 +23,10 @@ import {
 } from "../../shared/lib/card-cache";
 import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import { activeCardAutoReadSuppression } from "../../shared/lib/card-read-state";
-import { useCardReadState } from "../../shared/lib/useCardReadState";
+import {
+  useBatchMarkCardsRead,
+  useCardReadState,
+} from "../../shared/lib/useCardReadState";
 import { CardActions } from "../cards/CardActions";
 import { CardRowActionSheet } from "../cards/CardRowActionSheet";
 import { buildCardSwipeActions } from "../cards/card-swipe-actions";
@@ -29,12 +37,18 @@ import {
   ContextSidebarSkeleton,
 } from "../../shared/ui/ContextSidebar";
 import {
+  Badge,
   Button,
   ConfirmDialog,
   HintTooltip,
   TextInput,
 } from "../../shared/ui/components";
 import { EditCardDialog } from "../../shared/ui/EditCardDialog";
+import {
+  buildDiscussionListSections,
+  getUnreadDiscussionCardIDs,
+  shouldDefaultExpandMutedDiscussions,
+} from "./discussion-sidebar-model";
 
 function formatRelativeTime(dateStr?: string) {
   if (!dateStr) return "";
@@ -128,6 +142,7 @@ export function DiscussionSidebar({
 
   const muteMutation = useCardNotificationMute();
   const readStateMutation = useCardReadState();
+  const batchMarkRead = useBatchMarkCardsRead(projectID);
   const sheetTarget = useMemo(
     () => discussions.find((item) => item.id === sheetTargetID) || null,
     [discussions, sheetTargetID],
@@ -151,29 +166,152 @@ export function DiscussionSidebar({
     },
   });
 
-  const filtered = useMemo(() => {
-    const query = term.trim().toLowerCase();
-    return discussions
-      .filter((card) => {
-        if (!query) return true;
-        return (card.title + " " + card.description)
-          .toLowerCase()
-          .includes(query);
-      })
-      .sort((a, b) => {
-        if (mainDiscussionID) {
-          if (a.id === mainDiscussionID) return -1;
-          if (b.id === mainDiscussionID) return 1;
+  const sections = useMemo(
+    () =>
+      buildDiscussionListSections(discussions, {
+        mainDiscussionID,
+        searchQuery: term,
+        activeCardID,
+        activeAttemptStatus,
+      }),
+    [discussions, mainDiscussionID, term, activeCardID, activeAttemptStatus],
+  );
+
+  const mutedUnreadIDs = useMemo(
+    () => getUnreadDiscussionCardIDs(sections.muted, activeCardID),
+    [sections.muted, activeCardID],
+  );
+
+  const hasSearch = term.trim().length > 0;
+  const activeInMuted = useMemo(
+    () =>
+      Boolean(
+        activeCardID && sections.muted.some((card) => card.id === activeCardID),
+      ),
+    [sections.muted, activeCardID],
+  );
+  const mutedExpansionContextKey = `${activeCardID || ""}:${activeInMuted ? "muted" : "normal"}:${hasSearch ? "search" : "browse"}`;
+  const defaultMutedExpanded = shouldDefaultExpandMutedDiscussions(
+    sections.muted,
+    { activeCardID, searchQuery: term },
+  );
+  const [manualMutedExpansion, setManualMutedExpansion] = useState<{
+    contextKey: string;
+    expanded: boolean;
+  } | null>(null);
+  const mutedExpanded =
+    manualMutedExpansion?.contextKey === mutedExpansionContextKey
+      ? manualMutedExpansion.expanded
+      : defaultMutedExpanded;
+
+  const renderDiscussionItem = (card: Card) => {
+    const isMain = card.id === mainDiscussionID;
+    const isPinned = isMain || Boolean(card.pinned_at);
+    const isMuted = Boolean(card.notifications_muted);
+    const isActive = card.id === activeCardID;
+    const swipeActions = buildCardSwipeActions({
+      card,
+      isMain,
+      isActive,
+      t,
+      onToggleRead: (nextUnread) => {
+        readStateMutation.mutate({
+          id: card.id,
+          unread: nextUnread,
+          projectID: card.project_id,
+          isActive,
+        });
+      },
+      onTogglePin: !isMain
+        ? () => {
+            pinMutation.mutate({
+              id: card.id,
+              pinned: !card.pinned_at,
+            });
+          }
+        : undefined,
+      onToggleMute: () => {
+        muteMutation.mutate({
+          id: card.id,
+          muted: !isMuted,
+          projectID: card.project_id,
+        });
+      },
+      onDelete: !isMain
+        ? () => {
+            setDeleteTarget(card);
+          }
+        : undefined,
+    });
+
+    return (
+      <ContextSidebarItem
+        key={card.id}
+        active={isActive}
+        pinned={isPinned}
+        muted={isMuted}
+        onClick={() => handleSelect(card)}
+        onLongPress={() => setSheetTargetID(card.id)}
+        swipeActions={swipeActions.length ? swipeActions : undefined}
+        icon={
+          <CardStatusDot
+            status={getCardVisualStatus(card, isActive, activeAttemptStatus)}
+            muted={isMuted}
+          />
         }
-        const aPinned = Boolean(a.pinned_at);
-        const bPinned = Boolean(b.pinned_at);
-        if (aPinned !== bPinned) return aPinned ? -1 : 1;
-        if (aPinned && bPinned) {
-          return (b.pinned_at || "").localeCompare(a.pinned_at || "");
+        title={card.title || t("新讨论")}
+        actions={
+          <div className="flex items-center gap-0.5">
+            {/* 时间：悬浮时展示，与置顶按钮水平排列不冲突 */}
+            <span className="mr-0.5 select-none text-[11px] font-normal tabular-nums text-faint">
+              {formatRelativeTime(card.updated_at)}
+            </span>
+
+            {/* 桌面端快捷置顶切换（显隐由 ContextSidebarItem 的 opacity 统一控制，避免 display:none 导致关闭菜单瞬间坐标归零） */}
+            {!isMain && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  pinMutation.mutate({
+                    id: card.id,
+                    pinned: !card.pinned_at,
+                  });
+                }}
+                title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
+                aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
+                className={`grid size-6 place-items-center rounded-lg transition-all ${
+                  card.pinned_at
+                    ? "text-amber-500 hover:text-amber-600 hover:bg-muted"
+                    : "text-muted-foreground/60 hover:text-foreground hover:bg-muted"
+                }`}
+              >
+                {card.pinned_at ? (
+                  <PinOff className="size-3.5" />
+                ) : (
+                  <Pin className="size-3.5" />
+                )}
+              </button>
+            )}
+
+            <CardActions
+              card={card}
+              menuSide="right"
+              preserve={isMain}
+              isActive={isActive}
+              onDeleted={() => {
+                if (card.id === activeCardID) {
+                  navigate(
+                    `/chat?project=${encodeURIComponent(card.project_id)}`,
+                  );
+                }
+              }}
+            />
+          </div>
         }
-        return b.updated_at.localeCompare(a.updated_at);
-      });
-  }, [discussions, mainDiscussionID, term]);
+      />
+    );
+  };
 
   if (loading && discussions.length === 0) {
     return (
@@ -195,9 +333,9 @@ export function DiscussionSidebar({
               <span className="text-xs font-semibold text-foreground/80 tracking-wide">
                 {t("讨论")}
               </span>
-              {filtered.length > 0 && (
+              {sections.totalCount > 0 && (
                 <span className="rounded-full bg-muted/80 px-1.5 py-0.2 text-[10.5px] font-medium tabular-nums text-muted-foreground">
-                  {filtered.length}
+                  {sections.totalCount}
                 </span>
               )}
             </div>
@@ -237,119 +375,90 @@ export function DiscussionSidebar({
         </>
       }
     >
-      {filtered.length ? (
+      {sections.totalCount > 0 ? (
         <div className="space-y-1">
-          {filtered.map((card) => {
-            const isMain = card.id === mainDiscussionID;
-            const isPinned = isMain || Boolean(card.pinned_at);
-            const isMuted = Boolean(card.notifications_muted);
-            const isActive = card.id === activeCardID;
-            const swipeActions = buildCardSwipeActions({
-              card,
-              isMain,
-              isActive,
-              t,
-              onToggleRead: (nextUnread) => {
-                readStateMutation.mutate({
-                  id: card.id,
-                  unread: nextUnread,
-                  projectID: card.project_id,
-                  isActive,
-                });
-              },
-              onTogglePin: !isMain
-                ? () => {
-                    pinMutation.mutate({
-                      id: card.id,
-                      pinned: !card.pinned_at,
-                    });
-                  }
-                : undefined,
-              onToggleMute: () => {
-                muteMutation.mutate({
-                  id: card.id,
-                  muted: !isMuted,
-                  projectID: card.project_id,
-                });
-              },
-              onDelete: !isMain
-                ? () => {
-                    setDeleteTarget(card);
-                  }
-                : undefined,
-            });
+          {sections.pinned.map(renderDiscussionItem)}
 
-            return (
-              <ContextSidebarItem
-                key={card.id}
-                active={isActive}
-                pinned={isPinned}
-                muted={isMuted}
-                onClick={() => handleSelect(card)}
-                onLongPress={() => setSheetTargetID(card.id)}
-                swipeActions={swipeActions.length ? swipeActions : undefined}
-                icon={
-                  <CardStatusDot
-                    status={getCardVisualStatus(
-                      card,
-                      isActive,
-                      activeAttemptStatus,
-                    )}
-                  />
-                }
-                title={card.title || t("新讨论")}
-                actions={
-                  <div className="flex items-center gap-0.5">
-                    {/* 时间：悬浮时展示，与置顶按钮水平排列不冲突 */}
-                    <span className="mr-0.5 select-none text-[11px] font-normal tabular-nums text-faint">
-                      {formatRelativeTime(card.updated_at)}
+          {/* 顶部单行免打扰折叠入口：紧跟主聊天与置顶下方，避免长讨论列表需要翻到底才能找到免打扰会话 */}
+          {sections.muted.length > 0 ? (
+            <section
+              data-discussion-group="muted"
+              className="my-1 rounded-xl border border-line/60 bg-muted/35 p-0.5"
+            >
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  aria-expanded={mutedExpanded}
+                  onClick={() =>
+                    setManualMutedExpansion({
+                      contextKey: mutedExpansionContextKey,
+                      expanded: !mutedExpanded,
+                    })
+                  }
+                  className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition ${
+                    activeInMuted
+                      ? "text-heading"
+                      : "text-muted-foreground hover:bg-surface/70 hover:text-foreground"
+                  }`}
+                >
+                  {mutedExpanded ? (
+                    <ChevronDown className="size-3.5 shrink-0 text-faint" />
+                  ) : (
+                    <ChevronRight className="size-3.5 shrink-0 text-faint" />
+                  )}
+                  <BellOff className="size-3 shrink-0 text-muted-foreground/75" />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                    {t("免打扰")}
+                  </span>
+                  {mutedUnreadIDs.length > 0 ? (
+                    <span
+                      data-muted-unread-summary="true"
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface/90 px-1.5 py-0.5 text-[10px] font-normal leading-none tabular-nums text-muted-foreground"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="inline-flex size-1.5 rounded-full bg-muted-foreground/50"
+                      />
+                      {t("{{count}} 未读", { count: mutedUnreadIDs.length })}
                     </span>
+                  ) : null}
+                  <Badge
+                    variant="secondary"
+                    className="px-1.5 py-0 text-[11px] font-normal tabular-nums text-faint"
+                  >
+                    {sections.muted.length}
+                  </Badge>
+                </button>
+                {mutedUnreadIDs.length > 0 ? (
+                  <HintTooltip content={t("全部已读")} side="top">
+                    <button
+                      type="button"
+                      disabled={batchMarkRead.isPending}
+                      aria-label={t("全部已读")}
+                      onClick={() =>
+                        void batchMarkRead.markBatchRead(mutedUnreadIDs)
+                      }
+                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 text-[11px] font-medium text-muted-foreground transition hover:bg-surface/80 hover:text-foreground disabled:opacity-50"
+                    >
+                      {batchMarkRead.isPending ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <CheckCheck className="size-3.5" />
+                      )}
+                    </button>
+                  </HintTooltip>
+                ) : null}
+              </div>
 
-                    {/* 桌面端快捷置顶切换（显隐由 ContextSidebarItem 的 opacity 统一控制，避免 display:none 导致关闭菜单瞬间坐标归零） */}
-                    {!isMain && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          pinMutation.mutate({
-                            id: card.id,
-                            pinned: !card.pinned_at,
-                          });
-                        }}
-                        title={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                        aria-label={card.pinned_at ? t("取消置顶") : t("置顶讨论")}
-                        className={`grid size-6 place-items-center rounded-lg transition-all ${
-                          card.pinned_at
-                            ? "text-amber-500 hover:text-amber-600 hover:bg-muted"
-                            : "text-muted-foreground/60 hover:text-foreground hover:bg-muted"
-                        }`}
-                      >
-                        {card.pinned_at ? (
-                          <PinOff className="size-3.5" />
-                        ) : (
-                          <Pin className="size-3.5" />
-                        )}
-                      </button>
-                    )}
+              {mutedExpanded ? (
+                <div className="mt-0.5 space-y-0.5 border-t border-divider/70 pt-1 pl-1">
+                  {sections.muted.map(renderDiscussionItem)}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
-                    <CardActions
-                      card={card}
-                      menuSide="right"
-                      preserve={isMain}
-                      isActive={isActive}
-                      onDeleted={() => {
-                        if (card.id === activeCardID) {
-                          navigate(
-                            `/chat?project=${encodeURIComponent(card.project_id)}`,
-                          );
-                        }
-                      }}
-                    />
-                  </div>
-                }
-              />
-            );
-          })}
+          {sections.regular.map(renderDiscussionItem)}
         </div>
       ) : (
         <div className="mx-1 mt-1 rounded-xl border border-dashed border-line/60 bg-surface/40 px-4 py-8 text-center">

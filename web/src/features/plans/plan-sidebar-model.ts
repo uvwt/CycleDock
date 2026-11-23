@@ -1,11 +1,12 @@
 import type { Card, OngoingState, ProjectSchedule } from "../../shared/api/types";
+import { isCardUnread } from "../../shared/lib/card-read-state";
 import {
   summarizePlanSchedules,
   type ScheduleSummaryInput,
   type TranslateFn,
 } from "./schedule-summary";
 
-export type PlanSidebarGroupKey = "attention" | "active" | "inactive";
+export type PlanSidebarGroupKey = "attention" | "active" | "muted" | "inactive";
 
 export type PlanSidebarGroup = {
   key: PlanSidebarGroupKey;
@@ -68,16 +69,27 @@ function isPlanRunning(
   );
 }
 
-function isPlanUnread(
+export function isPlanCardUnread(
   card: Pick<Card, "id" | "unread" | "marked_unread">,
   activeCardID?: string,
 ): boolean {
-  return Boolean(
-    card.marked_unread || (card.id !== activeCardID && card.unread),
-  );
+  return isCardUnread(card, Boolean(activeCardID && card.id === activeCardID));
 }
 
-// 正在执行优先于未读，未读优先于空闲。
+export function getUnreadPlanCardIDs(
+  cards: readonly Pick<Card, "id" | "unread" | "marked_unread">[],
+  activeCardID?: string,
+): string[] {
+  const ids: string[] = [];
+  for (const card of cards) {
+    if (isPlanCardUnread(card, activeCardID)) {
+      ids.push(card.id);
+    }
+  }
+  return ids;
+}
+
+// 正在执行优先于未读，普通未读优先于免打扰未读，最后为空闲。
 // 注意：需关注组内 health=critical/warning 会覆盖 getCardVisualStatus 的 unread，
 // 因此排序必须直接读取运行态与未读态，避免异常卡丢失未读优先级。
 function activityRank(
@@ -86,8 +98,10 @@ function activityRank(
   activeAttemptStatus?: string,
 ): number {
   if (isPlanRunning(card, activeCardID, activeAttemptStatus)) return 0;
-  if (isPlanUnread(card, activeCardID)) return 1;
-  return 2;
+  if (isPlanCardUnread(card, activeCardID)) {
+    return card.notifications_muted ? 2 : 1;
+  }
+  return 3;
 }
 
 function compareTimeDesc(a?: string, b?: string): number {
@@ -165,8 +179,13 @@ function compareInactiveCards(a: Card, b: Card): number {
 }
 
 /**
- * 将项目卡片过滤并组织为定时侧边栏分组：
- * 组间固定顺序：需关注 -> 运行中 -> 已暂停 / 已归档，空分组自动隐藏。
+ * 将项目卡片过滤并组织为定时任务分组：
+ * 组间固定顺序：需关注 -> 运行中 -> 免打扰 -> 已暂停 / 已归档，空分组自动隐藏。
+ *
+ * 关键规则：
+ * - 巡检异常（critical / warning）穿透免打扰，始终进入「需关注」；
+ * - 用户手动置顶的免打扰定时卡留在「运行中」顶部，不收进折叠的「免打扰」组；
+ * - 未置顶且开启免打扰的运行中卡片统一归入「免打扰」分组，避免刷屏干扰普通未读。
  */
 export function buildPlanSidebarGroups(
   cards: readonly Card[],
@@ -177,6 +196,7 @@ export function buildPlanSidebarGroups(
 
   const attention: Card[] = [];
   const active: Card[] = [];
+  const muted: Card[] = [];
   const inactive: Card[] = [];
 
   for (const card of cards) {
@@ -195,6 +215,8 @@ export function buildPlanSidebarGroups(
       inactive.push(card);
     } else if (isPlanAttentionCard(card)) {
       attention.push(card);
+    } else if (card.notifications_muted && !card.pinned_at) {
+      muted.push(card);
     } else {
       active.push(card);
     }
@@ -217,6 +239,14 @@ export function buildPlanSidebarGroups(
       ),
     });
   }
+  if (muted.length > 0) {
+    groups.push({
+      key: "muted",
+      cards: muted.sort((a, b) =>
+        compareActiveCards(a, b, activeCardID, activeAttemptStatus),
+      ),
+    });
+  }
   if (inactive.length > 0) {
     groups.push({
       key: "inactive",
@@ -230,7 +260,7 @@ export function buildPlanSidebarGroups(
 /**
  * 计算定时侧边栏默认展开分组：
  * - 「需关注」与「运行中」默认展开；
- * - 「已暂停 / 已归档」默认折叠，仅当包含当前激活卡片或搜索框非空时自动展开。
+ * - 「免打扰」与「已暂停 / 已归档」默认折叠，仅当包含当前激活卡片或搜索框非空时自动展开。
  */
 export function getDefaultExpandedPlanGroups(
   groups: readonly PlanSidebarGroup[],
