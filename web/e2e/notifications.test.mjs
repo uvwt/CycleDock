@@ -86,11 +86,15 @@ function worker() {
       await work;
     },
     async sendPendingCheck(port) {
+      let work;
       handlers.get("message")({
         data: { type: "CYCLE_CHECK_PENDING_NAVIGATION" },
         ports: port ? [port] : [],
-        waitUntil() {},
+        waitUntil: (promise) => {
+          work = promise;
+        },
       });
+      await work;
     },
   };
 }
@@ -212,7 +216,7 @@ test("通知点击打开对应卡片，已有页面则聚焦", async () => {
   assert.equal(w.opened.length, 1);
 });
 
-test("通知点击已有同源其他页面时，聚焦并触发导航通知", async () => {
+test("通知点击已有同源其他页面时，聚焦并优先通过 postMessage 触发 SPA 切路由", async () => {
   const w = worker();
   await w.send();
   let focused = false;
@@ -232,31 +236,31 @@ test("通知点击已有同源其他页面时，聚焦并触发导航通知", as
   });
   await w.click({ ...w.shown[0], close() {} });
   assert.equal(focused, true);
-  assert.equal(navigatedTo, "https://cycledock.test/cards/project/card");
+  // iOS WebKit 中 client.navigate() 常静默失效或回落主页，命中已有窗口时优先走 postMessage。
+  assert.equal(navigatedTo, null);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, "CYCLE_NAVIGATE");
+  assert.equal(messages[0].url, "https://cycledock.test/cards/project/card");
+  assert.ok(messages[0].id);
   assert.equal(w.opened.length, 0);
 
-  // 若 client.navigate 失败，降级通过 postMessage 传递 CYCLE_NAVIGATE
+  // 仅当 client 不支持 postMessage 时，才回退到 client.navigate
   const w2 = worker();
   await w2.send();
   let focused2 = false;
-  const messages2 = [];
+  let navigatedTo2 = null;
   w2.windows.push({
     url: "https://cycledock.test/chat",
     focus: async () => {
       focused2 = true;
     },
-    navigate: async () => {
-      throw new Error("navigate not supported");
-    },
-    postMessage: (msg) => {
-      messages2.push(msg);
+    navigate: async (url) => {
+      navigatedTo2 = url;
     },
   });
   await w2.click({ ...w2.shown[0], close() {} });
   assert.equal(focused2, true);
-  assert.equal(messages2.length, 1);
-  assert.equal(messages2[0].type, "CYCLE_NAVIGATE");
-  assert.equal(messages2[0].url, "https://cycledock.test/cards/project/card");
+  assert.equal(navigatedTo2, "https://cycledock.test/cards/project/card");
 });
 
 test("冷启动下通知点击暂存待消费意图，前端握手即可获取目标卡片并消费", async () => {

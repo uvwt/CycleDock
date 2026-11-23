@@ -10,24 +10,142 @@ const seen = new Map();
 // 在 Edge/Chrome 里会把前台标签报成 hidden 或未聚焦，不能用来决定是否弹通知。
 const viewingByClient = new Map();
 
-// 暂存用户点击通知但尚未被前端消费的跳转意图（应对 iOS PWA 冷启动或重定向丢失）
-let pendingNavigation = null;
-const PENDING_NAVIGATION_TTL_MS = 30_000;
+// 持久化暂存用户点击通知但尚未被前端消费的跳转意图。
+// 仅放内存会在 iOS 后台回收/重启 Service Worker 时丢失，导致冷启动或切回前台落回主页；
+// 使用同源 Cache Storage（前端与 SW 共享）可在 SW 重启或尚未 controller 就绪时双通道恢复。
+const PENDING_NAVIGATION_CACHE_NAME = "cycledock-push-nav-v1";
+const PENDING_NAVIGATION_CACHE_KEY = "/__cycledock_pending_navigation__";
+const PENDING_NAVIGATION_TTL_MS = 60_000;
 
-function setPendingNavigation(url) {
-  pendingNavigation = {
+// 仅在 Cache Storage 不可用的受限环境作为兜底；当 Cache Storage 可用时以持久缓存为唯一真源。
+let pendingNavigation = null;
+
+function pendingNavigationRequestURL() {
+  return new URL(PENDING_NAVIGATION_CACHE_KEY, self.location.origin).href;
+}
+
+function getPendingNavigationCacheStorage() {
+  if (self.caches && typeof self.caches.open === "function") {
+    return self.caches;
+  }
+  if (typeof caches !== "undefined" && typeof caches.open === "function") {
+    return caches;
+  }
+  return null;
+}
+
+function createPendingNavigationID() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `nav-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isFreshPendingNavigation(record, now = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  if (typeof record.url !== "string" || !record.url) return false;
+  if (typeof record.timestamp !== "number" || !Number.isFinite(record.timestamp)) {
+    return false;
+  }
+  return now - record.timestamp < PENDING_NAVIGATION_TTL_MS;
+}
+
+async function savePendingNavigation(url) {
+  const record = {
+    id: createPendingNavigationID(),
     url,
     timestamp: Date.now(),
   };
+  pendingNavigation = record;
+  const cacheStorage = getPendingNavigationCacheStorage();
+  if (cacheStorage && typeof Response !== "undefined") {
+    try {
+      const cache = await cacheStorage.open(PENDING_NAVIGATION_CACHE_NAME);
+      await cache.put(
+        pendingNavigationRequestURL(),
+        new Response(JSON.stringify(record), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to persist pending navigation", error);
+    }
+  }
+  return record;
 }
 
-function consumePendingNavigation() {
+async function readPendingNavigation() {
+  const cacheStorage = getPendingNavigationCacheStorage();
+  if (cacheStorage) {
+    try {
+      const cache = await cacheStorage.open(PENDING_NAVIGATION_CACHE_NAME);
+      const requestURL = pendingNavigationRequestURL();
+      const response = await cache.match(requestURL);
+      if (!response) {
+        // 前端可能已经直接从 Cache Storage 消费并删除，避免内存镜像把旧记录复活。
+        pendingNavigation = null;
+        return null;
+      }
+      let parsed = null;
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = null;
+      }
+      if (!isFreshPendingNavigation(parsed)) {
+        await cache.delete(requestURL);
+        pendingNavigation = null;
+        return null;
+      }
+      pendingNavigation = parsed;
+      return parsed;
+    } catch (error) {
+      console.error("Failed to read pending navigation", error);
+    }
+  }
   if (!pendingNavigation) return null;
-  const isFresh =
-    Date.now() - pendingNavigation.timestamp < PENDING_NAVIGATION_TTL_MS;
-  const nav = isFresh ? pendingNavigation.url : null;
-  pendingNavigation = null;
-  return nav;
+  if (!isFreshPendingNavigation(pendingNavigation)) {
+    pendingNavigation = null;
+    return null;
+  }
+  return pendingNavigation;
+}
+
+async function clearPendingNavigation(expectedID) {
+  if (!expectedID || pendingNavigation?.id === expectedID) {
+    pendingNavigation = null;
+  }
+  const cacheStorage = getPendingNavigationCacheStorage();
+  if (!cacheStorage) return;
+  try {
+    const cache = await cacheStorage.open(PENDING_NAVIGATION_CACHE_NAME);
+    const requestURL = pendingNavigationRequestURL();
+    if (!expectedID) {
+      await cache.delete(requestURL);
+      return;
+    }
+    const response = await cache.match(requestURL);
+    if (!response) return;
+    let parsed = null;
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = null;
+    }
+    // 只清理匹配 id 或已过期/损坏的记录，防止旧通知的清理误删用户刚点的新通知意图。
+    if (!parsed || !parsed.id || parsed.id === expectedID || !isFreshPendingNavigation(parsed)) {
+      await cache.delete(requestURL);
+    }
+  } catch (error) {
+    console.error("Failed to clear pending navigation", error);
+  }
+}
+
+async function consumePendingNavigation() {
+  const record = await readPendingNavigation();
+  if (!record) return null;
+  await clearPendingNavigation(record.id);
+  return record;
 }
 
 function enqueue(update, options = {}) {
@@ -116,17 +234,29 @@ self.addEventListener("message", (event) => {
     return;
   }
   if (event.data?.type === "CYCLE_CHECK_PENDING_NAVIGATION") {
-    const targetURL = consumePendingNavigation();
-    if (event.ports && event.ports[0]) {
-      event.ports[0].postMessage({
+    const work = (async () => {
+      const record = await consumePendingNavigation();
+      const reply = {
         type: "CYCLE_PENDING_NAVIGATION",
-        url: targetURL,
-      });
-    } else if (event.source?.postMessage) {
-      event.source.postMessage({
-        type: "CYCLE_PENDING_NAVIGATION",
-        url: targetURL,
-      });
+        url: record ? record.url : null,
+        id: record ? record.id : null,
+        timestamp: record ? record.timestamp : null,
+      };
+      if (event.ports && event.ports[0]) {
+        event.ports[0].postMessage(reply);
+      } else if (event.source?.postMessage) {
+        event.source.postMessage(reply);
+      }
+    })();
+    if (typeof event.waitUntil === "function") {
+      event.waitUntil(work);
+    }
+    return;
+  }
+  if (event.data?.type === "CYCLE_CLEAR_PENDING_NAVIGATION") {
+    const work = clearPendingNavigation(event.data.id);
+    if (typeof event.waitUntil === "function") {
+      event.waitUntil(work);
     }
     return;
   }
@@ -163,24 +293,43 @@ self.addEventListener("notificationclick", (event) => {
       const url = resolveTargetURL(rawTarget, false);
       if (!url || url.origin !== self.location.origin) return;
 
-      // 记录待消费导航意图，兜底 iOS PWA 冷启动或路由丢失
-      setPendingNavigation(url.href);
+      // 先持久化写入待跳转意图，确保 iOS 后台回收 SW 或冷启动回落 start_url 时仍可恢复。
+      const record = await savePendingNavigation(url.href);
 
       const windows = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
 
-      // 1. 若已有完全匹配目标路径的窗口，直接聚焦
-      const exactMatch = windows.find(
-        (client) => new URL(client.url).pathname === url.pathname,
-      );
+      // 1. 若已有完全停留在目标地址的同源窗口，直接聚焦并清理本次待跳转记录。
+      const exactMatch = windows.find((client) => {
+        try {
+          const current = new URL(client.url);
+          return (
+            current.origin === self.location.origin &&
+            current.pathname === url.pathname &&
+            current.search === url.search &&
+            current.hash === url.hash
+          );
+        } catch {
+          return false;
+        }
+      });
       if (exactMatch) {
-        consumePendingNavigation();
-        return exactMatch.focus();
+        try {
+          await exactMatch.focus();
+        } catch {
+          // 忽略部分环境下 focus 抛错，仍清理同页重复意图。
+        }
+        await clearPendingNavigation(record.id);
+        return;
       }
 
-      // 2. 若存在同源窗口（但停留在其他路径），优先聚焦并通过 client.navigate 或 postMessage 通知前端 SPA 切路由
+      // 2. 若存在其他同源窗口：不要在 SW 侧提前清空待跳转记录；
+      // 先聚焦窗口，再优先通过 postMessage 通知前端 SPA 无刷新切路由，
+      // 避免 iOS WebKit 中 client.navigate() 静默失效或回落主页。
+      // 待前端真正收到并执行跳转后再清除持久化记录；即使消息因页面挂起未送达，
+      // 前端切回前台时也会通过 visibilitychange / pageshow / focus 从持久化缓存兜底消费。
       const anyWindow = windows.find((client) => {
         try {
           return new URL(client.url).origin === self.location.origin;
@@ -189,27 +338,34 @@ self.addEventListener("notificationclick", (event) => {
         }
       });
       if (anyWindow) {
-        consumePendingNavigation();
-        await anyWindow.focus();
+        try {
+          await anyWindow.focus();
+        } catch {
+          // 某些环境下 focus 可能失败，仍继续投递导航消息。
+        }
+        if (typeof anyWindow.postMessage === "function") {
+          anyWindow.postMessage({
+            type: "CYCLE_NAVIGATE",
+            url: record.url,
+            id: record.id,
+            timestamp: record.timestamp,
+          });
+          return;
+        }
         if ("navigate" in anyWindow && typeof anyWindow.navigate === "function") {
           try {
-            await anyWindow.navigate(url.href);
-            return;
+            await anyWindow.navigate(record.url);
           } catch {
-            // navigate 失败时回退 postMessage
+            // navigate 失败时保留持久化记录，等前端恢复后兜底消费。
           }
         }
-        anyWindow.postMessage({
-          type: "CYCLE_NAVIGATE",
-          url: url.href,
-        });
         return;
       }
 
-      // 3. 没有任何现存窗口（冷启动）：尝试通过 openWindow 打开
-      // 无论 openWindow 是否被系统重定向至 start_url，页面启动后都会通过握手消费 pendingNavigation
+      // 3. 没有任何现存窗口（冷启动）：持久化记录已落盘，再调用 openWindow。
+      // 即使 iOS 将冷启动重定向至 manifest 的 start_url: "/"，前端启动后会立即消费持久化记录并跳转。
       if (self.clients.openWindow) {
-        await self.clients.openWindow(url.href);
+        await self.clients.openWindow(record.url);
       }
     })(),
   );

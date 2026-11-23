@@ -1,6 +1,6 @@
 import { DeviceSelectionProvider } from "../features/devices/DeviceSelectionProvider";
 import { ModelSelectionProvider } from "../features/models/ModelSelectionProvider";
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, startTransition, useEffect, useRef, useState } from "react";
 import {
   Navigate,
   Route,
@@ -14,7 +14,11 @@ import { keys, queryClient } from "./query";
 import { ErrorView, Spinner } from "../shared/ui/components";
 import { NotificationPermissionPrompt } from "../shared/realtime/NotificationPermissionPrompt";
 import { useCardNotifications } from "../shared/realtime/useCardNotifications";
-import { loadPushPublicKey } from "../shared/realtime/notifications";
+import {
+  checkNotificationWorkerUpdate,
+  loadPushPublicKey,
+} from "../shared/realtime/notifications";
+import { createPendingNavigationConsumer } from "../shared/realtime/pendingNavigation";
 import { Shell } from "../layouts/Shell";
 import { ProjectProvider } from "./ProjectContext";
 import { useProject } from "./project-context";
@@ -51,72 +55,93 @@ function Authenticated() {
   const me = useQuery({ queryKey: keys.me, queryFn: api.me, retry: false });
   const location = useLocation();
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
   useCardNotifications(me.data?.workspace.id || "");
 
-  // 监听来自 Service Worker 的通知点击跳转（热启动/前台）以及冷启动拉取（未被消费的 pending intent）
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+  // 根路由 `/` 跳转回 `/chat` 前必须先完成首次待跳转深链检查，
+  // 防止 iOS PWA 冷启动回落 manifest.start_url ("/") 时首页默认重定向抢跑覆盖通知目标。
+  const [pendingNavigationChecked, setPendingNavigationChecked] = useState(
+    () => typeof window !== "undefined" && window.location.pathname !== "/",
+  );
 
-    const navigateToTarget = (rawURL?: string | null) => {
-      if (!rawURL) return;
-      try {
-        const parsed = new URL(rawURL, window.location.origin);
-        if (parsed.origin !== window.location.origin) return;
-        const targetPath = parsed.pathname + parsed.search + parsed.hash;
-        const currentPath =
-          window.location.pathname + window.location.search + window.location.hash;
-        if (targetPath && targetPath !== currentPath) {
-          navigate(targetPath);
-        }
-      } catch {
-        // 忽略异常 URL
-      }
+  // 监听 Service Worker 推送点击导航（前台/热启动）、冷启动双通道消费，
+  // 以及 iOS PWA 从后台切回前台（visibilitychange / pageshow / focus）时的主动拉取。
+  useEffect(() => {
+    let disposed = false;
+    const consumer = createPendingNavigationConsumer({
+      onNavigate: (targetPath, { replace }) => {
+        if (disposed) return;
+        preloadRouteForPathname(targetPath);
+        navigateRef.current(targetPath, { replace });
+      },
+    });
+
+    const runPendingCheck = () => {
+      void consumer.checkPending({
+        replace: window.location.pathname === "/",
+      });
     };
 
     const handleMessage = (event: MessageEvent) => {
-      if (
-        event.data?.type === "CYCLE_NAVIGATE" ||
-        event.data?.type === "CYCLE_PENDING_NAVIGATION"
-      ) {
-        navigateToTarget(event.data.url);
-      }
+      consumer.handleWorkerMessage(event.data, {
+        replace: window.location.pathname === "/",
+      });
     };
 
-    navigator.serviceWorker.addEventListener("message", handleMessage);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      runPendingCheck();
+      void checkNotificationWorkerUpdate();
+    };
 
-    // 冷启动 / 页面加载就绪时，主动向 Service Worker 查询是否有未消费的通知点击意图
-    const checkPendingNavigation = async () => {
-      try {
-        const registration = await navigator.serviceWorker.ready;
-        const targetWorker =
-          registration.active || navigator.serviceWorker.controller;
-        if (!targetWorker) return;
+    const handlePageShow = () => {
+      runPendingCheck();
+    };
 
-        if (typeof MessageChannel !== "undefined") {
-          const channel = new MessageChannel();
-          channel.port1.onmessage = (event) => {
-            if (event.data?.type === "CYCLE_PENDING_NAVIGATION") {
-              navigateToTarget(event.data.url);
-            }
-          };
-          targetWorker.postMessage(
-            { type: "CYCLE_CHECK_PENDING_NAVIGATION" },
-            [channel.port2],
-          );
-        } else {
-          targetWorker.postMessage({ type: "CYCLE_CHECK_PENDING_NAVIGATION" });
+    const handleFocus = () => {
+      runPendingCheck();
+    };
+
+    const hasServiceWorker = "serviceWorker" in navigator;
+    if (hasServiceWorker) {
+      navigator.serviceWorker.addEventListener("message", handleMessage);
+      void checkNotificationWorkerUpdate();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handleFocus);
+
+    void consumer
+      .checkPending({ replace: window.location.pathname === "/" })
+      .then((navigated) => {
+        if (disposed) return;
+        // 若已触发通知深链跳转，必须将放行状态放入 startTransition，
+        // 避免 React 19 紧急更新抢跑在 React Router startTransition 之前挂载 <Navigate to="/chat" />。
+        if (navigated) {
+          startTransition(() => setPendingNavigationChecked(true));
+          return;
         }
-      } catch {
-        // 忽略 SW 通信异常
-      }
-    };
-
-    void checkPendingNavigation();
+        setPendingNavigationChecked(true);
+      })
+      .catch(() => {
+        if (!disposed) {
+          setPendingNavigationChecked(true);
+        }
+      });
 
     return () => {
-      navigator.serviceWorker.removeEventListener("message", handleMessage);
+      disposed = true;
+      if (hasServiceWorker) {
+        navigator.serviceWorker.removeEventListener("message", handleMessage);
+      }
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handleFocus);
     };
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     if (me.data) void loadPushPublicKey().catch(() => undefined);
@@ -188,7 +213,12 @@ function Authenticated() {
               }
             >
               <Routes>
-              <Route path="/" element={<Navigate to="/chat" replace />} />
+              <Route
+                path="/"
+                element={
+                  <RootRoute ready={pendingNavigationChecked} />
+                }
+              />
               <Route path="/chat" element={<ChatHome />} />
               <Route path="/chat/:projectID/:cardID" element={<CardPage />} />
               <Route path="/board" element={<BoardPage />} />
@@ -228,6 +258,22 @@ function LegacyBoardRedirect() {
   return (
     <Navigate to={location.pathname.replace("/projects/", "/board/")} replace />
   );
+}
+
+function RootRoute({ ready }: { ready: boolean }) {
+  const { t } = useTranslation();
+  // 当通知深链已通过 history.replaceState 改写浏览器地址、React Router 仍在提交 transition 时，
+  // 保持加载态，绝不渲染 <Navigate to="/chat" replace /> 将目标深链冲回首页。
+  const deepLinkInFlight =
+    typeof window !== "undefined" && window.location.pathname !== "/";
+  if (!ready || deepLinkInFlight) {
+    return (
+      <main className="grid h-full min-h-0 place-items-center">
+        <Spinner text={t("正在加载…")} />
+      </main>
+    );
+  }
+  return <Navigate to="/chat" replace />;
 }
 function LegacyCardRedirect() {
   const location = useLocation();
