@@ -948,32 +948,107 @@ test("提交验收气泡采用与普通气泡一致的自适应宽度，仅在�
   assert.doesNotMatch(workingHtml, /通过验收/);
 });
 
-test("巡检事件采用与待验收一致的卡片气泡渲染，展示状态徽标与自适应富文本内容", () => {
-  const checkinWarning = {
-    id: "checkin-1",
+test("巡检事件按轻重分级折叠：正常与历史/已确认默认折叠单行，仅最新未确认异常默认展开", () => {
+  const olderWarning = {
+    id: "checkin-old",
+    type: "checkin",
+    checkin_status: "warning",
+    actor_kind: "cycle_agent",
+    actor_name: "Cycle Agent",
+    content: "历史告警：磁盘占用 **82%**，需留意。",
+    sequence: 2,
+    created_at: "2026-11-02T10:00:00Z",
+  };
+  const latestWarning = {
+    id: "checkin-latest",
     type: "checkin",
     checkin_status: "warning",
     actor_kind: "cycle_agent",
     actor_name: "Cycle Agent",
     content: "下午已经过了，没有喝水记录。**按要求不补记成已喝**。",
-    sequence: 2,
+    sequence: 3,
     created_at: "2026-11-02T15:00:00Z",
   };
-  const html = renderToStaticMarkup(
+
+  // 最新且未确认的 warning：最新一条默认展开并渲染富文本与“已确认”，历史 warning 保持默认折叠
+  const unackHtml = renderToStaticMarkup(
     createElement(ConversationView, {
-      events: [comment, checkinWarning],
+      events: [comment, olderWarning, latestWarning],
       live: null,
       cardKind: "ongoing",
       pendingTurns: [],
       currentAttempt: null,
       attemptHistory: [attempt],
+      canAcknowledgeCheckin: true,
+      onAcknowledgeCheckin() {},
       onRetryAttempt() {},
     }),
   );
-  assert.match(html, /巡检/);
-  assert.match(html, /需留意/);
-  assert.match(html, /<strong>按要求不补记成已喝<\/strong>/);
-  assert.doesNotMatch(html, /巡检 ·/);
+  assert.match(
+    unackHtml,
+    /id="event-checkin-old"[^>]*data-checkin-expanded="false"/,
+  );
+  assert.match(
+    unackHtml,
+    /id="event-checkin-latest"[^>]*data-checkin-expanded="true"/,
+  );
+  assert.match(unackHtml, /巡检/);
+  assert.match(unackHtml, /需留意/);
+  assert.match(unackHtml, /<strong>按要求不补记成已喝<\/strong>/);
+  assert.match(unackHtml, /已确认/);
+  assert.doesNotMatch(unackHtml, /<strong>82%<\/strong>/);
+
+  // 已确认（canAcknowledgeCheckin=false）时，即使是 warning 也默认折叠
+  const ackedHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [comment, latestWarning],
+      live: null,
+      cardKind: "ongoing",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [attempt],
+      canAcknowledgeCheckin: false,
+      onAcknowledgeCheckin() {},
+      onRetryAttempt() {},
+    }),
+  );
+  assert.match(
+    ackedHtml,
+    /id="event-checkin-latest"[^>]*data-checkin-expanded="false"/,
+  );
+  assert.match(ackedHtml, /按要求不补记成已喝/);
+  assert.doesNotMatch(ackedHtml, /<strong>按要求不补记成已喝<\/strong>/);
+
+  // 正常（healthy）巡检默认折叠为单行摘要
+  const healthyCheckin = {
+    id: "checkin-ok",
+    type: "checkin",
+    checkin_status: "healthy",
+    actor_kind: "cycle_agent",
+    actor_name: "Cycle Agent",
+    content: "服务响应 **120ms**，CPU 与内存均在正常阈值内。",
+    sequence: 4,
+    created_at: "2026-11-02T16:00:00Z",
+  };
+  const healthyHtml = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events: [comment, healthyCheckin],
+      live: null,
+      cardKind: "ongoing",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [attempt],
+      canAcknowledgeCheckin: false,
+      onRetryAttempt() {},
+    }),
+  );
+  assert.match(
+    healthyHtml,
+    /id="event-checkin-ok"[^>]*data-checkin-expanded="false"/,
+  );
+  assert.match(healthyHtml, /正常/);
+  assert.match(healthyHtml, /服务响应 120ms/);
+  assert.doesNotMatch(healthyHtml, /<strong>120ms<\/strong>/);
 });
 
 test("右侧卡片详情面板独立渲染标题、描述、来源讨论与实时进度", () => {

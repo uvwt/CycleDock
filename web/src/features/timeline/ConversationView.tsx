@@ -21,7 +21,6 @@ import {
   Reply,
   ClipboardCheck,
   AlertCircle,
-  Activity,
   CornerDownRight,
   Loader2,
   ChevronDown,
@@ -54,7 +53,7 @@ import {
   ChatBubbleTimestamp,
   ChatMessageList,
 } from "../../shared/ui/chat";
-import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
+import { CheckinTimelineItem } from "./CheckinTimelineItem";
 import {
   AttemptMetadata,
   ExecutionStatus,
@@ -171,12 +170,10 @@ function getStatusDisplay(
 }
 
 /**
- * 待验收、驳回及巡检等系统卡片事件的视觉样式配置。
- * 巡检卡片采用与待验收（confirm）一致的结构化卡片气泡呈现，
- * 并根据健康状态（healthy / warning / critical）动态匹配主题色与图标，
- * 避免长文本在居中系统胶囊中折行拥挤、排版失衡。
+ * 待验收与驳回系统卡片事件的视觉样式配置。
+ * 巡检事件已独立由 CheckinTimelineItem 以更轻量的可折叠形态呈现，与正式气泡区分轻重。
  */
-function getSystemCardStyle(type: string, checkinStatus?: string) {
+function getSystemCardStyle(type: string) {
   if (type === "confirm") {
     return {
       container:
@@ -195,46 +192,6 @@ function getSystemCardStyle(type: string, checkinStatus?: string) {
         "bg-red-500/15 text-red-600 dark:bg-red-500/25 dark:text-red-400",
       title: "text-red-700 dark:text-red-300",
       icon: <AlertCircle className="size-3" />,
-    };
-  }
-  if (type === "checkin") {
-    if (checkinStatus === "healthy") {
-      return {
-        container:
-          "border-emerald-500/30 bg-emerald-500/[0.04] dark:border-emerald-500/25 dark:bg-emerald-500/[0.08]",
-        iconWrap:
-          "bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400",
-        title: "text-emerald-700 dark:text-emerald-300",
-        icon: <Activity className="size-3" />,
-      };
-    }
-    if (checkinStatus === "warning") {
-      return {
-        container:
-          "border-amber-500/30 bg-amber-500/[0.04] dark:border-amber-500/25 dark:bg-amber-500/[0.08]",
-        iconWrap:
-          "bg-amber-500/15 text-amber-600 dark:bg-amber-500/25 dark:text-amber-400",
-        title: "text-amber-700 dark:text-amber-300",
-        icon: <Activity className="size-3" />,
-      };
-    }
-    if (checkinStatus === "critical") {
-      return {
-        container:
-          "border-rose-500/30 bg-rose-500/[0.04] dark:border-rose-500/25 dark:bg-rose-500/[0.08]",
-        iconWrap:
-          "bg-rose-500/15 text-rose-600 dark:bg-rose-500/25 dark:text-rose-400",
-        title: "text-rose-700 dark:text-rose-300",
-        icon: <Activity className="size-3" />,
-      };
-    }
-    return {
-      container:
-        "border-sky-500/30 bg-sky-500/[0.04] dark:border-sky-500/25 dark:bg-sky-500/[0.08]",
-      iconWrap:
-        "bg-sky-500/15 text-sky-600 dark:bg-sky-500/25 dark:text-sky-400",
-      title: "text-sky-700 dark:text-sky-300",
-      icon: <Activity className="size-3" />,
     };
   }
   return null;
@@ -466,19 +423,28 @@ function EventRow({
     );
   }
   if (system) {
-    const cardStyle = getSystemCardStyle(event.type, event.checkin_status);
+    if (event.type === "checkin") {
+      return (
+        <>
+          <CheckinTimelineItem
+            event={event}
+            canAcknowledge={actions.canAcknowledgeCheckin}
+            acknowledging={actions.acknowledgingCheckin}
+            onAcknowledge={actions.onAcknowledgeCheckin}
+          />
+          {attempts.length > 0 && (
+            <div className="mt-3">
+              <ExecutionStatus attempts={attempts} live={live} {...actions} />
+            </div>
+          )}
+        </>
+      );
+    }
+    const cardStyle = getSystemCardStyle(event.type);
     if (cardStyle) {
       const isConfirm = event.type === "confirm";
       const showApproveAction = Boolean(
         isConfirm && actions.canApproveReview && actions.onApproveReview,
-      );
-      const isCheckin = event.type === "checkin";
-      const showAcknowledgeAction = Boolean(
-        isCheckin &&
-          (event.checkin_status === "warning" ||
-            event.checkin_status === "critical") &&
-          actions.canAcknowledgeCheckin &&
-          actions.onAcknowledgeCheckin,
       );
       return (
         <>
@@ -513,13 +479,6 @@ function EventRow({
                   >
                     {t(labels[event.type] || event.type)}
                   </span>
-                  {event.type === "checkin" && event.checkin_status && (
-                    <OngoingHealthBadge
-                      health={event.checkin_status}
-                      variant="pill"
-                      size="xs"
-                    />
-                  )}
                   {event.created_at && (
                     <span className="ml-auto pl-3 text-[11px] text-faint">
                       {new Date(event.created_at).toLocaleTimeString([], {
@@ -542,20 +501,6 @@ function EventRow({
                     >
                       <Check className="size-3.5" />
                       <span>{t("通过验收")}</span>
-                    </button>
-                  </div>
-                )}
-
-                {showAcknowledgeAction && (
-                  <div className="mt-3 flex items-center justify-end border-t border-line/60 pt-2.5">
-                    <button
-                      type="button"
-                      disabled={actions.acknowledgingCheckin}
-                      onClick={actions.onAcknowledgeCheckin}
-                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-2xs transition hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Check className="size-3.5" />
-                      <span>{t("已确认")}</span>
                     </button>
                   </div>
                 )}

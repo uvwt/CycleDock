@@ -151,7 +151,7 @@ func (r scheduleRow) Rule() (domain.ScheduleRule, error) {
 	return rule, rule.Validate()
 }
 
-const scheduledTurnContent = "Run the scheduled follow-up for this ongoing Card. Check the current state, perform the ongoing work that is due now, and record an evidence-based check-in."
+const scheduledTurnContent = "Run the scheduled follow-up for this ongoing Card. Check the current state, perform the ongoing work that is due now, record a concise key-takeaway check-in (1-2 sentences), and put detailed findings or full response in reply_message."
 
 func (s *Store) ProcessDueScheduleTurns(
 	ctx context.Context,

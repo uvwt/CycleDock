@@ -400,6 +400,8 @@ const en = {
   正在生成回复: "Generating a reply",
   阶段进度: "Progress",
   巡检: "Check-in",
+  展开巡检详情: "Expand check-in details",
+  收起巡检详情: "Collapse check-in details",
   状态变化: "Status update",
   提交审核: "Submitted for review",
   提交验收: "Submitted for acceptance",
