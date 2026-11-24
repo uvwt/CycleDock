@@ -9,14 +9,13 @@ import {
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Bell, BellOff, Expand, X } from "lucide-react";
+import { BellOff, Expand, X } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
-import { useCardNotificationMute } from "../../shared/lib/useCardNotificationMute";
 import type {
   Attempt,
   CardDetail,
@@ -64,6 +63,80 @@ const AgentTracePanel = lazy(() =>
 );
 
 const BUBBLE_BOTTOM_STORAGE_KEY = "cycledock.main-chat.bubble-bottom";
+
+export interface MainChatDockHeaderProps {
+  title: string;
+  isMainMuted: boolean;
+  canExpand: boolean;
+  onExpand: () => void;
+  onClose: () => void;
+  onDragStart?: (e: React.MouseEvent<HTMLElement>) => void;
+}
+
+/**
+ * 主聊天小窗顶栏：仅保留标题（含已静音时的只读图标提示）、完整页面打开与关闭按钮。
+ * 通知静音开关统一收口在卡片详情与操作菜单中，避免小窗顶栏按钮拥挤。
+ */
+export function MainChatDockHeader({
+  title,
+  isMainMuted,
+  canExpand,
+  onExpand,
+  onClose,
+  onDragStart,
+}: MainChatDockHeaderProps) {
+  const { t } = useTranslation();
+  return (
+    <header
+      onMouseDown={onDragStart}
+      onTouchMove={(e) => {
+        // 移动端浮窗头部不应拖动页面或触发滚动穿透
+        e.preventDefault();
+      }}
+      className="absolute top-0 inset-x-0 z-20 flex cursor-move items-center justify-between gap-2 bg-gradient-to-b from-canvas/95 via-canvas/70 to-transparent px-3 pt-2.5 pb-3 select-none"
+    >
+      <div className="pointer-events-none inline-flex h-7 min-w-0 max-w-[62%] items-center gap-1.5 rounded-lg border border-line/75 bg-surface/85 px-2.5 shadow-2xs backdrop-blur-md">
+        <img
+          src="/cycledock-logo.png"
+          alt=""
+          className="size-4 shrink-0 object-contain"
+          draggable={false}
+        />
+        <h2 className="truncate text-xs font-semibold text-foreground">
+          {title}
+        </h2>
+        {isMainMuted && (
+          <BellOff
+            aria-label={t("通知已静音")}
+            className="size-3 shrink-0 text-muted-foreground/80"
+          />
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        <button
+          type="button"
+          title={t("在完整页面打开")}
+          aria-label={t("在完整页面打开")}
+          disabled={!canExpand}
+          onClick={onExpand}
+          className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+        >
+          <Expand className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          title={t("关闭主聊天")}
+          aria-label={t("关闭主聊天")}
+          onClick={onClose}
+          className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+    </header>
+  );
+}
 
 export function MainChatDock() {
   const { t } = useTranslation();
@@ -384,7 +457,6 @@ export function MainChatDock() {
   }, [olderEvents, detail.data?.timeline]);
 
   const card = detail.data?.card;
-  const toggleMute = useCardNotificationMute(card ?? main.data);
   const isMainMuted = Boolean(
     card?.notifications_muted ?? main.data?.notifications_muted,
   );
@@ -841,84 +913,19 @@ export function MainChatDock() {
             className="absolute bottom-0 right-0 size-3 cursor-nwse-resize z-50"
           />
 
-          <header
-            onMouseDown={handleDragStart}
-            onTouchMove={(e) => {
-              // 移动端浮窗头部不应拖动页面或触发滚动穿透
-              e.preventDefault();
-            }}
-            className="absolute top-0 inset-x-0 z-20 flex cursor-move items-center justify-between gap-2 bg-gradient-to-b from-canvas/95 via-canvas/70 to-transparent px-3 pt-2.5 pb-3 select-none"
-          >
-            <div className="pointer-events-none inline-flex h-7 min-w-0 max-w-[62%] items-center gap-1.5 rounded-lg border border-line/75 bg-surface/85 px-2.5 shadow-2xs backdrop-blur-md">
-              <img
-                src="/cycledock-logo.png"
-                alt=""
-                className="size-4 shrink-0 object-contain"
-                draggable={false}
-              />
-              <h2 className="truncate text-xs font-semibold text-foreground">
-                {card?.title || t("主聊天")}
-              </h2>
-              {isMainMuted && (
-                <BellOff
-                  aria-label={t("通知已静音")}
-                  className="size-3 shrink-0 text-muted-foreground/80"
-                />
-              )}
-            </div>
-
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                title={isMainMuted ? t("取消静音") : t("静音通知")}
-                aria-label={isMainMuted ? t("取消静音") : t("静音通知")}
-                disabled={!cardID || toggleMute.isPending}
-                onClick={() =>
-                  cardID &&
-                  toggleMute.mutate({
-                    id: cardID,
-                    muted: !isMainMuted,
-                    projectID,
-                  })
-                }
-                className={`grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 shadow-2xs backdrop-blur-md transition hover:bg-muted disabled:opacity-40 ${
-                  isMainMuted
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {isMainMuted ? (
-                  <BellOff className="size-3.5" />
-                ) : (
-                  <Bell className="size-3.5" />
-                )}
-              </button>
-              <button
-                type="button"
-                title={t("在完整页面打开")}
-                aria-label={t("在完整页面打开")}
-                disabled={!cardID}
-                onClick={() =>
-                  cardID &&
-                  navigate(
-                    `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
-                  )
-                }
-                className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-              >
-                <Expand className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                title={t("关闭主聊天")}
-                aria-label={t("关闭主聊天")}
-                onClick={() => setOpen(false)}
-                className="grid size-7 place-items-center rounded-lg border border-line/75 bg-surface/85 text-muted-foreground shadow-2xs backdrop-blur-md transition hover:bg-muted hover:text-foreground"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          </header>
+          <MainChatDockHeader
+            title={card?.title || t("主聊天")}
+            isMainMuted={isMainMuted}
+            canExpand={Boolean(cardID)}
+            onDragStart={handleDragStart}
+            onExpand={() =>
+              cardID &&
+              navigate(
+                `/chat/${encodeURIComponent(projectID)}/${encodeURIComponent(cardID)}`,
+              )
+            }
+            onClose={() => setOpen(false)}
+          />
 
           <Suspense
             fallback={
