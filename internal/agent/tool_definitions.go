@@ -115,10 +115,10 @@ func internalToolDefinitions() []modelclient.ToolDefinition {
 			Type: "function",
 			Function: modelclient.ToolDefinitionFunc{
 				Name:        "cycledock_check_in",
-				Description: "Persist the latest health fact for an Ongoing Card.",
+				Description: "Persist the latest health fact for an Ongoing Card. Keep content concise (1-2 sentences with only key takeaways, core metrics, or anomalies) because it renders as a compact status anchor in the timeline, card header summary, and alert notifications; put detailed issues, diagnostics, and recommendations in reply_message bubbles instead of repeating a long report.",
 				Parameters: object(map[string]any{
 					"status":          map[string]any{"type": "string", "enum": []string{"healthy", "warning", "critical"}},
-					"content":         stringField("Evidence-based health summary."),
+					"content":         stringField("Concise 1-2 sentence evidence-based highlight (key conclusion, core metrics, or anomaly). Do not dump long lists or placeholder text like 'see below'; put detailed issues and full context in reply_message."),
 					"idempotency_key": stringField("Stable key for this logical check-in."),
 				}, "status", "content", "idempotency_key"),
 			},

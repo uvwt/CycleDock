@@ -198,3 +198,46 @@ func TestBuildADKInstructionsAndToolDefinitions_图片发送规范(t *testing.T)
 		t.Fatalf("reply_message content 参数描述未说明纯图片气泡可留空: %s", contentDesc)
 	}
 }
+
+func TestBuildADKInstructionsAndToolDefinitions_巡检与气泡分工规范(t *testing.T) {
+	card := store.AgentCardContext{CardKind: domain.CardKindOngoing, CardTitle: "服务健康巡检"}
+	instructions := buildADKInstructions(card, "", "")
+	for _, want := range []string{
+		"cycledock_check_in",
+		"1～2 句精炼重点结论",
+		"详见下方回复",
+		"放在消息气泡里展开说明",
+		"重复写两遍",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("系统提示词缺少巡检与消息气泡分工约束 %q", want)
+		}
+	}
+
+	var checkInDesc string
+	var checkInContentDesc string
+	for _, def := range internalToolDefinitions() {
+		if def.Function.Name != "cycledock_check_in" {
+			continue
+		}
+		checkInDesc = def.Function.Description
+		props, _ := def.Function.Parameters["properties"].(map[string]any)
+		if contentField, ok := props["content"].(map[string]any); ok {
+			checkInContentDesc, _ = contentField["description"].(string)
+		}
+	}
+	if checkInDesc == "" {
+		t.Fatal("internalToolDefinitions 缺少 cycledock_check_in 工具定义")
+	}
+	for _, want := range []string{"1-2 sentences", "reply_message"} {
+		if !strings.Contains(checkInDesc, want) {
+			t.Fatalf("cycledock_check_in 工具描述缺少 %q: %s", want, checkInDesc)
+		}
+	}
+	for _, want := range []string{"1-2 sentence", "reply_message"} {
+		if !strings.Contains(checkInContentDesc, want) {
+			t.Fatalf("cycledock_check_in content 参数描述缺少 %q: %s", want, checkInContentDesc)
+		}
+	}
+}
+
