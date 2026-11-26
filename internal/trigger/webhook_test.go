@@ -225,3 +225,191 @@ func TestFormatUntrustedEnvelopeNeutralizesPromptInjection(t *testing.T) {
 		t.Fatalf("watcher note should be rendered outside envelope:\n%s", out)
 	}
 }
+
+func TestParseCircleCIPingAndHeaderFallbacks(t *testing.T) {
+	t.Run("ping payload without type falls back to circleci-event-type header", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("circleci-event-type", "ping")
+		body := []byte(`{
+			"id": "cc-ping-header-1",
+			"happened_at": "2026-11-26T00:00:00Z",
+			"webhook": {"id": "wh-1", "name": "CycleDock"}
+		}`)
+		ev, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{
+			Events:       []string{"workflow-completed"},
+			Repositories: []string{"uvwt/nexusdock-cloud"},
+		}, h, body)
+		if err != nil {
+			t.Fatalf("unexpected error for header-based circleci ping: %v", err)
+		}
+		if ev.EventType != "ping" || !ev.Skip || ev.SkipReason != "circleci_ping" {
+			t.Fatalf("expected skipped circleci_ping event, got %+v", ev)
+		}
+		if ev.DeliveryID != "cc-ping-header-1" {
+			t.Fatalf("expected delivery id from body id, got %q", ev.DeliveryID)
+		}
+	})
+
+	t.Run("ping payload with body type still works without header", func(t *testing.T) {
+		body := []byte(`{"id": "cc-ping-body-1", "type": "ping"}`)
+		ev, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{}, http.Header{}, body)
+		if err != nil {
+			t.Fatalf("unexpected error for body-type circleci ping: %v", err)
+		}
+		if ev.EventType != "ping" || !ev.Skip || ev.SkipReason != "circleci_ping" {
+			t.Fatalf("expected skipped circleci_ping event, got %+v", ev)
+		}
+	})
+
+	t.Run("empty or whitespace body with circleci-event-type ping succeeds", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("circleci-event-type", "ping")
+		h.Set("circleci-delivery-id", "cc-empty-ping-deliv-1")
+		for _, raw := range [][]byte{nil, []byte(""), []byte("   \n\t ")} {
+			ev, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{}, h, raw)
+			if err != nil {
+				t.Fatalf("expected empty ping body %q to succeed, got %v", string(raw), err)
+			}
+			if ev.EventType != "ping" || !ev.Skip || ev.SkipReason != "circleci_ping" {
+				t.Fatalf("unexpected parsed empty ping event: %+v", ev)
+			}
+			if ev.DeliveryID != "cc-empty-ping-deliv-1" {
+				t.Fatalf("expected delivery id from circleci-delivery-id header, got %q", ev.DeliveryID)
+			}
+		}
+	})
+
+	t.Run("empty body without ping header is still rejected", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("circleci-event-type", "workflow-completed")
+		if _, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{}, h, nil); err == nil {
+			t.Fatal("expected empty non-ping circleci body to return error")
+		}
+		if _, err := ParseAndFilter(domain.TriggerProviderGitHub, FilterConfig{}, http.Header{"X-GitHub-Event": []string{"ping"}}, nil); err == nil {
+			t.Fatal("expected empty github body to return error")
+		}
+	})
+
+	t.Run("workflow-completed without body type falls back to header and delivery headers", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("circleci-event-type", "workflow-completed")
+		h.Set("X-CircleCI-Delivery-ID", "cc-x-header-deliv-9")
+		body := []byte(`{
+			"project": {"slug": "gh/uvwt/nexusdock-cloud", "name": "nexusdock-cloud"},
+			"pipeline": {"vcs": {"branch": "main", "revision": "abcdef123456"}},
+			"workflow": {"id": "wf-9", "name": "ci", "status": "success", "url": "https://app.circleci.com/pipelines/wf-9"}
+		}`)
+		ev, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{}, h, body)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ev.Skip || ev.EventType != "workflow-completed" || ev.DeliveryID != "cc-x-header-deliv-9" {
+			t.Fatalf("unexpected event: %+v", ev)
+		}
+	})
+}
+
+func TestRepositoryFilterCircleCIBidirectionalAndGitHubStrict(t *testing.T) {
+	makeCircleCI := func(slug string) []byte {
+		return []byte(`{
+			"id": "cc-repo-test",
+			"type": "workflow-completed",
+			"project": {"slug": "` + slug + `", "name": "nexusdock-cloud"},
+			"pipeline": {"vcs": {"branch": "main", "revision": "1234567890abcdef"}},
+			"workflow": {"id": "wf-1", "name": "ci", "status": "success"}
+		}`)
+	}
+
+	cases := []struct {
+		name       string
+		slug       string
+		filterRepo []string
+		wantSkip   bool
+	}{
+		{
+			name:       "gh slug matches bare owner/repo filter",
+			slug:       "gh/uvwt/nexusdock-cloud",
+			filterRepo: []string{"uvwt/nexusdock-cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "gh slug matches exact gh slug case-insensitively",
+			slug:       "gh/uvwt/nexusdock-cloud",
+			filterRepo: []string{"GH/UVWT/NexusDock-Cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "gh slug matches github alias prefix",
+			slug:       "gh/uvwt/nexusdock-cloud",
+			filterRepo: []string{"github/uvwt/nexusdock-cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "bare repo matches prefixed filter bidirectionally",
+			slug:       "uvwt/nexusdock-cloud",
+			filterRepo: []string{"gh/uvwt/nexusdock-cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "bitbucket and gitlab prefixes match bare owner/repo",
+			slug:       "bb/uvwt/nexusdock-cloud",
+			filterRepo: []string{"uvwt/nexusdock-cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "gitlab prefix matches bare owner/repo",
+			slug:       "gl/uvwt/nexusdock-cloud",
+			filterRepo: []string{"uvwt/nexusdock-cloud"},
+			wantSkip:   false,
+		},
+		{
+			name:       "different explicit VCS prefixes do not cross-match",
+			slug:       "gh/uvwt/nexusdock-cloud",
+			filterRepo: []string{"bb/uvwt/nexusdock-cloud"},
+			wantSkip:   true,
+		},
+		{
+			name:       "mismatched repo is rejected by repository filter",
+			slug:       "gh/uvwt/other-repo",
+			filterRepo: []string{"uvwt/nexusdock-cloud"},
+			wantSkip:   true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := ParseAndFilter(domain.TriggerProviderCircleCI, FilterConfig{
+				Repositories: tc.filterRepo,
+			}, http.Header{}, makeCircleCI(tc.slug))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ev.Skip != tc.wantSkip {
+				t.Fatalf("slug=%q filter=%v: got skip=%v (reason=%q), want skip=%v", tc.slug, tc.filterRepo, ev.Skip, ev.SkipReason, tc.wantSkip)
+			}
+			if tc.wantSkip && ev.SkipReason != "filter_mismatch:repository" {
+				t.Fatalf("expected filter_mismatch:repository, got %q", ev.SkipReason)
+			}
+		})
+	}
+
+	t.Run("github keeps strict exact repository matching", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("X-GitHub-Event", "workflow_run")
+		h.Set("X-GitHub-Delivery", "gh-repo-strict-1")
+		ghBody := []byte(`{
+			"action": "completed",
+			"workflow_run": {"name": "CI", "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "abcdef123456"},
+			"repository": {"full_name": "uvwt/nexusdock-cloud"}
+		}`)
+		ev, err := ParseAndFilter(domain.TriggerProviderGitHub, FilterConfig{
+			Repositories: []string{"gh/uvwt/nexusdock-cloud"},
+		}, h, ghBody)
+		if err != nil {
+			t.Fatalf("unexpected github error: %v", err)
+		}
+		if !ev.Skip || ev.SkipReason != "filter_mismatch:repository" {
+			t.Fatalf("expected github to reject prefixed repository filter, got skip=%v reason=%q", ev.Skip, ev.SkipReason)
+		}
+	})
+}
