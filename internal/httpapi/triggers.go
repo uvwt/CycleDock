@@ -586,9 +586,18 @@ func (api *API) receiveTriggerWebhook(w http.ResponseWriter, r *http.Request) {
 	if !trigger.VerifySignature(trig.AuthMode, secret, trig.SignatureHeader, r.Header, rawBody) {
 		deliveryID := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery"))
 		if deliveryID == "" {
+			deliveryID = strings.TrimSpace(r.Header.Get("circleci-delivery-id"))
+		}
+		if deliveryID == "" {
+			deliveryID = strings.TrimSpace(r.Header.Get("X-CircleCI-Delivery-ID"))
+		}
+		if deliveryID == "" {
 			deliveryID = strings.TrimSpace(r.Header.Get("X-Delivery-Id"))
 		}
 		eventType := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
+		if eventType == "" {
+			eventType = strings.TrimSpace(r.Header.Get("circleci-event-type"))
+		}
 		_, _ = api.store.RecordRejectedWebhookDelivery(r.Context(), trig, deliveryID, eventType, "", "invalid_signature", now)
 		writeError(w, http.StatusUnauthorized, "invalid_signature", "webhook signature verification failed")
 		return
