@@ -14,9 +14,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
 )
@@ -190,7 +190,7 @@ func normalizePushEndpoint(w http.ResponseWriter, raw string) (string, bool) {
 // DeliverPushes 在进程存活期间把已切后台或关闭页面的卡片变化推出去。
 // 优先由 realtime.Hub 在消息/审批/状态落库后零延迟唤醒并只扫目标工作区；
 // 同时保留低频全量兜底轮询，覆盖心跳过期、跨副本写入和上次失败重试。
-func DeliverPushes(ctx context.Context, pool *pgxpool.Pool, dataStore *store.Store, sender pushSender, live *realtime.Hub, logger *slog.Logger) {
+func DeliverPushes(ctx context.Context, pool *sqldb.DB, dataStore *store.Store, sender pushSender, live *realtime.Hub, logger *slog.Logger) {
 	if sender == nil || sender.PublicKey() == "" {
 		return
 	}

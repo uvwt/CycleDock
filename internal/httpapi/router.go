@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/attachments"
 	"github.com/uvwt/CycleDock/internal/auth"
@@ -22,6 +21,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -43,7 +43,7 @@ type Config struct {
 }
 
 type API struct {
-	pool               *pgxpool.Pool
+	pool               *sqldb.DB
 	store              *store.Store
 	auth               *auth.Service
 	oauth              *oauth.Service
@@ -61,7 +61,7 @@ type API struct {
 	logger             *slog.Logger
 }
 
-func NewRouter(pool *pgxpool.Pool, dataStore *store.Store, authService *auth.Service, config Config) http.Handler {
+func NewRouter(pool *sqldb.DB, dataStore *store.Store, authService *auth.Service, config Config) http.Handler {
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()

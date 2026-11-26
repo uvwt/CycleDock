@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
@@ -28,8 +28,8 @@ func TestModelCallToResponseIncludesResponseModel(t *testing.T) {
 		ModelID:       "auto-router",
 		ResponseModel: "gemini-2.5-pro-preview-05-06",
 		Provider:      "openai_compatible",
-		StartedAt:     pgtype.Timestamptz{Time: now, Valid: true},
-		FinishedAt:    pgtype.Timestamptz{Time: now, Valid: true},
+		StartedAt:     sqldb.Timestamptz{Time: now, Valid: true},
+		FinishedAt:    sqldb.Timestamptz{Time: now, Valid: true},
 		DurationMs:    320,
 		Status:        "success",
 		UsageSource:   "actual",

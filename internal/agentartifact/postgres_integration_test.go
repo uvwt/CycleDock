@@ -3,100 +3,34 @@ package agentartifact
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentsession"
+	"github.com/uvwt/CycleDock/internal/sqldb"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
-var artifactIntegrationPool *pgxpool.Pool
-
-func TestMain(m *testing.M) {
-	os.Exit(runArtifactTests(m))
-}
-
-func runArtifactTests(m *testing.M) int {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		return m.Run()
-	}
-
-	adminPool, err := pgxpool.New(context.Background(), databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	defer adminPool.Close()
-	// 集成测试必须在独立临时 schema 中执行迁移，避免修改已有开发库表。
-	schema := "agentartifact_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if _, err := adminPool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			panic(err)
-		}
-	}()
-
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*config.ConnConfig)
-	defer sqlDB.Close()
-
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		panic(err)
-	}
-	if err := goose.Up(sqlDB, migrations); err != nil {
-		panic(err)
-	}
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
-	if err != nil {
-		panic(err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		panic(err)
-	}
-	defer pool.Close()
-	artifactIntegrationPool = pool
-
-	return m.Run()
-}
-
 func TestPostgresArtifactServiceVersionsAndIsolation(t *testing.T) {
-	if artifactIntegrationPool == nil {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	ctx := context.Background()
-	workspaceID := uuid.New()
-	cardID := uuid.New()
-	appName, userID, sessionID := agentsession.Identity(workspaceID, cardID)
+	testdb.ForEach(t, func(t *testing.T, db *sqldb.DB) {
+		ctx := context.Background()
+		workspaceID := uuid.New()
+		cardID := uuid.New()
+		appName, userID, sessionID := agentsession.Identity(workspaceID, cardID)
 
-	sessionService := agentsession.NewPostgresService(artifactIntegrationPool)
-	if _, err := sessionService.Create(ctx, &session.CreateRequest{
-		AppName: appName, UserID: userID, SessionID: sessionID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	service := NewPostgresService(artifactIntegrationPool)
+		sessionService := agentsession.NewService(db)
+		if _, err := sessionService.Create(ctx, &session.CreateRequest{
+			AppName: appName, UserID: userID, SessionID: sessionID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		service := NewService(db)
 
 	first, err := service.Save(ctx, &artifact.SaveRequest{
 		AppName: appName, UserID: userID, SessionID: sessionID, FileName: "evidence-result.json",
@@ -222,4 +156,5 @@ func TestPostgresArtifactServiceVersionsAndIsolation(t *testing.T) {
 	if loadedAbnormal.Part.Text != "artifact text\uFFFDwith nul and 中文🚀" {
 		t.Fatalf("loaded abnormal artifact text=%q", loadedAbnormal.Part.Text)
 	}
+	})
 }

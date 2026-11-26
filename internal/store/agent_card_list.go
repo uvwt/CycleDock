@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -141,91 +142,110 @@ func (s *Store) ListCardsForAgent(
 		// 健康度语义仅存在于 Ongoing 卡片；指定 health 时同步限定 kind = 'ongoing'。
 		where = append(where, "c.kind = 'ongoing'")
 		if health == "abnormal" {
-			where = append(where, "COALESCE(latest_checkin.checkin_status, 'unknown') IN ('warning', 'critical')")
+			where = append(where, "COALESCE(latest_checkin_status, 'unknown') IN ('warning', 'critical')")
 		} else {
-			where = append(where, "COALESCE(latest_checkin.checkin_status, 'unknown') = "+nextArg(health))
+			where = append(where, "COALESCE(latest_checkin_status, 'unknown') = "+nextArg(health))
 		}
 	}
 	if query != "" {
-		pattern := "%" + escapeLikePattern(query) + "%"
-		where = append(where, `c.title ILIKE `+nextArg(pattern)+` ESCAPE '\'`)
+		pattern := "%" + escapeLikePattern(strings.ToLower(query)) + "%"
+		where = append(where, `LOWER(c.title) LIKE `+nextArg(pattern)+` ESCAPE '\'`)
 	}
 
 	limitArg := nextArg(limit)
 	sqlQuery := fmt.Sprintf(`
+		WITH enriched AS (
+			SELECT
+				c.id,
+				c.workspace_id,
+				c.project_id,
+				p.name AS project_name,
+				c.kind,
+				c.title,
+				c.description,
+				c.todo_state,
+				c.ongoing_state,
+				c.discussion_state,
+				c.pinned_at,
+				c.notifications_muted,
+				c.updated_at,
+				p.main_discussion_id,
+				(
+					SELECT
+						CASE
+							WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+								SELECT 1 FROM events ack
+								WHERE ack.workspace_id = e.workspace_id
+								  AND ack.card_id = e.card_id
+								  AND ack.event_type = 'checkin_ack'
+								  AND ack.sequence > e.sequence
+							) THEN 'acknowledged'
+							ELSE e.checkin_status
+						END
+					FROM events e
+					WHERE e.workspace_id = c.workspace_id
+					  AND e.card_id = c.id
+					  AND e.event_type = 'checkin'
+					ORDER BY e.sequence DESC
+					LIMIT 1
+				) AS latest_checkin_status,
+				(
+					SELECT a.status
+					FROM turn_attempts a
+					WHERE a.workspace_id = c.workspace_id
+					  AND a.card_id = c.id
+					  AND a.status IN ('queued', 'running')
+					ORDER BY a.created_at DESC, a.attempt_number DESC
+					LIMIT 1
+				) AS current_attempt_status,
+				(
+					SELECT a.status
+					FROM turn_attempts a
+					WHERE a.workspace_id = c.workspace_id
+					  AND a.card_id = c.id
+					ORDER BY a.created_at DESC, a.attempt_number DESC
+					LIMIT 1
+				) AS latest_attempt_status,
+				(
+					SELECT COUNT(*)
+					FROM card_tool_approvals ta
+					WHERE ta.workspace_id = c.workspace_id
+					  AND ta.card_id = c.id
+					  AND ta.status = 'pending'
+				) AS pending_count
+			FROM cards c
+			JOIN projects p
+			  ON p.workspace_id = c.workspace_id
+			 AND p.id = c.project_id
+			WHERE c.workspace_id = $1
+		)
 		SELECT
 			c.id,
 			c.project_id,
-			p.name,
+			c.project_name,
 			c.kind,
 			c.title,
 			c.description,
-			COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, '')::text AS state,
+			COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, '') AS state,
 			CASE
-				WHEN c.kind = 'ongoing' THEN COALESCE(latest_checkin.checkin_status, 'unknown')
+				WHEN c.kind = 'ongoing' THEN COALESCE(c.latest_checkin_status, 'unknown')
 				ELSE ''
-			END::text AS health,
-			COALESCE(current_attempt.status, '')::text AS current_attempt_status,
-			COALESCE(latest_attempt.status, '')::text AS latest_attempt_status,
-			COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
-			(c.pinned_at IS NOT NULL)::boolean AS pinned,
+			END AS health,
+			COALESCE(c.current_attempt_status, '') AS current_attempt_status,
+			COALESCE(c.latest_attempt_status, '') AS latest_attempt_status,
+			COALESCE(c.pending_count, 0) AS pending_tool_approval_count,
+			(c.pinned_at IS NOT NULL) AS pinned,
 			c.notifications_muted,
-			COALESCE(p.main_discussion_id = c.id, false)::boolean AS is_main_discussion,
+			COALESCE(c.main_discussion_id = c.id, false) AS is_main_discussion,
 			c.updated_at,
-			COUNT(*) OVER()::int AS total_matched
-		FROM cards c
-		JOIN projects p
-		  ON p.workspace_id = c.workspace_id
-		 AND p.id = c.project_id
-		LEFT JOIN LATERAL (
-			SELECT
-				CASE
-					WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-						SELECT 1 FROM events ack
-						WHERE ack.workspace_id = e.workspace_id
-						  AND ack.card_id = e.card_id
-						  AND ack.event_type = 'checkin_ack'
-						  AND ack.sequence > e.sequence
-					) THEN 'acknowledged'
-					ELSE e.checkin_status
-				END::text AS checkin_status
-			FROM events e
-			WHERE e.workspace_id = c.workspace_id
-			  AND e.card_id = c.id
-			  AND e.event_type = 'checkin'
-			ORDER BY e.sequence DESC
-			LIMIT 1
-		) latest_checkin ON true
-		LEFT JOIN LATERAL (
-			SELECT a.status
-			FROM turn_attempts a
-			WHERE a.workspace_id = c.workspace_id
-			  AND a.card_id = c.id
-			  AND a.status IN ('queued', 'running')
-			ORDER BY a.created_at DESC, a.attempt_number DESC
-			LIMIT 1
-		) current_attempt ON true
-		LEFT JOIN LATERAL (
-			SELECT a.status
-			FROM turn_attempts a
-			WHERE a.workspace_id = c.workspace_id
-			  AND a.card_id = c.id
-			ORDER BY a.created_at DESC, a.attempt_number DESC
-			LIMIT 1
-		) latest_attempt ON true
-		LEFT JOIN LATERAL (
-			SELECT COUNT(*) AS pending_count
-			FROM card_tool_approvals ta
-			WHERE ta.workspace_id = c.workspace_id
-			  AND ta.card_id = c.id
-			  AND ta.status = 'pending'
-		) pending_approval ON true
+			COUNT(*) OVER() AS total_matched
+		FROM enriched c
 		WHERE %s
 		ORDER BY
 			CASE
-				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'critical' THEN 0
-				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'warning' THEN 1
-				WHEN COALESCE(pending_approval.pending_count, 0) > 0 THEN 2
+				WHEN c.kind = 'ongoing' AND COALESCE(c.latest_checkin_status, 'unknown') = 'critical' THEN 0
+				WHEN c.kind = 'ongoing' AND COALESCE(c.latest_checkin_status, 'unknown') = 'warning' THEN 1
+				WHEN COALESCE(c.pending_count, 0) > 0 THEN 2
 				ELSE 3
 			END ASC,
 			c.pinned_at DESC NULLS LAST,
@@ -245,7 +265,7 @@ func (s *Store) ListCardsForAgent(
 	for rows.Next() {
 		var item AgentCardListItem
 		var description string
-		var updatedAt pgtype.Timestamptz
+		var updatedAt sqldb.Timestamptz
 		var total int
 		if err := rows.Scan(
 			&item.CardID,

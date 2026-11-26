@@ -10,12 +10,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -108,7 +107,7 @@ func (s *Store) GetAPICredential(ctx context.Context, workspaceID, id uuid.UUID)
 	credential, err := s.queries.GetWorkspaceAPICredential(ctx, db.GetWorkspaceAPICredentialParams{
 		WorkspaceID: workspaceID, ID: id,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WorkspaceApiCredential{}, domain.ErrNotFound
 	}
 	return credential, err
@@ -218,7 +217,7 @@ func (s *Store) SaveAPICredential(
 		found, err := s.queries.GetWorkspaceAPICredential(ctx, db.GetWorkspaceAPICredentialParams{
 			WorkspaceID: workspaceID, ID: input.ID,
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return db.WorkspaceApiCredential{}, domain.ErrNotFound
 		}
 		if err != nil {
@@ -231,7 +230,7 @@ func (s *Store) SaveAPICredential(
 		return db.WorkspaceApiCredential{}, err
 	}
 	credential, err := s.queries.UpsertWorkspaceAPICredential(ctx, params)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WorkspaceApiCredential{}, fmt.Errorf("%w: changing provider base URL requires replacing or clearing its API key", domain.ErrConflict)
 	}
 	if err != nil {
@@ -255,7 +254,7 @@ func (s *Store) DeleteAPICredential(ctx context.Context, workspaceID, credential
 
 func (s *Store) GetAgentSettings(ctx context.Context, workspaceID uuid.UUID) (AgentSettings, error) {
 	settings, err := s.queries.GetWorkspaceAgentSettings(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return AgentSettings{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -378,7 +377,7 @@ func (s *Store) SaveAgentSettings(
 
 	var lockedWorkspace uuid.UUID
 	if err := tx.QueryRow(ctx, "SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", workspaceID).Scan(&lockedWorkspace); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return AgentSettings{}, domain.ErrNotFound
 		}
 		return AgentSettings{}, err
@@ -400,7 +399,7 @@ func (s *Store) SaveAgentSettings(
 		if kind != string(domain.SourceKindCycleAgent) {
 			return AgentSettings{}, fmt.Errorf("%w: configured agent source is not cycle_agent", domain.ErrConflict)
 		}
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sqldb.ErrNoRows):
 		source, err := q.CreateSource(ctx, db.CreateSourceParams{
 			ID: uuid.New(), WorkspaceID: workspaceID,
 			Kind: string(domain.SourceKindCycleAgent), Name: "Cycle Agent",
@@ -422,7 +421,7 @@ func (s *Store) SaveAgentSettings(
 			"SELECT provider FROM model_oauth_credentials WHERE workspace_id=$1 AND id=$2",
 			workspaceID, *route.CredentialID,
 		).Scan(&provider); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sqldb.ErrNoRows) {
 				return AgentSettings{}, fmt.Errorf("%w: model credential does not exist in this workspace", domain.ErrConflict)
 			}
 			return AgentSettings{}, err
@@ -485,7 +484,7 @@ func (s *Store) SaveAgentSettings(
 					return AgentSettings{}, err
 				}
 				cred, err = q.UpsertWorkspaceAPICredential(ctx, params)
-				if errors.Is(err, pgx.ErrNoRows) {
+				if errors.Is(err, sqldb.ErrNoRows) {
 					return AgentSettings{}, fmt.Errorf("%w: changing provider base URL requires replacing or clearing its API key", domain.ErrConflict)
 				}
 				if err != nil {
@@ -560,15 +559,20 @@ func (s *Store) SaveAgentSettings(
 
 	// 仅删除本次真正移除的 Route，保留既有 Route 记录原地更新，
 	// 防止全表 DELETE 触发 cards / card_turns / tool_guard 外键 ON DELETE SET NULL 清空已绑定模型。
-	keepIDs := make([]uuid.UUID, 0, len(routes))
+	keepSet := make(map[uuid.UUID]struct{}, len(routes))
 	for _, route := range routes {
-		keepIDs = append(keepIDs, route.ID)
+		keepSet[route.ID] = struct{}{}
 	}
-	if err := q.DeleteRemovedWorkspaceModelRoutes(ctx, db.DeleteRemovedWorkspaceModelRoutesParams{
-		WorkspaceID: workspaceID,
-		KeepIds:     keepIDs,
-	}); err != nil {
-		return AgentSettings{}, err
+	for _, existing := range existingRoutes {
+		if _, keep := keepSet[existing.ID]; keep {
+			continue
+		}
+		if err := q.DeleteWorkspaceModelRoute(ctx, db.DeleteWorkspaceModelRouteParams{
+			WorkspaceID: workspaceID,
+			ID:          existing.ID,
+		}); err != nil {
+			return AgentSettings{}, err
+		}
 	}
 	if len(routes) > 0 {
 		if err := q.ShiftWorkspaceModelRoutePositions(ctx, workspaceID); err != nil {
@@ -633,9 +637,9 @@ func (s *Store) SaveAgentSettings(
 			route.BaseModel,
 			now,
 		)
-		var verifiedAt pgtype.Timestamptz
+		var verifiedAt sqldb.Timestamptz
 		if resolvedLimits.VerifiedAt != nil && !resolvedLimits.VerifiedAt.IsZero() {
-			verifiedAt = pgtype.Timestamptz{Time: resolvedLimits.VerifiedAt.UTC(), Valid: true}
+			verifiedAt = sqldb.Timestamptz{Time: resolvedLimits.VerifiedAt.UTC(), Valid: true}
 		}
 		stored, err := q.UpsertWorkspaceModelRoute(ctx, db.UpsertWorkspaceModelRouteParams{
 			ID:                  route.ID,
@@ -647,13 +651,13 @@ func (s *Store) SaveAgentSettings(
 			ApiCredentialID:     apiCredentialID,
 			Model:               route.Model,
 			BaseModel:           route.BaseModel,
-			ContextWindowTokens: pgtype.Int4{Int32: int32(resolvedLimits.ContextWindowTokens), Valid: resolvedLimits.ContextWindowTokens > 0},
-			MaxInputTokens:      pgtype.Int4{Int32: int32(resolvedLimits.MaxInputTokens), Valid: resolvedLimits.MaxInputTokens > 0},
-			MaxOutputTokens:     pgtype.Int4{Int32: int32(resolvedLimits.MaxOutputTokens), Valid: resolvedLimits.MaxOutputTokens > 0},
+			ContextWindowTokens: sqldb.Int4{Int32: int32(resolvedLimits.ContextWindowTokens), Valid: resolvedLimits.ContextWindowTokens > 0},
+			MaxInputTokens:      sqldb.Int4{Int32: int32(resolvedLimits.MaxInputTokens), Valid: resolvedLimits.MaxInputTokens > 0},
+			MaxOutputTokens:     sqldb.Int4{Int32: int32(resolvedLimits.MaxOutputTokens), Valid: resolvedLimits.MaxOutputTokens > 0},
 			LimitsSource:        resolvedLimits.Source,
 			LimitsVerifiedAt:    verifiedAt,
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return AgentSettings{}, fmt.Errorf("%w: model route id belongs to another workspace", domain.ErrConflict)
 		}
 		if err != nil {
@@ -724,7 +728,7 @@ func (s *Store) GetToolGuardSettings(ctx context.Context, workspaceID uuid.UUID)
 	}
 
 	settings, err := s.queries.GetWorkspaceAgentSettings(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return ToolGuardSettings{
 			Mode:           "block_high_risk",
 			TimeoutSeconds: 10,
@@ -796,7 +800,7 @@ func (s *Store) SaveToolGuardSettings(
 
 	var lockedWorkspace uuid.UUID
 	if err := tx.QueryRow(ctx, "SELECT id FROM workspaces WHERE id=$1 FOR UPDATE", workspaceID).Scan(&lockedWorkspace); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return ToolGuardSettings{}, domain.ErrNotFound
 		}
 		return ToolGuardSettings{}, err
@@ -808,7 +812,7 @@ func (s *Store) SaveToolGuardSettings(
 	switch {
 	case err == nil:
 		sourceID = existing.SourceID
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sqldb.ErrNoRows):
 		// 如果工作区尚未创建过 Cycle Agent Source，则一并创建，确保外键完整。
 		var existingSourceID uuid.UUID
 		findErr := tx.QueryRow(ctx,
@@ -818,7 +822,7 @@ func (s *Store) SaveToolGuardSettings(
 		switch {
 		case findErr == nil:
 			sourceID = existingSourceID
-		case errors.Is(findErr, pgx.ErrNoRows):
+		case errors.Is(findErr, sqldb.ErrNoRows):
 			source, createErr := q.CreateSource(ctx, db.CreateSourceParams{
 				ID: uuid.New(), WorkspaceID: workspaceID,
 				Kind: string(domain.SourceKindCycleAgent), Name: "Cycle Agent",
@@ -841,7 +845,7 @@ func (s *Store) SaveToolGuardSettings(
 			"SELECT enabled FROM workspace_model_routes WHERE workspace_id=$1 AND id=$2",
 			workspaceID, *input.ModelRouteID,
 		).Scan(&routeEnabled)
-		if errors.Is(routeErr, pgx.ErrNoRows) {
+		if errors.Is(routeErr, sqldb.ErrNoRows) {
 			return ToolGuardSettings{}, fmt.Errorf("%w: tool guard model route does not exist in workspace routes", domain.ErrConflict)
 		}
 		if routeErr != nil {
@@ -893,7 +897,7 @@ func (s *Store) GetMCPConnection(ctx context.Context, workspaceID, id uuid.UUID)
 	connection, err := s.queries.GetWorkspaceMCPConnection(ctx, db.GetWorkspaceMCPConnectionParams{
 		WorkspaceID: workspaceID, ID: id,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WorkspaceMcpConnection{}, domain.ErrNotFound
 	}
 	return connection, err
@@ -940,7 +944,7 @@ func (s *Store) SaveMCPConnection(
 		existing, err := s.queries.GetWorkspaceMCPConnection(ctx, db.GetWorkspaceMCPConnectionParams{
 			WorkspaceID: workspaceID, ID: input.ID,
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return db.WorkspaceMcpConnection{}, domain.ErrNotFound
 		} else if err != nil {
 			return db.WorkspaceMcpConnection{}, err
@@ -965,7 +969,7 @@ func (s *Store) SaveMCPConnection(
 		Enabled: input.Enabled, TimeoutMs: input.TimeoutMS,
 		ToolGuardEnabled: input.ToolGuardEnabled,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WorkspaceMcpConnection{}, fmt.Errorf("%w: changing MCP URL requires replacing or clearing its bearer token", domain.ErrConflict)
 	}
 	if err != nil {

@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type CardStatusChange struct {
@@ -78,9 +77,9 @@ func (s *Store) LoadAgentCardContext(
 	workspaceID, attemptID, runnerSourceID uuid.UUID,
 ) (AgentCardContext, error) {
 	var out AgentCardContext
-	var discussionState, todoState, ongoingState pgtype.Text
+	var discussionState, todoState, ongoingState sqldb.Text
 	var turnSource, dispatchMode, attemptReason, turnIdempotencyKey string
-	var createdAt pgtype.Timestamptz
+	var createdAt sqldb.Timestamptz
 	var sourceEventMessage []byte
 
 	err := s.pool.QueryRow(ctx, `
@@ -145,7 +144,7 @@ func (s *Store) LoadAgentCardContext(
 		&out.AttemptID, &out.AttemptNumber, &attemptReason, &out.RunnerSourceID,
 		&out.PendingTurnCount,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return AgentCardContext{}, domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -241,7 +240,7 @@ func (s *Store) loadStatusChangesSinceLastExecutedTurn(
 		ORDER BY t_prev.sequence DESC, a_prev.attempt_number DESC
 		LIMIT 1
 	`, workspaceID, cardID, turnSequence).Scan(&prevAttemptID, &prevTurnCreatedAt, &prevSourceEventID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		// 卡片首次执行，前序尚无执行过的 Turn/Attempt，不生成“自上一轮执行以来”的增量提示
 		return nil, nil
 	}
@@ -277,7 +276,7 @@ func (s *Store) loadStatusChangesSinceLastExecutedTurn(
 		  AND turn_id = $3
 		  AND attempt_number = 1
 	`, workspaceID, cardID, turnID).Scan(&maxCreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		maxCreatedAt = time.Now().UTC()
 	} else if err != nil {
 		return nil, err
@@ -522,7 +521,7 @@ func (s *Store) CompleteAttempt(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, attemptID).Scan(&actualRunner, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -555,14 +554,42 @@ func (s *Store) CompleteAttempt(
 	}
 	// 正常完成 Attempt 时，在同一事务内清理未转正的孤儿预览气泡（例如模型路由切换或放弃调用留下的草稿）。
 	// 取消、打断或失败路径不经过 CompleteAttempt，仍按设计保留已输出的流式正文。
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM events
+	orphanRows, err := tx.Query(ctx, `
+		SELECT id, message
+		FROM events
 		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
 		  AND actor_source_id=$4 AND event_type='message'
 		  AND idempotency_key IS NULL
-		  AND message->>'preview'='true'
-	`, workspaceID, cardID, attemptID, runnerSourceID); err != nil {
+	`, workspaceID, cardID, attemptID, runnerSourceID)
+	if err != nil {
 		return err
+	}
+	var orphanIDs []uuid.UUID
+	for orphanRows.Next() {
+		var evID uuid.UUID
+		var raw []byte
+		if err := orphanRows.Scan(&evID, &raw); err != nil {
+			orphanRows.Close()
+			return err
+		}
+		var flag struct {
+			Preview bool `json:"preview"`
+		}
+		if len(raw) > 0 && json.Unmarshal(raw, &flag) == nil && flag.Preview {
+			orphanIDs = append(orphanIDs, evID)
+		}
+	}
+	if err := orphanRows.Err(); err != nil {
+		orphanRows.Close()
+		return err
+	}
+	orphanRows.Close()
+	if len(orphanIDs) > 0 {
+		args := []any{workspaceID}
+		inClause := sqldb.AppendInPlaceholders(&args, orphanIDs)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM events WHERE workspace_id=$1 AND id IN (%s)`, inClause), args...); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
@@ -573,7 +600,7 @@ func (s *Store) CompleteAttempt(
 
 func requireCurrentAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID, attemptID, runnerSourceID uuid.UUID,
 	statuses ...domain.AttemptStatus,
 ) error {
@@ -585,7 +612,7 @@ func requireCurrentAttempt(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, attemptID).Scan(&status, &actualRunner)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -604,7 +631,7 @@ func requireCurrentAttempt(
 
 func appendAttemptActivity(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID, attemptID, sourceID uuid.UUID,
 	eventType domain.EventType,
 	content string,
@@ -633,7 +660,7 @@ func appendAttemptActivity(
 		}
 		return existingID, true, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, err
 	}
 

@@ -12,13 +12,13 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -536,9 +536,9 @@ func TestADKRouteModelCapacityInterception_SystemToolsAndChinese(t *testing.T) {
 				Enabled:             true,
 				ProviderBaseUrl:     srv.URL,
 				Model:               "capped-10k-model",
-				ContextWindowTokens: pgtype.Int4{Int32: 16000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 10000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 16000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 10000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 4000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 		})
@@ -613,9 +613,9 @@ func TestADKRouteModelCapacityInterception_SystemToolsAndChinese(t *testing.T) {
 				Enabled:             true,
 				ProviderBaseUrl:     smallSrv.URL,
 				Model:               "small-32k",
-				ContextWindowTokens: pgtype.Int4{Int32: 40000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 32000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 40000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 32000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 4000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 			{
@@ -676,9 +676,9 @@ func TestADKRouteModelMultiRouteErrorPreservesPrimaryFailureOverSmallBackupCapac
 			Enabled:             true,
 			ProviderBaseUrl:     primarySrv.URL,
 			Model:               "gpt-5.4",
-			ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 400000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 400000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 		{
@@ -686,9 +686,9 @@ func TestADKRouteModelMultiRouteErrorPreservesPrimaryFailureOverSmallBackupCapac
 			Enabled:             true,
 			ProviderBaseUrl:     backupSrv.URL,
 			Model:               "grok-4.7-backup",
-			ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 239000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 239000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 	})
@@ -754,9 +754,9 @@ func TestResolveAttemptCompactionThresholdCapsAtBackupRouteBudget(t *testing.T) 
 				Enabled:             true,
 				ProviderBaseUrl:     "https://primary.example/v1",
 				Model:               "gpt-5.4-large",
-				ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 400000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 400000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 			{
@@ -764,9 +764,9 @@ func TestResolveAttemptCompactionThresholdCapsAtBackupRouteBudget(t *testing.T) 
 				Enabled:             true,
 				ProviderBaseUrl:     "https://backup.example/v1",
 				Model:               "grok-4.7",
-				ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 239000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 239000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 		}
@@ -788,9 +788,9 @@ func TestResolveAttemptCompactionThresholdCapsAtBackupRouteBudget(t *testing.T) 
 				Enabled:             true,
 				ProviderBaseUrl:     "https://primary.example/v1",
 				Model:               "gpt-5.4-large",
-				ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 400000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 400000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 			{
@@ -798,9 +798,9 @@ func TestResolveAttemptCompactionThresholdCapsAtBackupRouteBudget(t *testing.T) 
 				Enabled:             true,
 				ProviderBaseUrl:     "https://tiny.example/v1",
 				Model:               "tiny-32k",
-				ContextWindowTokens: pgtype.Int4{Int32: 32000, Valid: true},
-				MaxInputTokens:      pgtype.Int4{Int32: 32000, Valid: true},
-				MaxOutputTokens:     pgtype.Int4{Int32: 4000, Valid: true},
+				ContextWindowTokens: sqldb.Int4{Int32: 32000, Valid: true},
+				MaxInputTokens:      sqldb.Int4{Int32: 32000, Valid: true},
+				MaxOutputTokens:     sqldb.Int4{Int32: 4000, Valid: true},
 				LimitsSource:        modelclient.LimitsSourceUser,
 			},
 		}

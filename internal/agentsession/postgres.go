@@ -14,13 +14,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const AppName = "cycledock"
@@ -45,17 +44,23 @@ func Identity(workspaceID, cardID uuid.UUID) (appName, userID, sessionID string)
 	return AppName, workspaceID.String(), cardID.String()
 }
 
-// PostgresService persists ADK sessions without introducing GORM or a second
-// migration system into CycleDock.
-type PostgresService struct {
-	pool *pgxpool.Pool
+// Service 提供基于 sqldb 的双数据库（PostgreSQL / SQLite）ADK 会话持久化实现。
+type Service struct {
+	db *sqldb.DB
 }
 
-func NewPostgresService(pool *pgxpool.Pool) *PostgresService {
-	return &PostgresService{pool: pool}
+// PostgresService 为历史名称别名，便于既有调用方平滑过渡。
+type PostgresService = Service
+
+func NewService(db *sqldb.DB) *Service {
+	return &Service{db: db}
 }
 
-func (s *PostgresService) Create(ctx context.Context, req *session.CreateRequest) (*session.CreateResponse, error) {
+func NewPostgresService(db *sqldb.DB) *Service {
+	return NewService(db)
+}
+
+func (s *Service) Create(ctx context.Context, req *session.CreateRequest) (*session.CreateResponse, error) {
 	if req == nil || strings.TrimSpace(req.AppName) == "" || strings.TrimSpace(req.UserID) == "" {
 		return nil, errors.New("app_name and user_id are required")
 	}
@@ -67,7 +72,7 @@ func (s *PostgresService) Create(ctx context.Context, req *session.CreateRequest
 	appDelta, userDelta, sessionState := splitStateDelta(req.State)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin create session: %w", err)
 	}
@@ -86,8 +91,8 @@ func (s *PostgresService) Create(ctx context.Context, req *session.CreateRequest
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO agent_sessions(app_name, user_id, id, state, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $5)
-	`, req.AppName, req.UserID, sessionID, rawState, now)
+		VALUES ($1, $2, $3, $4, $5, $5)
+	`, req.AppName, req.UserID, sessionID, sqldb.JSON(rawState), now)
 	if err != nil {
 		return nil, fmt.Errorf("create session %q: %w", sessionID, err)
 	}
@@ -102,19 +107,19 @@ func (s *PostgresService) Create(ctx context.Context, req *session.CreateRequest
 	return &session.CreateResponse{Session: newStoredSession(req.AppName, req.UserID, sessionID, merged, nil, now)}, nil
 }
 
-func (s *PostgresService) Get(ctx context.Context, req *session.GetRequest) (*session.GetResponse, error) {
+func (s *Service) Get(ctx context.Context, req *session.GetRequest) (*session.GetResponse, error) {
 	if req == nil || strings.TrimSpace(req.AppName) == "" || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.SessionID) == "" {
 		return nil, errors.New("app_name, user_id, session_id are required")
 	}
 
 	var rawState []byte
 	var updatedAt time.Time
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT state, updated_at
 		FROM agent_sessions
 		WHERE app_name=$1 AND user_id=$2 AND id=$3
 	`, req.AppName, req.UserID, req.SessionID).Scan(&rawState, &updatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if sqldb.IsNoRows(err) {
 		return nil, fmt.Errorf("%w: %q", session.ErrNotFound, req.SessionID)
 	}
 	if err != nil {
@@ -139,7 +144,7 @@ func (s *PostgresService) Get(ctx context.Context, req *session.GetRequest) (*se
 	}, nil
 }
 
-func (s *PostgresService) List(ctx context.Context, req *session.ListRequest) (*session.ListResponse, error) {
+func (s *Service) List(ctx context.Context, req *session.ListRequest) (*session.ListResponse, error) {
 	if req == nil || strings.TrimSpace(req.AppName) == "" {
 		return nil, errors.New("app_name is required")
 	}
@@ -155,7 +160,7 @@ func (s *PostgresService) List(ctx context.Context, req *session.ListRequest) (*
 	}
 	query += ` ORDER BY updated_at DESC, id`
 
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
@@ -185,11 +190,11 @@ func (s *PostgresService) List(ctx context.Context, req *session.ListRequest) (*
 	return &session.ListResponse{Sessions: out}, nil
 }
 
-func (s *PostgresService) Delete(ctx context.Context, req *session.DeleteRequest) error {
+func (s *Service) Delete(ctx context.Context, req *session.DeleteRequest) error {
 	if req == nil || strings.TrimSpace(req.AppName) == "" || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.SessionID) == "" {
 		return errors.New("app_name, user_id, session_id are required")
 	}
-	if _, err := s.pool.Exec(ctx, `
+	if _, err := s.db.Exec(ctx, `
 		DELETE FROM agent_sessions
 		WHERE app_name=$1 AND user_id=$2 AND id=$3
 	`, req.AppName, req.UserID, req.SessionID); err != nil {
@@ -198,7 +203,7 @@ func (s *PostgresService) Delete(ctx context.Context, req *session.DeleteRequest
 	return nil
 }
 
-func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, event *session.Event) error {
+func (s *Service) AppendEvent(ctx context.Context, cur session.Session, event *session.Event) error {
 	if cur == nil {
 		return errors.New("session is nil")
 	}
@@ -248,7 +253,7 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 		)
 	}
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin append event: %w", err)
 	}
@@ -266,14 +271,14 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 		}
 	}
 
+	var storedStateRaw []byte
 	var storedUpdated time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT updated_at
+		SELECT state, updated_at
 		FROM agent_sessions
-		WHERE app_name=$1 AND user_id=$2 AND id=$3
-		FOR UPDATE
-	`, local.appName, local.userID, local.id).Scan(&storedUpdated)
-	if errors.Is(err, pgx.ErrNoRows) {
+		WHERE app_name=$1 AND user_id=$2 AND id=$3`+tx.ForUpdate(),
+		local.appName, local.userID, local.id).Scan(&storedStateRaw, &storedUpdated)
+	if sqldb.IsNoRows(err) {
 		return fmt.Errorf("%w: %q, cannot apply event", session.ErrNotFound, local.id)
 	}
 	if err != nil {
@@ -294,19 +299,26 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 	if err := mergeScopedState(ctx, tx, "agent_user_state", local.appName, local.userID, userDelta, event.Timestamp); err != nil {
 		return err
 	}
+	mergedSessionRaw := storedStateRaw
+	if len(sessionDelta) > 0 {
+		mergedSessionRaw, err = mergeJSONObjects(storedStateRaw, rawSessionDelta)
+		if err != nil {
+			return fmt.Errorf("merge session state: %w", err)
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_sessions
-		SET state = state || $4::jsonb, updated_at=$5
+		SET state = $4, updated_at=$5
 		WHERE app_name=$1 AND user_id=$2 AND id=$3
-	`, local.appName, local.userID, local.id, rawSessionDelta, event.Timestamp); err != nil {
+	`, local.appName, local.userID, local.id, sqldb.JSON(mergedSessionRaw), event.Timestamp); err != nil {
 		return fmt.Errorf("update session state: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO agent_session_events(
 			app_name, user_id, session_id, id, invocation_id, occurred_at, event
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-	`, local.appName, local.userID, local.id, persistedEvent.ID, persistedEvent.InvocationID, persistedEvent.Timestamp, rawEvent); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, local.appName, local.userID, local.id, persistedEvent.ID, persistedEvent.InvocationID, persistedEvent.Timestamp, sqldb.JSON(rawEvent)); err != nil {
 		return fmt.Errorf("append session event: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -315,7 +327,7 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 
 	// 数据库持久化使用已脱敏的 persistedEvent；当前内存会话保留规范化后的原始工具返回，
 	// 以便模型在同一轮调用（如刚生成一次性 webhook_secret 后立即调用 gh api 配置仓库）中读取。
-	// 下一轮从 PostgreSQL 重新加载会话时仅看到已脱敏版本。
+	// 下一轮从数据库重新加载会话时仅看到已脱敏版本。
 	liveEvent := liveSessionEvent(event, persistedEvent)
 	local.append(event, liveEvent)
 	return nil
@@ -323,7 +335,7 @@ func (s *PostgresService) AppendEvent(ctx context.Context, cur session.Session, 
 
 func guardCompactionAppend(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	local *storedSession,
 	event *session.Event,
 	attemptID uuid.UUID,
@@ -357,10 +369,9 @@ func guardCompactionAppend(
 	err = tx.QueryRow(ctx, `
 		SELECT status, invocation_id
 		FROM turn_attempts
-		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		FOR UPDATE
-	`, workspaceID, cardID, attemptID).Scan(&status, &invocationID)
-	if errors.Is(err, pgx.ErrNoRows) {
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3`+tx.ForUpdate(),
+		workspaceID, cardID, attemptID).Scan(&status, &invocationID)
+	if sqldb.IsNoRows(err) {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -413,7 +424,7 @@ func safeCompactionContent(content *genai.Content) bool {
 
 func guardAttemptAppend(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	local *storedSession,
 	event *session.Event,
 	attemptID uuid.UUID,
@@ -439,10 +450,9 @@ func guardAttemptAppend(
 	err = tx.QueryRow(ctx, `
 		SELECT id
 		FROM cards
-		WHERE workspace_id=$1 AND id=$2
-		FOR UPDATE
-	`, workspaceID, cardID).Scan(&lockedCard)
-	if errors.Is(err, pgx.ErrNoRows) {
+		WHERE workspace_id=$1 AND id=$2`+tx.ForUpdate(),
+		workspaceID, cardID).Scan(&lockedCard)
+	if sqldb.IsNoRows(err) {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -454,10 +464,9 @@ func guardAttemptAppend(
 	err = tx.QueryRow(ctx, `
 		SELECT status, invocation_id
 		FROM turn_attempts
-		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
-		FOR UPDATE
-	`, workspaceID, cardID, attemptID).Scan(&status, &invocationID)
-	if errors.Is(err, pgx.ErrNoRows) {
+		WHERE workspace_id=$1 AND card_id=$2 AND id=$3`+tx.ForUpdate(),
+		workspaceID, cardID, attemptID).Scan(&status, &invocationID)
+	if sqldb.IsNoRows(err) {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {
@@ -470,11 +479,11 @@ func guardAttemptAppend(
 	if invocationID == nil {
 		command, err := tx.Exec(ctx, `
 			UPDATE turn_attempts
-			SET invocation_id=$4, updated_at=now()
+			SET invocation_id=$4, updated_at=$5
 			WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 			  AND status='running'
 			  AND invocation_id IS NULL
-		`, workspaceID, cardID, attemptID, event.InvocationID)
+		`, workspaceID, cardID, attemptID, event.InvocationID, time.Now().UTC())
 		if err != nil {
 			return fmt.Errorf("bind attempt invocation: %w", err)
 		}
@@ -489,7 +498,7 @@ func guardAttemptAppend(
 	return nil
 }
 
-func (s *PostgresService) loadEvents(ctx context.Context, req *session.GetRequest) ([]*session.Event, error) {
+func (s *Service) loadEvents(ctx context.Context, req *session.GetRequest) ([]*session.Event, error) {
 	query := `
 		SELECT event
 		FROM agent_session_events
@@ -505,7 +514,7 @@ func (s *PostgresService) loadEvents(ctx context.Context, req *session.GetReques
 		query += fmt.Sprintf(" LIMIT $%d", len(args))
 	}
 
-	rows, err := s.pool.Query(ctx, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load session events: %w", err)
 	}
@@ -578,16 +587,16 @@ func alignPrunedCompactionEvents(events []*session.Event) []*session.Event {
 	return result
 }
 
-func (s *PostgresService) loadMergedState(
+func (s *Service) loadMergedState(
 	ctx context.Context,
 	appName, userID string,
 	sessionState map[string]any,
 ) (map[string]any, error) {
-	appState, err := loadScopedState(ctx, s.pool, "agent_app_state", appName, "")
+	appState, err := loadScopedState(ctx, s.db, "agent_app_state", appName, "")
 	if err != nil {
 		return nil, err
 	}
-	userState, err := loadScopedState(ctx, s.pool, "agent_user_state", appName, userID)
+	userState, err := loadScopedState(ctx, s.db, "agent_user_state", appName, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +604,7 @@ func (s *PostgresService) loadMergedState(
 }
 
 type queryer interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
+	QueryRow(context.Context, string, ...any) *sqldb.Row
 }
 
 func loadScopedState(ctx context.Context, q queryer, table, appName, userID string) (map[string]any, error) {
@@ -613,7 +622,7 @@ func loadScopedState(ctx context.Context, q queryer, table, appName, userID stri
 	}
 	var raw []byte
 	err := q.QueryRow(ctx, query, args...).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if sqldb.IsNoRows(err) {
 		return map[string]any{}, nil
 	}
 	if err != nil {
@@ -624,7 +633,7 @@ func loadScopedState(ctx context.Context, q queryer, table, appName, userID stri
 
 func mergeScopedState(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	table, appName, userID string,
 	delta map[string]any,
 	updatedAt time.Time,
@@ -636,23 +645,63 @@ func mergeScopedState(
 	if err != nil {
 		return fmt.Errorf("encode %s delta: %w", table, err)
 	}
+	// PostgreSQL 原生使用 jsonb || 合并；SQLite 在写事务内读取旧 JSON 并在 Go 层浅合并，
+	// 两者都严格保留“覆盖顶层键、显式保留 null 值”的语义（SQLite json_patch 会删掉 null 键）。
 	switch table {
 	case "agent_app_state":
-		_, err = tx.Exec(ctx, `
-			INSERT INTO agent_app_state(app_name, state, updated_at)
-			VALUES ($1, $2::jsonb, $3)
-			ON CONFLICT (app_name) DO UPDATE
-			SET state = agent_app_state.state || EXCLUDED.state,
-			    updated_at = EXCLUDED.updated_at
-		`, appName, raw, updatedAt)
+		if tx.Dialect() == sqldb.DialectPostgres {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO agent_app_state(app_name, state, updated_at)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (app_name) DO UPDATE
+				SET state = agent_app_state.state || EXCLUDED.state,
+				    updated_at = EXCLUDED.updated_at
+			`, appName, sqldb.JSON(raw), updatedAt)
+		} else {
+			var existing []byte
+			qErr := tx.QueryRow(ctx, `SELECT state FROM agent_app_state WHERE app_name=$1`, appName).Scan(&existing)
+			if qErr != nil && !sqldb.IsNoRows(qErr) {
+				return fmt.Errorf("load %s before merge: %w", table, qErr)
+			}
+			merged, mErr := mergeJSONObjects(existing, raw)
+			if mErr != nil {
+				return fmt.Errorf("merge %s: %w", table, mErr)
+			}
+			_, err = tx.Exec(ctx, `
+				INSERT INTO agent_app_state(app_name, state, updated_at)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (app_name) DO UPDATE
+				SET state = EXCLUDED.state,
+				    updated_at = EXCLUDED.updated_at
+			`, appName, sqldb.JSON(merged), updatedAt)
+		}
 	case "agent_user_state":
-		_, err = tx.Exec(ctx, `
-			INSERT INTO agent_user_state(app_name, user_id, state, updated_at)
-			VALUES ($1, $2, $3::jsonb, $4)
-			ON CONFLICT (app_name, user_id) DO UPDATE
-			SET state = agent_user_state.state || EXCLUDED.state,
-			    updated_at = EXCLUDED.updated_at
-		`, appName, userID, raw, updatedAt)
+		if tx.Dialect() == sqldb.DialectPostgres {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO agent_user_state(app_name, user_id, state, updated_at)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (app_name, user_id) DO UPDATE
+				SET state = agent_user_state.state || EXCLUDED.state,
+				    updated_at = EXCLUDED.updated_at
+			`, appName, userID, sqldb.JSON(raw), updatedAt)
+		} else {
+			var existing []byte
+			qErr := tx.QueryRow(ctx, `SELECT state FROM agent_user_state WHERE app_name=$1 AND user_id=$2`, appName, userID).Scan(&existing)
+			if qErr != nil && !sqldb.IsNoRows(qErr) {
+				return fmt.Errorf("load %s before merge: %w", table, qErr)
+			}
+			merged, mErr := mergeJSONObjects(existing, raw)
+			if mErr != nil {
+				return fmt.Errorf("merge %s: %w", table, mErr)
+			}
+			_, err = tx.Exec(ctx, `
+				INSERT INTO agent_user_state(app_name, user_id, state, updated_at)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (app_name, user_id) DO UPDATE
+				SET state = EXCLUDED.state,
+				    updated_at = EXCLUDED.updated_at
+			`, appName, userID, sqldb.JSON(merged), updatedAt)
+		}
 	default:
 		return fmt.Errorf("unsupported state table %q", table)
 	}
@@ -660,6 +709,23 @@ func mergeScopedState(
 		return fmt.Errorf("merge %s: %w", table, err)
 	}
 	return nil
+}
+
+// mergeJSONObjects 以 PostgreSQL `jsonb || jsonb` 语义浅合并两个顶层 JSON 对象。
+func mergeJSONObjects(baseRaw, deltaRaw []byte) ([]byte, error) {
+	base, err := decodeState(baseRaw)
+	if err != nil {
+		return nil, err
+	}
+	delta, err := decodeState(deltaRaw)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range delta {
+		base[k] = v
+	}
+	out, _, err := agentdata.MarshalJSONB(base)
+	return out, err
 }
 
 func splitStateDelta(delta map[string]any) (appState, userState, sessionState map[string]any) {

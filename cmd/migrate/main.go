@@ -1,40 +1,37 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"log/slog"
 	"os"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		logger.Error("DATABASE_URL is required")
+	cfg, err := sqldb.ConfigFromEnv()
+	if err != nil {
+		logger.Error("configure database", "error", err)
 		os.Exit(1)
 	}
 
-	database, err := sql.Open("pgx", databaseURL)
+	ctx := context.Background()
+	database, err := sqldb.Open(ctx, cfg)
 	if err != nil {
 		logger.Error("open database", "error", err)
 		os.Exit(1)
 	}
 	defer database.Close()
 
-	if err := database.Ping(); err != nil {
+	if err := database.Ping(ctx); err != nil {
 		logger.Error("database ping failed", "error", err)
 		os.Exit(1)
 	}
-	migrationsDir := os.Getenv("MIGRATIONS_DIR")
-	if migrationsDir == "" {
-		migrationsDir = "db/migrations"
-	}
-	if err := goose.Up(database, migrationsDir); err != nil {
+	// MIGRATIONS_DIR 留空时默认使用二进制内嵌的对应方言迁移脚本，也可指定外部目录。
+	if err := sqldb.MigrateUp(ctx, database, os.Getenv("MIGRATIONS_DIR")); err != nil {
 		logger.Error("database migration failed", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("database migrations are current")
+	logger.Info("database migrations are current", "dialect", database.Dialect())
 }

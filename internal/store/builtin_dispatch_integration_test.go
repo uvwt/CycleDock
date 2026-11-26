@@ -147,7 +147,6 @@ func TestBuiltInDispatchQueuedRetryRespectsQuotaAndResumesOnRelease(t *testing.T
 
 func TestBuiltInDispatchSkipsLockedAndDisabledWorkspaces(t *testing.T) {
 	s := requireIntegration(t)
-	locked := builtinDispatchFixture(t, s, 1)
 	disabled := builtinDispatchFixture(t, s, 1)
 	ready := builtinDispatchFixture(t, s, 1)
 	ctx := context.Background()
@@ -156,13 +155,18 @@ func TestBuiltInDispatchSkipsLockedAndDisabledWorkspaces(t *testing.T) {
 	if _, err := s.SaveAgentSettings(ctx, disabled.WorkspaceID, settings); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM workspace_agent_settings WHERE workspace_id=$1 FOR UPDATE`, locked.WorkspaceID); err != nil {
-		t.Fatal(err)
+	// PostgreSQL 支持在行级 FOR UPDATE 锁被持有时通过 SKIP LOCKED 跳过被锁定的租户；
+	// SQLite 采用单写连接事务串行化，不具备同进程长持写事务并发抢锁语义，此处仅在 PG 模式下持行锁验证 SKIP LOCKED。
+	if s.pool.IsPostgres() {
+		locked := builtinDispatchFixture(t, s, 1)
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM workspace_agent_settings WHERE workspace_id=$1 FOR UPDATE`, locked.WorkspaceID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	claimCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()

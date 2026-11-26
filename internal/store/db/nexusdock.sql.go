@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const consumeNexusDockAuthFlow = `-- name: ConsumeNexusDockAuthFlow :one
@@ -65,13 +65,13 @@ VALUES (
 `
 
 type CreateNexusDockAuthFlowParams struct {
-	StateDigest    []byte             `json:"state_digest"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	HumanAccountID uuid.UUID          `json:"human_account_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	ClientID       string             `json:"client_id"`
-	CodeVerifier   string             `json:"code_verifier"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	StateDigest    []byte            `json:"state_digest"`
+	WorkspaceID    uuid.UUID         `json:"workspace_id"`
+	HumanAccountID uuid.UUID         `json:"human_account_id"`
+	SourceID       uuid.UUID         `json:"source_id"`
+	ClientID       string            `json:"client_id"`
+	CodeVerifier   string            `json:"code_verifier"`
+	ExpiresAt      sqldb.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreateNexusDockAuthFlow(ctx context.Context, arg CreateNexusDockAuthFlowParams) error {
@@ -181,19 +181,19 @@ SET resource = EXCLUDED.resource,
     refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
     access_expires_at = EXCLUDED.access_expires_at,
     authorized_subject = EXCLUDED.authorized_subject,
-    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject IS DISTINCT FROM EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
+    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject <> EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
     updated_at = now()
 RETURNING workspace_id, resource, client_id, access_token_ciphertext, refresh_token_ciphertext, access_expires_at, connected_at, updated_at, authorized_subject
 `
 
 type UpsertWorkspaceNexusDockConnectionParams struct {
-	WorkspaceID            uuid.UUID          `json:"workspace_id"`
-	Resource               string             `json:"resource"`
-	ClientID               string             `json:"client_id"`
-	AccessTokenCiphertext  []byte             `json:"access_token_ciphertext"`
-	RefreshTokenCiphertext []byte             `json:"refresh_token_ciphertext"`
-	AccessExpiresAt        pgtype.Timestamptz `json:"access_expires_at"`
-	AuthorizedSubject      string             `json:"authorized_subject"`
+	WorkspaceID            uuid.UUID         `json:"workspace_id"`
+	Resource               string            `json:"resource"`
+	ClientID               string            `json:"client_id"`
+	AccessTokenCiphertext  []byte            `json:"access_token_ciphertext"`
+	RefreshTokenCiphertext []byte            `json:"refresh_token_ciphertext"`
+	AccessExpiresAt        sqldb.Timestamptz `json:"access_expires_at"`
+	AuthorizedSubject      string            `json:"authorized_subject"`
 }
 
 func (q *Queries) UpsertWorkspaceNexusDockConnection(ctx context.Context, arg UpsertWorkspaceNexusDockConnectionParams) (WorkspaceNexusdockConnection, error) {

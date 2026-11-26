@@ -77,6 +77,12 @@ CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<base64-key>
 docker compose up -d
 ```
 
+For low-memory VPS / NAS self-hosting without PostgreSQL, use the single-container SQLite mode instead:
+
+```bash
+docker compose -f docker-compose.sqlite.yml up -d
+```
+
 3. Open `http://127.0.0.1:8080`, sign in, and configure your model routes in **Agent Settings**.
 
 ### Local Development

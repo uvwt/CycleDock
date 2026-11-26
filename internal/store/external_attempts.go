@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type CardAttemptClaimResult struct {
@@ -88,7 +88,7 @@ func (s *Store) ClaimCardTurnAttempt(
 		}
 		return CardAttemptClaimResult{Attempt: current, Turn: turn, Reused: true}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return CardAttemptClaimResult{}, err
 	}
 
@@ -113,7 +113,7 @@ func (s *Store) ClaimCardTurnAttempt(
 		LIMIT 1
 		FOR UPDATE OF t
 	`, workspaceID, cardID).Scan(&turnID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CardAttemptClaimResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -204,7 +204,7 @@ func (s *Store) FailAttemptOwned(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, attemptID).Scan(&actualRunner, &status, &existing)
-	if errors.Is(err, pgx.ErrNoRows) || actualRunner != runnerSourceID {
+	if errors.Is(err, sqldb.ErrNoRows) || actualRunner != runnerSourceID {
 		return domain.ErrAttemptNotCurrent
 	}
 	if err != nil {

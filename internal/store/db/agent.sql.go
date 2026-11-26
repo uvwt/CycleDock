@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const checkCardScopeWhitelisted = `-- name: CheckCardScopeWhitelisted :one
@@ -120,22 +120,6 @@ func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardTool
 	return i, err
 }
 
-const deleteRemovedWorkspaceModelRoutes = `-- name: DeleteRemovedWorkspaceModelRoutes :exec
-DELETE FROM workspace_model_routes
-WHERE workspace_id = $1
-  AND NOT (id = ANY($2::uuid[]))
-`
-
-type DeleteRemovedWorkspaceModelRoutesParams struct {
-	WorkspaceID uuid.UUID   `json:"workspace_id"`
-	KeepIds     []uuid.UUID `json:"keep_ids"`
-}
-
-func (q *Queries) DeleteRemovedWorkspaceModelRoutes(ctx context.Context, arg DeleteRemovedWorkspaceModelRoutesParams) error {
-	_, err := q.db.Exec(ctx, deleteRemovedWorkspaceModelRoutes, arg.WorkspaceID, arg.KeepIds)
-	return err
-}
-
 const deleteWorkspaceAPICredential = `-- name: DeleteWorkspaceAPICredential :execrows
 DELETE FROM workspace_api_credentials
 WHERE workspace_id = $1
@@ -191,6 +175,22 @@ func (q *Queries) DeleteWorkspaceMCPConnection(ctx context.Context, arg DeleteWo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteWorkspaceModelRoute = `-- name: DeleteWorkspaceModelRoute :exec
+DELETE FROM workspace_model_routes
+WHERE workspace_id = $1
+  AND id = $2
+`
+
+type DeleteWorkspaceModelRouteParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteWorkspaceModelRoute(ctx context.Context, arg DeleteWorkspaceModelRouteParams) error {
+	_, err := q.db.Exec(ctx, deleteWorkspaceModelRoute, arg.WorkspaceID, arg.ID)
+	return err
 }
 
 const getCardToolApproval = `-- name: GetCardToolApproval :one
@@ -678,26 +678,26 @@ ORDER BY r.position, r.id
 `
 
 type ListWorkspaceModelRoutesRow struct {
-	ID                  uuid.UUID          `json:"id"`
-	WorkspaceID         uuid.UUID          `json:"workspace_id"`
-	Position            int32              `json:"position"`
-	Enabled             bool               `json:"enabled"`
-	ProviderType        string             `json:"provider_type"`
-	CredentialID        uuid.NullUUID      `json:"credential_id"`
-	ApiCredentialID     uuid.NullUUID      `json:"api_credential_id"`
-	ApiCredentialName   string             `json:"api_credential_name"`
-	ProviderBaseUrl     string             `json:"provider_base_url"`
-	Model               string             `json:"model"`
-	BaseModel           string             `json:"base_model"`
-	ApiKeyEnv           string             `json:"api_key_env"`
-	ApiKeyCiphertext    []byte             `json:"api_key_ciphertext"`
-	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
-	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
-	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
-	LimitsSource        string             `json:"limits_source"`
-	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ID                  uuid.UUID         `json:"id"`
+	WorkspaceID         uuid.UUID         `json:"workspace_id"`
+	Position            int32             `json:"position"`
+	Enabled             bool              `json:"enabled"`
+	ProviderType        string            `json:"provider_type"`
+	CredentialID        uuid.NullUUID     `json:"credential_id"`
+	ApiCredentialID     uuid.NullUUID     `json:"api_credential_id"`
+	ApiCredentialName   string            `json:"api_credential_name"`
+	ProviderBaseUrl     string            `json:"provider_base_url"`
+	Model               string            `json:"model"`
+	BaseModel           string            `json:"base_model"`
+	ApiKeyEnv           string            `json:"api_key_env"`
+	ApiKeyCiphertext    []byte            `json:"api_key_ciphertext"`
+	ContextWindowTokens sqldb.Int4        `json:"context_window_tokens"`
+	MaxInputTokens      sqldb.Int4        `json:"max_input_tokens"`
+	MaxOutputTokens     sqldb.Int4        `json:"max_output_tokens"`
+	LimitsSource        string            `json:"limits_source"`
+	LimitsVerifiedAt    sqldb.Timestamptz `json:"limits_verified_at"`
+	CreatedAt           sqldb.Timestamptz `json:"created_at"`
+	UpdatedAt           sqldb.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) ListWorkspaceModelRoutes(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceModelRoutesRow, error) {
@@ -760,29 +760,29 @@ RETURNING id, workspace_id, card_id, turn_id, attempt_id, invocation_id, call_in
 `
 
 type RecordAgentModelCallParams struct {
-	ID                    uuid.UUID          `json:"id"`
-	WorkspaceID           uuid.UUID          `json:"workspace_id"`
-	CardID                uuid.UUID          `json:"card_id"`
-	TurnID                uuid.UUID          `json:"turn_id"`
-	AttemptID             uuid.UUID          `json:"attempt_id"`
-	InvocationID          string             `json:"invocation_id"`
-	CallIndex             int32              `json:"call_index"`
-	Purpose               string             `json:"purpose"`
-	ModelRouteID          uuid.NullUUID      `json:"model_route_id"`
-	ModelID               string             `json:"model_id"`
-	ResponseModel         string             `json:"response_model"`
-	Provider              string             `json:"provider"`
-	StartedAt             pgtype.Timestamptz `json:"started_at"`
-	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
-	DurationMs            int32              `json:"duration_ms"`
-	Status                string             `json:"status"`
-	InputTokens           int32              `json:"input_tokens"`
-	OutputTokens          int32              `json:"output_tokens"`
-	CachedInputTokens     int32              `json:"cached_input_tokens"`
-	ReasoningOutputTokens int32              `json:"reasoning_output_tokens"`
-	UsageSource           string             `json:"usage_source"`
-	ErrorCode             string             `json:"error_code"`
-	ErrorSummary          string             `json:"error_summary"`
+	ID                    uuid.UUID         `json:"id"`
+	WorkspaceID           uuid.UUID         `json:"workspace_id"`
+	CardID                uuid.UUID         `json:"card_id"`
+	TurnID                uuid.UUID         `json:"turn_id"`
+	AttemptID             uuid.UUID         `json:"attempt_id"`
+	InvocationID          string            `json:"invocation_id"`
+	CallIndex             int32             `json:"call_index"`
+	Purpose               string            `json:"purpose"`
+	ModelRouteID          uuid.NullUUID     `json:"model_route_id"`
+	ModelID               string            `json:"model_id"`
+	ResponseModel         string            `json:"response_model"`
+	Provider              string            `json:"provider"`
+	StartedAt             sqldb.Timestamptz `json:"started_at"`
+	FinishedAt            sqldb.Timestamptz `json:"finished_at"`
+	DurationMs            int32             `json:"duration_ms"`
+	Status                string            `json:"status"`
+	InputTokens           int32             `json:"input_tokens"`
+	OutputTokens          int32             `json:"output_tokens"`
+	CachedInputTokens     int32             `json:"cached_input_tokens"`
+	ReasoningOutputTokens int32             `json:"reasoning_output_tokens"`
+	UsageSource           string            `json:"usage_source"`
+	ErrorCode             string            `json:"error_code"`
+	ErrorSummary          string            `json:"error_summary"`
 }
 
 func (q *Queries) RecordAgentModelCall(ctx context.Context, arg RecordAgentModelCallParams) (AgentModelCall, error) {
@@ -1222,20 +1222,20 @@ RETURNING id, workspace_id, position, enabled, provider_type, credential_id, mod
 `
 
 type UpsertWorkspaceModelRouteParams struct {
-	ID                  uuid.UUID          `json:"id"`
-	WorkspaceID         uuid.UUID          `json:"workspace_id"`
-	Position            int32              `json:"position"`
-	Enabled             bool               `json:"enabled"`
-	ProviderType        string             `json:"provider_type"`
-	CredentialID        uuid.NullUUID      `json:"credential_id"`
-	ApiCredentialID     uuid.NullUUID      `json:"api_credential_id"`
-	Model               string             `json:"model"`
-	BaseModel           string             `json:"base_model"`
-	ContextWindowTokens pgtype.Int4        `json:"context_window_tokens"`
-	MaxInputTokens      pgtype.Int4        `json:"max_input_tokens"`
-	MaxOutputTokens     pgtype.Int4        `json:"max_output_tokens"`
-	LimitsSource        string             `json:"limits_source"`
-	LimitsVerifiedAt    pgtype.Timestamptz `json:"limits_verified_at"`
+	ID                  uuid.UUID         `json:"id"`
+	WorkspaceID         uuid.UUID         `json:"workspace_id"`
+	Position            int32             `json:"position"`
+	Enabled             bool              `json:"enabled"`
+	ProviderType        string            `json:"provider_type"`
+	CredentialID        uuid.NullUUID     `json:"credential_id"`
+	ApiCredentialID     uuid.NullUUID     `json:"api_credential_id"`
+	Model               string            `json:"model"`
+	BaseModel           string            `json:"base_model"`
+	ContextWindowTokens sqldb.Int4        `json:"context_window_tokens"`
+	MaxInputTokens      sqldb.Int4        `json:"max_input_tokens"`
+	MaxOutputTokens     sqldb.Int4        `json:"max_output_tokens"`
+	LimitsSource        string            `json:"limits_source"`
+	LimitsVerifiedAt    sqldb.Timestamptz `json:"limits_verified_at"`
 }
 
 func (q *Queries) UpsertWorkspaceModelRoute(ctx context.Context, arg UpsertWorkspaceModelRouteParams) (WorkspaceModelRoute, error) {

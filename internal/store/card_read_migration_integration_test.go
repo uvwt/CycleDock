@@ -10,14 +10,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 func TestCardReadCursorMigrationSeedsExistingMessagesAsRead(t *testing.T) {
-	requireIntegration(t)
+	requirePostgresIntegration(t)
 	ctx := context.Background()
 	schema := pgx.Identifier{"read_cursor_migration_" + uuid.NewString()}.Sanitize()
 
@@ -25,7 +25,7 @@ func TestCardReadCursorMigrationSeedsExistingMessagesAsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	basePool, err := pgxpool.New(ctx, connectionURL.String())
+	basePool, err := sqldb.Open(ctx, sqldb.Config{Driver: sqldb.DialectPostgres, DatabaseURL: connectionURL.String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestCardReadCursorMigrationSeedsExistingMessagesAsRead(t *testing.T) {
 	}
 	basePool.Close()
 	defer func() {
-		cleanupPool, err := pgxpool.New(ctx, connectionURL.String())
+		cleanupPool, err := sqldb.Open(ctx, sqldb.Config{Driver: sqldb.DialectPostgres, DatabaseURL: connectionURL.String()})
 		if err == nil {
 			_, _ = cleanupPool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 			cleanupPool.Close()
@@ -51,11 +51,11 @@ func TestCardReadCursorMigrationSeedsExistingMessagesAsRead(t *testing.T) {
 	}
 	defer database.Close()
 
-	const migrations = "../../db/migrations"
+	const migrations = "../../db/migrations/postgres"
 	if err := goose.Up(database, migrations); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := pgxpool.New(ctx, connectionURL.String())
+	pool, err := sqldb.Open(ctx, sqldb.Config{Driver: sqldb.DialectPostgres, DatabaseURL: connectionURL.String()})
 	if err != nil {
 		t.Fatal(err)
 	}

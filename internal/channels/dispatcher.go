@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -629,7 +629,7 @@ func (d *Dispatcher) isAttemptRunning(ctx context.Context, workspaceID uuid.UUID
 		FROM turn_attempts
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, attemptID.UUID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {

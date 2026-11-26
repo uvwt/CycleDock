@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -9,10 +10,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // ReplyMessage 是一条独立的用户可见气泡。业务状态仍由 Card/Attempt 决定。
@@ -165,16 +166,13 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 			return uuid.Nil, false, domain.ErrIdempotencyMismatch
 		}
 		if p.PreviewID != "" {
-			if _, err := tx.Exec(ctx, `DELETE FROM events WHERE workspace_id=$1 AND card_id=$2
-                AND attempt_id=$3 AND actor_source_id=$4 AND message->>'preview_id'=$5
-                AND id<>$6 AND idempotency_key IS NULL`, p.WorkspaceID, p.CardID, p.AttemptID,
-				p.RunnerSourceID, p.PreviewID, oldID); err != nil {
+			if _, err := deleteReplyPreviewEventsTx(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.PreviewID, oldID); err != nil {
 				return uuid.Nil, false, err
 			}
 		}
 		return oldID, true, tx.Commit(ctx)
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, err
 	}
 	if err := requireCurrentAttempt(ctx, tx, p.WorkspaceID, p.CardID,
@@ -184,13 +182,18 @@ func (s *Store) PublishReply(ctx context.Context, p PublishReplyParams) (uuid.UU
 	// 正式发送原地接替已持久化预览，气泡 ID、顺序与创建时间保持稳定。
 	id := uuid.Nil
 	if p.PreviewID != "" {
-		err = tx.QueryRow(ctx, `UPDATE events SET content=$6,message=$7,idempotency_key=$8,request_hash=$9
-			WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3 AND actor_source_id=$4
-			  AND message->>'preview_id'=$5 AND idempotency_key IS NULL
-			RETURNING id`, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID,
-			p.PreviewID, p.Message.Content, payload, p.IdempotencyKey, hash).Scan(&id)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, false, err
+		previewEventID, _, found, findErr := findReplyPreviewEventTx(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.PreviewID)
+		if findErr != nil {
+			return uuid.Nil, false, findErr
+		}
+		if found {
+			err = tx.QueryRow(ctx, `UPDATE events SET content=$3,message=$4,idempotency_key=$5,request_hash=$6
+				WHERE workspace_id=$1 AND id=$2 AND idempotency_key IS NULL
+				RETURNING id`, p.WorkspaceID, previewEventID,
+				p.Message.Content, payload, p.IdempotencyKey, hash).Scan(&id)
+			if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
+				return uuid.Nil, false, err
+			}
 		}
 	}
 	if id == uuid.Nil {
@@ -256,20 +259,33 @@ func (s *Store) SaveReplyPreview(ctx context.Context, p ReplyPreviewParams) erro
 	if err := requireCurrentAttempt(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, domain.AttemptStatusRunning); err != nil {
 		return err
 	}
-	command, err := tx.Exec(ctx, `INSERT INTO events
-		(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message)
-		VALUES ($1,$2,$3,'message',$4,$5,$6,$7)
-		ON CONFLICT (workspace_id,card_id,attempt_id,(message->>'preview_id'))
-		WHERE message ? 'preview_id'
-		DO UPDATE SET content=EXCLUDED.content,message=EXCLUDED.message
-		WHERE events.idempotency_key IS NULL
-		  AND left(EXCLUDED.content,length(events.content))=events.content`,
-		uuid.New(), p.WorkspaceID, p.CardID, p.RunnerSourceID, p.AttemptID, p.Content, payload)
+	// 已持有 Card 行锁（PG）或单写事务（SQLite），先查找同 attempt + preview_id 的既有事件，
+	// 避免使用 PG 专属表达式索引 ON CONFLICT ((message->>'preview_id')) 与 left() 函数。
+	existingID, existingContent, existingIdem, found, err := findAnyReplyPreviewEventTx(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.PreviewID)
 	if err != nil {
-		return mapConstraintError(err)
+		return err
 	}
-	if command.RowsAffected() != 1 {
-		return fmt.Errorf("%w: reply preview already sent or rewritten", domain.ErrConflict)
+	if found {
+		if existingIdem || !strings.HasPrefix(p.Content, existingContent) {
+			return fmt.Errorf("%w: reply preview already sent or rewritten", domain.ErrConflict)
+		}
+		command, err := tx.Exec(ctx, `UPDATE events SET content=$3,message=$4
+			WHERE workspace_id=$1 AND id=$2 AND idempotency_key IS NULL`,
+			p.WorkspaceID, existingID, p.Content, payload)
+		if err != nil {
+			return mapConstraintError(err)
+		}
+		if command.RowsAffected() != 1 {
+			return fmt.Errorf("%w: reply preview already sent or rewritten", domain.ErrConflict)
+		}
+	} else {
+		_, err = tx.Exec(ctx, `INSERT INTO events
+			(id,workspace_id,card_id,event_type,actor_source_id,attempt_id,content,message)
+			VALUES ($1,$2,$3,'message',$4,$5,$6,$7)`,
+			uuid.New(), p.WorkspaceID, p.CardID, p.RunnerSourceID, p.AttemptID, p.Content, payload)
+		if err != nil {
+			return mapConstraintError(err)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -298,19 +314,137 @@ func (s *Store) DiscardReplyPreview(ctx context.Context, p DiscardReplyPreviewPa
 	if err := requireCurrentAttempt(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, domain.AttemptStatusRunning); err != nil {
 		return err
 	}
-	command, err := tx.Exec(ctx, `DELETE FROM events
-		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
-		  AND actor_source_id=$4 AND event_type='message'
-		  AND message->>'preview_id'=$5 AND idempotency_key IS NULL`,
-		p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.PreviewID)
+	deleted, err := deleteReplyPreviewEventsTx(ctx, tx, p.WorkspaceID, p.CardID, p.AttemptID, p.RunnerSourceID, p.PreviewID, uuid.Nil)
 	if err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if command.RowsAffected() > 0 {
+	if deleted > 0 {
 		s.notifyWorkspaceChanged(p.WorkspaceID)
 	}
 	return nil
+}
+
+// findAnyReplyPreviewEventTx 在单次 Attempt 内按 preview_id 查找已落库的事件（含已转正与未转正）。
+func findAnyReplyPreviewEventTx(
+	ctx context.Context, tx *sqldb.Tx,
+	workspaceID, cardID, attemptID uuid.UUID,
+	previewID string,
+) (eventID uuid.UUID, content string, hasIdempotencyKey bool, found bool, err error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, content, message, idempotency_key
+		FROM events
+		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3 AND event_type='message'
+		ORDER BY sequence ASC
+	`, workspaceID, cardID, attemptID)
+	if err != nil {
+		return uuid.Nil, "", false, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var body string
+		var raw []byte
+		var idem sqldb.Text
+		if err := rows.Scan(&id, &body, &raw, &idem); err != nil {
+			return uuid.Nil, "", false, false, err
+		}
+		if extractPreviewID(raw) == previewID {
+			return id, body, idem.Valid, true, nil
+		}
+	}
+	return uuid.Nil, "", false, false, rows.Err()
+}
+
+// findReplyPreviewEventTx 查找可被正式 reply_message 原地接替的未转正预览气泡。
+func findReplyPreviewEventTx(
+	ctx context.Context, tx *sqldb.Tx,
+	workspaceID, cardID, attemptID, actorSourceID uuid.UUID,
+	previewID string,
+) (eventID uuid.UUID, content string, found bool, err error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, content, message
+		FROM events
+		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+		  AND actor_source_id=$4 AND event_type='message' AND idempotency_key IS NULL
+		ORDER BY sequence ASC
+	`, workspaceID, cardID, attemptID, actorSourceID)
+	if err != nil {
+		return uuid.Nil, "", false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var body string
+		var raw []byte
+		if err := rows.Scan(&id, &body, &raw); err != nil {
+			return uuid.Nil, "", false, err
+		}
+		if extractPreviewID(raw) == previewID {
+			return id, body, true, nil
+		}
+	}
+	return uuid.Nil, "", false, rows.Err()
+}
+
+// deleteReplyPreviewEventsTx 删除匹配 preview_id 的未转正草稿气泡（可选排除 excludeID）。
+func deleteReplyPreviewEventsTx(
+	ctx context.Context, tx *sqldb.Tx,
+	workspaceID, cardID, attemptID, actorSourceID uuid.UUID,
+	previewID string, excludeID uuid.UUID,
+) (int64, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, message
+		FROM events
+		WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
+		  AND actor_source_id=$4 AND event_type='message' AND idempotency_key IS NULL
+	`, workspaceID, cardID, attemptID, actorSourceID)
+	if err != nil {
+		return 0, err
+	}
+	var toDelete []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if excludeID != uuid.Nil && id == excludeID {
+			continue
+		}
+		if extractPreviewID(raw) == previewID {
+			toDelete = append(toDelete, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
+	args := []any{workspaceID}
+	inClause := sqldb.AppendInPlaceholders(&args, toDelete)
+	res, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM events WHERE workspace_id=$1 AND id IN (%s)`, inClause), args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected(), nil
+}
+
+func extractPreviewID(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var meta struct {
+		PreviewID string `json:"preview_id"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return ""
+	}
+	return meta.PreviewID
 }

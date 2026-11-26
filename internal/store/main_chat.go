@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -25,7 +25,7 @@ func (s *Store) MainDiscussion(ctx context.Context, workspaceID, projectID uuid.
 		FROM projects
 		WHERE workspace_id = $1 AND id = $2 AND main_discussion_id IS NOT NULL
 	`, workspaceID, projectID).Scan(&cardID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -62,7 +62,7 @@ func (s *Store) EnsureMainDiscussion(
 
 func lockProjectMainDiscussion(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, projectID uuid.UUID,
 ) (uuid.NullUUID, error) {
 	var current uuid.NullUUID
@@ -72,7 +72,7 @@ func lockProjectMainDiscussion(
 		WHERE workspace_id = $1 AND id = $2
 		FOR UPDATE
 	`, workspaceID, projectID).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.NullUUID{}, domain.ErrNotFound
 	}
 	return current, err
@@ -80,7 +80,7 @@ func lockProjectMainDiscussion(
 
 func ensureMainDiscussionTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, projectID, createdBy uuid.UUID,
 	current uuid.NullUUID,
 ) (uuid.UUID, bool, error) {
@@ -123,7 +123,7 @@ func ensureMainDiscussionTx(
 
 func mainDiscussionUsable(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, projectID, cardID uuid.UUID,
 ) (bool, error) {
 	var owner uuid.UUID
@@ -133,7 +133,7 @@ func mainDiscussionUsable(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&owner, &kind, &state)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
@@ -142,7 +142,7 @@ func mainDiscussionUsable(
 	return owner == projectID && kind == string(domain.CardKindDiscussion) && state == string(domain.DiscussionStateActive), nil
 }
 
-func ensureCycleAgentSource(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUID) (uuid.UUID, error) {
+func ensureCycleAgentSource(ctx context.Context, tx *sqldb.Tx, workspaceID uuid.UUID) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
 		SELECT id FROM sources
@@ -153,7 +153,7 @@ func ensureCycleAgentSource(ctx context.Context, tx pgx.Tx, workspaceID uuid.UUI
 	if err == nil {
 		return id, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, err
 	}
 	id = uuid.New()

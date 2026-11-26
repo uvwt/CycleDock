@@ -55,7 +55,7 @@ SET resource = EXCLUDED.resource,
     refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
     access_expires_at = EXCLUDED.access_expires_at,
     authorized_subject = EXCLUDED.authorized_subject,
-    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject IS DISTINCT FROM EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
+    connected_at = CASE WHEN workspace_nexusdock_connections.authorized_subject <> EXCLUDED.authorized_subject THEN now() ELSE workspace_nexusdock_connections.connected_at END,
     updated_at = now()
 RETURNING *;
 

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -82,9 +82,9 @@ type CleanupStats struct {
 }
 
 // Service 管理本地临时磁盘附件（图片及 gzip 压缩纯文本/日志/代码）的落盘、鉴权读取以及 TTL + 总容量上限双重自动清理。
-// 本地目录独立于 PostgreSQL 与云端 R2 备份，数据库仅保存轻量元数据行。
+// 本地目录独立于数据库与云端 R2 备份，数据库仅保存轻量元数据行。
 type Service struct {
-	pool               *pgxpool.Pool
+	db                 *sqldb.DB
 	dir                string
 	ttl                time.Duration
 	maxTotalBytes      int64
@@ -103,9 +103,9 @@ func AttachmentURL(workspaceID, attachmentID uuid.UUID) string {
 	return fmt.Sprintf("/api/v1/workspaces/%s/attachments/%s", workspaceID.String(), attachmentID.String())
 }
 
-func New(pool *pgxpool.Pool, cfg Config) (*Service, error) {
-	if pool == nil {
-		return nil, errors.New("attachments service requires database pool")
+func New(db *sqldb.DB, cfg Config) (*Service, error) {
+	if db == nil {
+		return nil, errors.New("attachments service requires database handle")
 	}
 	dir := strings.TrimSpace(cfg.Dir)
 	if dir == "" {
@@ -156,7 +156,7 @@ func New(pool *pgxpool.Pool, cfg Config) (*Service, error) {
 		logger = slog.Default()
 	}
 	return &Service{
-		pool:               pool,
+		db:                 db,
 		dir:                absDir,
 		ttl:                ttl,
 		maxTotalBytes:      maxTotal,
@@ -184,7 +184,7 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 
 	if p.CardID != nil && *p.CardID != uuid.Nil {
 		var exists bool
-		err := s.pool.QueryRow(ctx, `
+		err := s.db.QueryRow(ctx, `
 			SELECT EXISTS(SELECT 1 FROM cards WHERE workspace_id = $1 AND id = $2)
 		`, p.WorkspaceID, *p.CardID).Scan(&exists)
 		if err != nil {
@@ -261,7 +261,7 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 	var existingPath, existingMime, existingEncoding string
 	var existingSize, existingStoredSize int64
 	var existingLines, existingW, existingH int
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT relative_path, mime_type, storage_encoding, size_bytes, stored_size_bytes, line_count, width, height
 		FROM workspace_attachments
 		WHERE workspace_id = $1
@@ -288,7 +288,7 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 				reusedFile = true
 			}
 		}
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	} else if err != nil && !sqldb.IsNoRows(err) {
 		return Attachment{}, fmt.Errorf("lookup deduplicated attachment: %w", err)
 	}
 
@@ -311,7 +311,7 @@ func (s *Service) Upload(ctx context.Context, p UploadParams) (Attachment, error
 		cardIDArg = &cid
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	_, err = s.db.Exec(ctx, `
 		INSERT INTO workspace_attachments (
 			id, workspace_id, card_id, uploaded_by_source_id,
 			kind, file_name, storage_encoding,
@@ -361,7 +361,7 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 		return OpenedAttachment{}, ErrNotFound
 	}
 	var att Attachment
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT
 			id, workspace_id, card_id, uploaded_by_source_id,
 			kind, file_name, storage_encoding,
@@ -375,7 +375,7 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 		&att.MimeType, &att.SizeBytes, &att.StoredSizeBytes, &att.LineCount, &att.Width, &att.Height,
 		&att.SHA256, &att.RelativePath, &att.CreatedAt, &att.ExpiresAt, &att.PurgedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if sqldb.IsNoRows(err) {
 		return OpenedAttachment{}, ErrNotFound
 	}
 	if err != nil {
@@ -396,7 +396,7 @@ func (s *Service) Open(ctx context.Context, workspaceID, attachmentID uuid.UUID)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// 宿主机目录重建或手工清理后懒同步 purged_at，保持元数据与磁盘一致。
-			_, _ = s.pool.Exec(ctx, `
+			_, _ = s.db.Exec(ctx, `
 				UPDATE workspace_attachments
 				SET purged_at = COALESCE(purged_at, $3)
 				WHERE id = $1 AND workspace_id = $2
@@ -483,31 +483,32 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 	var stats CleanupStats
 
 	// 第一阶段：清理所有已超过保留时长 TTL 的记录。
-	rows, err := s.pool.Query(ctx, `
-		UPDATE workspace_attachments
-		SET purged_at = $1
-		WHERE purged_at IS NULL AND expires_at <= $1
-		RETURNING relative_path, stored_size_bytes
-	`, now)
-	if err != nil {
-		return stats, fmt.Errorf("purge expired attachments: %w", err)
-	}
 	type purgedFile struct {
 		relPath   string
 		sizeBytes int64
 	}
 	var expiredPaths []purgedFile
-	for rows.Next() {
-		var pf purgedFile
-		if err := rows.Scan(&pf.relPath, &pf.sizeBytes); err != nil {
-			rows.Close()
-			return stats, fmt.Errorf("scan expired attachment: %w", err)
+	if err := s.db.WithTx(ctx, func(tx *sqldb.Tx) error {
+		rows, err := tx.Query(ctx, `
+			UPDATE workspace_attachments
+			SET purged_at = $1
+			WHERE purged_at IS NULL AND expires_at <= $1
+			RETURNING relative_path, stored_size_bytes
+		`, now)
+		if err != nil {
+			return fmt.Errorf("purge expired attachments: %w", err)
 		}
-		expiredPaths = append(expiredPaths, pf)
-		stats.ExpiredRows++
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var pf purgedFile
+			if err := rows.Scan(&pf.relPath, &pf.sizeBytes); err != nil {
+				return fmt.Errorf("scan expired attachment: %w", err)
+			}
+			expiredPaths = append(expiredPaths, pf)
+			stats.ExpiredRows++
+		}
+		return rows.Err()
+	}); err != nil {
 		return stats, err
 	}
 
@@ -536,14 +537,14 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 		var victimID uuid.UUID
 		var relPath string
 		var sizeBytes int64
-		err := s.pool.QueryRow(ctx, `
+		err := s.db.QueryRow(ctx, `
 			SELECT id, relative_path, stored_size_bytes
 			FROM workspace_attachments
 			WHERE purged_at IS NULL
 			ORDER BY created_at ASC, id ASC
 			LIMIT 1
 		`).Scan(&victimID, &relPath, &sizeBytes)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if sqldb.IsNoRows(err) {
 			break
 		}
 		if err != nil {
@@ -551,7 +552,7 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 		}
 
 		// 若同一物理文件被多条活跃记录引用，逐条淘汰最老记录；当最后一条引用被淘汰时物理文件被真正删除。
-		if _, err := s.pool.Exec(ctx, `
+		if _, err := s.db.Exec(ctx, `
 			UPDATE workspace_attachments
 			SET purged_at = $2
 			WHERE id = $1 AND purged_at IS NULL
@@ -579,13 +580,19 @@ func (s *Service) RunCleanup(ctx context.Context, now time.Time) (CleanupStats, 
 
 func (s *Service) activeUniqueBytes(ctx context.Context) (int64, error) {
 	var total int64
-	err := s.pool.QueryRow(ctx, `
+	err := s.db.QueryRow(ctx, `
 		SELECT COALESCE(SUM(stored_size_bytes), 0)
 		FROM (
-			SELECT DISTINCT ON (relative_path) relative_path, stored_size_bytes
-			FROM workspace_attachments
-			WHERE purged_at IS NULL
-			ORDER BY relative_path, created_at DESC
+			SELECT relative_path, stored_size_bytes
+			FROM (
+				SELECT
+					relative_path,
+					stored_size_bytes,
+					ROW_NUMBER() OVER (PARTITION BY relative_path ORDER BY created_at DESC) AS rn
+				FROM workspace_attachments
+				WHERE purged_at IS NULL
+			) ranked
+			WHERE rn = 1
 		) active_files
 	`).Scan(&total)
 	if err != nil {
@@ -596,7 +603,7 @@ func (s *Service) activeUniqueBytes(ctx context.Context) (int64, error) {
 
 func (s *Service) unlinkIfUnreferenced(ctx context.Context, relPath string) (bool, error) {
 	var stillReferenced bool
-	if err := s.pool.QueryRow(ctx, `
+	if err := s.db.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1
 			FROM workspace_attachments

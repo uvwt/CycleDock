@@ -11,9 +11,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -129,12 +129,16 @@ func (s *Store) ProcessBuiltInProactiveTurns(
 	if err != nil {
 		return nil, err
 	}
-	projects, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (builtInProactiveProject, error) {
+	defer rows.Close()
+	var projects []builtInProactiveProject
+	for rows.Next() {
 		var item builtInProactiveProject
-		err := row.Scan(&item.ID, &item.CreatedAt)
-		return item, err
-	})
-	if err != nil {
+		if err := rows.Scan(&item.ID, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		projects = append(projects, item)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -271,7 +275,7 @@ type projectUserInterests struct {
 
 func loadProjectUserInterestsTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, projectID uuid.UUID,
 ) (projectUserInterests, error) {
 	var out projectUserInterests
@@ -349,69 +353,82 @@ func loadProjectUserInterestsTx(
 	}
 
 	cardRows, err := tx.Query(ctx, `
+		WITH enriched AS (
+			SELECT
+				c.id,
+				c.kind,
+				c.todo_state,
+				c.ongoing_state,
+				c.discussion_state,
+				c.title,
+				c.description,
+				c.pinned_at,
+				c.updated_at,
+				(
+					SELECT
+						CASE
+							WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+								SELECT 1 FROM events ack
+								WHERE ack.workspace_id = e.workspace_id
+								  AND ack.card_id = e.card_id
+								  AND ack.event_type = 'checkin_ack'
+								  AND ack.sequence > e.sequence
+							) THEN 'acknowledged'
+							ELSE e.checkin_status
+						END
+					FROM events e
+					WHERE e.workspace_id = c.workspace_id
+					  AND e.card_id = c.id
+					  AND e.event_type = 'checkin'
+					ORDER BY e.sequence DESC
+					LIMIT 1
+				) AS latest_checkin_status,
+				(
+					SELECT a.status
+					FROM turn_attempts a
+					WHERE a.workspace_id = c.workspace_id
+					  AND a.card_id = c.id
+					  AND a.status IN ('queued', 'running')
+					ORDER BY a.created_at DESC, a.attempt_number DESC
+					LIMIT 1
+				) AS current_attempt_status,
+				(
+					SELECT a.status
+					FROM turn_attempts a
+					WHERE a.workspace_id = c.workspace_id
+					  AND a.card_id = c.id
+					ORDER BY a.created_at DESC, a.attempt_number DESC
+					LIMIT 1
+				) AS latest_attempt_status
+			FROM cards c
+			JOIN projects p
+			  ON p.workspace_id = c.workspace_id
+			 AND p.id = c.project_id
+			WHERE c.workspace_id = $1
+			  AND c.project_id = $2
+			  AND (p.main_discussion_id IS NULL OR c.id <> p.main_discussion_id)
+			  AND (
+				(c.kind = 'todo' AND c.todo_state <> 'done')
+				OR (c.kind = 'ongoing' AND c.ongoing_state = 'active')
+				OR (c.kind = 'discussion' AND c.discussion_state = 'active' AND TRIM(c.title) <> '')
+			  )
+		)
 		SELECT
 			c.id,
 			c.kind,
-			COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, '')::text AS state,
+			COALESCE(c.todo_state, c.ongoing_state, c.discussion_state, '') AS state,
 			CASE
-				WHEN c.kind = 'ongoing' THEN COALESCE(latest_checkin.checkin_status, 'unknown')
+				WHEN c.kind = 'ongoing' THEN COALESCE(c.latest_checkin_status, 'unknown')
 				ELSE ''
-			END::text AS health,
-			COALESCE(current_attempt.status, latest_attempt.status, '')::text AS attempt_status,
+			END AS health,
+			COALESCE(c.current_attempt_status, c.latest_attempt_status, '') AS attempt_status,
 			c.title,
 			c.description
-		FROM cards c
-		JOIN projects p
-		  ON p.workspace_id = c.workspace_id
-		 AND p.id = c.project_id
-		LEFT JOIN LATERAL (
-			SELECT
-				CASE
-					WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-						SELECT 1 FROM events ack
-						WHERE ack.workspace_id = e.workspace_id
-						  AND ack.card_id = e.card_id
-						  AND ack.event_type = 'checkin_ack'
-						  AND ack.sequence > e.sequence
-					) THEN 'acknowledged'
-					ELSE e.checkin_status
-				END::text AS checkin_status
-			FROM events e
-			WHERE e.workspace_id = c.workspace_id
-			  AND e.card_id = c.id
-			  AND e.event_type = 'checkin'
-			ORDER BY e.sequence DESC
-			LIMIT 1
-		) latest_checkin ON true
-		LEFT JOIN LATERAL (
-			SELECT a.status
-			FROM turn_attempts a
-			WHERE a.workspace_id = c.workspace_id
-			  AND a.card_id = c.id
-			  AND a.status IN ('queued', 'running')
-			ORDER BY a.created_at DESC, a.attempt_number DESC
-			LIMIT 1
-		) current_attempt ON true
-		LEFT JOIN LATERAL (
-			SELECT a.status
-			FROM turn_attempts a
-			WHERE a.workspace_id = c.workspace_id
-			  AND a.card_id = c.id
-			ORDER BY a.created_at DESC, a.attempt_number DESC
-			LIMIT 1
-		) latest_attempt ON true
-		WHERE c.workspace_id = $1
-		  AND c.project_id = $2
-		  AND (p.main_discussion_id IS NULL OR c.id <> p.main_discussion_id)
-		  AND (
-			(c.kind = 'todo' AND c.todo_state <> 'done')
-			OR (c.kind = 'ongoing' AND c.ongoing_state = 'active')
-			OR (c.kind = 'discussion' AND c.discussion_state = 'active' AND btrim(c.title) <> '')
-		  )
+		FROM enriched c
 		ORDER BY
 			CASE
-				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'critical' THEN 0
-				WHEN c.kind = 'ongoing' AND COALESCE(latest_checkin.checkin_status, 'unknown') = 'warning' THEN 1
+				WHEN c.kind = 'ongoing' AND COALESCE(c.latest_checkin_status, 'unknown') = 'critical' THEN 0
+				WHEN c.kind = 'ongoing' AND COALESCE(c.latest_checkin_status, 'unknown') = 'warning' THEN 1
 				WHEN c.kind = 'todo' AND c.todo_state = 'review' THEN 2
 				ELSE 3
 			END ASC,

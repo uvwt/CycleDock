@@ -19,16 +19,22 @@ type DiscussionMetadataInput struct {
 // ListDiscussionsNeedingMetadata 从已落库的首条输入恢复任务，进程重启也不会丢失生成请求。
 func (s *Store) ListDiscussionsNeedingMetadata(ctx context.Context, workspaceID uuid.UUID) ([]DiscussionMetadataInput, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT c.id, first_turn.content
-		FROM cards c
-		JOIN LATERAL (
-			SELECT content FROM card_turns
-			WHERE workspace_id=c.workspace_id AND card_id=c.id
-			ORDER BY sequence LIMIT 1
-		) first_turn ON true
-		WHERE c.workspace_id=$1 AND c.kind='discussion' AND c.discussion_state='active'
-		  AND btrim(c.title)='' AND btrim(c.description)=''
-		ORDER BY c.created_at, c.id
+		SELECT id, first_content
+		FROM (
+			SELECT
+				c.id,
+				c.created_at,
+				(
+					SELECT content FROM card_turns
+					WHERE workspace_id=c.workspace_id AND card_id=c.id
+					ORDER BY sequence LIMIT 1
+				) AS first_content
+			FROM cards c
+			WHERE c.workspace_id=$1 AND c.kind='discussion' AND c.discussion_state='active'
+			  AND TRIM(c.title)='' AND TRIM(c.description)=''
+		) sub
+		WHERE first_content IS NOT NULL
+		ORDER BY created_at, id
 	`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -55,7 +61,7 @@ func (s *Store) SaveGeneratedDiscussionMetadata(ctx context.Context, workspaceID
 	command, err := s.pool.Exec(ctx, `
 		UPDATE cards SET title=$3, description=$4, updated_at=now()
 		WHERE workspace_id=$1 AND id=$2 AND kind='discussion' AND discussion_state='active'
-		  AND btrim(title)='' AND btrim(description)=''
+		  AND TRIM(title)='' AND TRIM(description)=''
 	`, workspaceID, cardID, title, description)
 	return command.RowsAffected() == 1, err
 }

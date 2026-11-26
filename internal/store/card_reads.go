@@ -5,9 +5,9 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -29,7 +29,7 @@ func (s *Store) GetCardReadState(
 		CardID:      cardID,
 		SourceID:    sourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CardReadState{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -55,7 +55,7 @@ func (s *Store) MarkCardRead(
 		CardID:      cardID,
 		SourceID:    sourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return 0, domain.ErrNotFound
 	}
 	return sequence, err
@@ -73,7 +73,7 @@ func (s *Store) MarkCardUnread(
 		CardID:      cardID,
 		SourceID:    sourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return 0, domain.ErrNotFound
 	}
 	return sequence, err

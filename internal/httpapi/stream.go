@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/uvwt/CycleDock/internal/realtime"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // streamCard is authenticated by requireHuman before upgrading to a long-lived response.
@@ -132,7 +132,7 @@ func (api *API) streamPoll(ctx context.Context, workspaceID, cardID uuid.UUID, l
  FROM turn_attempts WHERE workspace_id=$1 AND card_id=$2
  ORDER BY created_at DESC LIMIT 1
  `, workspaceID, cardID).Scan(&attemptID, &attemptStatus, &stage)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil
 	}
 	if err != nil {

@@ -2,9 +2,34 @@
 SELECT
     c.*,
     p.name AS project_name,
-    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
+    COALESCE((
+        SELECT
+            CASE
+                WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                    SELECT 1 FROM events ack
+                    WHERE ack.workspace_id = e.workspace_id
+                      AND ack.card_id = e.card_id
+                      AND ack.event_type = 'checkin_ack'
+                      AND ack.sequence > e.sequence
+                ) THEN 'acknowledged'
+                ELSE e.checkin_status
+            END
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type = 'checkin'
+        ORDER BY e.sequence DESC
+        LIMIT 1
+    ), 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE((
+        SELECT a.status
+        FROM turn_attempts a
+        WHERE a.workspace_id = c.workspace_id
+          AND a.card_id = c.id
+        ORDER BY a.created_at DESC, a.attempt_number DESC
+        LIMIT 1
+    ), '')::text AS latest_attempt_status,
     (
         SELECT count(*)
         FROM card_turns t
@@ -21,37 +46,10 @@ FROM cards c
 JOIN projects p
   ON p.workspace_id = c.workspace_id
  AND p.id = c.project_id
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-                SELECT 1 FROM events ack
-                WHERE ack.workspace_id = e.workspace_id
-                  AND ack.card_id = e.card_id
-                  AND ack.event_type = 'checkin_ack'
-                  AND ack.sequence > e.sequence
-            ) THEN 'acknowledged'
-            ELSE e.checkin_status
-        END::text AS checkin_status
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type = 'checkin'
-    ORDER BY e.sequence DESC
-    LIMIT 1
-) latest_checkin ON true
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running')
-LEFT JOIN LATERAL (
-    SELECT a.status
-    FROM turn_attempts a
-    WHERE a.workspace_id = c.workspace_id
-      AND a.card_id = c.id
-    ORDER BY a.created_at DESC, a.attempt_number DESC
-    LIMIT 1
-) latest_attempt ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
 ORDER BY p.created_at, c.created_at, c.id;
 

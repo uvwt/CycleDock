@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -54,7 +53,7 @@ func (s *Store) MoveTodoWithCard(
 
 func moveTodoTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID, actorSourceID uuid.UUID,
 	to domain.TodoState,
 ) error {
@@ -65,7 +64,7 @@ func moveTodoTx(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&kind, &from); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		return err
@@ -78,7 +77,7 @@ func moveTodoTx(
 	if err := tx.QueryRow(ctx, `
 		SELECT kind FROM sources WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, actorSourceID).Scan(&actorKind); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		return err
@@ -182,17 +181,17 @@ func (s *Store) ArchiveDiscussionWithCard(
 		return db.Card{}, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE card_turns pending
+		UPDATE card_turns
 		SET cancelled_at=now(),
 		    cancelled_by_source_id=$3,
 		    cancel_reason='discussion archived'
-		WHERE pending.workspace_id=$1
-		  AND pending.card_id=$2
-		  AND pending.cancelled_at IS NULL
+		WHERE workspace_id=$1
+		  AND card_id=$2
+		  AND cancelled_at IS NULL
 		  AND NOT EXISTS (
 			SELECT 1 FROM turn_attempts existing
-			WHERE existing.workspace_id=pending.workspace_id
-			  AND existing.turn_id=pending.id
+			WHERE existing.workspace_id=card_turns.workspace_id
+			  AND existing.turn_id=card_turns.id
 		  )
 	`, workspaceID, cardID, actorSourceID); err != nil {
 		return db.Card{}, err
@@ -228,7 +227,7 @@ func (s *Store) ArchiveDiscussionWithCard(
 
 func ensureDiscussionAcceptsWork(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 ) error {
 	var kind, discussionState string
@@ -237,7 +236,7 @@ func ensureDiscussionAcceptsWork(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&kind, &discussionState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		return err
@@ -309,7 +308,7 @@ func (s *Store) SetCardPreferredModelRoute(
 			WHERE workspace_id = $1 AND id = $2 AND enabled = true
 		`, workspaceID, preferredModelRouteID.UUID).Scan(&exists)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sqldb.ErrNoRows) {
 				return db.Card{}, fmt.Errorf("%w: model route not found or disabled", domain.ErrNotFound)
 			}
 			return db.Card{}, err
@@ -321,7 +320,7 @@ func (s *Store) SetCardPreferredModelRoute(
 		ID:                    cardID,
 		PreferredModelRouteID: preferredModelRouteID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	return card, err
@@ -417,7 +416,7 @@ func (s *Store) Health(ctx context.Context, workspaceID, cardID uuid.UUID) (doma
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.CheckinUnknown, nil
 	}
 	if err != nil {
@@ -482,7 +481,7 @@ func (s *Store) AcknowledgeCheckin(
 	}
 
 	var latestSeq int64
-	var latestStatus pgtype.Text
+	var latestStatus sqldb.Text
 	err = tx.QueryRow(ctx, `
 		SELECT sequence, checkin_status
 		FROM events
@@ -492,7 +491,7 @@ func (s *Store) AcknowledgeCheckin(
 		ORDER BY sequence DESC
 		LIMIT 1
 	`, workspaceID, cardID).Scan(&latestSeq, &latestStatus)
-	if errors.Is(err, pgx.ErrNoRows) || !latestStatus.Valid {
+	if errors.Is(err, sqldb.ErrNoRows) || !latestStatus.Valid {
 		return domain.ErrInvalidTransition
 	}
 	if err != nil {

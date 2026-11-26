@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/adk/v2/session"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -46,14 +48,29 @@ func (s *PostgresService) SearchHistory(
 	}
 
 	appName, userID, sessionID := Identity(workspaceID, cardID)
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, invocation_id, occurred_at, event
-		FROM agent_session_events
-		WHERE app_name=$1 AND user_id=$2 AND session_id=$3
-		  AND strpos(lower(event::text), lower($4)) > 0
-		ORDER BY occurred_at DESC, sequence DESC
-		LIMIT $5
-	`, appName, userID, sessionID, query, limit*4)
+	var (
+		rows *sqldb.Rows
+		err  error
+	)
+	if s.db.IsPostgres() {
+		rows, err = s.db.Query(ctx, `
+			SELECT id, invocation_id, occurred_at, event
+			FROM agent_session_events
+			WHERE app_name=$1 AND user_id=$2 AND session_id=$3
+			  AND strpos(lower(event::text), lower($4)) > 0
+			ORDER BY occurred_at DESC, sequence DESC
+			LIMIT $5
+		`, appName, userID, sessionID, query, limit*4)
+	} else {
+		rows, err = s.db.Query(ctx, `
+			SELECT id, invocation_id, occurred_at, event
+			FROM agent_session_events
+			WHERE app_name=$1 AND user_id=$2 AND session_id=$3
+			  AND instr(lower(event), lower($4)) > 0
+			ORDER BY occurred_at DESC, sequence DESC
+			LIMIT $5
+		`, appName, userID, sessionID, query, limit*4)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("search session history: %w", err)
 	}
@@ -110,13 +127,13 @@ type SessionRound struct {
 
 // InspectFullSession loads all events for the card session and converts them into
 // complete rounds including thinking, tool calls, and outputs.
-func (s *PostgresService) InspectFullSession(
+func (s *Service) InspectFullSession(
 	ctx context.Context,
 	workspaceID, cardID uuid.UUID,
 	limit int,
 ) ([]SessionRound, error) {
-	if s == nil || s.pool == nil {
-		return nil, fmt.Errorf("postgres session service is not initialized")
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("session service is not initialized")
 	}
 	appName, userID, sessionID := Identity(workspaceID, cardID)
 	if limit <= 0 {
@@ -125,7 +142,7 @@ func (s *PostgresService) InspectFullSession(
 		limit = 200
 	}
 
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT id, invocation_id, occurred_at, event
 		FROM agent_session_events
 		WHERE app_name=$1 AND user_id=$2 AND session_id=$3

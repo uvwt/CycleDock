@@ -142,14 +142,27 @@ WHERE wm.human_account_id = sqlc.arg(human_account_id)
 ORDER BY wm.is_personal DESC, w.created_at, w.id;
 
 -- name: SwitchWebSessionWorkspace :execrows
-UPDATE web_sessions ws
-SET workspace_id = membership.workspace_id,
-    source_id = membership.source_id
-FROM workspace_memberships membership
-WHERE ws.token_digest = sqlc.arg(token_digest)
-  AND ws.expires_at > now()
-  AND membership.human_account_id = ws.human_account_id
-  AND membership.workspace_id = sqlc.arg(workspace_id);
+UPDATE web_sessions
+SET workspace_id = (
+        SELECT m.workspace_id
+        FROM workspace_memberships m
+        WHERE m.human_account_id = web_sessions.human_account_id
+          AND m.workspace_id = sqlc.arg(workspace_id)
+    ),
+    source_id = (
+        SELECT m.source_id
+        FROM workspace_memberships m
+        WHERE m.human_account_id = web_sessions.human_account_id
+          AND m.workspace_id = sqlc.arg(workspace_id)
+    )
+WHERE token_digest = sqlc.arg(token_digest)
+  AND expires_at > now()
+  AND EXISTS (
+      SELECT 1
+      FROM workspace_memberships m
+      WHERE m.human_account_id = web_sessions.human_account_id
+        AND m.workspace_id = sqlc.arg(workspace_id)
+  );
 
 -- name: DeleteWebSession :exec
 DELETE FROM web_sessions

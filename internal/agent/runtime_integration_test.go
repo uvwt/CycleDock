@@ -3,17 +3,12 @@ package agent
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,17 +16,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/pressly/goose/v3"
 	"google.golang.org/adk/v2/session"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
 func testRunnerSettings(modelURL, model string) store.AgentSettingsInput {
@@ -126,7 +119,7 @@ func TestCommentWakesDispatcherWithoutWaitingForPoll(t *testing.T) {
 		if scanErr == nil && status == string(domain.AttemptStatusCompleted) {
 			break
 		}
-		if scanErr != nil && !errors.Is(scanErr, pgx.ErrNoRows) {
+		if scanErr != nil && !errors.Is(scanErr, sqldb.ErrNoRows) {
 			cancel()
 			wg.Wait()
 			t.Fatal(scanErr)
@@ -205,7 +198,7 @@ func TestTwoDispatchersExecuteOneTurnOnce(t *testing.T) {
 		if err == nil && status == string(domain.AttemptStatusCompleted) {
 			break
 		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
 			cancel()
 			wg.Wait()
 			t.Fatal(err)
@@ -544,53 +537,8 @@ func containsModelMessage(messages []modelclient.Message, needle string) bool {
 	return false
 }
 
-func newAgentIntegrationStore(t *testing.T) (*store.Store, *pgxpool.Pool) {
+func newAgentIntegrationStore(t *testing.T) (*store.Store, *sqldb.DB) {
 	t.Helper()
-	baseURL := os.Getenv("TEST_DATABASE_URL")
-	if baseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adminPool, err := pgxpool.New(context.Background(), baseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(adminPool.Close)
-
-	schema := "agent_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE")
-	})
-
-	query := parsedURL.Query()
-	query.Set("search_path", schema)
-	parsedURL.RawQuery = query.Encode()
-	scopedURL := parsedURL.String()
-
-	migrationDB, err := sql.Open("pgx", scopedURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = migrationDB.Close() })
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		t.Fatal(err)
-	}
-	if err := goose.Up(migrationDB, migrations); err != nil {
-		t.Fatal(err)
-	}
-	pool, err := pgxpool.New(context.Background(), scopedURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool := testdb.OpenDefault(t)
 	return store.New(pool), pool
 }

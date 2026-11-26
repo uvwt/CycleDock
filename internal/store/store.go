@@ -9,20 +9,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
 const DefaultClaimLease = 2 * time.Minute
 
 type Store struct {
-	pool          *pgxpool.Pool
+	pool          *sqldb.DB
 	queries       *db.Queries
 	mcpCipher     cipher.AEAD
 	modelCipher   cipher.AEAD
@@ -35,12 +32,12 @@ type Store struct {
 	workspaceChanged func(workspaceID uuid.UUID)
 }
 
-func New(pool *pgxpool.Pool) *Store {
+func New(pool *sqldb.DB) *Store {
 	return &Store{pool: pool, queries: db.New(pool)}
 }
 
 // Pool 返回底层连接池，供同进程后台服务做受控只读扫描。
-func (s *Store) Pool() *pgxpool.Pool {
+func (s *Store) Pool() *sqldb.DB {
 	return s.pool
 }
 
@@ -105,7 +102,7 @@ func (s *Store) CreateDiscussion(
 		WorkspaceID:           workspaceID,
 		ProjectID:             projectID,
 		Kind:                  string(domain.CardKindDiscussion),
-		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
+		DiscussionState:       sqldb.Text{String: string(domain.DiscussionStateActive), Valid: true},
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
 		PreferredModelRouteID: preferredRouteID,
@@ -139,7 +136,7 @@ func (s *Store) CreateTodoCardWithOptions(
 			Kind:                  string(domain.CardKindTodo),
 			Title:                 title,
 			Description:           description,
-			TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+			TodoState:             sqldb.Text{String: string(domain.TodoStateTodo), Valid: true},
 			SourceDiscussionID:    sourceDiscussionID,
 			RequiredConfirmations: requiredConfirmations,
 			CreatedBySourceID:     sourceID,
@@ -164,7 +161,7 @@ func (s *Store) CreateTodoCardWithOptions(
 		Kind:                  string(domain.CardKindTodo),
 		Title:                 title,
 		Description:           description,
-		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+		TodoState:             sqldb.Text{String: string(domain.TodoStateTodo), Valid: true},
 		SourceDiscussionID:    sourceDiscussionID,
 		RequiredConfirmations: requiredConfirmations,
 		CreatedBySourceID:     sourceID,
@@ -228,7 +225,7 @@ func (s *Store) CreateOngoingCard(
 		Kind:                  string(domain.CardKindOngoing),
 		Title:                 strings.TrimSpace(title),
 		Description:           strings.TrimSpace(description),
-		OngoingState:          pgtype.Text{String: string(domain.OngoingStateActive), Valid: true},
+		OngoingState:          sqldb.Text{String: string(domain.OngoingStateActive), Valid: true},
 		SourceDiscussionID:    sourceDiscussionID,
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     sourceID,
@@ -241,7 +238,7 @@ func (s *Store) CreateOngoingCard(
 
 func (s *Store) GetCard(ctx context.Context, workspaceID, cardID uuid.UUID) (db.Card, error) {
 	card, err := s.queries.GetCard(ctx, db.GetCardParams{WorkspaceID: workspaceID, ID: cardID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	return card, err
@@ -252,31 +249,11 @@ func (s *Store) ListCardEvents(ctx context.Context, workspaceID, cardID uuid.UUI
 }
 
 func mapConstraintError(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return err
+	if sqldb.IsUniqueViolation(err) {
+		if name := sqldb.ConstraintName(err); name != "" {
+			return fmt.Errorf("%w: %s", domain.ErrConflict, name)
+		}
+		return fmt.Errorf("%w: %v", domain.ErrConflict, err)
 	}
-	switch pgErr.ConstraintName {
-	case "agent_runs_trigger_uq",
-		"agent_runs_one_current_per_card_uq",
-		"turn_attempts_workspace_id_turn_id_attempt_number_key",
-		"turn_attempts_one_current_per_card_uq",
-		"turn_attempts_one_successor_uq",
-		"turn_attempts_invocation_uq":
-		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
-	case "events_comment_idempotency_uq",
-		"events_message_idempotency_uq",
-		"card_turns_source_idempotency_uq",
-		"card_turns_schedule_occurrence_uq",
-		"triggers_cause_event_uq",
-		"triggers_schedule_occurrence_uq",
-		"cards_source_create_idempotency_uq",
-		"events_source_type_idempotency_uq",
-		"events_confirm_source_uq",
-		"triggers_source_followup_idempotency_uq",
-		"triggers_retry_once_uq":
-		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.ConstraintName)
-	default:
-		return err
-	}
+	return err
 }

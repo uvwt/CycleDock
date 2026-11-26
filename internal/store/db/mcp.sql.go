@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const countCardConfirmations = `-- name: CountCardConfirmations :one
@@ -58,14 +58,14 @@ type CreateAgentCardParams struct {
 	Kind                  string        `json:"kind"`
 	Title                 string        `json:"title"`
 	Description           string        `json:"description"`
-	DiscussionState       pgtype.Text   `json:"discussion_state"`
-	TodoState             pgtype.Text   `json:"todo_state"`
-	OngoingState          pgtype.Text   `json:"ongoing_state"`
+	DiscussionState       sqldb.Text    `json:"discussion_state"`
+	TodoState             sqldb.Text    `json:"todo_state"`
+	OngoingState          sqldb.Text    `json:"ongoing_state"`
 	SourceDiscussionID    uuid.NullUUID `json:"source_discussion_id"`
 	RequiredConfirmations int32         `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID     `json:"created_by_source_id"`
-	CreateIdempotencyKey  pgtype.Text   `json:"create_idempotency_key"`
-	CreateRequestHash     pgtype.Text   `json:"create_request_hash"`
+	CreateIdempotencyKey  sqldb.Text    `json:"create_idempotency_key"`
+	CreateRequestHash     sqldb.Text    `json:"create_request_hash"`
 }
 
 func (q *Queries) CreateAgentCard(ctx context.Context, arg CreateAgentCardParams) (Card, error) {
@@ -126,16 +126,16 @@ RETURNING id, sequence, workspace_id, card_id, event_type, actor_source_id, atte
 `
 
 type CreateAgentEventParams struct {
-	ID                uuid.UUID   `json:"id"`
-	WorkspaceID       uuid.UUID   `json:"workspace_id"`
-	CardID            uuid.UUID   `json:"card_id"`
-	EventType         string      `json:"event_type"`
-	ActorSourceID     uuid.UUID   `json:"actor_source_id"`
-	Content           string      `json:"content"`
-	CheckinStatus     pgtype.Text `json:"checkin_status"`
-	IdempotencyKey    pgtype.Text `json:"idempotency_key"`
-	RequestHash       pgtype.Text `json:"request_hash"`
-	ConfirmationRound int64       `json:"confirmation_round"`
+	ID                uuid.UUID  `json:"id"`
+	WorkspaceID       uuid.UUID  `json:"workspace_id"`
+	CardID            uuid.UUID  `json:"card_id"`
+	EventType         string     `json:"event_type"`
+	ActorSourceID     uuid.UUID  `json:"actor_source_id"`
+	Content           string     `json:"content"`
+	CheckinStatus     sqldb.Text `json:"checkin_status"`
+	IdempotencyKey    sqldb.Text `json:"idempotency_key"`
+	RequestHash       sqldb.Text `json:"request_hash"`
+	ConfirmationRound int64      `json:"confirmation_round"`
 }
 
 func (q *Queries) CreateAgentEvent(ctx context.Context, arg CreateAgentEventParams) (Event, error) {
@@ -183,10 +183,10 @@ WHERE workspace_id = $1
 `
 
 type GetAgentEventRequestParams struct {
-	WorkspaceID    uuid.UUID   `json:"workspace_id"`
-	ActorSourceID  uuid.UUID   `json:"actor_source_id"`
-	EventType      string      `json:"event_type"`
-	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	WorkspaceID    uuid.UUID  `json:"workspace_id"`
+	ActorSourceID  uuid.UUID  `json:"actor_source_id"`
+	EventType      string     `json:"event_type"`
+	IdempotencyKey sqldb.Text `json:"idempotency_key"`
 }
 
 func (q *Queries) GetAgentEventRequest(ctx context.Context, arg GetAgentEventRequestParams) (Event, error) {
@@ -227,9 +227,9 @@ WHERE workspace_id = $1
 `
 
 type GetCreatedCardRequestParams struct {
-	WorkspaceID          uuid.UUID   `json:"workspace_id"`
-	CreatedBySourceID    uuid.UUID   `json:"created_by_source_id"`
-	CreateIdempotencyKey pgtype.Text `json:"create_idempotency_key"`
+	WorkspaceID          uuid.UUID  `json:"workspace_id"`
+	CreatedBySourceID    uuid.UUID  `json:"created_by_source_id"`
+	CreateIdempotencyKey sqldb.Text `json:"create_idempotency_key"`
 }
 
 func (q *Queries) GetCreatedCardRequest(ctx context.Context, arg GetCreatedCardRequestParams) (Card, error) {
@@ -286,24 +286,24 @@ type ListRecentCardTimelineParams struct {
 }
 
 type ListRecentCardTimelineRow struct {
-	ID                uuid.UUID          `json:"id"`
-	Sequence          int64              `json:"sequence"`
-	WorkspaceID       uuid.UUID          `json:"workspace_id"`
-	CardID            uuid.UUID          `json:"card_id"`
-	EventType         string             `json:"event_type"`
-	ActorSourceID     uuid.UUID          `json:"actor_source_id"`
-	AttemptID         uuid.NullUUID      `json:"attempt_id"`
-	Content           string             `json:"content"`
-	CheckinStatus     pgtype.Text        `json:"checkin_status"`
-	IdempotencyKey    pgtype.Text        `json:"idempotency_key"`
-	RequestHash       pgtype.Text        `json:"request_hash"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	Message           []byte             `json:"message"`
-	ConfirmationRound int64              `json:"confirmation_round"`
-	SourceCardID      uuid.NullUUID      `json:"source_card_id"`
-	ToolApprovalID    uuid.NullUUID      `json:"tool_approval_id"`
-	ActorName         string             `json:"actor_name"`
-	ActorKind         string             `json:"actor_kind"`
+	ID                uuid.UUID         `json:"id"`
+	Sequence          int64             `json:"sequence"`
+	WorkspaceID       uuid.UUID         `json:"workspace_id"`
+	CardID            uuid.UUID         `json:"card_id"`
+	EventType         string            `json:"event_type"`
+	ActorSourceID     uuid.UUID         `json:"actor_source_id"`
+	AttemptID         uuid.NullUUID     `json:"attempt_id"`
+	Content           string            `json:"content"`
+	CheckinStatus     sqldb.Text        `json:"checkin_status"`
+	IdempotencyKey    sqldb.Text        `json:"idempotency_key"`
+	RequestHash       sqldb.Text        `json:"request_hash"`
+	CreatedAt         sqldb.Timestamptz `json:"created_at"`
+	Message           []byte            `json:"message"`
+	ConfirmationRound int64             `json:"confirmation_round"`
+	SourceCardID      uuid.NullUUID     `json:"source_card_id"`
+	ToolApprovalID    uuid.NullUUID     `json:"tool_approval_id"`
+	ActorName         string            `json:"actor_name"`
+	ActorKind         string            `json:"actor_kind"`
 }
 
 func (q *Queries) ListRecentCardTimeline(ctx context.Context, arg ListRecentCardTimelineParams) ([]ListRecentCardTimelineRow, error) {
@@ -349,9 +349,34 @@ const listWorkspaceCardSummaries = `-- name: ListWorkspaceCardSummaries :many
 SELECT
     c.id, c.workspace_id, c.project_id, c.kind, c.title, c.description, c.discussion_state, c.todo_state, c.ongoing_state, c.source_discussion_id, c.required_confirmations, c.created_by_source_id, c.created_at, c.updated_at, c.create_idempotency_key, c.create_request_hash, c.pinned_at, c.confirmation_round, c.preferred_model_route_id, c.notifications_muted,
     p.name AS project_name,
-    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
+    COALESCE((
+        SELECT
+            CASE
+                WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                    SELECT 1 FROM events ack
+                    WHERE ack.workspace_id = e.workspace_id
+                      AND ack.card_id = e.card_id
+                      AND ack.event_type = 'checkin_ack'
+                      AND ack.sequence > e.sequence
+                ) THEN 'acknowledged'
+                ELSE e.checkin_status
+            END
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type = 'checkin'
+        ORDER BY e.sequence DESC
+        LIMIT 1
+    ), 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
+    COALESCE((
+        SELECT a.status
+        FROM turn_attempts a
+        WHERE a.workspace_id = c.workspace_id
+          AND a.card_id = c.id
+        ORDER BY a.created_at DESC, a.attempt_number DESC
+        LIMIT 1
+    ), '')::text AS latest_attempt_status,
     (
         SELECT count(*)
         FROM card_turns t
@@ -368,67 +393,40 @@ FROM cards c
 JOIN projects p
   ON p.workspace_id = c.workspace_id
  AND p.id = c.project_id
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-                SELECT 1 FROM events ack
-                WHERE ack.workspace_id = e.workspace_id
-                  AND ack.card_id = e.card_id
-                  AND ack.event_type = 'checkin_ack'
-                  AND ack.sequence > e.sequence
-            ) THEN 'acknowledged'
-            ELSE e.checkin_status
-        END::text AS checkin_status
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type = 'checkin'
-    ORDER BY e.sequence DESC
-    LIMIT 1
-) latest_checkin ON true
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running')
-LEFT JOIN LATERAL (
-    SELECT a.status
-    FROM turn_attempts a
-    WHERE a.workspace_id = c.workspace_id
-      AND a.card_id = c.id
-    ORDER BY a.created_at DESC, a.attempt_number DESC
-    LIMIT 1
-) latest_attempt ON true
 WHERE c.workspace_id = $1
 ORDER BY p.created_at, c.created_at, c.id
 `
 
 type ListWorkspaceCardSummariesRow struct {
-	ID                    uuid.UUID          `json:"id"`
-	WorkspaceID           uuid.UUID          `json:"workspace_id"`
-	ProjectID             uuid.UUID          `json:"project_id"`
-	Kind                  string             `json:"kind"`
-	Title                 string             `json:"title"`
-	Description           string             `json:"description"`
-	DiscussionState       pgtype.Text        `json:"discussion_state"`
-	TodoState             pgtype.Text        `json:"todo_state"`
-	OngoingState          pgtype.Text        `json:"ongoing_state"`
-	SourceDiscussionID    uuid.NullUUID      `json:"source_discussion_id"`
-	RequiredConfirmations int32              `json:"required_confirmations"`
-	CreatedBySourceID     uuid.UUID          `json:"created_by_source_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	CreateIdempotencyKey  pgtype.Text        `json:"create_idempotency_key"`
-	CreateRequestHash     pgtype.Text        `json:"create_request_hash"`
-	PinnedAt              pgtype.Timestamptz `json:"pinned_at"`
-	ConfirmationRound     int64              `json:"confirmation_round"`
-	PreferredModelRouteID uuid.NullUUID      `json:"preferred_model_route_id"`
-	NotificationsMuted    bool               `json:"notifications_muted"`
-	ProjectName           string             `json:"project_name"`
-	Health                string             `json:"health"`
-	CurrentAttemptStatus  pgtype.Text        `json:"current_attempt_status"`
-	LatestAttemptStatus   string             `json:"latest_attempt_status"`
-	PendingTurnCount      int64              `json:"pending_turn_count"`
+	ID                    uuid.UUID         `json:"id"`
+	WorkspaceID           uuid.UUID         `json:"workspace_id"`
+	ProjectID             uuid.UUID         `json:"project_id"`
+	Kind                  string            `json:"kind"`
+	Title                 string            `json:"title"`
+	Description           string            `json:"description"`
+	DiscussionState       sqldb.Text        `json:"discussion_state"`
+	TodoState             sqldb.Text        `json:"todo_state"`
+	OngoingState          sqldb.Text        `json:"ongoing_state"`
+	SourceDiscussionID    uuid.NullUUID     `json:"source_discussion_id"`
+	RequiredConfirmations int32             `json:"required_confirmations"`
+	CreatedBySourceID     uuid.UUID         `json:"created_by_source_id"`
+	CreatedAt             sqldb.Timestamptz `json:"created_at"`
+	UpdatedAt             sqldb.Timestamptz `json:"updated_at"`
+	CreateIdempotencyKey  sqldb.Text        `json:"create_idempotency_key"`
+	CreateRequestHash     sqldb.Text        `json:"create_request_hash"`
+	PinnedAt              sqldb.Timestamptz `json:"pinned_at"`
+	ConfirmationRound     int64             `json:"confirmation_round"`
+	PreferredModelRouteID uuid.NullUUID     `json:"preferred_model_route_id"`
+	NotificationsMuted    bool              `json:"notifications_muted"`
+	ProjectName           string            `json:"project_name"`
+	Health                string            `json:"health"`
+	CurrentAttemptStatus  sqldb.Text        `json:"current_attempt_status"`
+	LatestAttemptStatus   string            `json:"latest_attempt_status"`
+	PendingTurnCount      int64             `json:"pending_turn_count"`
 }
 
 func (q *Queries) ListWorkspaceCardSummaries(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceCardSummariesRow, error) {

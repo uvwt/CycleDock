@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -189,7 +189,7 @@ type RegenerateSessionMessageParams struct {
 // 传入 nil 或 uuid.Nil 表示不指定单次覆盖，继续沿用卡片/工作区默认路由。
 func validateEnabledWorkspaceModelRouteTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID uuid.UUID,
 	routeID *uuid.UUID,
 ) (uuid.NullUUID, error) {
@@ -202,7 +202,7 @@ func validateEnabledWorkspaceModelRouteTx(
 		FROM workspace_model_routes
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, *routeID).Scan(&enabled)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.NullUUID{}, fmt.Errorf("%w: model route not found in workspace", domain.ErrNotFound)
 	}
 	if err != nil {
@@ -217,7 +217,7 @@ func validateEnabledWorkspaceModelRouteTx(
 // ensureCardAllowsRerunTx 校验目标卡片当前生命周期是否允许截断历史并重新执行。
 func ensureCardAllowsRerunTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 ) (string, error) {
 	var cardKind, discussionState, todoState, ongoingState string
@@ -226,7 +226,7 @@ func ensureCardAllowsRerunTx(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, cardID).Scan(&cardKind, &discussionState, &todoState, &ongoingState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return "", domain.ErrNotFound
 		}
 		return "", err
@@ -252,7 +252,7 @@ func ensureCardAllowsRerunTx(
 // 业务事件、ADK 会话事件、turn_attempts 与后续 card_turns，保留源触发事件（若有）。
 func truncateCardHistoryFromTurnTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	cardKind string,
 	turnSequence int64,
@@ -309,15 +309,25 @@ func truncateCardHistoryFromTurnTx(
 
 	// 先删除关联的业务 Events，避免先删 turn_attempts 触发 ON DELETE SET NULL (attempt_id)
 	// 从而违反 events_reply_preview_check（带 preview_id 的消息要求 attempt_id IS NOT NULL）。
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM events e
-		WHERE e.workspace_id = $1
-		  AND e.card_id = $2
-		  AND ($3::uuid IS NULL OR e.id <> $3)
+	delEventArgs := []any{workspaceID, cardID, cutoffEventSequence, turnSequence}
+	keepClause := "1 = 1"
+	if keepEventID.Valid {
+		delEventArgs = append(delEventArgs, keepEventID.UUID)
+		keepClause = fmt.Sprintf("id <> $%d", len(delEventArgs))
+	}
+	attemptClause := "1 = 0"
+	if len(attemptIDs) > 0 {
+		attemptClause = "attempt_id IN (" + sqldb.AppendInPlaceholders(&delEventArgs, attemptIDs) + ")"
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM events
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND %s
 		  AND (
-		    e.attempt_id = ANY($4::uuid[])
+		    %s
 		    OR (
-		      e.sequence > $5
+		      sequence > $3
 		      AND NOT EXISTS (
 		        SELECT 1
 		        FROM turn_attempts prev_a
@@ -325,33 +335,35 @@ func truncateCardHistoryFromTurnTx(
 		          ON prev_t.workspace_id = prev_a.workspace_id
 		         AND prev_t.card_id = prev_a.card_id
 		         AND prev_t.id = prev_a.turn_id
-		        WHERE prev_a.workspace_id = e.workspace_id
-		          AND prev_a.card_id = e.card_id
-		          AND prev_a.id = e.attempt_id
-		          AND prev_t.sequence < $6
+		        WHERE prev_a.workspace_id = events.workspace_id
+		          AND prev_a.card_id = events.card_id
+		          AND prev_a.id = events.attempt_id
+		          AND prev_t.sequence < $4
 		      )
 		      AND NOT EXISTS (
 		        SELECT 1
 		        FROM card_turns prev_t
-		        WHERE prev_t.workspace_id = e.workspace_id
-		          AND prev_t.card_id = e.card_id
-		          AND prev_t.source_event_id = e.id
-		          AND prev_t.sequence < $6
+		        WHERE prev_t.workspace_id = events.workspace_id
+		          AND prev_t.card_id = events.card_id
+		          AND prev_t.source_event_id = events.id
+		          AND prev_t.sequence < $4
 		      )
 		    )
 		  )
-	`, workspaceID, cardID, keepEventID, attemptIDs, cutoffEventSequence, turnSequence); err != nil {
+	`, keepClause, attemptClause), delEventArgs...); err != nil {
 		return err
 	}
 
 	if len(invocationIDs) > 0 {
-		if _, err := tx.Exec(ctx, `
+		invArgs := []any{workspaceID.String(), cardID.String()}
+		invIn := sqldb.AppendInPlaceholders(&invArgs, invocationIDs)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
 			DELETE FROM agent_session_events
 			WHERE app_name = 'cycledock'
 			  AND user_id = $1
 			  AND session_id = $2
 			  AND (
-			    invocation_id = ANY($3::text[])
+			    invocation_id IN (%s)
 			    OR sequence >= COALESCE(
 			      (
 			        SELECT MIN(ase.sequence)
@@ -359,33 +371,37 @@ func truncateCardHistoryFromTurnTx(
 			        WHERE ase.app_name = 'cycledock'
 			          AND ase.user_id = $1
 			          AND ase.session_id = $2
-			          AND ase.invocation_id = ANY($3::text[])
+			          AND ase.invocation_id IN (%s)
 			      ),
 			      9223372036854775807
 			    )
 			  )
-		`, workspaceID.String(), cardID.String(), invocationIDs); err != nil {
+		`, invIn, invIn), invArgs...); err != nil {
 			return err
 		}
 	}
 
 	if len(attemptIDs) > 0 {
-		if _, err := tx.Exec(ctx, `
+		updArgs := []any{workspaceID, cardID}
+		updIn := sqldb.AppendInPlaceholders(&updArgs, attemptIDs)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
 			UPDATE turn_attempts
 			SET retry_of_attempt_id = NULL
 			WHERE workspace_id = $1
 			  AND card_id = $2
-			  AND id = ANY($3::uuid[])
+			  AND id IN (%s)
 			  AND retry_of_attempt_id IS NOT NULL
-		`, workspaceID, cardID, attemptIDs); err != nil {
+		`, updIn), updArgs...); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
+		delArgs := []any{workspaceID, cardID}
+		delIn := sqldb.AppendInPlaceholders(&delArgs, attemptIDs)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
 			DELETE FROM turn_attempts
 			WHERE workspace_id = $1
 			  AND card_id = $2
-			  AND id = ANY($3::uuid[])
-		`, workspaceID, cardID, attemptIDs); err != nil {
+			  AND id IN (%s)
+		`, delIn), delArgs...); err != nil {
 			return err
 		}
 	}
@@ -400,35 +416,41 @@ func truncateCardHistoryFromTurnTx(
 	}
 
 	if cardKind == string(domain.CardKindTodo) {
+		// 在 Go 侧解析最新 status_change 目标状态，避免使用 PostgreSQL 专属 split_part()。
+		nextTodoState := "todo"
+		var latestTransition string
+		err := tx.QueryRow(ctx, `
+			SELECT content
+			FROM events
+			WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'status_change'
+			ORDER BY sequence DESC
+			LIMIT 1
+		`, workspaceID, cardID).Scan(&latestTransition)
+		if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			parts := strings.Split(latestTransition, " -> ")
+			if len(parts) >= 2 && (parts[1] == "todo" || parts[1] == "working" || parts[1] == "review") {
+				nextTodoState = parts[1]
+			} else {
+				nextTodoState = "working"
+			}
+		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE cards c
-			SET todo_state = COALESCE(
-			      (
-			        SELECT CASE
-			          WHEN split_part(transition.content, ' -> ', 2) IN ('todo', 'working', 'review')
-			            THEN split_part(transition.content, ' -> ', 2)
-			          ELSE 'working'
-			        END
-			        FROM events transition
-			        WHERE transition.workspace_id = c.workspace_id
-			          AND transition.card_id = c.id
-			          AND transition.event_type = 'status_change'
-			        ORDER BY transition.sequence DESC
-			        LIMIT 1
-			      ),
-			      'todo'
-			    ),
+			UPDATE cards
+			SET todo_state = $3,
 			    confirmation_round = (
 			      SELECT count(*)
 			      FROM events transition
-			      WHERE transition.workspace_id = c.workspace_id
-			        AND transition.card_id = c.id
+			      WHERE transition.workspace_id = cards.workspace_id
+			        AND transition.card_id = cards.id
 			        AND transition.event_type = 'status_change'
 			        AND transition.content IN ('todo -> working', 'review -> working', 'done -> working')
 			    ),
 			    updated_at = now()
-			WHERE c.workspace_id = $1 AND c.id = $2
-		`, workspaceID, cardID); err != nil {
+			WHERE workspace_id = $1 AND id = $2
+		`, workspaceID, cardID, nextTodoState); err != nil {
 			return err
 		}
 	}
@@ -488,7 +510,7 @@ func (s *Store) EditSessionCommentAndRerun(
 		  AND e.event_type = 'comment'
 		FOR UPDATE OF e, t
 	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventSequence, &turnID, &turnSequence, &turnSource)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return SubmitSessionCommentResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -586,7 +608,7 @@ func (s *Store) RegenerateSessionMessage(
 		WHERE workspace_id = $1 AND card_id = $2 AND id = $3
 		FOR UPDATE
 	`, p.WorkspaceID, p.CardID, p.EventID).Scan(&eventType, &eventSequence, &eventAttemptID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return SubmitSessionCommentResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -615,7 +637,7 @@ func (s *Store) RegenerateSessionMessage(
 			  AND a.id = $3
 			FOR UPDATE OF t
 		`, p.WorkspaceID, p.CardID, eventAttemptID.UUID).Scan(&turnID, &turnSequence, &sourceEventID)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return SubmitSessionCommentResult{}, domain.ErrNotFound
 		}
 		if err != nil {
@@ -627,7 +649,7 @@ func (s *Store) RegenerateSessionMessage(
 				FROM events
 				WHERE workspace_id = $1 AND card_id = $2 AND id = $3
 			`, p.WorkspaceID, p.CardID, sourceEventID.UUID).Scan(&cutoffEventSequence)
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sqldb.ErrNoRows) {
 				sourceEventID = uuid.NullUUID{}
 				cutoffEventSequence = eventSequence
 			} else if err != nil {
@@ -660,7 +682,7 @@ func (s *Store) RegenerateSessionMessage(
 			  AND t.source_event_id = $3
 			FOR UPDATE OF t
 		`, p.WorkspaceID, p.CardID, p.EventID).Scan(&turnID, &turnSequence)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return SubmitSessionCommentResult{}, domain.ErrNotFound
 		}
 		if err != nil {
@@ -833,7 +855,7 @@ func (s *Store) submitSessionComment(
 			  )
 			FOR UPDATE OF a
 		`, p.WorkspaceID, p.CardID, p.ReplyToAttemptID).Scan(&status)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return SubmitSessionCommentResult{}, domain.ErrAttemptNotCurrent
 		}
 		if err != nil {
@@ -850,7 +872,7 @@ func (s *Store) submitSessionComment(
 				WHERE workspace_id=$1 AND card_id=$2 AND attempt_id=$3
 				  AND id=$4 AND event_type='message'
 			`, p.WorkspaceID, p.CardID, p.ReplyToAttemptID, p.ChoiceMessageID).Scan(&payload)
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sqldb.ErrNoRows) {
 				return SubmitSessionCommentResult{}, fmt.Errorf("%w: choice message does not match attempt", domain.ErrConflict)
 			}
 			if err != nil {
@@ -987,7 +1009,7 @@ type existingSessionComment struct {
 
 func findSessionComment(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, sourceID uuid.UUID,
 	idempotencyKey string,
 ) (existingSessionComment, bool, error) {
@@ -1007,7 +1029,7 @@ func findSessionComment(
 	`, workspaceID, sourceID, idempotencyKey).Scan(
 		&out.EventID, &out.CardID, &out.TurnID, &out.RequestHash,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return existingSessionComment{}, false, nil
 	}
 	if err != nil {
@@ -1018,17 +1040,19 @@ func findSessionComment(
 
 func resolveAndBindCommentAttachmentsTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	attachmentIDs []uuid.UUID,
 ) ([]CommentAttachmentRef, error) {
 	now := time.Now().UTC()
-	rows, err := tx.Query(ctx, `
+	loadArgs := []any{workspaceID}
+	loadIn := sqldb.AppendInPlaceholders(&loadArgs, attachmentIDs)
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT id, card_id, kind, file_name, mime_type, size_bytes, stored_size_bytes, line_count, width, height, expires_at, purged_at
 		FROM workspace_attachments
-		WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+		WHERE workspace_id = $1 AND id IN (%s)
 		FOR UPDATE
-	`, workspaceID, attachmentIDs)
+	`, loadIn), loadArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("load comment attachments: %w", err)
 	}
@@ -1080,11 +1104,13 @@ func resolveAndBindCommentAttachmentsTx(
 	}
 
 	if len(unbindableIDs) > 0 {
-		if _, err := tx.Exec(ctx, `
+		bindArgs := []any{workspaceID, cardID}
+		bindIn := sqldb.AppendInPlaceholders(&bindArgs, unbindableIDs)
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
 			UPDATE workspace_attachments
-			SET card_id = $3
-			WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND card_id IS NULL
-		`, workspaceID, unbindableIDs, cardID); err != nil {
+			SET card_id = $2
+			WHERE workspace_id = $1 AND id IN (%s) AND card_id IS NULL
+		`, bindIn), bindArgs...); err != nil {
 			return nil, fmt.Errorf("bind comment attachments to card: %w", err)
 		}
 	}

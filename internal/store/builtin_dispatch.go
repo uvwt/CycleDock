@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // ClaimNextBuiltInAttempt 跨 Workspace 公平领取，租户并发额度在所有后端实例之间共享。
@@ -54,8 +54,16 @@ func (s *Store) ClaimNextBuiltInAttempt(
 	if err != nil {
 		return nil, err
 	}
-	workspaceIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
+	defer rows.Close()
+	var workspaceIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		workspaceIDs = append(workspaceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	for _, workspaceID := range workspaceIDs {
@@ -85,7 +93,7 @@ func (s *Store) claimBuiltInWorkspaceAttempt(
 		SELECT source_id FROM workspace_agent_settings
 		WHERE workspace_id=$1 FOR UPDATE SKIP LOCKED
 	`, workspaceID).Scan(&runnerSourceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {

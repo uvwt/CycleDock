@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type SessionAttemptView struct {
@@ -98,7 +98,7 @@ func (s *Store) GetAttemptView(
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return SessionAttemptView{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -157,7 +157,7 @@ func (s *Store) CurrentAttemptView(
 		&out.CurrentStage, &out.ProgressSummary,
 		&out.ErrorSummary, &out.CreatedAt, &startedAt, &finishedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -231,6 +231,17 @@ func (s *Store) listAttempts(
 	if limit < 0 || limit > 100 {
 		limit = 50
 	}
+	// SQLite 与 PostgreSQL 兼容的无上限/有上限与时间边界：
+	// 避免使用 PG 专属 LIMIT NULLIF(0, 0) 与 '-infinity'/'infinity'::timestamptz。
+	limitClause := ""
+	args := []any{workspaceID, cardID, oldestSequence, beforeSequence}
+	minTime := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	maxTime := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	args = append(args, minTime, maxTime)
+	if limit > 0 {
+		limitClause = "LIMIT $7"
+		args = append(args, limit)
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			a.id, a.turn_id, t.source_event_id, t.sequence, t.source, t.content, t.device_node_id, t.device_name,
@@ -276,13 +287,13 @@ func (s *Store) listAttempts(
 				SELECT 1 FROM events e
 				WHERE e.workspace_id=a.workspace_id AND e.card_id=a.card_id
 				  AND (e.attempt_id=a.id OR e.id=t.source_event_id)
-				  AND e.sequence >= $4 AND e.sequence < $5
+				  AND e.sequence >= $3 AND e.sequence < $4
 			)
 			OR (
 				t.source_event_id IS NULL
 				AND NOT EXISTS (SELECT 1 FROM events e WHERE e.workspace_id=a.workspace_id AND e.attempt_id=a.id)
-				AND a.created_at >= COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$4), '-infinity'::timestamptz)
-				AND a.created_at < COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$5), 'infinity'::timestamptz)
+				AND a.created_at >= COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$3), $5)
+				AND a.created_at < COALESCE((SELECT created_at FROM events WHERE workspace_id=$1 AND card_id=$2 AND sequence=$4), $6)
 			)
 		  )
 		  AND (
@@ -300,8 +311,8 @@ func (s *Store) listAttempts(
 			)
 		  )
 		ORDER BY COALESCE(a.finished_at, a.created_at) DESC, a.created_at DESC
-		LIMIT NULLIF($3, 0)
-	`, workspaceID, cardID, limit, oldestSequence, beforeSequence)
+		`+limitClause+`
+	`, args...)
 	if err != nil {
 		return nil, err
 	}

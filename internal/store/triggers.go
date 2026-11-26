@@ -15,11 +15,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 	"github.com/uvwt/CycleDock/internal/trigger"
 )
@@ -347,7 +346,7 @@ func (s *Store) CreateTrigger(
 		err := tx.QueryRow(ctx, `
 			SELECT project_id FROM cards WHERE workspace_id=$1 AND id=$2
 		`, workspaceID, targetCardID.UUID).Scan(&cardProjectID)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return WorkspaceTrigger{}, "", domain.ErrNotFound
 		}
 		if err != nil {
@@ -442,19 +441,24 @@ func (s *Store) ListTriggers(ctx context.Context, workspaceID uuid.UUID) ([]Work
 		       c.project_id,
 		       COALESCE(c.kind, ''),
 		       COALESCE(c.title, ''),
-		       COALESCE(ld.status, ''),
-		       COALESCE(ld.reason, ''),
-		       ld.received_at
+		       COALESCE((
+		         SELECT d.status FROM trigger_deliveries d
+		         WHERE d.workspace_id = t.workspace_id AND d.trigger_id = t.id
+		         ORDER BY d.received_at DESC LIMIT 1
+		       ), ''),
+		       COALESCE((
+		         SELECT d.reason FROM trigger_deliveries d
+		         WHERE d.workspace_id = t.workspace_id AND d.trigger_id = t.id
+		         ORDER BY d.received_at DESC LIMIT 1
+		       ), ''),
+		       (
+		         SELECT d.received_at FROM trigger_deliveries d
+		         WHERE d.workspace_id = t.workspace_id AND d.trigger_id = t.id
+		         ORDER BY d.received_at DESC LIMIT 1
+		       )
 		FROM workspace_triggers t
 		LEFT JOIN projects p ON p.workspace_id = t.workspace_id AND p.id = t.target_project_id
 		LEFT JOIN cards c ON c.workspace_id = t.workspace_id AND c.id = t.target_card_id
-		LEFT JOIN LATERAL (
-			SELECT d.status, d.reason, d.received_at
-			FROM trigger_deliveries d
-			WHERE d.workspace_id = t.workspace_id AND d.trigger_id = t.id
-			ORDER BY d.received_at DESC
-			LIMIT 1
-		) ld ON true
 		WHERE t.workspace_id=$1
 		ORDER BY t.created_at DESC
 	`, workspaceID)
@@ -594,7 +598,7 @@ func (s *Store) UpdateTrigger(
 		err := tx.QueryRow(ctx, `
 			SELECT project_id FROM cards WHERE workspace_id=$1 AND id=$2
 		`, workspaceID, current.TargetCardID.UUID).Scan(&cardProjectID)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return WorkspaceTrigger{}, domain.ErrNotFound
 		}
 		if err != nil {
@@ -811,12 +815,14 @@ func (s *Store) attachDeliveryLinkedCards(
 		for id := range turnIDSet {
 			turnIDs = append(turnIDs, id)
 		}
-		rows, err := s.pool.Query(ctx, `
+		turnArgs := []any{workspaceID}
+		turnIn := sqldb.AppendInPlaceholders(&turnArgs, turnIDs)
+		rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 			SELECT ct.id, c.id, c.project_id, c.kind, c.title
 			FROM card_turns ct
 			JOIN cards c ON c.workspace_id = ct.workspace_id AND c.id = ct.card_id
-			WHERE ct.workspace_id = $1 AND ct.id = ANY($2::uuid[])
-		`, workspaceID, turnIDs)
+			WHERE ct.workspace_id = $1 AND ct.id IN (%s)
+		`, turnIn), turnArgs...)
 		if err != nil {
 			return err
 		}
@@ -843,11 +849,13 @@ func (s *Store) attachDeliveryLinkedCards(
 		for id := range cardIDSet {
 			cardIDs = append(cardIDs, id)
 		}
-		rows, err := s.pool.Query(ctx, `
+		cardArgs := []any{workspaceID}
+		cardIn := sqldb.AppendInPlaceholders(&cardArgs, cardIDs)
+		rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 			SELECT id, project_id, kind, title
 			FROM cards
-			WHERE workspace_id = $1 AND id = ANY($2::uuid[])
-		`, workspaceID, cardIDs)
+			WHERE workspace_id = $1 AND id IN (%s)
+		`, cardIn), cardArgs...)
 		if err != nil {
 			return err
 		}
@@ -992,7 +1000,7 @@ func (s *Store) ProcessVerifiedWebhookDelivery(
 		RETURNING id
 	`, deliveryRowID, lockedTrig.WorkspaceID, lockedTrig.ID, deliveryID, string(lockedTrig.Provider),
 		event.EventType, event.Action, matchKeys, summary, now).Scan(&insertedID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		existing, loadErr := loadVerifiedDelivery(ctx, tx, lockedTrig.WorkspaceID, lockedTrig.ID, deliveryID)
 		if loadErr != nil {
 			return WebhookProcessResult{}, loadErr
@@ -1210,7 +1218,7 @@ func (s *Store) ProcessVerifiedWebhookDelivery(
 				Kind:                  string(domain.CardKindTodo),
 				Title:                 title,
 				Description:           envelope,
-				TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+				TodoState:             sqldb.Text{String: string(domain.TodoStateTodo), Valid: true},
 				RequiredConfirmations: 1,
 				CreatedBySourceID:     creatorSourceID,
 			})
@@ -1286,7 +1294,7 @@ func (s *Store) ProcessVerifiedWebhookDelivery(
 	}, nil
 }
 
-func isCardRunnableTx(ctx context.Context, tx pgx.Tx, workspaceID, cardID uuid.UUID) (bool, error) {
+func isCardRunnableTx(ctx context.Context, tx *sqldb.Tx, workspaceID, cardID uuid.UUID) (bool, error) {
 	var runnable bool
 	err := tx.QueryRow(ctx, `
 		SELECT (
@@ -1297,13 +1305,13 @@ func isCardRunnableTx(ctx context.Context, tx pgx.Tx, workspaceID, cardID uuid.U
 		FROM cards
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, cardID).Scan(&runnable)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return false, nil
 	}
 	return runnable, err
 }
 
-func resolveTriggerCardCreatorSourceTx(ctx context.Context, tx pgx.Tx, trig WorkspaceTrigger) (uuid.UUID, error) {
+func resolveTriggerCardCreatorSourceTx(ctx context.Context, tx *sqldb.Tx, trig WorkspaceTrigger) (uuid.UUID, error) {
 	if trig.CreatedBySourceID.Valid {
 		return trig.CreatedBySourceID.UUID, nil
 	}
@@ -1314,7 +1322,7 @@ func resolveTriggerCardCreatorSourceTx(ctx context.Context, tx pgx.Tx, trig Work
 	if err == nil {
 		return sourceID, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, err
 	}
 	err = tx.QueryRow(ctx, `
@@ -1347,13 +1355,13 @@ func truncateTriggerSummary(s string, maxRunes int) string {
 }
 
 type triggerQueryRow interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	QueryRow(ctx context.Context, sql string, args ...any) *sqldb.Row
 }
 
 func loadTriggerRow(ctx context.Context, q triggerQueryRow, query string, args ...any) (WorkspaceTrigger, error) {
 	row := q.QueryRow(ctx, query, args...)
 	item, err := scanTrigger(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return WorkspaceTrigger{}, domain.ErrNotFound
 	}
 	return item, err
@@ -1396,7 +1404,7 @@ func scanTrigger(row scannableRow) (WorkspaceTrigger, error) {
 
 func loadVerifiedDelivery(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, triggerID uuid.UUID,
 	deliveryID string,
 ) (TriggerDelivery, error) {

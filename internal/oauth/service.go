@@ -14,12 +14,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -45,7 +43,7 @@ type Config struct {
 }
 
 type Service struct {
-	pool       *pgxpool.Pool
+	pool       *sqldb.DB
 	queries    *db.Queries
 	issuer     string
 	resource   string
@@ -119,7 +117,7 @@ type TokenIdentity struct {
 	ExpiresAt   time.Time
 }
 
-func New(pool *pgxpool.Pool, config Config) (*Service, error) {
+func New(pool *sqldb.DB, config Config) (*Service, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("%w: database pool is required", ErrInvalidConfig)
 	}
@@ -195,7 +193,7 @@ func (s *Service) RegisterClient(ctx context.Context, name string, redirectURIs 
 
 func (s *Service) GetClient(ctx context.Context, clientID string) (Client, error) {
 	row, err := s.queries.GetOAuthClient(ctx, strings.TrimSpace(clientID))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return Client{}, ErrInvalidClient
 	}
 	if err != nil {
@@ -274,7 +272,7 @@ func (s *Service) Authorize(
 	// 同一 Workspace + OAuth Client 的授权串行化。这样重复授权只复用一条
 	// oauth_client Source，不会因为并发浏览器批准留下孤立 Source。
 	lockKey := "cycledock/oauth/" + human.WorkspaceID.String() + "/" + client.ID
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
+	if err := tx.AdvisoryLock(ctx, lockKey); err != nil {
 		return AuthorizationCode{}, fmt.Errorf("lock oauth authorization: %w", err)
 	}
 
@@ -282,7 +280,7 @@ func (s *Service) Authorize(
 	membership, err := q.GetOAuthHumanMembership(ctx, db.GetOAuthHumanMembershipParams{
 		WorkspaceID: human.WorkspaceID, HumanAccountID: human.HumanAccountID, SourceID: human.SourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return AuthorizationCode{}, ErrAuthorizationDenied
 	}
 	if err != nil {
@@ -317,7 +315,7 @@ func (s *Service) Authorize(
 		if err != nil {
 			return AuthorizationCode{}, fmt.Errorf("refresh oauth grant approval: %w", err)
 		}
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sqldb.ErrNoRows):
 		source, createErr := q.CreateSource(ctx, db.CreateSourceParams{
 			ID: uuid.New(), WorkspaceID: human.WorkspaceID,
 			Kind: string(domain.SourceKindOAuthClient), Name: client.Name,
@@ -348,7 +346,7 @@ func (s *Service) Authorize(
 		CodeDigest: codeDigest[:], GrantID: grant.ID,
 		RedirectUri: request.RedirectURI, CodeChallenge: request.CodeChallenge,
 		Scope: request.Scope, Resource: s.resource,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt: sqldb.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
 		return AuthorizationCode{}, fmt.Errorf("create oauth authorization code: %w", err)
 	}
@@ -381,7 +379,7 @@ func (s *Service) ExchangeCode(ctx context.Context, request CodeTokenRequest) (T
 	q := db.New(tx)
 
 	code, err := q.GetOAuthAuthorizationCodeForUpdate(ctx, codeDigest[:])
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return TokenSet{}, ErrInvalidGrant
 	}
 	if err != nil {
@@ -432,7 +430,7 @@ func (s *Service) Refresh(ctx context.Context, request RefreshTokenRequest) (Tok
 	q := db.New(tx)
 
 	current, err := q.GetOAuthRefreshTokenForUpdate(ctx, refreshDigest[:])
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return TokenSet{}, ErrInvalidGrant
 	}
 	if err != nil {
@@ -479,7 +477,7 @@ func (s *Service) AuthenticateAccessToken(ctx context.Context, rawToken string) 
 	}
 	digest := sha256.Sum256([]byte(rawToken))
 	row, err := s.queries.GetOAuthAccessTokenIdentity(ctx, digest[:])
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return TokenIdentity{}, ErrInvalidToken
 	}
 	if err != nil {
@@ -517,8 +515,8 @@ func (s *Service) issueTokenSet(
 	if err := q.CreateOAuthToken(ctx, db.CreateOAuthTokenParams{
 		ID: uuid.New(), GrantID: grantID, FamilyID: familyID,
 		AccessTokenDigest: accessDigest[:], RefreshTokenDigest: refreshDigest[:],
-		AccessExpiresAt:  pgtype.Timestamptz{Time: accessExpiresAt, Valid: true},
-		RefreshExpiresAt: pgtype.Timestamptz{Time: refreshExpiresAt, Valid: true},
+		AccessExpiresAt:  sqldb.Timestamptz{Time: accessExpiresAt, Valid: true},
+		RefreshExpiresAt: sqldb.Timestamptz{Time: refreshExpiresAt, Valid: true},
 	}); err != nil {
 		return TokenSet{}, fmt.Errorf("create oauth token: %w", err)
 	}

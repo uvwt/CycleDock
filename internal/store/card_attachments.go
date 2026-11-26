@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -87,7 +86,7 @@ func (s *Store) CreateTodoCardWithAttachmentsAndOptions(
 		Kind:                  string(domain.CardKindTodo),
 		Title:                 title,
 		Description:           description,
-		TodoState:             pgtype.Text{String: string(domain.TodoStateTodo), Valid: true},
+		TodoState:             sqldb.Text{String: string(domain.TodoStateTodo), Valid: true},
 		SourceDiscussionID:    sourceDiscussionID,
 		RequiredConfirmations: requiredConfirmations,
 		CreatedBySourceID:     sourceID,
@@ -158,7 +157,7 @@ func (s *Store) ListCardAttachments(
 }
 
 type cardAttachmentQueryer interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Query(ctx context.Context, sql string, args ...any) (*sqldb.Rows, error)
 }
 
 func listCardAttachmentsTx(
@@ -246,12 +245,14 @@ func (s *Store) AttachmentStatuses(
 	if workspaceID == uuid.Nil || len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.pool.Query(ctx, `
+	args := []any{workspaceID}
+	inClause := sqldb.AppendInPlaceholders(&args, ids)
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, expires_at, purged_at
 		FROM workspace_attachments
 		WHERE workspace_id = $1
-		  AND id = ANY($2::uuid[])
-	`, workspaceID, ids)
+		  AND id IN (%s)
+	`, inClause), args...)
 	if err != nil {
 		return nil, fmt.Errorf("load attachment statuses: %w", err)
 	}

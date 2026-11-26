@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/google/uuid"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -76,21 +79,28 @@ func (api *API) applySupervisorNotificationSuppression(
 		return nil
 	}
 
-	rows, err := api.pool.Query(ctx, `
-WITH target_cards AS (
-  SELECT card_id, event_seq
-  FROM unnest($2::uuid[], $3::bigint[]) AS u(card_id, event_seq)
-)
+	// 按目标卡片逐条查询通知静默判定所需的标准 SQL 事实（PG / SQLite 公共子集，不依赖 unnest / LATERAL / jsonb ->>）。
+	// 工作空间内单次更新涉及的活跃卡片数量有限，标量主键查询均走主键与复合索引。
+	for i, cardID := range cardIDs {
+		seq := eventSeqs[i]
+		var (
+			facts  cardNotificationFacts
+			msgRaw []byte
+		)
+		err := api.pool.QueryRow(ctx, `
 SELECT
   c.id,
   c.kind,
   COALESCE(c.todo_state, ''),
   c.confirmation_round,
   COALESCE(ev.event_type, ''),
-  COALESCE(ev.message->>'type', ''),
-  tc.event_seq,
+  ev.message,
   ev.attempt_id,
-  COALESCE(ap.pending, 0),
+  (
+    SELECT COUNT(*)
+    FROM card_tool_approvals ap
+    WHERE ap.workspace_id = c.workspace_id AND ap.card_id = c.id AND ap.status = 'pending'
+  ),
   COALESCE(ma.status, ''),
   COALESCE(mt.source, ''),
   COALESCE(mt.idempotency_key, ''),
@@ -103,103 +113,70 @@ SELECT
     WHERE ma.turn_id IS NOT NULL
       AND rcd.turn_id = ma.turn_id
       AND rc.enabled = true
-  ) AS from_remote_channel,
-  COALESCE(rv.sequence, 0),
-  rv.attempt_id,
-  sup.id,
-  COALESCE(sup.notifications_muted, false),
-  EXISTS (
-    SELECT 1
-    FROM card_turns ct
-    WHERE sup.id IS NOT NULL
-      AND ct.workspace_id = c.workspace_id
-      AND ct.card_id = sup.id
-      AND ct.source = 'system'
-      AND ct.cancelled_at IS NULL
-      AND ct.idempotency_key = CASE
-        WHEN c.confirmation_round > 1 THEN
-          'supervisor-callback:' || c.id::text || ':review:' || c.id::text || ':round:' || c.confirmation_round::text
-        ELSE
-          'supervisor-callback:' || c.id::text || ':review:' || c.id::text
-      END
-  ) AS has_review_callback,
-  EXISTS (
-    SELECT 1
-    FROM card_turns ct
-    WHERE sup.id IS NOT NULL
-      AND ev.attempt_id IS NOT NULL
-      AND ct.workspace_id = c.workspace_id
-      AND ct.card_id = sup.id
-      AND ct.source = 'system'
-      AND ct.cancelled_at IS NULL
-      AND ct.idempotency_key = 'supervisor-callback:' || c.id::text || ':attempt:' || ev.attempt_id::text
-  ) AS has_failure_callback
-FROM target_cards tc
-JOIN cards c
-  ON c.workspace_id = $1 AND c.id = tc.card_id
+  ),
+  COALESCE((
+    SELECT rv.sequence
+    FROM events rv
+    WHERE c.kind = 'todo' AND c.todo_state = 'review'
+      AND rv.workspace_id = c.workspace_id
+      AND rv.card_id = c.id
+      AND rv.event_type = 'status_change'
+      AND rv.content = 'working -> review'
+    ORDER BY rv.sequence DESC
+    LIMIT 1
+  ), 0),
+  (
+    SELECT rv.attempt_id
+    FROM events rv
+    WHERE c.kind = 'todo' AND c.todo_state = 'review'
+      AND rv.workspace_id = c.workspace_id
+      AND rv.card_id = c.id
+      AND rv.event_type = 'status_change'
+      AND rv.content = 'working -> review'
+    ORDER BY rv.sequence DESC
+    LIMIT 1
+  ),
+  COALESCE(
+    (
+      SELECT d.id
+      FROM cards d
+      WHERE c.kind IN ('todo', 'ongoing')
+        AND c.source_discussion_id IS NOT NULL
+        AND d.workspace_id = c.workspace_id
+        AND d.id = c.source_discussion_id
+        AND d.kind = 'discussion'
+        AND d.discussion_state = 'active'
+      LIMIT 1
+    ),
+    (
+      SELECT d.id
+      FROM cards d
+      WHERE c.kind IN ('todo', 'ongoing')
+        AND p.main_discussion_id IS NOT NULL
+        AND d.workspace_id = c.workspace_id
+        AND d.id = p.main_discussion_id
+        AND d.kind = 'discussion'
+        AND d.discussion_state = 'active'
+      LIMIT 1
+    )
+  )
+FROM cards c
 LEFT JOIN projects p
   ON p.workspace_id = c.workspace_id AND p.id = c.project_id
 LEFT JOIN events ev
-  ON ev.workspace_id = c.workspace_id AND ev.card_id = c.id AND ev.sequence = tc.event_seq
+  ON ev.workspace_id = c.workspace_id AND ev.card_id = c.id AND ev.sequence = $3
 LEFT JOIN turn_attempts ma
   ON ma.workspace_id = c.workspace_id AND ma.card_id = c.id AND ma.id = ev.attempt_id
 LEFT JOIN card_turns mt
   ON mt.workspace_id = c.workspace_id AND mt.card_id = c.id AND mt.id = ma.turn_id
-LEFT JOIN LATERAL (
-  SELECT COUNT(*)::int AS pending
-  FROM card_tool_approvals
-  WHERE workspace_id = c.workspace_id AND card_id = c.id AND status = 'pending'
-) ap ON true
-LEFT JOIN LATERAL (
-  SELECT sequence, attempt_id
-  FROM events
-  WHERE workspace_id = c.workspace_id
-    AND card_id = c.id
-    AND event_type = 'status_change'
-    AND content = 'working -> review'
-  ORDER BY sequence DESC
-  LIMIT 1
-) rv ON c.kind = 'todo' AND c.todo_state = 'review'
-LEFT JOIN LATERAL (
-  -- 监督目标解析与 store.supervisorDiscussionID 保持严格一致：
-  -- 优先选择活跃的 source_discussion_id，否则回退到活跃的项目 main_discussion_id。
-  SELECT s.id, s.notifications_muted
-  FROM (
-    SELECT 1 AS priority, d.id, d.notifications_muted
-    FROM cards d
-    WHERE c.source_discussion_id IS NOT NULL
-      AND d.workspace_id = c.workspace_id
-      AND d.id = c.source_discussion_id
-      AND d.kind = 'discussion'
-      AND d.discussion_state = 'active'
-    UNION ALL
-    SELECT 2 AS priority, d.id, d.notifications_muted
-    FROM cards d
-    WHERE p.main_discussion_id IS NOT NULL
-      AND d.workspace_id = c.workspace_id
-      AND d.id = p.main_discussion_id
-      AND d.kind = 'discussion'
-      AND d.discussion_state = 'active'
-  ) s
-  ORDER BY s.priority ASC
-  LIMIT 1
-) sup ON c.kind IN ('todo', 'ongoing')
-`, workspaceID, cardIDs, eventSeqs)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var facts cardNotificationFacts
-		if err := rows.Scan(
+WHERE c.workspace_id = $1 AND c.id = $2
+`, workspaceID, cardID, seq).Scan(
 			&facts.CardID,
 			&facts.Kind,
 			&facts.TodoState,
 			&facts.ConfirmationRound,
 			&facts.EventType,
-			&facts.MessageType,
-			&facts.MessageSeq,
+			&msgRaw,
 			&facts.MessageAttemptID,
 			&facts.PendingApprovalCount,
 			&facts.MessageAttemptStatus,
@@ -210,17 +187,66 @@ LEFT JOIN LATERAL (
 			&facts.ReviewEventSeq,
 			&facts.ReviewAttemptID,
 			&facts.SupervisorID,
-			&facts.SupervisorMuted,
-			&facts.HasReviewCallback,
-			&facts.HasFailureCallback,
-		); err != nil {
+		)
+		if errors.Is(err, sqldb.ErrNoRows) {
+			continue
+		}
+		if err != nil {
 			return err
+		}
+		facts.MessageSeq = seq
+		if len(msgRaw) > 0 {
+			var meta struct {
+				Type string `json:"type"`
+			}
+			_ = json.Unmarshal(msgRaw, &meta)
+			facts.MessageType = meta.Type
+		}
+		if facts.SupervisorID.Valid {
+			reviewKey := "supervisor-callback:" + facts.CardID.String() + ":review:" + facts.CardID.String()
+			if facts.ConfirmationRound > 1 {
+				reviewKey += ":round:" + strconv.FormatInt(facts.ConfirmationRound, 10)
+			}
+			failureKey := ""
+			if facts.MessageAttemptID.Valid {
+				failureKey = "supervisor-callback:" + facts.CardID.String() + ":attempt:" + facts.MessageAttemptID.UUID.String()
+			}
+			err = api.pool.QueryRow(ctx, `
+SELECT
+  COALESCE(sup.notifications_muted, false),
+  EXISTS (
+    SELECT 1 FROM card_turns ct
+    WHERE ct.workspace_id = $1
+      AND ct.card_id = $2
+      AND ct.source = 'system'
+      AND ct.cancelled_at IS NULL
+      AND ct.idempotency_key = $3
+  ),
+  EXISTS (
+    SELECT 1 FROM card_turns ct
+    WHERE $4 <> ''
+      AND ct.workspace_id = $1
+      AND ct.card_id = $2
+      AND ct.source = 'system'
+      AND ct.cancelled_at IS NULL
+      AND ct.idempotency_key = $4
+  )
+FROM cards sup
+WHERE sup.workspace_id = $1 AND sup.id = $2
+`, workspaceID, facts.SupervisorID.UUID, reviewKey, failureKey).Scan(
+				&facts.SupervisorMuted,
+				&facts.HasReviewCallback,
+				&facts.HasFailureCallback,
+			)
+			if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
+				return err
+			}
 		}
 		if idx, ok := indexByCard[facts.CardID]; ok {
 			updates[idx].NotificationSuppressed = isSupervisorNotificationSuppressed(facts)
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // isSupervisorNotificationSuppressed 执行 Web Push / 桌面通知的静默收口规则：

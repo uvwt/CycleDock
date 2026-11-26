@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -36,7 +35,7 @@ func (s *Store) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]db.P
 		WHERE id = $1
 		FOR UPDATE
 	`, workspaceID).Scan(&lockedWorkspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return []db.Project{}, nil
 	}
 	if err != nil {
@@ -68,7 +67,7 @@ func (s *Store) ListProjects(ctx context.Context, workspaceID uuid.UUID) ([]db.P
 
 func (s *Store) GetProject(ctx context.Context, workspaceID, projectID uuid.UUID) (db.Project, error) {
 	project, err := s.queries.GetProject(ctx, db.GetProjectParams{WorkspaceID: workspaceID, ID: projectID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Project{}, domain.ErrNotFound
 	}
 	return project, err
@@ -85,7 +84,7 @@ func (s *Store) UpdateProject(
 		WorkspaceID: workspaceID,
 		ID:          projectID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Project{}, domain.ErrNotFound
 	}
 	return project, err
@@ -237,7 +236,7 @@ func (s *Store) UpdateCardText(
 		WorkspaceID: workspaceID,
 		ID:          cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	if err == nil {
@@ -261,16 +260,16 @@ func (s *Store) SetCardPinned(
 			return db.Card{}, fmt.Errorf("%w: main discussion is always pinned", domain.ErrConflict)
 		}
 	}
-	var pinnedAt pgtype.Timestamptz
+	var pinnedAt sqldb.Timestamptz
 	if pinned {
-		pinnedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+		pinnedAt = sqldb.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	}
 	card, err := s.queries.SetCardPinned(ctx, db.SetCardPinnedParams{
 		PinnedAt:    pinnedAt,
 		WorkspaceID: workspaceID,
 		ID:          cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	if err == nil {
@@ -290,7 +289,7 @@ func (s *Store) SetCardNotificationsMuted(
 		WorkspaceID:        workspaceID,
 		ID:                 cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, domain.ErrNotFound
 	}
 	if err == nil {
@@ -314,7 +313,7 @@ func (s *Store) LatestCheckin(ctx context.Context, workspaceID, cardID uuid.UUID
 		WorkspaceID: workspaceID,
 		CardID:      cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -356,7 +355,7 @@ func (s *Store) ListCardTimelineBefore(
 	return s.queries.ListCardTimelineBefore(ctx, db.ListCardTimelineBeforeParams{
 		WorkspaceID:    workspaceID,
 		CardID:         cardID,
-		BeforeSequence: pgtype.Int8{Int64: beforeSequence, Valid: true},
+		BeforeSequence: sqldb.Int8{Int64: beforeSequence, Valid: true},
 		PageLimit:      limit,
 	})
 }
@@ -408,7 +407,7 @@ func (s *Store) UpdateSchedule(ctx context.Context, p UpdateScheduleParams) (Car
 		TimeOfDay:       scheduleTimeValue(p.Rule.Frequency, p.Rule.Hour, p.Rule.Minute),
 		IntervalMinutes: intervalMinutesValue(p.Rule.IntervalMinutes),
 		Timezone:        p.Rule.Timezone,
-		NextTriggerAt:   pgtype.Timestamptz{Time: next, Valid: true},
+		NextTriggerAt:   sqldb.Timestamptz{Time: next, Valid: true},
 		WorkspaceID:     p.WorkspaceID,
 		CardID:          p.CardID,
 		ID:              p.ScheduleID,
@@ -449,7 +448,7 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 		CardID:      cardID,
 		ID:          scheduleID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		return err
@@ -491,32 +490,32 @@ func (s *Store) DeleteSchedule(ctx context.Context, workspaceID, cardID, schedul
 	return nil
 }
 
-func weekdayValue(day *time.Weekday) pgtype.Int2 {
+func weekdayValue(day *time.Weekday) sqldb.Int2 {
 	if day == nil {
-		return pgtype.Int2{}
+		return sqldb.Int2{}
 	}
-	return pgtype.Int2{Int16: int16(*day), Valid: true}
+	return sqldb.Int2{Int16: int16(*day), Valid: true}
 }
 
-func dayOfMonthValue(day *int) pgtype.Int2 {
+func dayOfMonthValue(day *int) sqldb.Int2 {
 	if day == nil {
-		return pgtype.Int2{}
+		return sqldb.Int2{}
 	}
-	return pgtype.Int2{Int16: int16(*day), Valid: true}
+	return sqldb.Int2{Int16: int16(*day), Valid: true}
 }
 
-func intervalMinutesValue(minutes *int) pgtype.Int4 {
+func intervalMinutesValue(minutes *int) sqldb.Int4 {
 	if minutes == nil {
-		return pgtype.Int4{}
+		return sqldb.Int4{}
 	}
-	return pgtype.Int4{Int32: int32(*minutes), Valid: true}
+	return sqldb.Int4{Int32: int32(*minutes), Valid: true}
 }
 
-func scheduleTimeValue(freq domain.ScheduleFrequency, hour, minute int) pgtype.Time {
+func scheduleTimeValue(freq domain.ScheduleFrequency, hour, minute int) sqldb.Time {
 	if freq == domain.ScheduleInterval {
-		return pgtype.Time{}
+		return sqldb.Time{}
 	}
 	micros := int64(hour)*int64(time.Hour/time.Microsecond) +
 		int64(minute)*int64(time.Minute/time.Microsecond)
-	return pgtype.Time{Microseconds: micros, Valid: true}
+	return sqldb.Time{Microseconds: micros, Valid: true}
 }

@@ -4,80 +4,34 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/session/sessiontestsuite"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
-var integrationPool *pgxpool.Pool
+var integrationPool *sqldb.DB
 
 func TestMain(m *testing.M) {
 	os.Exit(runSessionTests(m))
 }
 
 func runSessionTests(m *testing.M) int {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		return m.Run()
-	}
-
-	adminPool, err := pgxpool.New(context.Background(), databaseURL)
+	pool, cleanup, err := testdb.SetupPackagePool("agentsession")
 	if err != nil {
 		panic(err)
 	}
-	defer adminPool.Close()
-	// 集成测试必须在独立临时 schema 中执行迁移与清表，严禁污染或清空开发库 public schema。
-	schema := "agentsession_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if _, err := adminPool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			panic(err)
-		}
-	}()
-
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*config.ConnConfig)
-	defer sqlDB.Close()
-
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		panic(err)
-	}
-	if err := goose.Up(sqlDB, migrations); err != nil {
-		panic(err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
-	if err != nil {
-		panic(err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		panic(err)
-	}
-	defer pool.Close()
+	defer cleanup()
 	integrationPool = pool
 
 	return m.Run()
@@ -570,10 +524,12 @@ func TestPostgresServiceNormalizesUnsupportedUnicodeWithoutCorruptingValidText(t
 	appName, userID, sessionID := Identity(workspaceID, cardID)
 
 	// 先验证真实 PostgreSQL jsonb 对未规范化的 \u0000 确实拒绝并返回 SQLSTATE 22P05。
-	var rejected string
-	rawNullJSONErr := integrationPool.QueryRow(ctx, `SELECT '{"stdout":"before\u0000after"}'::jsonb::text`).Scan(&rejected)
-	if rawNullJSONErr == nil || !strings.Contains(rawNullJSONErr.Error(), "22P05") {
-		t.Fatalf("expected PostgreSQL jsonb to reject \\u0000 with SQLSTATE 22P05, got: %v", rawNullJSONErr)
+	if integrationPool.IsPostgres() {
+		var rejected string
+		rawNullJSONErr := integrationPool.QueryRow(ctx, `SELECT '{"stdout":"before\u0000after"}'::jsonb::text`).Scan(&rejected)
+		if rawNullJSONErr == nil || !strings.Contains(rawNullJSONErr.Error(), "22P05") {
+			t.Fatalf("expected PostgreSQL jsonb to reject \\u0000 with SQLSTATE 22P05, got: %v", rawNullJSONErr)
+		}
 	}
 
 	created, err := service.Create(ctx, &session.CreateRequest{
@@ -697,14 +653,5 @@ func requirePostgresService(t *testing.T) *PostgresService {
 
 func resetAgentSessions(t *testing.T) {
 	t.Helper()
-	if _, err := integrationPool.Exec(context.Background(), `
-		TRUNCATE TABLE
-			agent_session_events,
-			agent_sessions,
-			agent_user_state,
-			agent_app_state
-		RESTART IDENTITY CASCADE
-	`); err != nil {
-		t.Fatalf("reset agent sessions: %v", err)
-	}
+	testdb.TruncateAll(t, integrationPool)
 }

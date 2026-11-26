@@ -105,10 +105,10 @@ LEFT JOIN workspace_api_credentials ac
 WHERE r.workspace_id = sqlc.arg(workspace_id)
 ORDER BY r.position, r.id;
 
--- name: DeleteRemovedWorkspaceModelRoutes :exec
+-- name: DeleteWorkspaceModelRoute :exec
 DELETE FROM workspace_model_routes
 WHERE workspace_id = sqlc.arg(workspace_id)
-  AND NOT (id = ANY(sqlc.arg(keep_ids)::uuid[]));
+  AND id = sqlc.arg(id);
 
 -- name: ShiftWorkspaceModelRoutePositions :exec
 UPDATE workspace_model_routes

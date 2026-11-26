@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const consumeWebAuthFlow = `-- name: ConsumeWebAuthFlow :one
@@ -59,10 +59,10 @@ RETURNING id, display_name, email_snapshot, is_local_admin, created_at, updated_
 `
 
 type CreateHumanAccountParams struct {
-	ID            uuid.UUID   `json:"id"`
-	DisplayName   string      `json:"display_name"`
-	EmailSnapshot pgtype.Text `json:"email_snapshot"`
-	IsLocalAdmin  bool        `json:"is_local_admin"`
+	ID            uuid.UUID  `json:"id"`
+	DisplayName   string     `json:"display_name"`
+	EmailSnapshot sqldb.Text `json:"email_snapshot"`
+	IsLocalAdmin  bool       `json:"is_local_admin"`
 }
 
 func (q *Queries) CreateHumanAccount(ctx context.Context, arg CreateHumanAccountParams) (HumanAccount, error) {
@@ -111,10 +111,10 @@ VALUES (
 `
 
 type CreateWebAuthFlowParams struct {
-	StateDigest  []byte             `json:"state_digest"`
-	CodeVerifier string             `json:"code_verifier"`
-	Nonce        string             `json:"nonce"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	StateDigest  []byte            `json:"state_digest"`
+	CodeVerifier string            `json:"code_verifier"`
+	Nonce        string            `json:"nonce"`
+	ExpiresAt    sqldb.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreateWebAuthFlow(ctx context.Context, arg CreateWebAuthFlowParams) error {
@@ -138,12 +138,12 @@ VALUES (
 `
 
 type CreateWebSessionParams struct {
-	ID             uuid.UUID          `json:"id"`
-	HumanAccountID uuid.UUID          `json:"human_account_id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	TokenDigest    []byte             `json:"token_digest"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ID             uuid.UUID         `json:"id"`
+	HumanAccountID uuid.UUID         `json:"human_account_id"`
+	WorkspaceID    uuid.UUID         `json:"workspace_id"`
+	SourceID       uuid.UUID         `json:"source_id"`
+	TokenDigest    []byte            `json:"token_digest"`
+	ExpiresAt      sqldb.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreateWebSession(ctx context.Context, arg CreateWebSessionParams) error {
@@ -278,15 +278,15 @@ LIMIT 1
 `
 
 type GetLocalAdminIdentityRow struct {
-	HumanAccountID uuid.UUID   `json:"human_account_id"`
-	DisplayName    string      `json:"display_name"`
-	EmailSnapshot  pgtype.Text `json:"email_snapshot"`
-	WorkspaceID    uuid.UUID   `json:"workspace_id"`
-	SourceID       uuid.UUID   `json:"source_id"`
-	Role           string      `json:"role"`
-	WorkspaceName  string      `json:"workspace_name"`
-	SourceName     string      `json:"source_name"`
-	SourceKind     string      `json:"source_kind"`
+	HumanAccountID uuid.UUID  `json:"human_account_id"`
+	DisplayName    string     `json:"display_name"`
+	EmailSnapshot  sqldb.Text `json:"email_snapshot"`
+	WorkspaceID    uuid.UUID  `json:"workspace_id"`
+	SourceID       uuid.UUID  `json:"source_id"`
+	Role           string     `json:"role"`
+	WorkspaceName  string     `json:"workspace_name"`
+	SourceName     string     `json:"source_name"`
+	SourceKind     string     `json:"source_kind"`
 }
 
 func (q *Queries) GetLocalAdminIdentity(ctx context.Context) (GetLocalAdminIdentityRow, error) {
@@ -338,15 +338,15 @@ type GetOIDCPersonalIdentityParams struct {
 }
 
 type GetOIDCPersonalIdentityRow struct {
-	HumanAccountID uuid.UUID   `json:"human_account_id"`
-	DisplayName    string      `json:"display_name"`
-	EmailSnapshot  pgtype.Text `json:"email_snapshot"`
-	WorkspaceID    uuid.UUID   `json:"workspace_id"`
-	SourceID       uuid.UUID   `json:"source_id"`
-	Role           string      `json:"role"`
-	WorkspaceName  string      `json:"workspace_name"`
-	SourceName     string      `json:"source_name"`
-	SourceKind     string      `json:"source_kind"`
+	HumanAccountID uuid.UUID  `json:"human_account_id"`
+	DisplayName    string     `json:"display_name"`
+	EmailSnapshot  sqldb.Text `json:"email_snapshot"`
+	WorkspaceID    uuid.UUID  `json:"workspace_id"`
+	SourceID       uuid.UUID  `json:"source_id"`
+	Role           string     `json:"role"`
+	WorkspaceName  string     `json:"workspace_name"`
+	SourceName     string     `json:"source_name"`
+	SourceKind     string     `json:"source_kind"`
 }
 
 func (q *Queries) GetOIDCPersonalIdentity(ctx context.Context, arg GetOIDCPersonalIdentityParams) (GetOIDCPersonalIdentityRow, error) {
@@ -395,16 +395,16 @@ WHERE ws.token_digest = $1
 `
 
 type GetWebSessionIdentityRow struct {
-	HumanAccountID uuid.UUID          `json:"human_account_id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	DisplayName    string             `json:"display_name"`
-	EmailSnapshot  pgtype.Text        `json:"email_snapshot"`
-	Role           string             `json:"role"`
-	WorkspaceName  string             `json:"workspace_name"`
-	SourceName     string             `json:"source_name"`
-	SourceKind     string             `json:"source_kind"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	HumanAccountID uuid.UUID         `json:"human_account_id"`
+	WorkspaceID    uuid.UUID         `json:"workspace_id"`
+	SourceID       uuid.UUID         `json:"source_id"`
+	DisplayName    string            `json:"display_name"`
+	EmailSnapshot  sqldb.Text        `json:"email_snapshot"`
+	Role           string            `json:"role"`
+	WorkspaceName  string            `json:"workspace_name"`
+	SourceName     string            `json:"source_name"`
+	SourceKind     string            `json:"source_kind"`
+	ExpiresAt      sqldb.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) GetWebSessionIdentity(ctx context.Context, tokenDigest []byte) (GetWebSessionIdentityRow, error) {
@@ -473,23 +473,36 @@ func (q *Queries) ListHumanWorkspaces(ctx context.Context, humanAccountID uuid.U
 }
 
 const switchWebSessionWorkspace = `-- name: SwitchWebSessionWorkspace :execrows
-UPDATE web_sessions ws
-SET workspace_id = membership.workspace_id,
-    source_id = membership.source_id
-FROM workspace_memberships membership
-WHERE ws.token_digest = $1
-  AND ws.expires_at > now()
-  AND membership.human_account_id = ws.human_account_id
-  AND membership.workspace_id = $2
+UPDATE web_sessions
+SET workspace_id = (
+        SELECT m.workspace_id
+        FROM workspace_memberships m
+        WHERE m.human_account_id = web_sessions.human_account_id
+          AND m.workspace_id = $1
+    ),
+    source_id = (
+        SELECT m.source_id
+        FROM workspace_memberships m
+        WHERE m.human_account_id = web_sessions.human_account_id
+          AND m.workspace_id = $1
+    )
+WHERE token_digest = $2
+  AND expires_at > now()
+  AND EXISTS (
+      SELECT 1
+      FROM workspace_memberships m
+      WHERE m.human_account_id = web_sessions.human_account_id
+        AND m.workspace_id = $1
+  )
 `
 
 type SwitchWebSessionWorkspaceParams struct {
-	TokenDigest []byte    `json:"token_digest"`
 	WorkspaceID uuid.UUID `json:"workspace_id"`
+	TokenDigest []byte    `json:"token_digest"`
 }
 
 func (q *Queries) SwitchWebSessionWorkspace(ctx context.Context, arg SwitchWebSessionWorkspaceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, switchWebSessionWorkspace, arg.TokenDigest, arg.WorkspaceID)
+	result, err := q.db.Exec(ctx, switchWebSessionWorkspace, arg.WorkspaceID, arg.TokenDigest)
 	if err != nil {
 		return 0, err
 	}
@@ -505,9 +518,9 @@ WHERE id = $3
 `
 
 type UpdateHumanAccountSnapshotParams struct {
-	DisplayName   string      `json:"display_name"`
-	EmailSnapshot pgtype.Text `json:"email_snapshot"`
-	ID            uuid.UUID   `json:"id"`
+	DisplayName   string     `json:"display_name"`
+	EmailSnapshot sqldb.Text `json:"email_snapshot"`
+	ID            uuid.UUID  `json:"id"`
 }
 
 func (q *Queries) UpdateHumanAccountSnapshot(ctx context.Context, arg UpdateHumanAccountSnapshotParams) error {

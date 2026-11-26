@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // pushActiveWindow 控制前台页面心跳的宽限时间。
@@ -35,18 +36,20 @@ type PushCardSnapshot struct {
 // 同一浏览器切换 Workspace 时，这条订阅跟着当前登录身份走，同时清理旧工作区残留的订阅卡片快照。
 func (s *Store) SavePushSubscription(ctx context.Context, workspaceID, userID uuid.UUID, sub PushSubscription) (uuid.UUID, error) {
 	var subID uuid.UUID
+	now := time.Now().UTC()
+	activeUntil := now.Add(pushActiveWindow)
 	err := s.pool.QueryRow(ctx, `
-INSERT INTO push_subscriptions (workspace_id, user_id, endpoint, p256dh, auth_secret, active_until)
-VALUES ($1, $2, $3, $4, $5, now() + ($6::int * interval '1 second'))
+INSERT INTO push_subscriptions (id, workspace_id, user_id, endpoint, p256dh, auth_secret, active_until, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (endpoint) DO UPDATE
 SET workspace_id = EXCLUDED.workspace_id,
     user_id = EXCLUDED.user_id,
     p256dh = EXCLUDED.p256dh,
     auth_secret = EXCLUDED.auth_secret,
     active_until = EXCLUDED.active_until,
-    updated_at = now()
+    updated_at = EXCLUDED.updated_at
 RETURNING id
-`, workspaceID, userID, sub.Endpoint, sub.P256dh, sub.AuthSecret, int(pushActiveWindow.Seconds())).Scan(&subID)
+`, uuid.New(), workspaceID, userID, sub.Endpoint, sub.P256dh, sub.AuthSecret, activeUntil, now).Scan(&subID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -66,7 +69,7 @@ func (s *Store) GetPushSubscriptionIDByEndpoint(ctx context.Context, workspaceID
 SELECT id FROM push_subscriptions
 WHERE workspace_id = $1 AND user_id = $2 AND endpoint = $3
 `, workspaceID, userID, endpoint).Scan(&id)
-	if err == pgx.ErrNoRows {
+	if err == sqldb.ErrNoRows {
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
@@ -77,11 +80,13 @@ WHERE workspace_id = $1 AND user_id = $2 AND endpoint = $3
 
 // TouchPushSubscription 延长页面存活时间。订阅不存在时返回 false。
 func (s *Store) TouchPushSubscription(ctx context.Context, workspaceID, userID uuid.UUID, endpoint string) (bool, error) {
+	now := time.Now().UTC()
+	activeUntil := now.Add(pushActiveWindow)
 	tag, err := s.pool.Exec(ctx, `
 UPDATE push_subscriptions
-SET active_until = now() + ($4::int * interval '1 second'), updated_at = now()
+SET active_until = $4, updated_at = $5
 WHERE workspace_id = $1 AND user_id = $2 AND endpoint = $3
-`, workspaceID, userID, endpoint, int(pushActiveWindow.Seconds()))
+`, workspaceID, userID, endpoint, activeUntil, now)
 	if err != nil {
 		return false, err
 	}
@@ -244,8 +249,12 @@ func (s *Store) SavePushSubscriptionCardSnapshotsBatch(ctx context.Context, work
 	if len(snapshots) == 0 {
 		return nil
 	}
-	batch := &pgx.Batch{}
-	const sql = `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	const upsertSQL = `
 INSERT INTO push_subscription_card_revisions (subscription_id, workspace_id, card_id, revision, event_sequence, message_preview, attempt_status, title)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (subscription_id, card_id) DO UPDATE
@@ -258,16 +267,11 @@ SET workspace_id = EXCLUDED.workspace_id,
     updated_at = now()
 `
 	for _, snapshot := range snapshots {
-		batch.Queue(sql, subscriptionID, workspaceID, snapshot.CardID, snapshot.Revision, snapshot.EventSequence, snapshot.MessagePreview, snapshot.AttemptStatus, snapshot.Title)
-	}
-	br := s.pool.SendBatch(ctx, batch)
-	defer br.Close()
-	for range snapshots {
-		if _, err := br.Exec(); err != nil {
+		if _, err := tx.Exec(ctx, upsertSQL, subscriptionID, workspaceID, snapshot.CardID, snapshot.Revision, snapshot.EventSequence, snapshot.MessagePreview, snapshot.AttemptStatus, snapshot.Title); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // ListPushCardSnapshots 返回旧工作区级快照（保留兼容读取）。

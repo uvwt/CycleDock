@@ -8,26 +8,33 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/genai"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // ErrNotFound 表示请求的 Artifact 不存在，或已超过保留期被后台清理任务回收。
 var ErrNotFound = errors.New("artifact not found or expired")
 
-type PostgresService struct {
-	pool *pgxpool.Pool
+// Service 提供基于 sqldb 的双数据库（PostgreSQL / SQLite）Artifact 持久化实现。
+type Service struct {
+	db *sqldb.DB
 }
 
-func NewPostgresService(pool *pgxpool.Pool) *PostgresService {
-	return &PostgresService{pool: pool}
+// PostgresService 为历史名称别名，保持既有调用方平滑过渡。
+type PostgresService = Service
+
+func NewService(db *sqldb.DB) *Service {
+	return &Service{db: db}
 }
 
-func (s *PostgresService) Save(ctx context.Context, req *artifact.SaveRequest) (*artifact.SaveResponse, error) {
+func NewPostgresService(db *sqldb.DB) *Service {
+	return NewService(db)
+}
+
+func (s *Service) Save(ctx context.Context, req *artifact.SaveRequest) (*artifact.SaveResponse, error) {
 	if req == nil {
 		return nil, errors.New("artifact save request is nil")
 	}
@@ -48,50 +55,49 @@ func (s *PostgresService) Save(ctx context.Context, req *artifact.SaveRequest) (
 		return nil, fmt.Errorf("encode artifact metadata: %w", err)
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin artifact save: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// Version numbers are scoped to one logical file. The advisory lock keeps
-	// concurrent writers deterministic without introducing a separate heads table.
-	lockKeyBytes, err := json.Marshal([]string{req.AppName, req.UserID, req.SessionID, req.FileName})
-	if err != nil {
-		return nil, fmt.Errorf("encode artifact lock key: %w", err)
-	}
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", string(lockKeyBytes)); err != nil {
-		return nil, fmt.Errorf("lock artifact version: %w", err)
-	}
-
-	version := req.Version
-	if version == 0 {
-		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(MAX(version), 0) + 1
-			FROM agent_artifacts
-			WHERE app_name=$1 AND user_id=$2 AND session_id=$3 AND file_name=$4
-		`, req.AppName, req.UserID, req.SessionID, req.FileName).Scan(&version); err != nil {
-			return nil, fmt.Errorf("allocate artifact version: %w", err)
+	var version int64
+	err = s.db.WithTx(ctx, func(tx *sqldb.Tx) error {
+		// 同一逻辑文件的版本号由事务锁串行分配：
+		// PostgreSQL 使用事务级 advisory lock，SQLite 由单写事务（BEGIN IMMEDIATE）天然串行化。
+		lockKeyBytes, err := json.Marshal([]string{req.AppName, req.UserID, req.SessionID, req.FileName})
+		if err != nil {
+			return fmt.Errorf("encode artifact lock key: %w", err)
 		}
-	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO agent_artifacts(
-			app_name, user_id, session_id, file_name, version,
-			part, mime_type, custom_metadata
-		)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb)
-	`, req.AppName, req.UserID, req.SessionID, req.FileName, version,
-		rawPart, partMIMEType(req.Part), rawMetadata)
+		if err := tx.AdvisoryLock(ctx, string(lockKeyBytes)); err != nil {
+			return fmt.Errorf("lock artifact version: %w", err)
+		}
+
+		version = req.Version
+		if version == 0 {
+			if err := tx.QueryRow(ctx, `
+				SELECT COALESCE(MAX(version), 0) + 1
+				FROM agent_artifacts
+				WHERE app_name=$1 AND user_id=$2 AND session_id=$3 AND file_name=$4
+			`, req.AppName, req.UserID, req.SessionID, req.FileName).Scan(&version); err != nil {
+				return fmt.Errorf("allocate artifact version: %w", err)
+			}
+		}
+		now := time.Now().UTC()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO agent_artifacts(
+				app_name, user_id, session_id, file_name, version,
+				part, mime_type, custom_metadata, created_at
+			)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		`, req.AppName, req.UserID, req.SessionID, req.FileName, version,
+			sqldb.JSON(rawPart), partMIMEType(req.Part), sqldb.JSON(rawMetadata), now)
+		if err != nil {
+			return fmt.Errorf("save artifact %q version %d: %w", req.FileName, version, err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("save artifact %q version %d: %w", req.FileName, version, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit artifact save: %w", err)
+		return nil, err
 	}
 	return &artifact.SaveResponse{Version: version}, nil
 }
 
-func (s *PostgresService) Load(ctx context.Context, req *artifact.LoadRequest) (*artifact.LoadResponse, error) {
+func (s *Service) Load(ctx context.Context, req *artifact.LoadRequest) (*artifact.LoadResponse, error) {
 	if req == nil {
 		return nil, errors.New("artifact load request is nil")
 	}
@@ -112,8 +118,8 @@ func (s *PostgresService) Load(ctx context.Context, req *artifact.LoadRequest) (
 	}
 
 	var raw []byte
-	if err := s.pool.QueryRow(ctx, query, args...).Scan(&raw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	if err := s.db.QueryRow(ctx, query, args...).Scan(&raw); err != nil {
+		if sqldb.IsNoRows(err) {
 			return nil, fmt.Errorf("%w: artifact %q not found (it may have expired and been cleaned up)", ErrNotFound, req.FileName)
 		}
 		return nil, fmt.Errorf("load artifact %q: %w", req.FileName, err)
@@ -125,7 +131,7 @@ func (s *PostgresService) Load(ctx context.Context, req *artifact.LoadRequest) (
 	return &artifact.LoadResponse{Part: &part}, nil
 }
 
-func (s *PostgresService) Delete(ctx context.Context, req *artifact.DeleteRequest) error {
+func (s *Service) Delete(ctx context.Context, req *artifact.DeleteRequest) error {
 	if req == nil {
 		return errors.New("artifact delete request is nil")
 	}
@@ -140,20 +146,20 @@ func (s *PostgresService) Delete(ctx context.Context, req *artifact.DeleteReques
 		query += " AND version=$5"
 		args = append(args, req.Version)
 	}
-	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
+	if _, err := s.db.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("delete artifact %q: %w", req.FileName, err)
 	}
 	return nil
 }
 
-func (s *PostgresService) List(ctx context.Context, req *artifact.ListRequest) (*artifact.ListResponse, error) {
+func (s *Service) List(ctx context.Context, req *artifact.ListRequest) (*artifact.ListResponse, error) {
 	if req == nil {
 		return nil, errors.New("artifact list request is nil")
 	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT file_name
 		FROM agent_artifacts
 		WHERE app_name=$1 AND user_id=$2 AND session_id=$3
@@ -178,14 +184,14 @@ func (s *PostgresService) List(ctx context.Context, req *artifact.ListRequest) (
 	return &artifact.ListResponse{FileNames: names}, nil
 }
 
-func (s *PostgresService) Versions(ctx context.Context, req *artifact.VersionsRequest) (*artifact.VersionsResponse, error) {
+func (s *Service) Versions(ctx context.Context, req *artifact.VersionsRequest) (*artifact.VersionsResponse, error) {
 	if req == nil {
 		return nil, errors.New("artifact versions request is nil")
 	}
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := s.db.Query(ctx, `
 		SELECT version
 		FROM agent_artifacts
 		WHERE app_name=$1 AND user_id=$2 AND session_id=$3 AND file_name=$4
@@ -210,7 +216,7 @@ func (s *PostgresService) Versions(ctx context.Context, req *artifact.VersionsRe
 	return &artifact.VersionsResponse{Versions: versions}, nil
 }
 
-func (s *PostgresService) GetArtifactVersion(
+func (s *Service) GetArtifactVersion(
 	ctx context.Context,
 	req *artifact.GetArtifactVersionRequest,
 ) (*artifact.GetArtifactVersionResponse, error) {
@@ -236,8 +242,8 @@ func (s *PostgresService) GetArtifactVersion(
 	var mimeType string
 	var rawMetadata []byte
 	var createdAt time.Time
-	err := s.pool.QueryRow(ctx, query, args...).Scan(&version, &mimeType, &rawMetadata, &createdAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	err := s.db.QueryRow(ctx, query, args...).Scan(&version, &mimeType, &rawMetadata, &createdAt)
+	if sqldb.IsNoRows(err) {
 		return nil, fmt.Errorf("%w: artifact %q not found (it may have expired and been cleaned up)", ErrNotFound, req.FileName)
 	}
 	if err != nil {
@@ -294,4 +300,4 @@ func canonicalURI(appName, userID, sessionID, fileName string, version int64) st
 	)
 }
 
-var _ artifact.Service = (*PostgresService)(nil)
+var _ artifact.Service = (*Service)(nil)

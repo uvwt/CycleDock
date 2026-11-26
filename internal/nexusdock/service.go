@@ -20,11 +20,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -52,7 +50,7 @@ type Config struct {
 }
 
 type Service struct {
-	pool         *pgxpool.Pool
+	pool         *sqldb.DB
 	queries      *db.Queries
 	mcpURL       string
 	webURL       string
@@ -113,7 +111,7 @@ type tokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-func New(pool *pgxpool.Pool, config Config) (*Service, error) {
+func New(pool *sqldb.DB, config Config) (*Service, error) {
 	config.MCPURL = strings.TrimRight(strings.TrimSpace(config.MCPURL), "/")
 	config.WebURL = strings.TrimRight(strings.TrimSpace(config.WebURL), "/")
 	config.PublicURL = strings.TrimRight(strings.TrimSpace(config.PublicURL), "/")
@@ -188,7 +186,7 @@ func (s *Service) Status(ctx context.Context, workspaceID uuid.UUID) (Status, er
 		ManageURL: s.webURL + "/workspace/devices",
 	}
 	connection, err := s.queries.GetWorkspaceNexusDockConnection(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return status, nil
 	}
 	if err != nil {
@@ -232,7 +230,7 @@ func (s *Service) BeginAuthorization(
 	if err := s.queries.CreateNexusDockAuthFlow(ctx, db.CreateNexusDockAuthFlowParams{
 		StateDigest: stateDigest[:], WorkspaceID: workspaceID, HumanAccountID: humanAccountID,
 		SourceID: sourceID, ClientID: clientID, CodeVerifier: verifier,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt: sqldb.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
 		return AuthorizationStart{}, fmt.Errorf("save NexusDock auth flow: %w", err)
 	}
@@ -265,7 +263,7 @@ func (s *Service) consumeAuthorization(ctx context.Context, workspaceID, humanAc
 	flow, err := s.queries.ConsumeNexusDockAuthFlow(ctx, db.ConsumeNexusDockAuthFlowParams{
 		StateDigest: digest[:], WorkspaceID: workspaceID, HumanAccountID: humanAccountID, SourceID: sourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.NexusdockAuthFlow{}, ErrInvalidState
 	}
 	if err != nil {
@@ -319,7 +317,7 @@ func (s *Service) Runtime(ctx context.Context, workspaceID uuid.UUID) (RuntimeCo
 		return RuntimeConnection{}, ErrDisabled
 	}
 	row, err := s.queries.GetWorkspaceNexusDockConnection(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RuntimeConnection{}, ErrNotConnected
 	}
 	if err != nil {
@@ -351,7 +349,7 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 		return ErrDisabled
 	}
 	row, err := s.queries.GetWorkspaceNexusDockConnection(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
@@ -381,64 +379,60 @@ func (s *Service) Disconnect(ctx context.Context, workspaceID uuid.UUID) error {
 }
 
 func (s *Service) refresh(ctx context.Context, workspaceID uuid.UUID, force bool) (RuntimeConnection, error) {
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return RuntimeConnection{}, fmt.Errorf("acquire NexusDock refresh lock connection: %w", err)
-	}
-	defer conn.Release()
-
 	lockKey := "cycledock/nexusdock/refresh/" + workspaceID.String()
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", lockKey); err != nil {
-		return RuntimeConnection{}, fmt.Errorf("lock NexusDock token refresh: %w", err)
-	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockKey)
-	}()
-
-	q := db.New(conn)
-	row, err := q.GetWorkspaceNexusDockConnection(ctx, workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return RuntimeConnection{}, ErrNotConnected
-	}
-	if err != nil {
-		return RuntimeConnection{}, fmt.Errorf("reload NexusDock connection: %w", err)
-	}
-	if !force && row.AccessExpiresAt.Valid && time.Until(row.AccessExpiresAt.Time) > accessRefreshSkew {
-		token, err := s.decryptToken(workspaceID, "access", row.AccessTokenCiphertext)
+	var result RuntimeConnection
+	err := s.pool.WithSessionLock(ctx, lockKey, func(ctx context.Context) error {
+		q := s.queries
+		row, err := q.GetWorkspaceNexusDockConnection(ctx, workspaceID)
+		if errors.Is(err, sqldb.ErrNoRows) {
+			return ErrNotConnected
+		}
 		if err != nil {
-			return RuntimeConnection{}, err
+			return fmt.Errorf("reload NexusDock connection: %w", err)
 		}
-		return RuntimeConnection{URL: row.Resource, AccessToken: token}, nil
-	}
+		if !force && row.AccessExpiresAt.Valid && time.Until(row.AccessExpiresAt.Time) > accessRefreshSkew {
+			token, err := s.decryptToken(workspaceID, "access", row.AccessTokenCiphertext)
+			if err != nil {
+				return err
+			}
+			result = RuntimeConnection{URL: row.Resource, AccessToken: token}
+			return nil
+		}
 
-	refreshToken, err := s.decryptToken(workspaceID, "refresh", row.RefreshTokenCiphertext)
-	if err != nil {
-		return RuntimeConnection{}, err
-	}
-	metadata, err := s.discover(ctx)
-	if err != nil {
-		return RuntimeConnection{}, err
-	}
-	tokens, err := s.exchangeRefresh(ctx, metadata, row.ClientID, refreshToken)
-	if err != nil {
-		if errors.Is(err, ErrAuthorization) {
-			return RuntimeConnection{}, ErrConnectionExpired
+		refreshToken, err := s.decryptToken(workspaceID, "refresh", row.RefreshTokenCiphertext)
+		if err != nil {
+			return err
 		}
-		return RuntimeConnection{}, err
-	}
-	// 刷新仅能续期原有资源账号，不能无声替换成另一位账号的设备权限。
-	if row.AuthorizedSubject != "" && tokens.Subject != row.AuthorizedSubject {
-		return RuntimeConnection{}, ErrConnectionExpired
-	}
-	updated, err := s.storeTokensWithQueries(ctx, q, workspaceID, metadata.Resource, row.ClientID, tokens)
+		metadata, err := s.discover(ctx)
+		if err != nil {
+			return err
+		}
+		tokens, err := s.exchangeRefresh(ctx, metadata, row.ClientID, refreshToken)
+		if err != nil {
+			if errors.Is(err, ErrAuthorization) {
+				return ErrConnectionExpired
+			}
+			return err
+		}
+		// 刷新仅能续期原有资源账号，不能无声替换成另一位账号的设备权限。
+		if row.AuthorizedSubject != "" && tokens.Subject != row.AuthorizedSubject {
+			return ErrConnectionExpired
+		}
+		updated, err := s.storeTokensWithQueries(ctx, q, workspaceID, metadata.Resource, row.ClientID, tokens)
+		if err != nil {
+			return err
+		}
+		access, err := s.decryptToken(workspaceID, "access", updated.AccessTokenCiphertext)
+		if err != nil {
+			return err
+		}
+		result = RuntimeConnection{URL: updated.Resource, AccessToken: access}
+		return nil
+	})
 	if err != nil {
 		return RuntimeConnection{}, err
 	}
-	access, err := s.decryptToken(workspaceID, "access", updated.AccessTokenCiphertext)
-	if err != nil {
-		return RuntimeConnection{}, err
-	}
-	return RuntimeConnection{URL: updated.Resource, AccessToken: access}, nil
+	return result, nil
 }
 
 func (s *Service) storeTokens(
@@ -473,7 +467,7 @@ func (s *Service) storeTokensWithQueries(
 	row, err := q.UpsertWorkspaceNexusDockConnection(ctx, db.UpsertWorkspaceNexusDockConnectionParams{
 		WorkspaceID: workspaceID, Resource: resource, ClientID: clientID,
 		AccessTokenCiphertext: accessCiphertext, RefreshTokenCiphertext: refreshCiphertext,
-		AccessExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		AccessExpiresAt:   sqldb.Timestamptz{Time: expiresAt, Valid: true},
 		AuthorizedSubject: tokens.Subject,
 	})
 	if err != nil {
@@ -487,55 +481,52 @@ func (s *Service) ensureOAuthClient(ctx context.Context, metadata oauthMetadata)
 	if err == nil {
 		return row.ClientID, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return "", fmt.Errorf("load NexusDock OAuth client: %w", err)
 	}
 
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return "", fmt.Errorf("acquire NexusDock client lock connection: %w", err)
-	}
-	defer conn.Release()
 	lockKey := "cycledock/nexusdock/oauth-client/" + metadata.Resource
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", lockKey); err != nil {
-		return "", fmt.Errorf("lock NexusDock OAuth client registration: %w", err)
-	}
-	defer func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", lockKey)
-	}()
+	var clientID string
+	err = s.pool.WithSessionLock(ctx, lockKey, func(ctx context.Context) error {
+		q := s.queries
+		row, err := q.GetNexusDockOAuthClient(ctx, metadata.Resource)
+		if err == nil {
+			clientID = row.ClientID
+			return nil
+		}
+		if !errors.Is(err, sqldb.ErrNoRows) {
+			return fmt.Errorf("reload NexusDock OAuth client: %w", err)
+		}
 
-	q := db.New(conn)
-	row, err = q.GetNexusDockOAuthClient(ctx, metadata.Resource)
-	if err == nil {
-		return row.ClientID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("reload NexusDock OAuth client: %w", err)
-	}
-
-	request := map[string]any{
-		"client_name":                "CycleDock",
-		"redirect_uris":              []string{s.callbackURL},
-		"grant_types":                []string{"authorization_code", "refresh_token"},
-		"response_types":             []string{"code"},
-		"token_endpoint_auth_method": "none",
-	}
-	var response struct {
-		ClientID string `json:"client_id"`
-	}
-	if err := s.postJSON(ctx, metadata.Server.RegistrationEndpoint, request, &response, http.StatusCreated); err != nil {
-		return "", fmt.Errorf("register NexusDock OAuth client: %w", err)
-	}
-	if response.ClientID == "" {
-		return "", fmt.Errorf("%w: NexusDock registration omitted client_id", ErrAuthorization)
-	}
-	saved, err := q.CreateNexusDockOAuthClient(ctx, db.CreateNexusDockOAuthClientParams{
-		Resource: metadata.Resource, ClientID: response.ClientID,
+		request := map[string]any{
+			"client_name":                "CycleDock",
+			"redirect_uris":              []string{s.callbackURL},
+			"grant_types":                []string{"authorization_code", "refresh_token"},
+			"response_types":             []string{"code"},
+			"token_endpoint_auth_method": "none",
+		}
+		var response struct {
+			ClientID string `json:"client_id"`
+		}
+		if err := s.postJSON(ctx, metadata.Server.RegistrationEndpoint, request, &response, http.StatusCreated); err != nil {
+			return fmt.Errorf("register NexusDock OAuth client: %w", err)
+		}
+		if response.ClientID == "" {
+			return fmt.Errorf("%w: NexusDock registration omitted client_id", ErrAuthorization)
+		}
+		saved, err := q.CreateNexusDockOAuthClient(ctx, db.CreateNexusDockOAuthClientParams{
+			Resource: metadata.Resource, ClientID: response.ClientID,
+		})
+		if err != nil {
+			return fmt.Errorf("save NexusDock OAuth client: %w", err)
+		}
+		clientID = saved.ClientID
+		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("save NexusDock OAuth client: %w", err)
+		return "", err
 	}
-	return saved.ClientID, nil
+	return clientID, nil
 }
 
 func (s *Service) exchangeCode(

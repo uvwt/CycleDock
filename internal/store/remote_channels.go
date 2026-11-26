@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -474,7 +473,7 @@ func (s *Store) validateChannelTargetScope(ctx context.Context, workspaceID, pro
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, *targetCardID).Scan(&cardProjectID, &kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.NullUUID{}, fmt.Errorf("%w: target ongoing card not found", domain.ErrNotFound)
 	}
 	if err != nil {
@@ -636,7 +635,7 @@ func (s *Store) GetRemoteChannel(ctx context.Context, workspaceID, channelID uui
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, channelID)
 	ch, err := scanRemoteChannel(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RemoteChannel{}, domain.ErrNotFound
 	}
 	return ch, err
@@ -717,7 +716,7 @@ func (s *Store) UpdateRemoteChannel(
 		configBytes, ciphertext, hintsBytes,
 	)
 	updated, err := scanRemoteChannel(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RemoteChannel{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -779,7 +778,7 @@ func (s *Store) SetRemoteChannelEnabled(ctx context.Context, workspaceID, channe
 		workspaceID, channelID, enabled,
 	)
 	ch, err := scanRemoteChannel(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RemoteChannel{}, domain.ErrNotFound
 	}
 	if err == nil {
@@ -950,7 +949,7 @@ func (s *Store) EnsureChannelConversationCard(
 		WHERE workspace_id = $1 AND id = $2
 		FOR UPDATE
 	`, workspaceID, channelID).Scan(&chName, &chPlatform, &chRole, &projectID, &convCardID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, false, domain.ErrNotFound
 	}
 	if err != nil {
@@ -986,7 +985,7 @@ func (s *Store) EnsureChannelConversationCard(
 		Kind:                  string(domain.CardKindDiscussion),
 		Title:                 title,
 		Description:           desc,
-		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
+		DiscussionState:       sqldb.Text{String: string(domain.DiscussionStateActive), Valid: true},
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     humanSourceID,
 	})
@@ -1009,7 +1008,7 @@ func (s *Store) EnsureChannelConversationCard(
 
 func loadUsableChannelConversationCardTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, projectID, cardID uuid.UUID,
 ) (db.Card, bool, error) {
 	q := db.New(tx)
@@ -1017,7 +1016,7 @@ func loadUsableChannelConversationCardTx(
 		WorkspaceID: workspaceID,
 		ID:          cardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, false, nil
 	}
 	if err != nil {
@@ -1094,7 +1093,7 @@ type RemoteChannelConversationBinding struct {
 }
 
 type queryRower interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	QueryRow(ctx context.Context, sql string, args ...any) *sqldb.Row
 }
 
 func isRemoteChannelConversationCard(
@@ -1128,7 +1127,7 @@ func (s *Store) GetRemoteChannelForConversationCard(
 		WHERE workspace_id = $1 AND conversation_card_id = $2
 		LIMIT 1
 	`, workspaceID, cardID).Scan(&b.ChannelID, &b.ChannelName, &platformStr)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RemoteChannelConversationBinding{}, false, nil
 	}
 	if err != nil {
@@ -1182,7 +1181,7 @@ func (s *Store) HasIngestedRemoteChannelMessage(
 		FROM remote_channel_inbound_dedup
 		WHERE workspace_id = $1 AND channel_id = $2 AND external_message_id = $3
 	`, workspaceID, channelID, externalMessageID).Scan(&existing.CardID, &existing.EventID, &existing.TurnID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return ChannelInboundResult{}, false, nil
 	}
 	if err != nil {
@@ -1247,7 +1246,7 @@ func (s *Store) IngestRemoteChannelMessageWithAttachments(
 		ON CONFLICT (workspace_id, channel_id, external_message_id) DO NOTHING
 		RETURNING id
 	`, dedupID, channel.WorkspaceID, channel.ID, externalMessageID, strings.TrimSpace(senderID), strings.TrimSpace(chatID)).Scan(&insertedID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		// 已经处理过同一 external_message_id，查询已有映射直接幂等返回。
 		var existing CardEventTurnRef
 		_ = s.pool.QueryRow(ctx, `
@@ -1351,7 +1350,7 @@ func (s *Store) resolveChannelHumanSource(ctx context.Context, workspaceID uuid.
 		ORDER BY created_at, id
 		LIMIT 1
 	`, workspaceID).Scan(&sourceID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("%w: workspace has no human source", domain.ErrConflict)
 	}
 	return sourceID, err
@@ -1366,7 +1365,7 @@ func (s *Store) EventOriginChannelID(ctx context.Context, workspaceID, eventID u
 		WHERE workspace_id = $1 AND event_id = $2
 		LIMIT 1
 	`, workspaceID, eventID).Scan(&channelID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
@@ -1406,7 +1405,7 @@ func (s *Store) AttemptTurnOrigin(ctx context.Context, workspaceID, attemptID uu
 		WHERE a.workspace_id = $1 AND a.id = $2
 		LIMIT 1
 	`, workspaceID, attemptID).Scan(&source, &channelID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return AttemptTurnOrigin{}, false, nil
 	}
 	if err != nil {
@@ -1436,7 +1435,7 @@ func (s *Store) GetChannelOutboundCursor(
 		&c.LastMessageSeq, &c.LastCommentSeq, &c.LastCheckinSeq, &c.LastStatusSeq,
 		&c.LastAttemptID, &c.LastAttemptStatus, &c.LastApprovalID, &c.UpdatedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RemoteChannelOutboundCursor{}, false, nil
 	}
 	if err != nil {
