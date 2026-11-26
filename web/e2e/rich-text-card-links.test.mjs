@@ -18,6 +18,9 @@ const { RichText } = await server.ssrLoadModule(
 const { normalizeCardMentions } = await server.ssrLoadModule(
   "/src/features/timeline/cardLinkFormatting.ts",
 );
+const { stripMarkdownSummary } = await server.ssrLoadModule(
+  "/src/shared/lib/markdown.ts",
+);
 const { ProjectContext } = await server.ssrLoadModule(
   "/src/app/project-context.ts",
 );
@@ -227,14 +230,38 @@ test("RichText SSR 渲染：卡片独立渲染为块级组件，消除 <p> 嵌�
   assert.doesNotMatch(html, /代码内示例[\s\S]*role="button"/);
 });
 
-test("ChatActionCard SSR 渲染：仅 review 状态的 Todo 卡片显示右上角快捷完成按钮", () => {
+test("stripMarkdownSummary：清洗标题井号、加粗下划线、行内代码、无序与有序列表前缀及多余空白", () => {
+  const raw = [
+    "## 目标",
+    "优化 `ChatActionCard` 在 **手机端** 与 __窄屏__ 下的展示空间。",
+    "",
+    "- 支持 [卡片链接](https://example.com) 摘要清洗",
+    "- [x] 去掉任务列表标记",
+    "1. 第一步校验布局",
+    "2) 第二步校验点击防冒泡",
+    "> 引用说明行",
+  ].join("\n");
+
+  const cleaned = stripMarkdownSummary(raw);
+  assert.equal(
+    cleaned,
+    "目标 优化 ChatActionCard 在 手机端 与 窄屏 下的展示空间。 支持 卡片链接 摘要清洗 去掉任务列表标记 第一步校验布局 第二步校验点击防冒泡 引用说明行",
+  );
+  assert.doesNotMatch(cleaned, /##|\*\*|__|`|^\s*\d+[.)]/);
+
+  // 仅包含 Markdown 装饰符的描述应清洗为空字符串，便于卡片回退到类型+短 ID
+  assert.equal(stripMarkdownSummary("  ##   \n---\n   "), "");
+});
+
+test("ChatActionCard SSR 渲染：手机端上下两层布局、Markdown 摘要清洗与唯一快捷完成按钮", () => {
   queryClient.setQueryData(["card", "card-review"], {
     card: {
       id: "card-review",
       project_id: "proj-1",
       kind: "todo",
-      title: "待验收卡片示例",
-      description: "验证完成后可直接在聊天内点击完成",
+      title: "优化手机端聊天气泡引用卡片上下两层布局解决长标题挤压问题",
+      description:
+        "## 目标\n- 1. 优化 **ChatActionCard** 与 `stripMarkdownSummary`\n2) 验证点击防冒泡",
       todo_state: "review",
       created_at: "2026-04-17T00:00:00Z",
       updated_at: "2026-04-17T00:00:00Z",
@@ -252,13 +279,40 @@ test("ChatActionCard SSR 渲染：仅 review 状态的 Todo 卡片显示右上�
       updated_at: "2026-04-17T00:00:00Z",
     },
   });
+  queryClient.setQueryData(["card", "card-no-desc"], {
+    card: {
+      id: "card-no-desc",
+      project_id: "proj-1",
+      kind: "todo",
+      title: "无描述待办卡片",
+      description: "",
+      todo_state: "working",
+      created_at: "2026-04-17T00:00:00Z",
+      updated_at: "2026-04-17T00:00:00Z",
+    },
+  });
 
   const reviewHtml = renderRichText(
     "[待验收卡片示例](cycledock://card/card-review)",
   );
-  assert.match(reviewHtml, /data-chat-card-complete="true"/);
+  // 仅渲染唯一一个完成按钮，避免移动端/桌面端重复挂载破坏选择器与无障碍
+  assert.equal(
+    (reviewHtml.match(/data-chat-card-complete="true"/g) || []).length,
+    1,
+  );
+  assert.match(reviewHtml, /data-chat-card-footer="true"/);
+  assert.match(reviewHtml, /<h4[^>]*line-clamp-2[^>]*sm:truncate/);
   assert.match(reviewHtml, /待确认/);
   assert.match(reviewHtml, /完成/);
+  // 描述中的 Markdown 符号被清洗，不把 `## 目标` 原样暴露到摘要首行
+  assert.match(
+    reviewHtml,
+    /目标 优化 ChatActionCard 与 stripMarkdownSummary 验证点击防冒泡/,
+  );
+  assert.doesNotMatch(
+    reviewHtml,
+    /## 目标|\*\*ChatActionCard\*\*|`stripMarkdownSummary`/,
+  );
 
   const doneHtml = renderRichText(
     "[已完成卡片示例](cycledock://card/card-done)",
@@ -270,4 +324,11 @@ test("ChatActionCard SSR 渲染：仅 review 状态的 Todo 卡片显示右上�
     "[修复登录超时](cycledock://card/card-1)",
   );
   assert.doesNotMatch(workingHtml, /data-chat-card-complete="true"/);
+
+  const noDescHtml = renderRichText(
+    "[无描述待办卡片](cycledock://card/card-no-desc)",
+  );
+  assert.doesNotMatch(noDescHtml, /<p[^>]*class="[^"]*line-clamp-1/);
+  assert.match(noDescHtml, /任务/);
+  assert.match(noDescHtml, /card-no-/);
 });

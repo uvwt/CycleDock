@@ -16,6 +16,7 @@ import { api, APIError } from "@/shared/api/client";
 import { keys } from "@/app/query";
 import type { Card, CardDetail } from "@/shared/api/types";
 import { isReviewTodoCard } from "@/shared/lib/review-acceptance";
+import { stripMarkdownSummary } from "@/shared/lib/markdown";
 import { useCompleteReviewCard } from "@/shared/lib/useCompleteReviewCard";
 import { CardStatusDot, getCardVisualStatus } from "@/shared/ui/CardStatusDot";
 
@@ -130,6 +131,11 @@ export const ChatActionCard = React.forwardRef<
         : `/cards/${cardId}`;
     }, [card, targetProject, cardId]);
 
+    const cleanDescription = React.useMemo(
+      () => stripMarkdownSummary(card?.description),
+      [card?.description],
+    );
+
     const visualStatus = React.useMemo(() => {
       if (!card) return "idle";
       return getCardVisualStatus(card);
@@ -138,15 +144,15 @@ export const ChatActionCard = React.forwardRef<
     const kindIcon = React.useMemo(() => {
       const kind = card?.kind;
       if (kind === "todo") {
-        return <CheckCircle2 className="size-4 text-sky-500 shrink-0" />;
+        return <CheckCircle2 className="size-3.5 sm:size-4 text-sky-500 shrink-0" />;
       }
       if (kind === "ongoing") {
-        return <Clock className="size-4 text-amber-500 shrink-0" />;
+        return <Clock className="size-3.5 sm:size-4 text-amber-500 shrink-0" />;
       }
       if (kind === "discussion") {
-        return <Sparkles className="size-4 text-purple-500 shrink-0" />;
+        return <Sparkles className="size-3.5 sm:size-4 text-purple-500 shrink-0" />;
       }
-      return <CheckCircle2 className="size-4 text-primary shrink-0" />;
+      return <CheckCircle2 className="size-3.5 sm:size-4 text-primary shrink-0" />;
     }, [card?.kind]);
 
     const statusBadge = React.useMemo(() => {
@@ -267,6 +273,7 @@ export const ChatActionCard = React.forwardRef<
 
     const title = card?.title || fallbackTitle || cardId;
     const canCompleteReview = isReviewTodoCard(card);
+    const shortCardId = cardId.slice(0, 8);
     const kindLabel =
       card?.kind === "todo"
         ? t("任务")
@@ -295,77 +302,108 @@ export const ChatActionCard = React.forwardRef<
         )}
         {...props}
       >
-        <div className="flex items-start gap-2.5 sm:gap-3">
-          {/* 左侧类型图标独立微底座 */}
-          <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs">
-            {kindIcon}
-          </div>
-
-          {/* 中间信息区 */}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h4 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground group-hover/card:text-primary transition-colors sm:flex-initial">
-                {title}
-              </h4>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {statusBadge}
-                {card && (
-                  <CardStatusDot
-                    status={visualStatus}
-                    className="size-1.5"
-                  />
-                )}
-              </div>
+        {/*
+         * 响应式单树双布局：
+         * - 手机端（< sm）：上下两层，上层给标题（最多 2 行）与清洗后的摘要释放接近整卡宽度，
+         *   下层独立承载状态徽标/状态点与待确认「完成」快捷按钮，避免窄屏挤压标题；
+         * - 桌面端（>= sm）：通过 sm:contents 展开为原有 4 列紧凑横向网格，
+         *   避免重复渲染按钮 DOM 破坏无障碍与自动化选择器唯一性。
+         */}
+        <div className="flex flex-col sm:grid sm:grid-cols-[auto_minmax(0,auto)_minmax(max-content,1fr)_auto] sm:items-start">
+          {/* 上层：图标 + 标题与摘要 */}
+          <div className="flex items-start gap-2.5 sm:contents">
+            {/* 左侧类型图标独立微底座 */}
+            <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs sm:col-start-1 sm:row-start-1 sm:row-span-2 sm:mr-3 sm:mt-0 sm:size-8">
+              {kindIcon}
             </div>
 
-            {card?.description ? (
-              <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground leading-normal">
-                {card.description}
-              </p>
-            ) : (
-              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-faint">
-                <span>{kindLabel}</span>
-                <span>•</span>
-                <span>{cardId.slice(0, 8)}</span>
-              </div>
-            )}
+            {/* 标题与清洗后摘要 */}
+            <div className="min-w-0 flex-1 sm:contents">
+              <h4 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground group-hover/card:text-primary transition-colors sm:col-start-2 sm:row-start-1 sm:line-clamp-none sm:truncate sm:leading-normal">
+                {title}
+              </h4>
+
+              {cleanDescription ? (
+                <p className="mt-1 line-clamp-1 text-xs text-muted-foreground leading-normal sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:mt-0.5 sm:w-0 sm:min-w-full">
+                  {cleanDescription}
+                </p>
+              ) : (
+                <div className="mt-0.5 hidden items-center gap-1.5 text-[11px] text-faint sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:flex sm:w-0 sm:min-w-full">
+                  <span>{kindLabel}</span>
+                  <span>•</span>
+                  <span>{shortCardId}</span>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* 右侧微交互跳转指示 */}
-          <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
-            {canCompleteReview && card && (
-              <button
-                type="button"
-                data-chat-card-complete="true"
-                disabled={completeReview.isPending}
-                title={t("验收完成")}
-                aria-label={t("验收完成")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  if (completeReview.isPending) return;
-                  completeReview.mutate({
-                    id: card.id,
-                    projectID: card.project_id || projectId,
-                  });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
+          {/* 下层：手机端独立状态与操作栏；桌面端通过 sm:contents 归位到标题右侧与最右操作区 */}
+          <div
+            data-chat-card-footer="true"
+            className="mt-2 flex items-center justify-between gap-2 border-t border-line/50 pt-2 sm:contents"
+          >
+            {/* 状态徽标与状态点（无 card 兜底时展示种类与短 ID） */}
+            <div className="flex min-w-0 items-center gap-1.5 sm:col-start-3 sm:row-start-1 sm:ml-2 sm:self-center sm:justify-self-start">
+              {card ? (
+                <>
+                  {statusBadge}
+                  {visualStatus !== "idle" && (
+                    <CardStatusDot
+                      status={visualStatus}
+                      className="size-1.5"
+                    />
+                  )}
+                  {!cleanDescription && (
+                    <span className="truncate text-[11px] text-faint sm:hidden">
+                      {kindLabel} • {shortCardId}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <div className="flex items-center gap-1.5 text-[11px] text-faint sm:hidden">
+                  <span>{kindLabel}</span>
+                  <span>•</span>
+                  <span>{shortCardId}</span>
+                </div>
+              )}
+            </div>
+
+            {/* 操作区：待确认完成快捷按钮 + 桌面端跳转指示箭头 */}
+            <div className="flex shrink-0 items-center gap-1.5 sm:col-start-4 sm:row-start-1 sm:row-span-2 sm:ml-3 sm:pt-0.5">
+              {canCompleteReview && card && (
+                <button
+                  type="button"
+                  data-chat-card-complete="true"
+                  disabled={completeReview.isPending}
+                  title={t("验收完成")}
+                  aria-label={t("验收完成")}
+                  onClick={(e) => {
                     e.stopPropagation();
-                  }
-                }}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium leading-none whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/20 active:scale-95 disabled:opacity-60 dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
-              >
-                {completeReview.isPending ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="size-3" />
-                )}
-                <span>{t("完成")}</span>
-              </button>
-            )}
-            <div className="text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all">
-              <ArrowUpRight className="size-4" />
+                    e.preventDefault();
+                    if (completeReview.isPending) return;
+                    completeReview.mutate({
+                      id: card.id,
+                      projectID: card.project_id || projectId,
+                    });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                    }
+                  }}
+                  className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium leading-none whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/20 active:scale-95 disabled:opacity-60 sm:min-h-0 sm:px-2 sm:py-0.5 sm:text-[11px] dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
+                >
+                  {completeReview.isPending ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="size-3" />
+                  )}
+                  <span>{t("完成")}</span>
+                </button>
+              )}
+              <div className="hidden text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all sm:block">
+                <ArrowUpRight className="size-4" />
+              </div>
             </div>
           </div>
         </div>
