@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"html/template"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +12,13 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/oauth"
+)
+
+const (
+	oauthConsentPagePath = "/oauth/consent"
+	// 仅用于兼容旧 POST /oauth/authorize 表单提交：Chromium 会把 form-action 应用于 302 跨源回调链，
+	// 因此该端点移除 form-action 限制，全局其余路由仍保留 form-action 'self'。
+	oauthAuthorizeSubmitCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
 )
 
 type oauthClientRegistrationRequest struct {
@@ -63,38 +69,33 @@ type oauthAuthorizationServerMetadataResponse struct {
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	ScopesSupported                   []string `json:"scopes_supported"`
+	ResourceIndicatorsSupported       bool     `json:"resource_indicators_supported"`
 }
 
-var oauthConsentTemplate = template.Must(template.New("oauth-consent").Parse(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Authorize CycleDock MCP</title>
-<style>
-body{font-family:system-ui,sans-serif;background:#020617;color:#e2e8f0;margin:0;min-height:100vh;display:grid;place-items:center}
-main{width:min(92vw,520px);border:1px solid #1e293b;border-radius:20px;padding:28px;background:#0f172a}
-h1{font-size:22px;margin:0 0 10px}p{color:#94a3b8;line-height:1.6}strong{color:#e2e8f0}
-.actions{display:flex;gap:10px;margin-top:22px}button{border:0;border-radius:10px;padding:10px 16px;font-weight:600;cursor:pointer}
-.approve{background:#22d3ee;color:#082f49}.deny{background:#1e293b;color:#cbd5e1}
-</style>
-</head>
-<body><main>
-<h1>Authorize CycleDock MCP</h1>
-<p><strong>{{.ClientName}}</strong> wants to work in <strong>{{.WorkspaceName}}</strong>.</p>
-<p>It will receive its own OAuth Client Source. It can read and update CycleDock work through the MCP tools, but it cannot complete Review → Done as a human.</p>
-<form method="post" action="/oauth/authorize">
-<input type="hidden" name="response_type" value="code">
-<input type="hidden" name="client_id" value="{{.ClientID}}">
-<input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
-<input type="hidden" name="scope" value="{{.Scope}}">
-<input type="hidden" name="state" value="{{.State}}">
-<input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
-<input type="hidden" name="code_challenge_method" value="S256">
-<input type="hidden" name="resource" value="{{.Resource}}">
-<div class="actions"><button class="approve" name="decision" value="approve">Authorize</button><button class="deny" name="decision" value="deny">Deny</button></div>
-</form>
-</main></body></html>`))
+type oauthConsentResponse struct {
+	ClientID      string `json:"client_id"`
+	ClientName    string `json:"client_name"`
+	RedirectURI   string `json:"redirect_uri"`
+	Scope         string `json:"scope"`
+	Resource      string `json:"resource"`
+	WorkspaceName string `json:"workspace_name"`
+}
+
+type oauthConsentSubmitRequest struct {
+	ResponseType        string `json:"response_type"`
+	ClientID            string `json:"client_id"`
+	RedirectURI         string `json:"redirect_uri"`
+	Scope               string `json:"scope"`
+	State               string `json:"state"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	Resource            string `json:"resource"`
+	Decision            string `json:"decision"`
+}
+
+type oauthConsentSubmitResponse struct {
+	RedirectTo string `json:"redirect_to"`
+}
 
 func (api *API) listAuthorizedAIClients(w http.ResponseWriter, r *http.Request) {
 	if api.oauth == nil {
@@ -135,6 +136,7 @@ func (api *API) oauthAuthorizationServerMetadata(w http.ResponseWriter, _ *http.
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: []string{"none"},
 		ScopesSupported:                   []string{oauth.ScopeMCP},
+		ResourceIndicatorsSupported:       true,
 	})
 }
 
@@ -154,8 +156,9 @@ func (api *API) oauthRegisterClient(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "only public clients with token_endpoint_auth_method=none are supported")
 		return
 	}
-	if len(request.GrantTypes) > 0 && !sameStringSet(request.GrantTypes, []string{"authorization_code", "refresh_token"}) {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "grant_types must be authorization_code and refresh_token")
+	grantTypes, ok := normalizeOAuthGrantTypes(request.GrantTypes)
+	if !ok {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "grant_types must include authorization_code and only use authorization_code or refresh_token")
 		return
 	}
 	if len(request.ResponseTypes) > 0 && !sameStringSet(request.ResponseTypes, []string{"code"}) {
@@ -170,58 +173,162 @@ func (api *API) oauthRegisterClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, oauthClientRegistrationResponse{
 		ClientID: client.ID, ClientName: client.Name, RedirectURIs: client.RedirectURIs,
 		TokenEndpointAuthMethod: "none",
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		GrantTypes:              grantTypes,
 		ResponseTypes:           []string{"code"},
 		ClientIDIssuedAt:        client.CreatedAt.Unix(),
 	})
 }
 
+// oauthAuthorizeForm 是公开的 OAuth Authorization Endpoint（GET /oauth/authorize）。
+// 校验通过后 302 到前端 SPA 同意页 /oauth/consent（未登录时携带 return_to 先去登录），
+// 真正的同意提交在同源 JSON 接口 POST /api/v1/oauth/consent 完成，彻底规避浏览器 form-action 重定向链拦截。
 func (api *API) oauthAuthorizeForm(w http.ResponseWriter, r *http.Request) {
 	if api.oauth == nil {
 		http.NotFound(w, r)
 		return
 	}
-	request, state, err := api.parseOAuthAuthorizationRequest(r.URL.Query())
-	if err != nil {
-		writeOAuthAuthorizeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	w.Header().Set("Cache-Control", "no-store")
+	query := r.URL.Query()
+	clientID := strings.TrimSpace(query.Get("client_id"))
+	redirectURI := strings.TrimSpace(query.Get("redirect_uri"))
+	state := query.Get("state")
+
+	// 第一步先确认 client_id 与 redirect_uri 已注册可信；不可信时绝不开放重定向，只落在站内错误页。
+	if clientID == "" || redirectURI == "" {
+		http.Redirect(w, r, oauthConsentPagePath+"?error=invalid_request", http.StatusFound)
 		return
 	}
-	client, err := api.oauth.ValidateAuthorizationRequest(r.Context(), request)
-	if err != nil {
-		api.handleOAuthAuthorizeValidationError(w, err)
-		return
-	}
-	identity, err := api.webIdentityFromCookie(r)
-	if err != nil {
-		returnTo := r.URL.RequestURI()
-		http.Redirect(w, r, "/?return_to="+url.QueryEscape(returnTo), http.StatusFound)
+	if _, err := api.oauth.ValidateClientRedirect(r.Context(), clientID, redirectURI); err != nil {
+		if errors.Is(err, oauth.ErrInvalidClient) || errors.Is(err, oauth.ErrUntrustedRedirect) {
+			http.Redirect(w, r, oauthConsentPagePath+"?error=invalid_request", http.StatusFound)
+			return
+		}
+		api.logger.Error("validate oauth client redirect failed", "error", err)
+		http.Redirect(w, r, oauthConsentPagePath+"?error=server_error", http.StatusFound)
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// client_id 与 redirect_uri 已可信，后续参数错误按 RFC 6749 §4.1.2.1 重定向回客户端回调地址。
+	request, parsedState, errCode, err := api.parseOAuthAuthorizationRequest(query)
+	if err != nil {
+		api.redirectOAuthAuthorizationResult(w, r, redirectURI, parsedState, "", errCode)
+		return
+	}
+	_, normalized, err := api.oauth.NormalizeAuthorizationRequest(r.Context(), request)
+	if err != nil {
+		api.redirectOAuthAuthorizationResult(w, r, redirectURI, state, "", oauthAuthorizeErrorCode(err))
+		return
+	}
+
+	consentURL := oauthConsentPagePath + "?" + oauthConsentQueryValues(normalized, state).Encode()
+	if _, err := api.webIdentityFromCookie(r); err != nil {
+		http.Redirect(w, r, "/?return_to="+url.QueryEscape(consentURL), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, consentURL, http.StatusFound)
+}
+
+// oauthConsentGet 返回 SPA 授权同意页展示所需的客户端与工作空间信息（受人类会话保护）。
+func (api *API) oauthConsentGet(w http.ResponseWriter, r *http.Request) {
+	if api.oauth == nil {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_ = oauthConsentTemplate.Execute(w, struct {
-		ClientID      string
-		ClientName    string
-		RedirectURI   string
-		Scope         string
-		State         string
-		CodeChallenge string
-		Resource      string
-		WorkspaceName string
-	}{
-		ClientID: client.ID, ClientName: client.Name, RedirectURI: request.RedirectURI,
-		Scope: request.Scope, State: state, CodeChallenge: request.CodeChallenge,
-		Resource: request.Resource, WorkspaceName: identity.WorkspaceName,
+	request, _, _, err := api.parseOAuthAuthorizationRequest(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "oauth_request_invalid", err.Error())
+		return
+	}
+	client, normalized, err := api.oauth.NormalizeAuthorizationRequest(r.Context(), request)
+	if err != nil {
+		api.writeConsentValidationError(w, err)
+		return
+	}
+	identity := identityFromRequest(r)
+	writeJSON(w, http.StatusOK, oauthConsentResponse{
+		ClientID:      client.ID,
+		ClientName:    client.Name,
+		RedirectURI:   normalized.RedirectURI,
+		Scope:         normalized.Scope,
+		Resource:      normalized.Resource,
+		WorkspaceName: identity.WorkspaceName,
 	})
 }
 
+// oauthConsentSubmit 处理 SPA 授权同意页的批准/拒绝决策（受人类会话与 requireJSONWrites 保护），
+// 返回客户端回调地址 redirect_to，由前端通过 window.location.assign 导航。
+func (api *API) oauthConsentSubmit(w http.ResponseWriter, r *http.Request) {
+	if api.oauth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	var body oauthConsentSubmitRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	values := url.Values{}
+	for key, value := range map[string]string{
+		"response_type":         body.ResponseType,
+		"client_id":             body.ClientID,
+		"redirect_uri":          body.RedirectURI,
+		"scope":                 body.Scope,
+		"state":                 body.State,
+		"code_challenge":        body.CodeChallenge,
+		"code_challenge_method": body.CodeChallengeMethod,
+		"resource":              body.Resource,
+	} {
+		if value != "" {
+			values.Set(key, value)
+		}
+	}
+	request, state, _, err := api.parseOAuthAuthorizationRequest(values)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "oauth_request_invalid", err.Error())
+		return
+	}
+	_, normalized, err := api.oauth.NormalizeAuthorizationRequest(r.Context(), request)
+	if err != nil {
+		api.writeConsentValidationError(w, err)
+		return
+	}
+
+	decision := strings.TrimSpace(body.Decision)
+	switch decision {
+	case "deny":
+		redirectTo, err := api.buildOAuthAuthorizationRedirect(normalized.RedirectURI, state, "", "access_denied")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "oauth_request_invalid", "invalid redirect_uri")
+			return
+		}
+		writeJSON(w, http.StatusOK, oauthConsentSubmitResponse{RedirectTo: redirectTo})
+	case "approve", "allow":
+		identity := identityFromRequest(r)
+		code, err := api.oauth.Authorize(r.Context(), identity, normalized)
+		if err != nil {
+			api.writeConsentValidationError(w, err)
+			return
+		}
+		redirectTo, err := api.buildOAuthAuthorizationRedirect(code.RedirectURI, state, code.Code, "")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "oauth_request_invalid", "invalid redirect_uri")
+			return
+		}
+		writeJSON(w, http.StatusOK, oauthConsentSubmitResponse{RedirectTo: redirectTo})
+	default:
+		writeError(w, http.StatusBadRequest, "oauth_request_invalid", "decision must be approve, allow, or deny")
+	}
+}
+
+// oauthAuthorizeSubmit 保留向后兼容的表单提交端点，响应显式移除 form-action CSP 限制，
+// 避免兼容客户端或旧表单提交时 302 跨源回调被浏览器拦截。
 func (api *API) oauthAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	if api.oauth == nil {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Content-Security-Policy", oauthAuthorizeSubmitCSP)
 	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		writeOAuthAuthorizeError(w, http.StatusForbidden, "invalid_request", "cross-site authorization submission is not allowed")
 		return
@@ -234,12 +341,13 @@ func (api *API) oauthAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 		writeOAuthAuthorizeError(w, http.StatusBadRequest, "invalid_request", "invalid authorization form")
 		return
 	}
-	request, state, err := api.parseOAuthAuthorizationRequest(r.PostForm)
+	request, state, errCode, err := api.parseOAuthAuthorizationRequest(r.PostForm)
 	if err != nil {
-		writeOAuthAuthorizeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeOAuthAuthorizeError(w, http.StatusBadRequest, errCode, err.Error())
 		return
 	}
-	if _, err := api.oauth.ValidateAuthorizationRequest(r.Context(), request); err != nil {
+	_, normalized, err := api.oauth.NormalizeAuthorizationRequest(r.Context(), request)
+	if err != nil {
 		api.handleOAuthAuthorizeValidationError(w, err)
 		return
 	}
@@ -248,11 +356,12 @@ func (api *API) oauthAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 		writeOAuthAuthorizeError(w, http.StatusUnauthorized, "login_required", "sign in to CycleDock before authorizing this client")
 		return
 	}
-	if r.PostForm.Get("decision") != "approve" {
-		api.redirectOAuthAuthorizationResult(w, r, request.RedirectURI, state, "", "access_denied")
+	decision := strings.TrimSpace(r.PostForm.Get("decision"))
+	if decision != "approve" && decision != "allow" {
+		api.redirectOAuthAuthorizationResult(w, r, normalized.RedirectURI, state, "", "access_denied")
 		return
 	}
-	code, err := api.oauth.Authorize(r.Context(), identity, request)
+	code, err := api.oauth.Authorize(r.Context(), identity, normalized)
 	if err != nil {
 		api.handleOAuthAuthorizeValidationError(w, err)
 		return
@@ -305,32 +414,47 @@ func (api *API) oauthToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (api *API) parseOAuthAuthorizationRequest(values url.Values) (oauth.AuthorizeRequest, string, error) {
+func (api *API) parseOAuthAuthorizationRequest(values url.Values) (oauth.AuthorizeRequest, string, string, error) {
+	state := values.Get("state")
 	if values.Get("response_type") != "code" {
-		return oauth.AuthorizeRequest{}, "", errors.New("response_type must be code")
+		return oauth.AuthorizeRequest{}, state, "unsupported_response_type", errors.New("response_type must be code")
 	}
 	if values.Get("code_challenge_method") != "S256" {
-		return oauth.AuthorizeRequest{}, "", errors.New("code_challenge_method must be S256")
-	}
-	scope := values.Get("scope")
-	if scope == "" {
-		scope = oauth.ScopeMCP
+		return oauth.AuthorizeRequest{}, state, "invalid_request", errors.New("code_challenge_method must be S256")
 	}
 	request := oauth.AuthorizeRequest{
-		ClientID: values.Get("client_id"), RedirectURI: values.Get("redirect_uri"),
-		CodeChallenge: values.Get("code_challenge"), Scope: scope, Resource: values.Get("resource"),
+		ClientID:      strings.TrimSpace(values.Get("client_id")),
+		RedirectURI:   strings.TrimSpace(values.Get("redirect_uri")),
+		CodeChallenge: strings.TrimSpace(values.Get("code_challenge")),
+		Scope:         strings.TrimSpace(values.Get("scope")),
+		Resource:      strings.TrimSpace(values.Get("resource")),
 	}
-	if request.ClientID == "" || request.RedirectURI == "" || request.CodeChallenge == "" || request.Resource == "" {
-		return oauth.AuthorizeRequest{}, "", errors.New("client_id, redirect_uri, code_challenge and resource are required")
+	if request.ClientID == "" || request.RedirectURI == "" || request.CodeChallenge == "" {
+		return oauth.AuthorizeRequest{}, state, "invalid_request", errors.New("client_id, redirect_uri and code_challenge are required")
 	}
-	return request, values.Get("state"), nil
+	return request, state, "", nil
 }
 
-func (api *API) redirectOAuthAuthorizationResult(w http.ResponseWriter, r *http.Request, redirectURI, state, code, oauthError string) {
+func oauthConsentQueryValues(request oauth.AuthorizeRequest, state string) url.Values {
+	values := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {request.ClientID},
+		"redirect_uri":          {request.RedirectURI},
+		"scope":                 {request.Scope},
+		"code_challenge":        {request.CodeChallenge},
+		"code_challenge_method": {"S256"},
+		"resource":              {request.Resource},
+	}
+	if state != "" {
+		values.Set("state", state)
+	}
+	return values
+}
+
+func (api *API) buildOAuthAuthorizationRedirect(redirectURI, state, code, oauthError string) (string, error) {
 	target, err := url.Parse(redirectURI)
 	if err != nil {
-		writeOAuthAuthorizeError(w, http.StatusBadRequest, "invalid_request", "invalid redirect_uri")
-		return
+		return "", err
 	}
 	query := target.Query()
 	if code != "" {
@@ -344,7 +468,49 @@ func (api *API) redirectOAuthAuthorizationResult(w http.ResponseWriter, r *http.
 	}
 	query.Set("iss", api.oauth.Issuer())
 	target.RawQuery = query.Encode()
-	http.Redirect(w, r, target.String(), http.StatusFound)
+	return target.String(), nil
+}
+
+func (api *API) redirectOAuthAuthorizationResult(w http.ResponseWriter, r *http.Request, redirectURI, state, code, oauthError string) {
+	target, err := api.buildOAuthAuthorizationRedirect(redirectURI, state, code, oauthError)
+	if err != nil {
+		writeOAuthAuthorizeError(w, http.StatusBadRequest, "invalid_request", "invalid redirect_uri")
+		return
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func oauthAuthorizeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, oauth.ErrInvalidScope):
+		return "invalid_scope"
+	case errors.Is(err, oauth.ErrInvalidResource):
+		return "invalid_target"
+	case errors.Is(err, oauth.ErrAuthorizationDenied):
+		return "access_denied"
+	case errors.Is(err, oauth.ErrInvalidRequest), errors.Is(err, oauth.ErrInvalidClient), errors.Is(err, oauth.ErrUntrustedRedirect):
+		return "invalid_request"
+	default:
+		return "server_error"
+	}
+}
+
+func (api *API) writeConsentValidationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, oauth.ErrInvalidClient), errors.Is(err, oauth.ErrUntrustedRedirect):
+		writeError(w, http.StatusBadRequest, "oauth_request_invalid", "授权请求无效或已失效，请回到客户端重新发起")
+	case errors.Is(err, oauth.ErrInvalidScope):
+		writeError(w, http.StatusBadRequest, "invalid_scope", "不支持请求的权限范围")
+	case errors.Is(err, oauth.ErrInvalidResource):
+		writeError(w, http.StatusBadRequest, "invalid_target", "请求的目标资源不受支持")
+	case errors.Is(err, oauth.ErrAuthorizationDenied):
+		writeError(w, http.StatusForbidden, "access_denied", "当前账号无权批准该工作空间授权")
+	case errors.Is(err, oauth.ErrInvalidRequest):
+		writeError(w, http.StatusBadRequest, "oauth_request_invalid", err.Error())
+	default:
+		api.logger.Error("OAuth consent error", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "OAuth 授权服务暂时不可用")
+	}
 }
 
 func (api *API) webIdentityFromCookie(r *http.Request) (auth.Identity, error) {
@@ -411,8 +577,9 @@ func requireOAuthMediaType(w http.ResponseWriter, r *http.Request, expected stri
 }
 
 func decodeOAuthJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	// RFC 7591 动态注册允许客户端携带扩展元数据字段（如 client_uri、scope、software_id），
+	// 这里不拒绝未知字段，避免外部 MCP 客户端注册失败。
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "invalid JSON request")
 		return false
@@ -422,6 +589,34 @@ func decodeOAuthJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// normalizeOAuthGrantTypes 允许客户端缺省 grant_types，或仅传 ["authorization_code"]，
+// 只要包含 authorization_code 且全部值属于受支持集合即放行。
+func normalizeOAuthGrantTypes(raw []string) ([]string, bool) {
+	if len(raw) == 0 {
+		return []string{"authorization_code", "refresh_token"}, true
+	}
+	seen := make(map[string]struct{}, len(raw))
+	normalized := make([]string, 0, len(raw))
+	hasAuthCode := false
+	for _, item := range raw {
+		switch item {
+		case "authorization_code":
+			hasAuthCode = true
+		case "refresh_token":
+		default:
+			return nil, false
+		}
+		if _, exists := seen[item]; !exists {
+			seen[item] = struct{}{}
+			normalized = append(normalized, item)
+		}
+	}
+	if !hasAuthCode {
+		return nil, false
+	}
+	return normalized, true
 }
 
 func sameStringSet(actual, expected []string) bool {
