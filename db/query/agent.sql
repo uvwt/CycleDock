@@ -321,3 +321,18 @@ RETURNING *;
 DELETE FROM workspace_device_tool_guards
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND device_node_id = sqlc.arg(device_node_id);
+
+-- name: ListRecentCardHumanTurns :many
+SELECT t.content
+FROM card_turns t
+JOIN sources s
+  ON s.workspace_id = t.workspace_id
+ AND s.id = t.created_by_source_id
+WHERE t.workspace_id = sqlc.arg(workspace_id)
+  AND t.card_id = sqlc.arg(card_id)
+  AND t.source = 'human'
+  AND t.cancelled_at IS NULL
+  AND s.kind = 'human'
+  AND (sqlc.arg(max_sequence)::bigint <= 0 OR t.sequence <= sqlc.arg(max_sequence)::bigint)
+ORDER BY t.sequence DESC
+LIMIT sqlc.arg(row_limit);
