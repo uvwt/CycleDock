@@ -3,15 +3,38 @@ package nexusdock
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const (
+	fleetCacheTTL         = 15 * time.Second
+	maxFleetResponseBytes = 4 << 20
+)
+
+var (
+	errUpstreamUnauthorized  = errors.New("NexusDock MCP unauthorized")
+	errFleetRedirectRefused  = errors.New("NexusDock MCP redirect refused")
+	errFleetResponseTooLarge = errors.New("NexusDock MCP response too large")
+)
+
+type fleetHTTPStatusError struct {
+	code int
+}
+
+func (e fleetHTTPStatusError) Error() string {
+	return fmt.Sprintf("NexusDock MCP HTTP %d", e.code)
+}
 
 // DeviceSkill 表示设备上安装的 Skill 摘要。
 type DeviceSkill struct {
@@ -70,14 +93,114 @@ type fleetCacheEntry struct {
 	fetchedAt time.Time
 }
 
-type bearerTransport struct {
-	token string
-	base  http.RoundTripper
+type fleetTransport struct {
+	token         string
+	allowedOrigin string
+	base          http.RoundTripper
+	maxBytes      int64
+
+	mu         sync.Mutex
+	recordedErr error
 }
 
-func (b *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", "Bearer "+b.token)
-	return b.base.RoundTrip(req)
+func (t *fleetTransport) recordError(err error) {
+	if err == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.recordedErr == nil {
+		t.recordedErr = err
+	}
+	t.mu.Unlock()
+}
+
+func (t *fleetTransport) lastError() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.recordedErr
+}
+
+func fleetEndpointOrigin(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+}
+
+func (t *fleetTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	// 仅向已校验的同 origin 附加 Bearer，避免意外跳出授权目标泄露凭据。
+	if t.allowedOrigin != "" && fleetEndpointOrigin(clone.URL.String()) == t.allowedOrigin {
+		clone.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(clone)
+	if err != nil {
+		return nil, err
+	}
+	// 拦截鉴权与上游错误状态码，避免上游响应正文（可能含内部细节）渗入错误消息。
+	// 404/405 透传给 MCP SDK 处理会话关闭与协议协商。
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		_ = resp.Body.Close()
+		t.recordError(errUpstreamUnauthorized)
+		return nil, errUpstreamUnauthorized
+	case resp.StatusCode == http.StatusForbidden:
+		_ = resp.Body.Close()
+		t.recordError(ErrConnectionExpired)
+		return nil, ErrConnectionExpired
+	case resp.StatusCode >= http.StatusBadRequest &&
+		resp.StatusCode != http.StatusNotFound &&
+		resp.StatusCode != http.StatusMethodNotAllowed:
+		_ = resp.Body.Close()
+		statusErr := fleetHTTPStatusError{code: resp.StatusCode}
+		t.recordError(statusErr)
+		return nil, statusErr
+	}
+	if t.maxBytes > 0 {
+		if resp.ContentLength > t.maxBytes {
+			_ = resp.Body.Close()
+			t.recordError(errFleetResponseTooLarge)
+			return nil, errFleetResponseTooLarge
+		}
+		resp.Body = &boundedFleetReadCloser{
+			ReadCloser: resp.Body,
+			remaining:  t.maxBytes,
+			onExceeded: func() { t.recordError(errFleetResponseTooLarge) },
+		}
+	}
+	return resp, nil
+}
+
+type boundedFleetReadCloser struct {
+	io.ReadCloser
+	remaining  int64
+	onExceeded func()
+}
+
+func (b *boundedFleetReadCloser) Read(p []byte) (int, error) {
+	if b.remaining <= 0 {
+		var extra [1]byte
+		n, err := b.ReadCloser.Read(extra[:])
+		if n > 0 {
+			if b.onExceeded != nil {
+				b.onExceeded()
+			}
+			return 0, errFleetResponseTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.remaining {
+		p = p[:b.remaining]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.remaining -= int64(n)
+	return n, err
 }
 
 type rawFleetPayload struct {
@@ -129,50 +252,104 @@ type rawFleetNode struct {
 }
 
 // Fleet 查询当前 Workspace 所属 NexusDock 账号下的设备及各设备上的 Skill 与 MCP。
-// 优先通过 MCP agentdock_context 读取完整运行能力；若 MCP 阶段性连接异常，平滑降级为 REST 设备摘要。
+// 统一走 MCP agentdock_context，并在内存短缓存与 singleflight 上与 Devices 共享结果，避免小窗和页面重复打上游。
 func (s *Service) Fleet(ctx context.Context, workspaceID uuid.UUID, forceRefresh bool) (*FleetResponse, error) {
 	if s == nil {
 		return &FleetResponse{Available: false, Connected: false, Devices: []FleetDevice{}}, nil
 	}
 
-	// 缓存命中检查：优先检查内存缓存，命中时无需查询 DB 与上游 MCP。
 	if !forceRefresh {
-		s.fleetMu.RLock()
-		entry, found := s.fleetCache[workspaceID]
-		s.fleetMu.RUnlock()
-		if found && time.Since(entry.fetchedAt) < 20*time.Second {
-			return entry.data, nil
+		if cached, ok := s.cachedFleet(workspaceID); ok {
+			return cached, nil
 		}
 	}
 
+	groupKey := workspaceID.String()
+	if forceRefresh {
+		groupKey = "refresh:" + groupKey
+	}
+
+	ch := s.fleetGroup.DoChan(groupKey, func() (any, error) {
+		if !forceRefresh {
+			if cached, ok := s.cachedFleet(workspaceID); ok {
+				return cached, nil
+			}
+		}
+
+		s.fleetMu.RLock()
+		epoch := s.fleetEpoch[workspaceID]
+		s.fleetMu.RUnlock()
+
+		// 使用与单个请求解耦的超时上下文，避免并发共享 singleflight 时某个请求取消中断其他调用方。
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+
+		fleetResp, err := s.loadFleetFromUpstream(fetchCtx, workspaceID)
+		if err != nil {
+			return nil, err
+		}
+
+		// 若拉取期间发生了断开或重新授权，则丢弃旧 epoch 的写回，防止过期快照复活。
+		s.fleetMu.Lock()
+		if s.fleetEpoch[workspaceID] == epoch {
+			if s.fleetCache == nil {
+				s.fleetCache = make(map[uuid.UUID]fleetCacheEntry)
+			}
+			s.fleetCache[workspaceID] = fleetCacheEntry{
+				data:      fleetResp,
+				fetchedAt: time.Now(),
+			}
+		}
+		s.fleetMu.Unlock()
+		return fleetResp, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*FleetResponse), nil
+	}
+}
+
+func (s *Service) cachedFleet(workspaceID uuid.UUID) (*FleetResponse, bool) {
+	s.fleetMu.RLock()
+	entry, found := s.fleetCache[workspaceID]
+	s.fleetMu.RUnlock()
+	if found && time.Since(entry.fetchedAt) < fleetCacheTTL {
+		return entry.data, true
+	}
+	return nil, false
+}
+
+func (s *Service) loadFleetFromUpstream(ctx context.Context, workspaceID uuid.UUID) (*FleetResponse, error) {
 	connection, err := s.Runtime(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 尝试通过 MCP agentdock_context 读取设备及能力。
 	fleetResp, err := s.fetchFleetContext(ctx, connection)
-	if err != nil {
-		// MCP 不可用时平滑降级为 REST 设备列表，保证页面不整体报红。
-		devices, restErr := s.fetchDevices(ctx, connection)
-		if restErr == nil {
-			fleetResp = fallbackDevicesToFleet(devices)
-		} else {
-			return nil, fmt.Errorf("fetch NexusDock fleet: %w (fallback failed: %v)", err, restErr)
+	if errors.Is(err, errUpstreamUnauthorized) {
+		// 上游 MCP 返回 401 时强制刷新一次 OAuth token 并重试；
+		// 刷新失败（如 refresh_token 失效）或刷新后再次 401 才判定为授权过期。
+		refreshed, refreshErr := s.ForceRefresh(ctx, workspaceID)
+		if refreshErr != nil {
+			return nil, refreshErr
+		}
+		fleetResp, err = s.fetchFleetContext(ctx, refreshed)
+		if errors.Is(err, errUpstreamUnauthorized) {
+			return nil, ErrConnectionExpired
 		}
 	}
-
-	// 写入内存缓存
-	s.fleetMu.Lock()
-	if s.fleetCache == nil {
-		s.fleetCache = make(map[uuid.UUID]fleetCacheEntry)
+	if err != nil {
+		if errors.Is(err, ErrConnectionExpired) {
+			return nil, ErrConnectionExpired
+		}
+		return nil, fmt.Errorf("fetch NexusDock fleet: %w", err)
 	}
-	s.fleetCache[workspaceID] = fleetCacheEntry{
-		data:      fleetResp,
-		fetchedAt: time.Now(),
-	}
-	s.fleetMu.Unlock()
-
 	return fleetResp, nil
 }
 
@@ -181,16 +358,32 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 		return nil, fmt.Errorf("invalid NexusDock MCP origin: %w", err)
 	}
 
+	baseTransport := http.DefaultTransport
+	if s != nil && s.client != nil && s.client.Transport != nil {
+		baseTransport = s.client.Transport
+	}
+
 	mcpClient := mcp.NewClient(&mcp.Implementation{
 		Name:    "cycledock-fleet-viewer",
 		Version: "1.0.0",
 	}, nil)
 
+	rt := &fleetTransport{
+		token:         connection.AccessToken,
+		allowedOrigin: fleetEndpointOrigin(connection.URL),
+		base:          baseTransport,
+		maxBytes:      maxFleetResponseBytes,
+	}
+
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: connection.URL,
 		HTTPClient: &http.Client{
-			Transport: &bearerTransport{token: connection.AccessToken, base: http.DefaultTransport},
+			Transport: rt,
 			Timeout:   15 * time.Second,
+			// 拒绝重定向，防止 Bearer 在跳转时泄露到其他地址。
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errFleetRedirectRefused
+			},
 		},
 		DisableStandaloneSSE: true,
 	}
@@ -200,7 +393,7 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 
 	session, err := mcpClient.Connect(connectCtx, transport, nil)
 	if err != nil {
-		return nil, fmt.Errorf("connect MCP agentdock_context: %w", err)
+		return nil, classifyFleetMCPError("connect NexusDock MCP", err, rt.lastError())
 	}
 	defer session.Close()
 
@@ -211,18 +404,30 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 		Name: "agentdock_context",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("call agentdock_context: %w", err)
+		return nil, classifyFleetMCPError("call NexusDock agentdock_context", err, rt.lastError())
+	}
+	if result == nil || result.IsError {
+		return nil, errors.New("NexusDock agentdock_context returned error")
 	}
 
 	var payload rawFleetPayload
+	parsed := false
 	for _, content := range result.Content {
 		textContent, ok := content.(*mcp.TextContent)
 		if !ok || textContent.Text == "" {
 			continue
 		}
-		if err := json.Unmarshal([]byte(textContent.Text), &payload); err == nil && len(payload.Nodes) > 0 {
-			break
+		var candidate rawFleetPayload
+		if err := json.Unmarshal([]byte(textContent.Text), &candidate); err == nil && candidate.Nodes != nil {
+			payload = candidate
+			parsed = true
+			if len(candidate.Nodes) > 0 {
+				break
+			}
 		}
+	}
+	if !parsed {
+		return nil, errors.New("invalid NexusDock agentdock_context response")
 	}
 
 	devices := make([]FleetDevice, 0, len(payload.Nodes))
@@ -381,29 +586,28 @@ func (s *Service) fetchFleetContext(ctx context.Context, connection RuntimeConne
 	}, nil
 }
 
-func fallbackDevicesToFleet(devices []Device) *FleetResponse {
-	fleetDevices := make([]FleetDevice, 0, len(devices))
-	for _, d := range devices {
-		fleetDevices = append(fleetDevices, FleetDevice{
-			ID:           d.ID,
-			Name:         d.Name,
-			Online:       d.Online,
-			OS:           d.OS,
-			Arch:         d.Arch,
-			AgentVersion: d.AgentVersion,
-			Skills:       []DeviceSkill{},
-			DynamicMCP:   []DeviceDynamicMCP{},
-		})
-	}
-	sort.Slice(fleetDevices, func(i, j int) bool {
-		if fleetDevices[i].Online != fleetDevices[j].Online {
-			return fleetDevices[i].Online
+func classifyFleetMCPError(action string, err, transportErr error) error {
+	for _, candidate := range []error{transportErr, err} {
+		if candidate == nil {
+			continue
 		}
-		return fleetDevices[i].Name < fleetDevices[j].Name
-	})
-	return &FleetResponse{
-		Available: true,
-		Connected: true,
-		Devices:   fleetDevices,
+		switch {
+		case errors.Is(candidate, errUpstreamUnauthorized):
+			return errUpstreamUnauthorized
+		case errors.Is(candidate, ErrConnectionExpired):
+			return ErrConnectionExpired
+		case errors.Is(candidate, errFleetRedirectRefused):
+			return errFleetRedirectRefused
+		case errors.Is(candidate, errFleetResponseTooLarge):
+			return errFleetResponseTooLarge
+		case errors.Is(candidate, context.DeadlineExceeded), errors.Is(candidate, context.Canceled):
+			return candidate
+		}
+		var statusErr fleetHTTPStatusError
+		if errors.As(candidate, &statusErr) {
+			return statusErr
+		}
 	}
+	// 其余 MCP 传输/协议解析失败做脱敏收口，避免上游原始正文渗入错误消息。
+	return fmt.Errorf("%s failed", action)
 }

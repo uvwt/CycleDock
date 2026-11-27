@@ -2,13 +2,6 @@ package nexusdock
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -23,95 +16,33 @@ type Device struct {
 	AgentVersion string `json:"agent_version"`
 }
 
-type devicesCacheEntry struct {
-	devices   []Device
-	fetchedAt time.Time
-}
-
-const devicesCacheTTL = 15 * time.Second
-
-func (s *Service) Devices(ctx context.Context, workspaceID uuid.UUID) ([]Device, error) {
+// Devices 返回当前 Workspace 关联 NexusDock 设备的公开在线摘要。
+// 复用 MCP Fleet 快照与短时缓存，避免拿 mcp OAuth token 请求 REST Integration 端点触发 resource_mismatch。
+func (s *Service) Devices(ctx context.Context, workspaceID uuid.UUID, forceRefresh bool) ([]Device, error) {
 	if s == nil {
 		return nil, ErrDisabled
 	}
-	// 短时复用同一 Workspace 的设备在线摘要，避免高频切换卡片时每次同步穿透远端 NexusDock。
-	s.devicesMu.RLock()
-	cached, found := s.devicesCache[workspaceID]
-	s.devicesMu.RUnlock()
-	if found && time.Since(cached.fetchedAt) < devicesCacheTTL {
-		out := make([]Device, len(cached.devices))
-		copy(out, cached.devices)
-		return out, nil
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	connection, err := s.Runtime(ctx, workspaceID)
+	fleet, err := s.Fleet(ctx, workspaceID, forceRefresh)
 	if err != nil {
 		return nil, err
 	}
-	devices, err := s.fetchDevices(ctx, connection)
-	if err != nil {
-		return nil, err
-	}
-
-	copied := make([]Device, len(devices))
-	copy(copied, devices)
-	s.devicesMu.Lock()
-	if s.devicesCache == nil {
-		s.devicesCache = make(map[uuid.UUID]devicesCacheEntry)
-	}
-	s.devicesCache[workspaceID] = devicesCacheEntry{
-		devices:   copied,
-		fetchedAt: time.Now(),
-	}
-	s.devicesMu.Unlock()
-	return devices, nil
+	return devicesFromFleet(fleet), nil
 }
 
-func (s *Service) fetchDevices(ctx context.Context, connection RuntimeConnection) ([]Device, error) {
-	endpoint, err := url.Parse(connection.URL)
-	if err != nil || validateServiceURL(connection.URL) != nil {
-		return nil, errors.New("invalid NexusDock device directory origin")
+func devicesFromFleet(fleet *FleetResponse) []Device {
+	if fleet == nil || len(fleet.Devices) == 0 {
+		return []Device{}
 	}
-	endpoint.Path, endpoint.RawPath = "/v1/integrations/devices", ""
-	endpoint.RawQuery, endpoint.Fragment = "", ""
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return nil, err
+	devices := make([]Device, 0, len(fleet.Devices))
+	for _, d := range fleet.Devices {
+		devices = append(devices, Device{
+			ID:           d.ID,
+			Name:         d.Name,
+			Online:       d.Online,
+			OS:           d.OS,
+			Arch:         d.Arch,
+			AgentVersion: d.AgentVersion,
+		})
 	}
-	request.Header.Set("Authorization", "Bearer "+connection.AccessToken)
-	request.Header.Set("Accept", "application/json")
-
-	// 设备目录只读当前授权的同 origin；拒绝重定向，避免 Bearer 被带到其他地址。
-	client := *s.client
-	client.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return errors.New("NexusDock device directory redirect refused")
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("fetch NexusDock devices: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return nil, ErrConnectionExpired
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("NexusDock device directory HTTP %d", response.StatusCode)
-	}
-	const maxDeviceResponseBytes = 2 << 20
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxDeviceResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read NexusDock devices: %w", err)
-	}
-	if len(body) > maxDeviceResponseBytes {
-		return nil, errors.New("NexusDock device directory response too large")
-	}
-	var result struct {
-		Devices []Device `json:"devices"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil || result.Devices == nil {
-		return nil, errors.New("invalid NexusDock device directory response")
-	}
-	return result.Devices, nil
+	return devices
 }
