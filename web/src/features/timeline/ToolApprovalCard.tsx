@@ -154,69 +154,56 @@ export function ToolApprovalCard({
   }
 
   if (!isPending && !expandedHistory) {
+    // 耗时与执行链路入口放在审批胶囊外侧紧邻并排展示，避免与胶囊内展开详情的下箭头混淆
     const traceTrigger =
       completedAttempt && completedAttempt.started_at && completedAttempt.finished_at ? (
-        <span
-          className="inline-flex shrink-0 items-center"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <RunDuration
-            startedAt={completedAttempt.started_at}
-            finishedAt={completedAttempt.finished_at}
-            active={false}
-            onClick={
-              onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
-            }
-          />
-        </span>
+        <RunDuration
+          startedAt={completedAttempt.started_at}
+          finishedAt={completedAttempt.finished_at}
+          active={false}
+          onClick={
+            onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
+          }
+        />
       ) : null;
 
     return (
       <div
         data-tool-approval-card
         data-approval-status={approval.status}
-        className="my-1.5"
+        className="my-1.5 flex flex-wrap items-center gap-2"
       >
-        <div className="inline-flex max-w-full items-center gap-1 rounded-xl border border-line/70 bg-muted/30 pr-2 text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60">
-          <button
-            type="button"
-            onClick={() => setExpandedHistory(true)}
-            className="inline-flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-1 text-left"
-          >
-            {isApproved ? (
-              <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            ) : isSuperseded ? (
-              <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
-            )}
-            <span className="font-mono font-medium text-foreground">
-              {approval.tool_name}
-            </span>
-            <span className="shrink-0">
-              ·{" "}
-              {isApproved
-                ? t("已允许执行")
-                : isSuperseded
-                  ? t("已失效（已有后续推进）")
-                  : t("已拒绝执行")}
-            </span>
-            {approval.resolution_comment && (
-              <span className="truncate text-faint">
-                · {approval.resolution_comment}
-              </span>
-            )}
-            <ChevronDown className="size-3.5 shrink-0 text-faint" />
-          </button>
-          {traceTrigger && (
-            <>
-              <span className="select-none text-[10px] text-muted-foreground/40">
-                •
-              </span>
-              {traceTrigger}
-            </>
+        <button
+          type="button"
+          onClick={() => setExpandedHistory(true)}
+          className="inline-flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line/70 bg-muted/30 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60"
+        >
+          {isApproved ? (
+            <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : isSuperseded ? (
+            <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ShieldX className="size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
           )}
-        </div>
+          <span className="font-mono font-medium text-foreground">
+            {approval.tool_name}
+          </span>
+          <span className="shrink-0">
+            ·{" "}
+            {isApproved
+              ? t("已允许执行")
+              : isSuperseded
+                ? t("已失效（已有后续推进）")
+                : t("已拒绝执行")}
+          </span>
+          {approval.resolution_comment && (
+            <span className="truncate text-faint">
+              · {approval.resolution_comment}
+            </span>
+          )}
+          <ChevronDown className="size-3.5 shrink-0 text-faint" />
+        </button>
+        {traceTrigger}
       </div>
     );
   }
