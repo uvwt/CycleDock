@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/realtime"
@@ -165,27 +164,9 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		status = "rejected"
 	}
 
-	resolved, err := api.store.ResolveToolApproval(r.Context(), store.ResolveToolApprovalParams{
-		WorkspaceID:        identity.WorkspaceID,
-		CardID:             cardID,
-		ApprovalID:         approvalID,
-		Status:             status,
-		Comment:            request.Comment,
-		ResolvedBySourceID: identity.SourceID,
-	})
-	if err != nil {
-		api.handleError(w, err)
-		return
-	}
-
 	scopeType, scopeTarget := resolveApprovalScope(approval)
-	if request.Action == "approve_session" {
-		if err := api.store.AddCardScopeWhitelist(r.Context(), identity.WorkspaceID, cardID, scopeType, scopeTarget, identity.SourceID); err != nil {
-			api.handleError(w, err)
-			return
-		}
-	}
-
+	// 审批通过后不再在 HTTP 请求中以 30 秒短超时同步代执行工具，而是统一交给恢复 Turn 通过 ADK 工具链
+	// 原子消费单次放行凭证执行，彻底消除 HTTP 超时后诱导重复重放与并发执行窗口。
 	var followupContent string
 	if status == "rejected" {
 		commentText := request.Comment
@@ -194,19 +175,6 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 		}
 		followupContent = fmt.Sprintf("【工具审批拒绝反馈】\n用户拒绝了工具 `%s` 的调用。\n拒绝原因与补充说明：%s\n请根据上述反馈调整方案继续推进。", approval.ToolName, commentText)
 	} else {
-		var parsedArgs map[string]any
-		_ = json.Unmarshal(approval.Arguments, &parsedArgs)
-		execCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		toolOutput, execErr := agent.ExecuteApprovedTool(
-			execCtx,
-			api.store,
-			api.nexusDock,
-			identity.WorkspaceID,
-			approval.ToolName,
-			parsedArgs,
-		)
-		cancel()
-
 		modeLabel := "允许本次执行"
 		if request.Action == "approve_session" {
 			switch scopeType {
@@ -218,14 +186,39 @@ func (api *API) resolveToolApproval(w http.ResponseWriter, r *http.Request) {
 				modeLabel = "允许执行（本卡片内同类操作不再询问）"
 			}
 		}
-		if execErr != nil {
-			followupContent = fmt.Sprintf("【工具审批通过（%s）】\n你请求调用的工具 `%s` 已获人工批准，已自动加入放行白名单或允许执行。请重新调用该工具或根据当前状态继续推进后续步骤。", modeLabel, approval.ToolName)
+		if request.Action == "approve_session" {
+			followupContent = fmt.Sprintf(
+				"【工具审批通过（%s）】\n用户已批准工具 `%s` 的调用，且已为本卡片授予对应作用域临时白名单。请使用原参数调用该工具并继续推进后续步骤。",
+				modeLabel,
+				approval.ToolName,
+			)
 		} else {
-			if len(toolOutput) > 6000 {
-				toolOutput = toolOutput[:6000] + "\n...(truncated)"
-			}
-			followupContent = fmt.Sprintf("【工具审批通过并已执行（%s）】\n工具 `%s` 已获人工批准并成功执行，返回结果如下：\n```json\n%s\n```\n请基于该执行结果继续推进任务。", modeLabel, approval.ToolName, toolOutput)
+			followupContent = fmt.Sprintf(
+				"【工具审批通过（%s）】\n用户已批准工具 `%s` 的本次调用，系统尚未执行该工具。请使用原参数调用该工具一次以完成该操作（此单次放行凭证仅在同参数首次调用时有效，消费后即失效；切勿重复执行）。",
+				modeLabel,
+				approval.ToolName,
+			)
 		}
+	}
+
+	resolveParams := store.ResolveToolApprovalParams{
+		WorkspaceID:        identity.WorkspaceID,
+		CardID:             cardID,
+		ApprovalID:         approvalID,
+		Status:             status,
+		Comment:            request.Comment,
+		ResolvedBySourceID: identity.SourceID,
+	}
+	if request.Action == "approve_session" {
+		resolveParams.GrantSessionWhitelist = true
+		resolveParams.WhitelistScopeType = scopeType
+		resolveParams.WhitelistScopeTarget = scopeTarget
+	}
+
+	resolved, err := api.store.ResolveToolApproval(r.Context(), resolveParams)
+	if err != nil {
+		api.handleError(w, err)
+		return
 	}
 
 	// 仅入队后台 System Turn 唤醒主模型继续推进，不再伪造人类 comment 聊天事件污染时间线。

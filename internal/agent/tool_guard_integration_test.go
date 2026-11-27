@@ -439,6 +439,76 @@ func TestToolGuard_TogglePrecedenceAndSingleCriticalApprovalIntegration(t *testi
 		t.Fatalf("expected single-approved critical command replay to be allowed, got %+v", approvedReplay)
 	}
 
+	// 单次放行凭证在首次放行时已被原子消费，数据库中应记录 consumed_at，且同参数第二次调用必须再次被拦截
+	consumedRow, err := dataStore.GetToolApproval(ctx, workspace.ID, card.ID, approval.ID)
+	if err != nil {
+		t.Fatalf("get consumed tool approval: %v", err)
+	}
+	if !consumedRow.ConsumedAt.Valid {
+		t.Fatalf("expected consumed_at to be populated after first replay")
+	}
+	secondReplay := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, card.ID, "node-on", deviceNames,
+		"Guard Flow Card", "", "exec_command", criticalArgs,
+	)
+	if secondReplay.Decision != "ask_human" || secondReplay.RiskLevel != "critical" || secondReplay.AllowSessionWhitelist {
+		t.Fatalf("expected second replay with same args to be intercepted after single-use consumption, got %+v", secondReplay)
+	}
+
+	// 非 critical 高危写命令在独立新卡片（无临时白名单）上 approve_once 放行一次后，同参数再次调用必须重新走守卫评估（禁止永久免检）
+	freshCard, err := dataStore.CreateTodoCard(ctx, workspace.ID, project.ID, human.ID, "Fresh Deploy Card", "", uuid.NullUUID{}, 1)
+	if err != nil {
+		t.Fatalf("create fresh deploy card: %v", err)
+	}
+	deployArgs := map[string]any{
+		"node_id": "node-on",
+		"cmd":     "nexusdock-backup && docker compose up -d",
+	}
+	deployApproval, err := dataStore.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID: workspace.ID,
+		CardID:      freshCard.ID,
+		ToolCallID:  "call-deploy-once",
+		ToolName:    "exec_command",
+		Arguments:   deployArgs,
+		RiskLevel:   "high",
+		Reversible:  false,
+		Reason:      "生产发布命令需要确认",
+		ScopeType:   "device",
+		ScopeTarget: "node-on",
+		ScopeLabel:  "Prod Box",
+	})
+	if err != nil {
+		t.Fatalf("create deploy approval: %v", err)
+	}
+	if _, err := dataStore.ResolveToolApproval(ctx, store.ResolveToolApprovalParams{
+		WorkspaceID:        workspace.ID,
+		CardID:             freshCard.ID,
+		ApprovalID:         deployApproval.ID,
+		Status:             string(domain.ToolApprovalStatusApproved),
+		Comment:            "仅放行本次发布",
+		ResolvedBySourceID: human.ID,
+	}); err != nil {
+		t.Fatalf("approve deploy call: %v", err)
+	}
+	beforeModelCalls := guardModelCalls
+	deployFirst := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, freshCard.ID, "node-on", deviceNames,
+		"Fresh Deploy Card", "", "exec_command", deployArgs,
+	)
+	if deployFirst.Decision != "allow" || guardModelCalls != beforeModelCalls {
+		t.Fatalf("expected first deploy replay to consume approval without guard model, decision=%+v calls=%d->%d", deployFirst, beforeModelCalls, guardModelCalls)
+	}
+	deploySecond := EvaluateToolGuard(
+		ctx, dataStore, client, nil, settings,
+		workspace.ID, freshCard.ID, "node-on", deviceNames,
+		"Fresh Deploy Card", "", "exec_command", deployArgs,
+	)
+	if deploySecond.Decision != "ask_human" || guardModelCalls != beforeModelCalls+1 {
+		t.Fatalf("expected second deploy replay to re-trigger guard model and ask_human, decision=%+v calls=%d->%d", deploySecond, beforeModelCalls, guardModelCalls)
+	}
+
 	// 单次批准仅对完全匹配的参数生效，同一设备上的其他极高危命令仍必须拦截
 	otherCritical := EvaluateToolGuard(
 		ctx, dataStore, client, nil, settings,

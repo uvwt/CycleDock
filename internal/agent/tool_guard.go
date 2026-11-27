@@ -19,7 +19,6 @@ import (
 	"github.com/uvwt/CycleDock/internal/mcpclient"
 	"github.com/uvwt/CycleDock/internal/modelauth"
 	"github.com/uvwt/CycleDock/internal/modelclient"
-	"github.com/uvwt/CycleDock/internal/nexusdock"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -739,8 +738,9 @@ func isIdentifierChar(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
-// hasApprovedMatchingToolCall 检查当前卡片中是否已经有相同工具名与参数的已批准记录（防止 approve_once 后模型重试死循环）
-func hasApprovedMatchingToolCall(
+// consumeApprovedMatchingToolCall 在当前卡片中查找并原子消费一条相同工具名与参数的未消费已批准记录。
+// 单次审批（approve_once）凭证只允许被成功消费一次，防止已执行命令在后续轮次中绕过安全守卫静默重放。
+func consumeApprovedMatchingToolCall(
 	ctx context.Context,
 	storeInstance *store.Store,
 	workspaceID, cardID uuid.UUID,
@@ -750,7 +750,7 @@ func hasApprovedMatchingToolCall(
 	if storeInstance == nil {
 		return false
 	}
-	approvals, err := storeInstance.ListCardToolApprovals(ctx, workspaceID, cardID)
+	approvals, err := storeInstance.ListUnconsumedApprovedToolApprovals(ctx, workspaceID, cardID, toolName)
 	if err != nil || len(approvals) == 0 {
 		return false
 	}
@@ -760,21 +760,34 @@ func hasApprovedMatchingToolCall(
 	}
 	targetCanonical, targetOK := canonicalizeToolArguments(targetRaw)
 	for _, app := range approvals {
-		if app.Status == "approved" && app.ToolName == toolName {
-			if targetOK {
-				if appCanonical, ok := canonicalizeToolArguments(app.Arguments); ok {
-					if bytes.Equal(appCanonical, targetCanonical) {
-						return true
-					}
-					continue
-				}
-			}
-			if bytes.Equal(bytes.TrimSpace(app.Arguments), bytes.TrimSpace(targetRaw)) {
-				return true
-			}
+		if !matchingApprovalArguments(app.Arguments, targetRaw, targetCanonical, targetOK) {
+			continue
+		}
+		_, consumed, consumeErr := storeInstance.ConsumeToolApproval(ctx, workspaceID, cardID, app.ID)
+		if consumeErr != nil {
+			slog.Warn("consume approved tool call failed",
+				"workspace_id", workspaceID,
+				"card_id", cardID,
+				"approval_id", app.ID,
+				"tool_name", toolName,
+				"error", consumeErr,
+			)
+			continue
+		}
+		if consumed {
+			return true
 		}
 	}
 	return false
+}
+
+func matchingApprovalArguments(approvalRaw, targetRaw, targetCanonical []byte, targetOK bool) bool {
+	if targetOK {
+		if appCanonical, ok := canonicalizeToolArguments(approvalRaw); ok {
+			return bytes.Equal(appCanonical, targetCanonical)
+		}
+	}
+	return bytes.Equal(bytes.TrimSpace(approvalRaw), bytes.TrimSpace(targetRaw))
 }
 
 // canonicalizeToolArguments 将 JSON/JSONB 字节归一化为紧凑且键有序的标准形式，
@@ -1023,13 +1036,14 @@ func EvaluateToolGuard(
 	}
 
 	// 3. 单次已批准匹配调用检查（位于极高危静态规则之前）：
-	// 避免用户对某条极高危命令点击「允许本次执行」后，因重放/重试再次被静态规则拦截陷入死循环。
-	if storeInstance != nil && hasApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
+	// 当用户对某条被拦截的命令点击「允许本次执行」后，恢复 Turn 发起的同参数调用在此原子消费该次放行凭证；
+	// 凭证一旦被消费立即失效，后续同参数再次调用仍须重新接受安全守卫评估。
+	if storeInstance != nil && consumeApprovedMatchingToolCall(ctx, storeInstance, workspaceID, cardID, toolName, args) {
 		return ToolGuardDecision{
 			Reversible:            true,
 			RiskLevel:             "low",
 			Decision:              "allow",
-			Reason:                "该工具调用已获人工批准，放行执行",
+			Reason:                "该工具调用已获人工单次批准，已消费本次放行凭证并允许执行",
 			ScopeType:             scope.ScopeType,
 			ScopeTarget:           scope.ScopeTarget,
 			ScopeLabel:            scope.ScopeLabel,
@@ -1486,87 +1500,4 @@ func ToolGuardCallback(
 			"message":     "此工具调用已被安全守卫拦截并挂起，等待人工审核确认后恢复执行。",
 		}, nil
 	}
-}
-
-// ExecuteApprovedTool 执行被审批通过的工具调用（与 openADKMCPSessions 保持一致的鉴权与刷新能力）
-func ExecuteApprovedTool(
-	ctx context.Context,
-	storeInstance *store.Store,
-	nexusDock *nexusdock.Service,
-	workspaceID uuid.UUID,
-	toolName string,
-	arguments map[string]any,
-) (string, error) {
-	connections, err := storeInstance.ListEnabledMCPConnections(ctx, workspaceID)
-	if err != nil {
-		return "", fmt.Errorf("load MCP connections: %w", err)
-	}
-	sessions, err := mcpclient.Connect(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer sessions.Close()
-
-	for _, connection := range connections {
-		token, err := storeInstance.MCPBearerToken(connection)
-		if err == nil {
-			_ = sessions.AddConnection(ctx, mcpclient.Connection{
-				Name: connection.Name, URL: connection.Url, BearerToken: token,
-				Timeout: time.Duration(connection.TimeoutMs) * time.Millisecond,
-			})
-		}
-	}
-
-	if nexusDock != nil {
-		if connection, err := nexusDock.Runtime(ctx, workspaceID); err == nil {
-			_ = sessions.AddConnection(ctx, mcpclient.Connection{
-				Name:        firstPartyNexusDockServerName,
-				URL:         connection.URL,
-				BearerToken: connection.AccessToken,
-				BearerTokenFunc: func(reqCtx context.Context) (string, error) {
-					conn, err := nexusDock.Runtime(reqCtx, workspaceID)
-					if err != nil {
-						return "", err
-					}
-					return conn.AccessToken, nil
-				},
-				RefreshBearerFunc: func(reqCtx context.Context) (string, error) {
-					conn, err := nexusDock.ForceRefresh(reqCtx, workspaceID)
-					if err != nil {
-						return "", err
-					}
-					return conn.AccessToken, nil
-				},
-				Timeout:           30 * time.Second,
-				NativeToolNames:   true,
-				HiddenRemoteTools: map[string]bool{"agentdock_context": true},
-			})
-		}
-	}
-
-	if toolName == "call_mcp_tool" {
-		toolID, _ := arguments["tool_id"].(string)
-		toolArgs, _ := arguments["arguments"].(map[string]any)
-		if toolArgs == nil {
-			toolArgs = map[string]any{}
-		}
-		serverName, remoteName, ok := mcpclient.ParseToolID(toolID)
-		if !ok {
-			return "", fmt.Errorf("invalid tool_id %q", toolID)
-		}
-		res, err := sessions.CallExternal(ctx, serverName, remoteName, toolArgs)
-		if err != nil {
-			return "", err
-		}
-		resJSON, _ := json.MarshalIndent(res, "", "  ")
-		return string(resJSON), nil
-	}
-
-	res, err := sessions.Call(ctx, toolName, arguments)
-	if err == nil {
-		resJSON, _ := json.MarshalIndent(res, "", "  ")
-		return string(resJSON), nil
-	}
-
-	return "", fmt.Errorf("tool %q execution failed: %w", toolName, err)
 }

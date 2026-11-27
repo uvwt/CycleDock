@@ -161,6 +161,7 @@ type CardToolApproval struct {
 	ScopeTarget           string            `json:"scope_target"`
 	ScopeLabel            string            `json:"scope_label"`
 	AllowSessionWhitelist bool              `json:"allow_session_whitelist"`
+	ConsumedAt            sqldb.Timestamptz `json:"consumed_at"`
 }
 
 type CardToolWhitelist struct {
