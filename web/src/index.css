@@ -411,11 +411,13 @@ button:disabled {
   border-radius: 1rem;
   animation: quote-jump-flash 1.6s ease-out;
 }
+/* 减少动态效果模式下限制动画仅执行 1 次，保留 0.01ms 时长以兼容 Radix UI 等依赖 animationend 的卸载逻辑，同时避免 infinite 动画高频闪烁与错峰相位归零 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }

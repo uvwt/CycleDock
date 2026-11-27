@@ -2032,6 +2032,191 @@ class CycleDockSmoke(unittest.TestCase):
             finally:
                 ctx.close()
 
+    def test_prefers_reduced_motion_prevents_infinite_animation_flicker(self):
+        # 分别验证 reduce 与 no-preference 两种媒体模式，防止无限动画在减少动态效果下以 0.01ms 高频闪烁或错峰相位归零。
+        def inspect_dots(page):
+            return page.evaluate(
+                """() => {
+                    const status = document.querySelector('[role="status"][aria-label="正在思考并生成回复"]');
+                    const dots = status ? Array.from(status.querySelectorAll('span')) : [];
+                    return dots.map((el) => {
+                        const cs = getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        const running = el.getAnimations().filter((a) => a.playState === 'running').length;
+                        return {
+                            duration: cs.animationDuration,
+                            iterationCount: cs.animationIterationCount,
+                            delay: cs.animationDelay,
+                            opacity: cs.opacity,
+                            transform: cs.transform,
+                            top: rect.top,
+                            width: rect.width,
+                            height: rect.height,
+                            running,
+                        };
+                    });
+                }"""
+            )
+
+        def inspect_running_indicators(page):
+            return page.evaluate(
+                """() => {
+                    const pings = Array.from(document.querySelectorAll('.animate-ping')).map((el) => {
+                        const cs = getComputedStyle(el);
+                        return {
+                            duration: cs.animationDuration,
+                            iterationCount: cs.animationIterationCount,
+                            running: el.getAnimations().filter((a) => a.playState === 'running').length,
+                        };
+                    });
+                    const pulses = Array.from(document.querySelectorAll('.animate-pulse')).map((el) => {
+                        const cs = getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return {
+                            duration: cs.animationDuration,
+                            iterationCount: cs.animationIterationCount,
+                            opacity: cs.opacity,
+                            width: rect.width,
+                            height: rect.height,
+                            running: el.getAnimations().filter((a) => a.playState === 'running').length,
+                        };
+                    });
+                    const solidDots = Array.from(
+                        document.querySelectorAll('[aria-label="Agent 正在回答…"] .bg-emerald-500')
+                    ).map((el) => {
+                        const cs = getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return {
+                            opacity: cs.opacity,
+                            width: rect.width,
+                            height: rect.height,
+                        };
+                    });
+                    return { pings, pulses, solidDots };
+                }"""
+            )
+
+        # 1. prefers-reduced-motion: reduce
+        reduce_ctx = self.browser.new_context(
+            viewport={"width": 1280, "height": 860},
+            reduced_motion="reduce",
+        )
+        try:
+            page = reduce_ctx.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route(
+                "**/api/v1/cards/todo-1/stream",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="text/event-stream",
+                    body=": keepalive\n\n",
+                ),
+            )
+            page.goto(BASE + "/cards/demo-project/todo-1")
+            page.get_by_role("status", name="正在思考并生成回复").first.wait_for()
+            page.wait_for_timeout(80)
+
+            dots = inspect_dots(page)
+            self.assertEqual(len(dots), 3)
+            tops = [d["top"] for d in dots]
+            for d in dots:
+                self.assertEqual(d["iterationCount"], "1")
+                self.assertAlmostEqual(float(d["duration"].rstrip("s")), 1e-5, places=7)
+                self.assertEqual(d["running"], 0)
+                self.assertEqual(d["opacity"], "1")
+                self.assertEqual(d["transform"], "none")
+                self.assertGreater(d["width"], 0)
+                self.assertGreater(d["height"], 0)
+            self.assertLessEqual(max(tops) - min(tops), 0.5)
+
+            indicators = inspect_running_indicators(page)
+            self.assertGreater(len(indicators["pings"]), 0)
+            for p in indicators["pings"]:
+                self.assertEqual(p["iterationCount"], "1")
+                self.assertEqual(p["running"], 0)
+            visible_solid_dots = [
+                sd for sd in indicators["solidDots"] if sd["width"] > 0 and sd["height"] > 0
+            ]
+            self.assertGreater(len(visible_solid_dots), 0)
+            for sd in visible_solid_dots:
+                self.assertEqual(sd["opacity"], "1")
+
+            # 检查 /nexusdock 页 animate-pulse / animate-ping 绿点静止且清晰可见
+            page.goto(BASE + "/nexusdock")
+            page.get_by_role("heading", name="远程设备").wait_for()
+            page.locator(".animate-pulse").first.wait_for()
+            page.wait_for_timeout(80)
+            nexus_indicators = inspect_running_indicators(page)
+            visible_pulses = [
+                pu for pu in nexus_indicators["pulses"] if pu["width"] > 0 and pu["height"] > 0
+            ]
+            self.assertGreater(len(visible_pulses), 0)
+            for pu in nexus_indicators["pulses"]:
+                self.assertEqual(pu["iterationCount"], "1")
+                self.assertEqual(pu["running"], 0)
+                self.assertEqual(pu["opacity"], "1")
+
+            # 检查 /chat 页 tw-animate-css Dialog 在 reduce 模式下正常显示与卸载
+            page.goto(BASE + "/chat")
+            page.get_by_role("heading", name="今天想推进什么？").wait_for()
+            page.get_by_role("button", name=re.compile("讨论服务器巡检计划")).first.click()
+            page.wait_for_url("**/chat/demo-project/discussion-1")
+            sidebar = page.locator('aside[aria-label="讨论列表"]:visible')
+            sidebar.wait_for()
+            row = sidebar.locator('button[aria-current="page"]').locator("..")
+            row.hover()
+            row.get_by_role("button", name="更多操作").click()
+            page.get_by_role("menu").get_by_role("menuitem", name="编辑信息").click()
+            dialog = page.get_by_role("dialog", name="编辑讨论信息")
+            dialog.wait_for()
+            page.wait_for_timeout(50)
+            dialog_opacity = dialog.evaluate("el => getComputedStyle(el).opacity")
+            self.assertEqual(dialog_opacity, "1")
+            page.keyboard.press("Escape")
+            dialog.wait_for(state="hidden")
+            self.assertEqual(errors, [], "Browser JS errors in reduced_motion=reduce")
+        finally:
+            reduce_ctx.close()
+
+        # 2. prefers-reduced-motion: no-preference
+        normal_ctx = self.browser.new_context(
+            viewport={"width": 1280, "height": 860},
+            reduced_motion="no-preference",
+        )
+        try:
+            page = normal_ctx.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route(
+                "**/api/v1/cards/todo-1/stream",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="text/event-stream",
+                    body=": keepalive\n\n",
+                ),
+            )
+            page.goto(BASE + "/cards/demo-project/todo-1")
+            page.get_by_role("status", name="正在思考并生成回复").first.wait_for()
+            page.wait_for_timeout(80)
+
+            dots = inspect_dots(page)
+            self.assertEqual(len(dots), 3)
+            self.assertEqual([d["delay"] for d in dots], ["-0.32s", "-0.16s", "0s"])
+            for d in dots:
+                self.assertEqual(d["iterationCount"], "infinite")
+                self.assertEqual(d["duration"], "1s")
+                self.assertGreaterEqual(d["running"], 1)
+
+            indicators = inspect_running_indicators(page)
+            self.assertGreater(len(indicators["pings"]), 0)
+            for p in indicators["pings"]:
+                self.assertEqual(p["iterationCount"], "infinite")
+                self.assertEqual(p["duration"], "1s")
+            self.assertEqual(errors, [], "Browser JS errors in reduced_motion=no-preference")
+        finally:
+            normal_ctx.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
