@@ -378,6 +378,14 @@ func claimNextTurnAttempt(
 			  AND current_attempt.card_id=t.card_id
 			  AND current_attempt.status IN ('queued','running')
 		  )
+		  -- 卡片存在待确认工具审批时暂停调度后续排队 Turn，避免审批未决前提前并发或重复执行。
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM card_tool_approvals pending_approval
+			WHERE pending_approval.workspace_id=t.workspace_id
+			  AND pending_approval.card_id=t.card_id
+			  AND pending_approval.status='pending'
+		  )
 		  AND (
 			(c.kind='discussion' AND c.discussion_state='active')
 			OR (c.kind='todo' AND c.todo_state<>'done')
@@ -1514,6 +1522,14 @@ func claimQueuedAttempt(
 		  AND a.runner_source_id=$2
 		  AND a.status='queued'
 		  AND t.cancelled_at IS NULL
+		  -- 卡片存在待确认工具审批时暂停调度预留的 queued Attempt，待审批处理或失效后再恢复。
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM card_tool_approvals pending_approval
+			WHERE pending_approval.workspace_id=a.workspace_id
+			  AND pending_approval.card_id=a.card_id
+			  AND pending_approval.status='pending'
+		  )
 		  AND (
 			(c.kind='discussion' AND c.discussion_state='active')
 			OR (c.kind='todo' AND c.todo_state<>'done')

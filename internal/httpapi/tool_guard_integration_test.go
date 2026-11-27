@@ -267,3 +267,98 @@ func TestResolveToolApproval_CriticalRedlineRejectsSessionWhitelistAndMCPSavesSc
 		t.Fatalf("expected mcp github to be whitelisted on card, got whitelisted=%v err=%v", whitelisted, err)
 	}
 }
+
+// TestResolveToolApproval_ApproveOnceDoesNotExecuteInHTTPAndLeavesSingleUseVoucher 验证：
+// 1. approve_once 在 HTTP 请求内不直接同步执行外部工具（即使存在慢速/挂起的远端 MCP 连接也立刻返回，绝不出现 30s 超时诱导重放）；
+// 2. 审批落库后 consumed_at 保持未消费，交由恢复 System Turn 在 ADK 工具链内单次原子消费执行；
+// 3. 入队的 System Turn 明确告知系统尚未执行该工具且切勿重复执行。
+func TestResolveToolApproval_ApproveOnceDoesNotExecuteInHTTPAndLeavesSingleUseVoucher(t *testing.T) {
+	handler, pool, dataStore := newHTTPIntegration(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login",
+		map[string]any{"password": httpIntegrationPassword}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+	var identity identityResponse
+	decodeRecorder(t, login, &identity)
+	workspaceID := uuid.MustParse(identity.Workspace.ID)
+	humanSourceID := uuid.MustParse(identity.Source.ID)
+
+	ctx := context.Background()
+	project, err := dataStore.CreateProject(ctx, workspaceID, "No HTTP Exec Test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := dataStore.CreateDiscussion(ctx, workspaceID, project.ID, humanSourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 注册一个指向黑洞/不可达地址的 MCP 连接，证明 resolveToolApproval 不会在 HTTP 内发起远端工具执行调用
+	if _, err := dataStore.SaveMCPConnection(ctx, workspaceID, store.MCPConnectionInput{
+		Name:             "slow-mcp",
+		URL:              "http://127.0.0.1:1/never-called",
+		Enabled:          true,
+		TimeoutMS:        5000,
+		ToolGuardEnabled: true,
+	}); err != nil {
+		t.Fatalf("save mcp connection: %v", err)
+	}
+
+	approval, err := dataStore.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID: workspaceID,
+		CardID:      card.ID,
+		ToolCallID:  "call-backup-1",
+		ToolName:    "call_mcp_tool",
+		Arguments:   map[string]any{"tool_id": "slow-mcp:run_backup", "arguments": map[string]any{"target": "prod"}},
+		RiskLevel:   "high",
+		Reversible:  false,
+		Reason:      "生产备份命令需要确认",
+		ScopeType:   "mcp",
+		ScopeTarget: "slow-mcp",
+		ScopeLabel:  "slow-mcp",
+	})
+	if err != nil {
+		t.Fatalf("create tool approval: %v", err)
+	}
+
+	rec := doJSON(
+		t, handler, http.MethodPost,
+		"/api/v1/cards/"+card.ID.String()+"/tool-approvals/"+approval.ID.String()+"/resolve",
+		map[string]any{"action": "approve_once"},
+		cookie, nil,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve approve_once: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Approval toolApprovalResponse `json:"approval"`
+		TurnID   string               `json:"turn_id"`
+	}
+	decodeRecorder(t, rec, &resp)
+	if resp.Approval.Status != "approved" || resp.TurnID == "" {
+		t.Fatalf("unexpected resolve response: %+v", resp)
+	}
+
+	// 验证单次放行凭证尚未被消费，等待恢复 Turn 执行时原子消费一次
+	row, err := dataStore.GetToolApproval(ctx, workspaceID, card.ID, approval.ID)
+	if err != nil {
+		t.Fatalf("get tool approval: %v", err)
+	}
+	if row.ConsumedAt.Valid {
+		t.Fatalf("expected approve_once voucher to remain unconsumed until resumed turn executes")
+	}
+
+	// 验证入队的 System Turn 文案明确说明尚未执行且不得重复执行，而不是误导性的“已执行/重试”提示
+	var turnContent string
+	if err := pool.QueryRow(ctx, `
+		SELECT content FROM card_turns WHERE workspace_id = $1 AND card_id = $2 AND id = $3
+	`, workspaceID, card.ID, uuid.MustParse(resp.TurnID)).Scan(&turnContent); err != nil {
+		t.Fatalf("query system turn: %v", err)
+	}
+	if !strings.Contains(turnContent, "系统尚未执行该工具") || !strings.Contains(turnContent, "切勿重复执行") {
+		t.Fatalf("unexpected approve_once system turn content: %q", turnContent)
+	}
+}

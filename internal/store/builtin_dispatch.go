@@ -40,10 +40,22 @@ func (s *Store) ClaimNextBuiltInAttempt(
 			EXISTS (
 				SELECT 1 FROM turn_attempts a
 				WHERE a.workspace_id=cfg.workspace_id AND a.runner_source_id=cfg.source_id AND a.status='queued'
+				  AND NOT EXISTS (
+					SELECT 1 FROM card_tool_approvals pending_approval
+					WHERE pending_approval.workspace_id=a.workspace_id
+					  AND pending_approval.card_id=a.card_id
+					  AND pending_approval.status='pending'
+				  )
 			) OR EXISTS (
 				SELECT 1 FROM card_turns t
 				WHERE t.workspace_id=cfg.workspace_id AND t.cancelled_at IS NULL
 				  AND NOT EXISTS (SELECT 1 FROM turn_attempts a WHERE a.workspace_id=t.workspace_id AND a.turn_id=t.id)
+				  AND NOT EXISTS (
+					SELECT 1 FROM card_tool_approvals pending_approval
+					WHERE pending_approval.workspace_id=t.workspace_id
+					  AND pending_approval.card_id=t.card_id
+					  AND pending_approval.status='pending'
+				  )
 			)
 		)
 		ORDER BY (
