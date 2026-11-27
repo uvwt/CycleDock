@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/mcpserver"
@@ -42,7 +43,8 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create OAuth service: %v", err)
 	}
-	mcpHandlers := mcpserver.New(dataStore, oauthService, nil)
+	sessionService := agentsession.NewService(pool)
+	mcpHandlers := mcpserver.New(dataStore, sessionService, oauthService, nil)
 	handler := NewRouter(pool, dataStore, humanAuth, Config{
 		OAuth: oauthService, MCP: mcpHandlers.MCP, MCPMetadata: mcpHandlers.ProtectedResourceMetadata,
 	})

@@ -33,6 +33,9 @@ func (s *PostgresService) SearchHistory(
 	query string,
 	limit int,
 ) ([]HistoryHit, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("session service is not initialized")
+	}
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("history query is required")

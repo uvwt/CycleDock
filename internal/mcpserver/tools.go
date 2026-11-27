@@ -10,15 +10,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-func registerTools(server *mcp.Server, dataStore *store.Store) {
+func registerTools(server *mcp.Server, dataStore *store.Store, sessionService *agentsession.Service) {
 	mcp.AddTool(server, &mcp.Tool{Name: "list_projects", Description: "List Projects in the authenticated CycleDock Workspace. A Project is the board."}, listProjectsHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "list_cards", Description: "List Cards in the authenticated Workspace with current Attempt status, pending Turn count, and Ongoing health."}, listCardsHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "get_card", Description: "Get one Card with bounded durable Timeline, pending Turns, current Attempt, and recent Attempt history."}, getCardHandler(dataStore))
+	mcp.AddTool(server, &mcp.Tool{Name: "get_card_session", Description: "Read a Card's session history (supports discussion, todo, and ongoing cards). Default mode=simple returns clean human-agent conversation bubbles; mode=full returns persisted execution rounds with thinking, tool calls, and tool results (bounded and sanitized)."}, getCardSessionHandler(dataStore, sessionService))
+	mcp.AddTool(server, &mcp.Tool{Name: "search_card_session", Description: "Search persisted execution history events of a Card (discussion, todo, or ongoing) by keyword or phrase to recover exact historical evidence."}, searchCardSessionHandler(dataStore, sessionService))
 	mcp.AddTool(server, &mcp.Tool{Name: "list_schedules", Description: "List recurring schedules and their next trigger times for one Ongoing Card. Inspect before creating or changing schedules."}, listSchedulesHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "create_schedule", Description: "Create a daily, weekly, or monthly recurring schedule for an Ongoing Card. Check list_schedules first to avoid duplicate schedules; creation is not retry-idempotent."}, createScheduleHandler(dataStore))
 	mcp.AddTool(server, &mcp.Tool{Name: "update_schedule", Description: "Replace an Ongoing Card schedule rule and set enabled. Read list_schedules first and retain unchanged rule fields; enabled=false pauses a schedule without deleting history."}, updateScheduleHandler(dataStore))
