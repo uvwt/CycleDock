@@ -2248,3 +2248,90 @@ test("status_change 穿插在同轮后续气泡之前，不再被挤到整轮末
   const aIdx = html.indexOf('id="event-a1"');
   assert.ok(qIdx >= 0 && stIdx > qIdx && aIdx > stIdx);
 });
+
+test("ConversationView 在首条未读消息正上方渲染未读消息分隔符并打断同发送者消息合并", () => {
+  const events = [
+    {
+      id: "u1",
+      sequence: 1,
+      type: "comment",
+      actor_kind: "human",
+      actor_name: "开发者",
+      content: "麻烦核实一下发布清单",
+      created_at: "2026-10-31T10:00:00Z",
+    },
+    {
+      id: "u2",
+      sequence: 2,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "已核实前两项配置",
+      created_at: "2026-10-31T10:00:10Z",
+      message: { type: "text", content: "已核实前两项配置", end_turn: false },
+    },
+    {
+      id: "u3",
+      sequence: 3,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "第三项也已完成，可以上线",
+      created_at: "2026-10-31T10:00:20Z",
+      message: {
+        type: "text",
+        content: "第三项也已完成，可以上线",
+        end_turn: false,
+      },
+    },
+    {
+      id: "u4",
+      sequence: 4,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "另外顺手补了监控告警规则",
+      created_at: "2026-10-31T10:00:25Z",
+      message: {
+        type: "text",
+        content: "另外顺手补了监控告警规则",
+        end_turn: true,
+      },
+    },
+  ];
+
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "discussion",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      unreadDividerAfterSequence: 2,
+      onRetryAttempt() {},
+    }),
+  );
+
+  const u2Idx = html.indexOf('id="event-u2"');
+  const dividerIdx = html.indexOf('data-unread-divider="true"');
+  const u3Idx = html.indexOf('id="event-u3"');
+  assert.ok(u2Idx >= 0 && dividerIdx > u2Idx && u3Idx > dividerIdx);
+  assert.ok(html.includes('data-unread-count="2"'));
+  assert.ok(html.includes("2 条未读消息"));
+
+  // 无未读水位线时不渲染分隔符
+  const htmlWithoutDivider = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "discussion",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      unreadDividerAfterSequence: null,
+      onRetryAttempt() {},
+    }),
+  );
+  assert.equal(htmlWithoutDivider.includes("data-unread-divider"), false);
+});

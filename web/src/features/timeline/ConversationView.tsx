@@ -1,4 +1,5 @@
 import {
+  type Ref,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -63,6 +64,7 @@ import {
 } from "./ExecutionStatus";
 import { BubbleRetryMenu } from "./BubbleRetryMenu";
 import { RichText } from "./RichText";
+import { resolveUnreadDividerPlacement } from "./unreadDivider";
 import { ToolApprovalCard } from "./ToolApprovalCard";
 import {
   MessageAttachmentGrid,
@@ -328,6 +330,59 @@ function TimeSeparator({ value }: { value: string }) {
           minute: "2-digit",
         })}
       </span>
+    </div>
+  );
+}
+
+function UnreadMessageDivider({
+  count,
+  compact = false,
+  hasTimeSeparatorAbove = false,
+  dividerRef,
+}: {
+  count: number;
+  compact?: boolean;
+  hasTimeSeparatorAbove?: boolean;
+  dividerRef?: Ref<HTMLDivElement>;
+}) {
+  const { t } = useTranslation();
+  const label =
+    count === 1
+      ? t("1 条未读消息")
+      : count > 1
+        ? t("{{count}} 条未读消息", { count })
+        : t("以下为未读消息");
+  return (
+    <div
+      ref={dividerRef}
+      role="separator"
+      data-unread-divider
+      data-unread-count={count}
+      data-testid="unread-message-divider"
+      aria-label={label}
+      className={`flex items-center gap-3 select-none ${
+        hasTimeSeparatorAbove
+          ? "pt-1 pb-2.5"
+          : compact
+            ? "py-2"
+            : "py-2.5"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className="h-px flex-1 bg-gradient-to-r from-transparent via-primary/35 to-primary/55 dark:via-sky-400/35 dark:to-sky-400/55"
+      />
+      <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/25 bg-primary/8 px-3 py-0.5 text-[11px] font-medium tracking-wide text-primary shadow-2xs dark:border-sky-400/30 dark:bg-sky-400/12 dark:text-sky-300">
+        <span
+          aria-hidden="true"
+          className="size-1.5 rounded-full bg-primary dark:bg-sky-400"
+        />
+        <span>{label}</span>
+      </span>
+      <span
+        aria-hidden="true"
+        className="h-px flex-1 bg-gradient-to-l from-transparent via-primary/35 to-primary/55 dark:via-sky-400/35 dark:to-sky-400/55"
+      />
     </div>
   );
 }
@@ -1161,6 +1216,8 @@ export function ConversationView({
   loadingMoreBefore = false,
   onLoadMoreBefore,
   onSelectionQuoteChange,
+  unreadDividerAfterSequence = null,
+  onNearBottomChange,
   ...actions
 }: {
   card?: Card;
@@ -1178,10 +1235,16 @@ export function ConversationView({
   onLoadMoreBefore?: () => Promise<boolean> | void;
   /** 移动端触屏选区变化回调；桌面端使用选区浮钮，不通过此回调展示底部动作条。 */
   onSelectionQuoteChange?: (quote: QuotedMessage | null) => void;
+  /** 本次会话锁定的未读消息水位线；大于该序号的首条可见消息上方渲染未读分隔符。 */
+  unreadDividerAfterSequence?: number | null;
+  /** 向外同步消息列表是否接近底部，供翻看历史时判断新到消息是否触发未读分隔符。 */
+  onNearBottomChange?: (nearBottom: boolean) => void;
 } & ExecutionActions) {
   const { t } = useTranslation();
   const bottom = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const unreadDividerElRef = useRef<HTMLDivElement>(null);
+  const initialUnreadAlignedRef = useRef(false);
   const stick = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const [desktopSelectionPopover, setDesktopSelectionPopover] = useState<{
@@ -1196,11 +1259,13 @@ export function ConversationView({
   const onReplyRef = useRef(actions.onReply);
   const onSelectionQuoteChangeRef = useRef(onSelectionQuoteChange);
   const onLoadMoreBeforeRef = useRef(onLoadMoreBefore);
+  const onNearBottomChangeRef = useRef(onNearBottomChange);
   const hasMoreBeforeRef = useRef(hasMoreBefore);
   useEffect(() => {
     onReplyRef.current = actions.onReply;
     onSelectionQuoteChangeRef.current = onSelectionQuoteChange;
     onLoadMoreBeforeRef.current = onLoadMoreBefore;
+    onNearBottomChangeRef.current = onNearBottomChange;
     hasMoreBeforeRef.current = hasMoreBefore;
   });
 
@@ -1337,6 +1402,11 @@ export function ConversationView({
   const { byEvent, standalone, statusByReply, statusByToolApproval, running } =
     groupExecutionAttempts(orderedEvents, effectiveAttempt, attemptHistory);
   const timelineItems = buildTimelineItems(rows, standalone, executions);
+  const unreadDividerPlacement = resolveUnreadDividerPlacement(
+    timelineItems,
+    unreadDividerAfterSequence,
+    hasMoreBefore,
+  );
 
   const groupStarts = new Set<string>();
   const statusByHeader = new Map<string, Attempt[]>();
@@ -1350,11 +1420,15 @@ export function ConversationView({
       continue;
     }
     const event = item.row.event;
+    const startsUnreadSection =
+      unreadDividerPlacement?.targetItemKey === item.key;
     const interval = previousEvent
       ? Date.parse(event.created_at) - Date.parse(previousEvent.created_at)
       : NaN;
-    // 执行信息归到消息组首，避免在连续回复中重复展示发送者。
+    // 执行信息归到消息组首，避免在连续回复中重复展示发送者；
+    // 未读消息分隔符之后的首条未读消息视为新组起点，避免隔着分隔符隐藏发送者头像与名称。
     const continuesGroup =
+      !startsUnreadSection &&
       !!previousEvent &&
       !systemTypes.has(previousEvent.type) &&
       !systemTypes.has(event.type) &&
@@ -1458,6 +1532,30 @@ export function ConversationView({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  // 首次进入且未读消息超出单屏高度时，将视口对齐到未读分隔符上方一点，方便从第一条未读顺着阅读；
+  // 若未读消息较少（吸底时分隔符仍在视口内），则维持默认吸底，不破坏既有体验。
+  const unreadDividerTargetKey = unreadDividerPlacement?.targetItemKey ?? null;
+  useEffect(() => {
+    if (!unreadDividerTargetKey || initialUnreadAlignedRef.current) return;
+    const raf = window.requestAnimationFrame(() => {
+      const element = list.current;
+      const dividerEl = unreadDividerElRef.current;
+      if (!element || !dividerEl) return;
+      initialUnreadAlignedRef.current = true;
+      const containerRect = element.getBoundingClientRect();
+      const dividerRect = dividerEl.getBoundingClientRect();
+      const dividerTop = dividerRect.top - containerRect.top + element.scrollTop;
+      const distanceFromDividerToBottom = element.scrollHeight - dividerTop;
+      if (distanceFromDividerToBottom > element.clientHeight - 40) {
+        element.scrollTop = Math.max(0, dividerTop - 56);
+        stick.current = false;
+        setShowLatest(true);
+        onNearBottomChangeRef.current?.(false);
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [unreadDividerTargetKey]);
 
   // 首次挂载或会话切换时，等待富文本和字体渲染稳定后再次对齐底部，防止末尾消息被遮挡
   useEffect(() => {
@@ -1715,6 +1813,7 @@ export function ConversationView({
       element.scrollHeight - element.scrollTop - element.clientHeight;
     const nearBottom = distanceToBottom < 100;
     stick.current = nearBottom;
+    onNearBottomChangeRef.current?.(nearBottom);
     setShowLatest((prev) => {
       const next = !nearBottom;
       return prev !== next ? next : prev;
@@ -1941,6 +2040,8 @@ export function ConversationView({
           }
 
           const { event, preview, key } = item.row;
+          const showUnreadDivider =
+            unreadDividerPlacement?.targetItemKey === item.key;
           const previousEventRow =
             previousItem?.kind === "event" ? previousItem.row.event : undefined;
           const continuesGroup = !groupStarts.has(event.id);
@@ -1993,6 +2094,14 @@ export function ConversationView({
               className={`${!preview && !previewKeys.has(event.id) && (historyIDs ? !historyIDs.has(event.id) : event.sequence > historyThrough) ? "message-enter" : ""} ${index === 0 ? "" : isConsecutiveStatusChange ? "mt-0.5" : continuesGroup ? "mt-2.5" : "mt-4"}`}
             >
               {showTime && <TimeSeparator value={item.displayTimestamp} />}
+              {showUnreadDivider && unreadDividerPlacement && (
+                <UnreadMessageDivider
+                  count={unreadDividerPlacement.unreadCount}
+                  compact={compact}
+                  hasTimeSeparatorAbove={showTime}
+                  dividerRef={unreadDividerElRef}
+                />
+              )}
               <EventRow
                 event={event}
                 cardID={card?.id}
@@ -2077,6 +2186,7 @@ export function ConversationView({
           onClick={() => {
             scrollToBottom(true);
             stick.current = true;
+            onNearBottomChangeRef.current?.(true);
             setShowLatest(false);
           }}
           className="pointer-events-auto grid size-9 place-items-center rounded-full border border-line bg-surface text-secondary-foreground shadow-md transition hover:bg-canvas active:scale-95"

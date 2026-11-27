@@ -11,6 +11,38 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
+// CardReadState summarizes one human source's read cursor and unread flag for a single Card.
+type CardReadState struct {
+	LatestMessageSequence   int64
+	LastReadMessageSequence int64
+	MarkedUnread            bool
+	Unread                  bool
+}
+
+// GetCardReadState loads one human source's current read cursor and unread state for a Card.
+func (s *Store) GetCardReadState(
+	ctx context.Context,
+	workspaceID, cardID, sourceID uuid.UUID,
+) (CardReadState, error) {
+	row, err := s.queries.GetCardReadState(ctx, db.GetCardReadStateParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		SourceID:    sourceID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CardReadState{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return CardReadState{}, err
+	}
+	return CardReadState{
+		LatestMessageSequence:   row.LatestMessageSequence,
+		LastReadMessageSequence: row.LastReadMessageSequence,
+		MarkedUnread:            row.MarkedUnread,
+		Unread:                  row.Unread,
+	}, nil
+}
+
 // MarkCardRead advances one human source's durable read cursor to the newest
 // user-visible message currently committed on the Card. GREATEST in SQL keeps
 // concurrent/retried reads monotonic.

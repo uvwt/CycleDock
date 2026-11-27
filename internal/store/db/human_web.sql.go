@@ -79,6 +79,62 @@ func (q *Queries) DeleteCardSchedule(ctx context.Context, arg DeleteCardSchedule
 	return result.RowsAffected(), nil
 }
 
+const getCardReadState = `-- name: GetCardReadState :one
+SELECT
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> $1
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = $1
+WHERE c.workspace_id = $2
+  AND c.id = $3
+`
+
+type GetCardReadStateParams struct {
+	SourceID    uuid.UUID `json:"source_id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+type GetCardReadStateRow struct {
+	LatestMessageSequence   int64 `json:"latest_message_sequence"`
+	LastReadMessageSequence int64 `json:"last_read_message_sequence"`
+	MarkedUnread            bool  `json:"marked_unread"`
+	Unread                  bool  `json:"unread"`
+}
+
+func (q *Queries) GetCardReadState(ctx context.Context, arg GetCardReadStateParams) (GetCardReadStateRow, error) {
+	row := q.db.QueryRow(ctx, getCardReadState, arg.SourceID, arg.WorkspaceID, arg.CardID)
+	var i GetCardReadStateRow
+	err := row.Scan(
+		&i.LatestMessageSequence,
+		&i.LastReadMessageSequence,
+		&i.MarkedUnread,
+		&i.Unread,
+	)
+	return i, err
+}
+
 const getCardSchedule = `-- name: GetCardSchedule :one
 SELECT id, workspace_id, card_id, enabled, frequency, day_of_week, day_of_month, time_of_day, timezone, next_trigger_at, last_triggered_at, created_at, updated_at, interval_minutes, archived_at
 FROM card_schedules

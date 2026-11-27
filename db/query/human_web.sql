@@ -283,6 +283,36 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND project_id = sqlc.arg(project_id)
   AND todo_state = 'done';
 
+-- name: GetCardReadState :one
+SELECT
+    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
+    COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
+    (CASE
+        WHEN COALESCE(read_cursor.marked_unread, false)
+          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+        THEN true
+        ELSE false
+    END)::boolean AS unread
+FROM cards c
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.sequence) AS latest_message_sequence,
+        MAX(e.sequence) FILTER (
+            WHERE e.actor_source_id <> sqlc.arg(source_id)
+        ) AS latest_other_message_sequence
+    FROM events e
+    WHERE e.workspace_id = c.workspace_id
+      AND e.card_id = c.id
+      AND e.event_type IN ('comment', 'message')
+) message_state ON true
+LEFT JOIN card_read_cursors read_cursor
+  ON read_cursor.workspace_id = c.workspace_id
+ AND read_cursor.card_id = c.id
+ AND read_cursor.source_id = sqlc.arg(source_id)
+WHERE c.workspace_id = sqlc.arg(workspace_id)
+  AND c.id = sqlc.arg(card_id);
+
 -- name: MarkCardRead :one
 INSERT INTO card_read_cursors (
     workspace_id, source_id, card_id, last_read_message_sequence, marked_unread, updated_at

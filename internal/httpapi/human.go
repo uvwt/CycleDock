@@ -758,7 +758,11 @@ func (api *API) getMainDiscussion(w http.ResponseWriter, r *http.Request) {
 		api.handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cardToResponse(card))
+	resp := cardToResponse(card)
+	if readState, readErr := api.store.GetCardReadState(r.Context(), identity.WorkspaceID, card.ID, identity.SourceID); readErr == nil {
+		applyCardReadState(&resp, readState)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (api *API) openMainDiscussion(w http.ResponseWriter, r *http.Request) {
@@ -902,15 +906,16 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		currentAttempt *store.SessionAttemptView
-		timelineResp   []eventResponse
-		hasMoreBefore  bool
-		oldestSeq      int64
-		pendingTurns   []store.PendingTurnView
-		schedules      []db.CardSchedule
-		lastCheckin    *db.Event
-		health         domain.CheckinStatus = domain.CheckinUnknown
+		currentAttempt  *store.SessionAttemptView
+		timelineResp    []eventResponse
+		hasMoreBefore   bool
+		oldestSeq       int64
+		pendingTurns    []store.PendingTurnView
+		schedules       []db.CardSchedule
+		lastCheckin     *db.Event
+		health          domain.CheckinStatus = domain.CheckinUnknown
 		cardAttachments []store.CardAttachmentMeta
+		readState       *store.CardReadState
 	)
 
 	isOngoing := card.Kind == string(domain.CardKindOngoing)
@@ -985,6 +990,16 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	// 3.6. CardReadState（单卡详情同步返回当前人类用户的已读水位线与未读状态，供前端在自动标已读前定位未读分隔符）
+	g.Go(func() error {
+		state, err := api.store.GetCardReadState(gctx, identity.WorkspaceID, cardID, identity.SourceID)
+		if err != nil {
+			return fmt.Errorf("card read state: %w", err)
+		}
+		readState = &state
+		return nil
+	})
+
 	// 4 & 5. Ongoing specific queries
 	if isOngoing {
 		g.Go(func() error {
@@ -1041,6 +1056,9 @@ func (api *API) getCard(w http.ResponseWriter, r *http.Request) {
 	}
 	if binding, ok, bindErr := api.store.GetRemoteChannelForConversationCard(ctx, identity.WorkspaceID, card.ID); bindErr == nil && ok {
 		applyRemoteChannelBinding(&response.Card, binding)
+	}
+	if readState != nil {
+		applyCardReadState(&response.Card, *readState)
 	}
 	if len(cardAttachments) > 0 {
 		count := int64(len(cardAttachments))
@@ -1934,6 +1952,17 @@ func projectToResponse(project db.Project) projectResponse {
 		resp.PrimaryPushChannelID = project.PrimaryPushChannelID.UUID.String()
 	}
 	return resp
+}
+
+func applyCardReadState(response *cardResponse, state store.CardReadState) {
+	latest := state.LatestMessageSequence
+	lastRead := state.LastReadMessageSequence
+	markedUnread := state.MarkedUnread
+	unread := state.Unread
+	response.LatestMessageSequence = &latest
+	response.LastReadMessageSequence = &lastRead
+	response.MarkedUnread = &markedUnread
+	response.Unread = &unread
 }
 
 func cardToResponse(card db.Card) cardResponse {

@@ -117,7 +117,7 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 		t.Fatalf("agent reply did not produce unread state: %+v", afterReply)
 	}
 
-	// 详情只提供卡片本体，前端进入详情时不能依赖其中的 unread 字段。
+	// 详情接口返回与卡片列表一致的已读水位线，确保直链刷新与主聊天浮窗能准确定位未读消息分隔符。
 	detailRec := doJSON(t, handler, http.MethodGet,
 		"/api/v1/cards/"+card.ID.String(), nil, cookie, nil)
 	if detailRec.Code != http.StatusOK {
@@ -125,8 +125,25 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 	}
 	var detail cardDetailResponse
 	decodeRecorder(t, detailRec, &detail)
-	if detail.Card.Unread != nil || len(detail.Timeline) == 0 {
-		t.Fatalf("unexpected detail read contract: %+v", detail)
+	if detail.Card.Unread == nil || !*detail.Card.Unread ||
+		detail.Card.LatestMessageSequence == nil ||
+		detail.Card.LastReadMessageSequence == nil ||
+		*detail.Card.LatestMessageSequence != *afterReply.LatestMessageSequence ||
+		*detail.Card.LastReadMessageSequence != *afterReply.LastReadMessageSequence ||
+		len(detail.Timeline) == 0 {
+		t.Fatalf("unexpected detail read contract: detail=%+v summary=%+v", detail.Card, afterReply)
+	}
+	if kind == domain.CardKindDiscussion {
+		mainRec := doJSON(t, handler, http.MethodGet,
+			"/api/v1/projects/"+project.ID.String()+"/main-discussion", nil, cookie, nil)
+		if mainRec.Code != http.StatusOK {
+			t.Fatalf("get main discussion: %d %s", mainRec.Code, mainRec.Body.String())
+		}
+		var mainCard cardResponse
+		decodeRecorder(t, mainRec, &mainCard)
+		if mainCard.Unread == nil || mainCard.LatestMessageSequence == nil || mainCard.LastReadMessageSequence == nil {
+			t.Fatalf("main discussion omitted read state: %+v", mainCard)
+		}
 	}
 
 	readRec := doJSON(t, handler, http.MethodPost,
