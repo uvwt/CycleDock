@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
@@ -50,17 +51,17 @@ type Config struct {
 }
 
 type Service struct {
-	pool         *sqldb.DB
-	queries      *db.Queries
-	mcpURL       string
-	webURL       string
-	callbackURL  string
-	aead         cipher.AEAD
-	client       *http.Client
-	fleetMu      sync.RWMutex
-	fleetCache   map[uuid.UUID]fleetCacheEntry
-	devicesMu    sync.RWMutex
-	devicesCache map[uuid.UUID]devicesCacheEntry
+	pool        *sqldb.DB
+	queries     *db.Queries
+	mcpURL      string
+	webURL      string
+	callbackURL string
+	aead        cipher.AEAD
+	client      *http.Client
+	fleetMu     sync.RWMutex
+	fleetCache  map[uuid.UUID]fleetCacheEntry
+	fleetEpoch  map[uuid.UUID]uint64
+	fleetGroup  singleflight.Group
 }
 
 type Status struct {
@@ -152,11 +153,11 @@ func New(pool *sqldb.DB, config Config) (*Service, error) {
 	}
 	return &Service{
 		pool: pool, queries: db.New(pool), mcpURL: config.MCPURL, webURL: config.WebURL,
-		callbackURL:  config.PublicURL + "/auth/nexusdock-device/callback",
-		aead:         aead,
-		client:       client,
-		fleetCache:   make(map[uuid.UUID]fleetCacheEntry),
-		devicesCache: make(map[uuid.UUID]devicesCacheEntry),
+		callbackURL: config.PublicURL + "/auth/nexusdock-device/callback",
+		aead:        aead,
+		client:      client,
+		fleetCache:  make(map[uuid.UUID]fleetCacheEntry),
+		fleetEpoch:  make(map[uuid.UUID]uint64),
 	}, nil
 }
 
@@ -166,11 +167,11 @@ func (s *Service) invalidateWorkspaceCaches(workspaceID uuid.UUID) {
 	}
 	s.fleetMu.Lock()
 	delete(s.fleetCache, workspaceID)
+	if s.fleetEpoch == nil {
+		s.fleetEpoch = make(map[uuid.UUID]uint64)
+	}
+	s.fleetEpoch[workspaceID]++
 	s.fleetMu.Unlock()
-
-	s.devicesMu.Lock()
-	delete(s.devicesCache, workspaceID)
-	s.devicesMu.Unlock()
 }
 
 func (s *Service) Enabled() bool {

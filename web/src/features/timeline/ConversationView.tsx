@@ -722,6 +722,7 @@ function EventRow({
           cardID={cardID}
           approval={event.tool_approval}
           fallbackContent={event.content}
+          senderName={senderLabel(event.actor_kind, event.actor_name) || "Cycle"}
           completedAttempt={toolApprovalAttempt}
           onOpenTrace={actions.onOpenTrace}
         />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import {
   ShieldAlert,
   ShieldCheck,
@@ -23,12 +23,14 @@ export function ToolApprovalCard({
   cardID,
   approval,
   fallbackContent,
+  senderName = "Cycle",
   completedAttempt,
   onOpenTrace,
 }: {
   cardID?: string;
   approval?: ToolApproval;
   fallbackContent?: string;
+  senderName?: string;
   completedAttempt?: Attempt;
   onOpenTrace?: (attemptID: string) => void;
 }) {
@@ -40,6 +42,43 @@ export function ToolApprovalCard({
   const [expandedArgs, setExpandedArgs] = useState(false);
   // 已审批（允许/拒绝）或已随后续对话自动失效后，默认收敛为单行轻量状态条，按需点击才展开历史参数与原因
   const [expandedHistory, setExpandedHistory] = useState(false);
+  const [touchActive, setTouchActive] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!touchActive) return;
+    function handleOutsidePointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (wrapperRef.current?.contains(target)) return;
+      if (
+        target.closest(
+          "[data-radix-popper-content-wrapper], [role='menu'], [role='dialog']",
+        )
+      ) {
+        return;
+      }
+      setTouchActive(false);
+    }
+    document.addEventListener("pointerdown", handleOutsidePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutsidePointerDown);
+    };
+  }, [touchActive]);
+
+  function handleWrapperClick(event: MouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("a, button, input, textarea, [role='menuitem']")) {
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      window.getSelection()?.toString().trim()
+    ) {
+      return;
+    }
+    setTouchActive((prev) => !prev);
+  }
 
   if (!approval) {
     return (
@@ -153,35 +192,55 @@ export function ToolApprovalCard({
     }
   }
 
-  if (!isPending && !expandedHistory) {
-    const traceTrigger =
-      completedAttempt && completedAttempt.started_at && completedAttempt.finished_at ? (
-        <span
-          className="inline-flex shrink-0 items-center"
-          onClick={(event) => event.stopPropagation()}
+  // 本轮无普通回复气泡时，由工具审批卡承载耗时与链路入口；位置和悬停/点击显隐与普通气泡顶部发送者栏保持一致
+  const traceHeader =
+    completedAttempt && completedAttempt.started_at && completedAttempt.finished_at ? (
+      <div
+        data-tool-approval-header
+        className="mb-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground"
+      >
+        <span className="font-semibold text-foreground/80">{senderName}</span>
+        <div
+          className={`inline-flex items-center gap-x-2 transition-opacity duration-150 ${
+            touchActive
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+          }`}
         >
-          <RunDuration
-            startedAt={completedAttempt.started_at}
-            finishedAt={completedAttempt.finished_at}
-            active={false}
-            onClick={
-              onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
-            }
-          />
-        </span>
-      ) : null;
+          <span className="select-none text-[10px] text-muted-foreground/40">
+            •
+          </span>
+          <div className="inline-flex items-center gap-1.5 text-[11px] font-normal text-faint">
+            <RunDuration
+              startedAt={completedAttempt.started_at}
+              finishedAt={completedAttempt.finished_at}
+              active={false}
+              onClick={
+                onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
+              }
+            />
+          </div>
+        </div>
+      </div>
+    ) : null;
 
+  if (!isPending && !expandedHistory) {
     return (
       <div
-        data-tool-approval-card
-        data-approval-status={approval.status}
-        className="my-1.5"
+        ref={wrapperRef}
+        onClick={handleWrapperClick}
+        className="group my-1.5 flex w-fit max-w-full flex-col items-start"
       >
-        <div className="inline-flex max-w-full items-center gap-1 rounded-xl border border-line/70 bg-muted/30 pr-2 text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60">
+        {traceHeader}
+        <div
+          data-tool-approval-card
+          data-approval-status={approval.status}
+          className="max-w-full"
+        >
           <button
             type="button"
             onClick={() => setExpandedHistory(true)}
-            className="inline-flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-1 text-left"
+            className="inline-flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line/70 bg-muted/30 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-line hover:bg-muted/60"
           >
             {isApproved ? (
               <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -208,14 +267,6 @@ export function ToolApprovalCard({
             )}
             <ChevronDown className="size-3.5 shrink-0 text-faint" />
           </button>
-          {traceTrigger && (
-            <>
-              <span className="select-none text-[10px] text-muted-foreground/40">
-                •
-              </span>
-              {traceTrigger}
-            </>
-          )}
         </div>
       </div>
     );
@@ -223,52 +274,48 @@ export function ToolApprovalCard({
 
   return (
     <div
-      data-tool-approval-card
-      data-approval-status={approval.status}
-      className={`my-2 w-full max-w-2xl overflow-hidden rounded-2xl border shadow-xs transition-colors ${
-        isPending
-          ? "border-amber-500/50 bg-amber-500/[0.04] dark:border-amber-500/40 dark:bg-amber-950/20"
-          : isApproved
-            ? "border-emerald-500/40 bg-emerald-500/[0.03] dark:border-emerald-500/30 dark:bg-emerald-950/15"
-            : isSuperseded
-              ? "border-line bg-muted/30"
-              : "border-rose-500/40 bg-rose-500/[0.03] dark:border-rose-500/30 dark:bg-rose-950/15"
-      }`}
+      ref={wrapperRef}
+      onClick={handleWrapperClick}
+      className="group my-2 flex w-full max-w-2xl flex-col items-start"
     >
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 px-4 py-3">
-        <div className="flex items-center gap-2">
-          {isPending ? (
-            <ShieldAlert className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          ) : isApproved ? (
-            <ShieldCheck className="size-4.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-          ) : isSuperseded ? (
-            <ShieldAlert className="size-4.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <ShieldX className="size-4.5 shrink-0 text-rose-600 dark:text-rose-400" />
-          )}
-          <span className="text-xs font-semibold tracking-tight text-heading">
-            {isPending
-              ? t("工具调用安全守卫 · 等待人工确认")
-              : isApproved
-                ? t("工具调用安全守卫 · 已允许执行")
-                : isSuperseded
-                  ? t("工具调用安全守卫 · 已失效（已有后续推进）")
-                  : t("工具调用安全守卫 · 已拒绝执行")}
-          </span>
-        </div>
+      {traceHeader}
+      <div
+        data-tool-approval-card
+        data-approval-status={approval.status}
+        className={`w-full overflow-hidden rounded-2xl border shadow-xs transition-colors ${
+          isPending
+            ? "border-amber-500/50 bg-amber-500/[0.04] dark:border-amber-500/40 dark:bg-amber-950/20"
+            : isApproved
+              ? "border-emerald-500/40 bg-emerald-500/[0.03] dark:border-emerald-500/30 dark:bg-emerald-950/15"
+              : isSuperseded
+                ? "border-line bg-muted/30"
+                : "border-rose-500/40 bg-rose-500/[0.03] dark:border-rose-500/30 dark:bg-rose-950/15"
+        }`}
+      >
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 px-4 py-3">
+          <div className="flex items-center gap-2">
+            {isPending ? (
+              <ShieldAlert className="size-4.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            ) : isApproved ? (
+              <ShieldCheck className="size-4.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : isSuperseded ? (
+              <ShieldAlert className="size-4.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <ShieldX className="size-4.5 shrink-0 text-rose-600 dark:text-rose-400" />
+            )}
+            <span className="text-xs font-semibold tracking-tight text-heading">
+              {isPending
+                ? t("工具调用安全守卫 · 等待人工确认")
+                : isApproved
+                  ? t("工具调用安全守卫 · 已允许执行")
+                  : isSuperseded
+                    ? t("工具调用安全守卫 · 已失效（已有后续推进）")
+                    : t("工具调用安全守卫 · 已拒绝执行")}
+            </span>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {completedAttempt && (
-            <RunDuration
-              startedAt={completedAttempt.started_at}
-              finishedAt={completedAttempt.finished_at}
-              active={false}
-              onClick={
-                onOpenTrace ? () => onOpenTrace(completedAttempt.id) : undefined
-              }
-            />
-          )}
+          <div className="flex flex-wrap items-center gap-1.5">
           <span
             className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${riskMeta.className}`}
           >
@@ -439,6 +486,7 @@ export function ToolApprovalCard({
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
