@@ -26,6 +26,8 @@ export { ChatInput, type ChatInputProps } from "./chat-input";
 
 export { ChatReplyBar, type ChatReplyBarProps } from "./chat-reply-bar";
 
+export { QuoteMarkIcon } from "./quote-mark-icon";
+
 export {
   MessageLoading,
   type MessageLoadingProps,

@@ -2396,3 +2396,108 @@ test("ConversationView 在首条未读消息正上方渲染未读消息分隔符
   );
   assert.equal(htmlWithoutDivider.includes("data-unread-divider"), false);
 });
+
+test("气泡轻引用按正文复杂度自动切换行内混排与顶部单行，输入框引用条同步去粗竖线", () => {
+  const quotePayload = {
+    event_id: "evt-orig-1",
+    sender: "Cycle",
+    text: "已确认将引用样式调整为极简轻引用，并保留平滑回跳能力",
+  };
+  const events = [
+    {
+      id: "evt-inline",
+      sequence: 1,
+      type: "comment",
+      actor_kind: "human",
+      actor_name: "你",
+      content: "这个方案很干净，直接改吧",
+      created_at: "2026-11-27T10:00:00Z",
+      message: {
+        type: "text",
+        content: "这个方案很干净，直接改吧",
+        quote: quotePayload,
+      },
+    },
+    {
+      id: "evt-stacked-md",
+      sequence: 2,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "## 改动清单\n- 重构气泡引用\n- 同步简化输入框引用条",
+      created_at: "2026-11-27T10:01:00Z",
+      message: {
+        type: "text",
+        content: "## 改动清单\n- 重构气泡引用\n- 同步简化输入框引用条",
+        quote: quotePayload,
+      },
+    },
+    {
+      id: "evt-stacked-img",
+      sequence: 3,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "附上验证截图",
+      created_at: "2026-11-27T10:02:00Z",
+      message: {
+        type: "text",
+        content: "附上验证截图",
+        images: ["https://example.com/preview.png"],
+        quote: {
+          event_id: "",
+          sender: "你",
+          text: "发一下亮暗对比图",
+        },
+      },
+    },
+  ];
+
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "discussion",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      onRetryAttempt() {},
+    }),
+  );
+
+  // 简单短句使用行内混排，保留既有 data-* 属性且不渲染粗左竖线
+  assert.ok(html.includes('data-testid="message-quote-block"'));
+  assert.ok(html.includes('data-quote-ignore="true"'));
+  assert.ok(html.includes('data-quote-layout="inline"'));
+  assert.ok(html.includes('data-quote-layout="stacked"'));
+  assert.ok(html.includes('data-quote-target-event-id="evt-orig-1"'));
+  assert.equal(html.includes("border-l-3"), false);
+
+  // 无跳转目标的引用依然渲染为可点击查看全文浮层的 button
+  const imgEventIdx = html.indexOf('id="event-evt-stacked-img"');
+  assert.ok(imgEventIdx >= 0);
+  const imgEventSlice = html.slice(imgEventIdx);
+  assert.ok(imgEventSlice.includes('data-quote-layout="stacked"'));
+  assert.ok(imgEventSlice.includes("<button"));
+
+  // 输入框引用条去粗左竖线并使用统一轻引用外观
+  const composerHtml = renderToStaticMarkup(
+    createElement(ConversationComposer, {
+      cardID: "card-1",
+      projectID: "proj-1",
+      comment: "",
+      setComment() {},
+      placeholder: "输入消息...",
+      onSubmit() {},
+      replyTo: {
+        id: "evt-orig-1",
+        sender: "Cycle",
+        text: "请确认暗色模式下的对比度与浮层边界夹紧",
+      },
+      onCancelReply() {},
+    }),
+  );
+  assert.ok(composerHtml.includes('data-testid="chat-reply-bar"'));
+  assert.ok(composerHtml.includes("请确认暗色模式下的对比度与浮层边界夹紧"));
+  assert.equal(composerHtml.includes("border-l-3"), false);
+});

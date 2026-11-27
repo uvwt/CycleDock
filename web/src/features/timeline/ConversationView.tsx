@@ -23,6 +23,7 @@ import {
   ClipboardCheck,
   AlertCircle,
   CornerDownRight,
+  CornerUpLeft,
   Loader2,
   ChevronDown,
   ChevronUp,
@@ -53,6 +54,7 @@ import {
   ChatBubbleMessage,
   ChatBubbleTimestamp,
   ChatMessageList,
+  QuoteMarkIcon,
 } from "../../shared/ui/chat";
 import { CheckinTimelineItem } from "./CheckinTimelineItem";
 import {
@@ -72,10 +74,13 @@ import {
 } from "./AttachmentGallery";
 import { usePacedTimeline } from "./usePacedTimeline";
 import {
+  canRenderInlineQuote,
+  computeQuotePopoverPosition,
   computeSelectionPopoverPosition,
   formatQuotePreview,
   normalizeQuoteText,
   resolveSelectionQuote,
+  type PopoverPlacement,
 } from "./selectionQuote";
 import { cn } from "../../shared/lib/utils";
 import {
@@ -258,58 +263,309 @@ type ExecutionActions = {
   onStartCard?: () => void;
 };
 
-/** 展示已发送消息顶部的结构化引用预览块，点击平滑回跳并高亮原消息。 */
+/**
+ * 气泡内极简轻引用组件：
+ * - 去框、去粗左竖线、去独立发送者行，以开双引号图标 + 截断主题色摘要呈现；
+ * - 桌面端 Hover 时呈现浅底高亮，并通过 Portal 在视口安全区域弹出完整引用全文浮层，点击直接平滑回跳；
+ * - 移动端/触屏或无可跳转目标时，轻点切换弹出完整浮层，浮层内附「查看原消息」快捷跳转按钮。
+ */
 function MessageQuoteBlock({
   quote,
   onJump,
+  inline = false,
 }: {
   quote: CommentQuote;
   onJump?: (eventID: string) => void;
+  inline?: boolean;
 }) {
   const { t } = useTranslation();
-  const preview = formatQuotePreview(quote.text, 240);
-  if (!preview) return null;
+  const fullText = quote.text.trim();
+  const preview = formatQuotePreview(fullText, 120);
   const sender = quote.sender.trim() || "Cycle";
   const interactive = Boolean(quote.event_id && onJump);
-  const content = (
-    <>
-      <span className="block truncate text-[11px] font-semibold text-primary">
-        {sender}
-      </span>
-      <span className="mt-0.5 line-clamp-2 break-words text-xs leading-snug text-muted-foreground">
-        {preview}
-      </span>
-    </>
+
+  const [popoverMode, setPopoverMode] = useState<"closed" | "hover" | "pinned">(
+    "closed",
+  );
+  const [popoverPos, setPopoverPos] = useState<PopoverPlacement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const lastPointerTypeRef = useRef<string>("");
+  const isOpen = popoverMode !== "closed";
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const closePopover = () => {
+    clearCloseTimer();
+    setPopoverMode("closed");
+    setPopoverPos(null);
+  };
+
+  const scheduleHoverClose = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      setPopoverMode((prev) => {
+        if (prev !== "hover") return prev;
+        setPopoverPos(null);
+        return "closed";
+      });
+    }, 140);
+  };
+
+  const updatePopoverPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const popover = popoverRef.current;
+    if (!trigger || !popover || typeof window === "undefined") return;
+    const triggerRect = trigger.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const viewportWidth =
+      document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight =
+      document.documentElement.clientHeight || window.innerHeight;
+    setPopoverPos(
+      computeQuotePopoverPosition(
+        {
+          top: triggerRect.top,
+          left: triggerRect.left,
+          width: triggerRect.width,
+          height: triggerRect.height,
+        },
+        { width: viewportWidth, height: viewportHeight },
+        {
+          width: popoverRect.width || 280,
+          height: popoverRect.height || 88,
+        },
+      ),
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    updatePopoverPosition();
+  }, [isOpen, fullText, updatePopoverPosition]);
+
+  useEffect(() => {
+    return () => {
+      clearCloseTimer();
+    };
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function dismiss() {
+      clearCloseTimer();
+      setPopoverMode("closed");
+      setPopoverPos(null);
+    }
+
+    function handlePointerDownOutside(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (
+        triggerRef.current?.contains(target) ||
+        popoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+      dismiss();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        dismiss();
+      }
+    }
+
+    function handleScroll(event: Event) {
+      // 仅忽略浮层内部超长文本自身的滚动，外部时间线或窗口滚动时收起浮层避免悬空漂移。
+      const target = event.target as Node | null;
+      if (target && popoverRef.current?.contains(target)) return;
+      dismiss();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", updatePopoverPosition);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        handlePointerDownOutside,
+        true,
+      );
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", updatePopoverPosition);
+    };
+  }, [isOpen, clearCloseTimer, updatePopoverPosition]);
+
+  if (!preview) return null;
+
+  const triggerButton = (
+    <button
+      ref={triggerRef}
+      type="button"
+      data-quote-ignore="true"
+      data-testid="message-quote-block"
+      data-quote-layout={inline ? "inline" : "stacked"}
+      data-quote-target-event-id={quote.event_id || undefined}
+      aria-expanded={isOpen}
+      aria-label={
+        interactive
+          ? t("引用自 {{sender}}，点击查看原消息", { sender })
+          : t("引用自 {{sender}}，点击查看完整引用", { sender })
+      }
+      onPointerDown={(event) => {
+        lastPointerTypeRef.current = event.pointerType;
+      }}
+      onPointerEnter={(event) => {
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          return;
+        }
+        clearCloseTimer();
+        setPopoverMode((prev) => (prev === "pinned" ? "pinned" : "hover"));
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          return;
+        }
+        scheduleHoverClose();
+      }}
+      onFocus={(event) => {
+        if (event.currentTarget.matches?.(":focus-visible")) {
+          clearCloseTimer();
+          setPopoverMode((prev) => (prev === "pinned" ? "pinned" : "hover"));
+        }
+      }}
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null;
+        if (popoverRef.current?.contains(next)) return;
+        if (popoverMode === "hover") {
+          closePopover();
+        }
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        clearCloseTimer();
+        const pointerType = lastPointerTypeRef.current;
+        lastPointerTypeRef.current = "";
+        const isTouchLike =
+          pointerType === "touch" ||
+          pointerType === "pen" ||
+          (typeof window !== "undefined" &&
+            window.matchMedia?.("(hover: none), (pointer: coarse)").matches);
+        if (!interactive || isTouchLike) {
+          if (popoverMode === "pinned") {
+            closePopover();
+          } else {
+            setPopoverMode("pinned");
+          }
+          return;
+        }
+        closePopover();
+        onJump?.(quote.event_id);
+      }}
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 -ml-1.5 text-left text-[13px] leading-[1.35] font-normal text-primary transition-colors duration-150 hover:bg-slate-900/[0.06] focus-visible:bg-slate-900/[0.06] dark:text-sky-300 dark:hover:bg-white/[0.09] dark:focus-visible:bg-white/[0.09]",
+        inline
+          ? "mr-1.5 max-w-[min(14rem,52vw)] align-[0.05em] sm:max-w-[16.5rem]"
+          : "max-w-full",
+        isOpen && "bg-slate-900/[0.06] dark:bg-white/[0.09]",
+      )}
+    >
+      <QuoteMarkIcon className="size-2.5 shrink-0 text-primary/75 dark:text-sky-300/85" />
+      <span className="min-w-0 truncate">{preview}</span>
+    </button>
   );
 
-  if (!interactive) {
-    return (
+  const popover =
+    isOpen &&
+    typeof document !== "undefined" &&
+    createPortal(
       <div
+        ref={popoverRef}
+        role="dialog"
+        aria-label={sender}
         data-quote-ignore="true"
-        data-testid="message-quote-block"
-        className="mb-2 max-w-full rounded-lg border border-line/60 border-l-3 border-l-primary/70 bg-surface/75 px-2.5 py-1.5 text-left dark:bg-canvas/55"
+        data-testid="message-quote-popover"
+        data-placement={popoverPos?.placement ?? "top"}
+        style={
+          popoverPos
+            ? {
+                position: "fixed",
+                top: `${popoverPos.top}px`,
+                left: `${popoverPos.left}px`,
+              }
+            : {
+                position: "fixed",
+                top: "-9999px",
+                left: "-9999px",
+                visibility: "hidden",
+              }
+        }
+        onClick={(event) => event.stopPropagation()}
+        onPointerEnter={(event) => {
+          if (event.pointerType === "mouse") {
+            clearCloseTimer();
+          }
+        }}
+        onPointerLeave={(event) => {
+          if (event.pointerType === "mouse") {
+            scheduleHoverClose();
+          }
+        }}
+        className="z-[60] w-max max-w-[min(22rem,calc(100vw-24px))] rounded-xl border border-line/85 bg-surface/98 px-3 py-2.5 text-left text-foreground shadow-lg shadow-slate-900/10 backdrop-blur-md animate-in fade-in-0 duration-100 dark:border-line-strong/75 dark:bg-surface/98 dark:shadow-black/45"
       >
-        {content}
-      </div>
+        <div className="mb-1.5 flex items-center justify-between gap-3">
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+            <QuoteMarkIcon className="size-2.5 shrink-0 text-primary/75 dark:text-sky-300/80" />
+            <span className="truncate">{sender}</span>
+          </span>
+          {interactive && (
+            <button
+              type="button"
+              data-testid="message-quote-jump-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                closePopover();
+                onJump?.(quote.event_id);
+              }}
+              className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium text-primary transition hover:bg-primary/10 dark:text-sky-300 dark:hover:bg-sky-400/15"
+            >
+              <span>{t("查看原消息")}</span>
+              <CornerUpLeft className="size-3" />
+            </button>
+          )}
+        </div>
+        <div className="scrollbar-thin max-h-56 overflow-y-auto pr-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+          {fullText}
+        </div>
+      </div>,
+      document.body,
+    );
+
+  if (inline) {
+    return (
+      <>
+        {triggerButton}
+        {popover}
+      </>
     );
   }
 
   return (
-    <button
-      type="button"
-      data-quote-ignore="true"
-      data-testid="message-quote-block"
-      data-quote-target-event-id={quote.event_id}
-      onClick={(event) => {
-        event.stopPropagation();
-        onJump?.(quote.event_id);
-      }}
-      title={t("点击查看原消息")}
-      aria-label={t("引用自 {{sender}}，点击查看原消息", { sender })}
-      className="mb-2 block w-full max-w-full cursor-pointer rounded-lg border border-line/60 border-l-3 border-l-primary/80 bg-surface/80 px-2.5 py-1.5 text-left transition hover:border-primary/40 hover:bg-surface active:scale-[0.99] dark:bg-canvas/55 dark:hover:bg-canvas/80"
-    >
-      {content}
-    </button>
+    <div data-quote-ignore="true" className="mb-1.5 flex max-w-full">
+      {triggerButton}
+      {popover}
+    </div>
   );
 }
 
@@ -938,28 +1194,60 @@ function EventRow({
                   : ""
               }`}
             >
-            {messageQuote && (
-              <MessageQuoteBlock
-                quote={messageQuote}
-                onJump={actions.onJumpToEvent}
-              />
-            )}
-            {(event.type === "finding" || event.type === "result") && (
-              <p
-                data-quote-ignore="true"
-                className={`mb-1 text-xs font-semibold ${event.type === "finding" ? "text-sky-700 dark:text-sky-400" : "text-emerald-700 dark:text-emerald-400"}`}
-              >
-                {t(event.type === "finding" ? "发现" : "结果")}
-              </p>
-            )}
-            {rawText && (
-              <div
-                data-quote-message-body="true"
-                data-quote-event-id={!isStreamingPreview ? event.id : undefined}
-                data-quote-sender={displaySender}
-              >
-                <RichText content={rawText} />
+            {messageQuote &&
+            canRenderInlineQuote(rawText, {
+              hasPrefix:
+                event.type === "finding" || event.type === "result",
+              hasAttachments: Boolean(
+                (commentAttachments && commentAttachments.length > 0) ||
+                  (message?.type === "attachment" && message.url),
+              ),
+              hasImages: Boolean(message?.images && message.images.length > 0),
+            }) ? (
+              <div className="min-w-0 text-[15px] leading-[1.62] break-words">
+                <MessageQuoteBlock
+                  quote={messageQuote}
+                  onJump={actions.onJumpToEvent}
+                  inline
+                />
+                <span
+                  data-quote-message-body="true"
+                  data-quote-event-id={
+                    !isStreamingPreview ? event.id : undefined
+                  }
+                  data-quote-sender={displaySender}
+                >
+                  <RichText content={rawText} inline />
+                </span>
               </div>
+            ) : (
+              <>
+                {messageQuote && (
+                  <MessageQuoteBlock
+                    quote={messageQuote}
+                    onJump={actions.onJumpToEvent}
+                  />
+                )}
+                {(event.type === "finding" || event.type === "result") && (
+                  <p
+                    data-quote-ignore="true"
+                    className={`mb-1 text-xs font-semibold ${event.type === "finding" ? "text-sky-700 dark:text-sky-400" : "text-emerald-700 dark:text-emerald-400"}`}
+                  >
+                    {t(event.type === "finding" ? "发现" : "结果")}
+                  </p>
+                )}
+                {rawText && (
+                  <div
+                    data-quote-message-body="true"
+                    data-quote-event-id={
+                      !isStreamingPreview ? event.id : undefined
+                    }
+                    data-quote-sender={displaySender}
+                  >
+                    <RichText content={rawText} />
+                  </div>
+                )}
+              </>
             )}
             {commentAttachments && commentAttachments.length > 0 && (
               <div data-quote-ignore="true">
