@@ -38,6 +38,9 @@ import {
 const LoginPage = lazy(() =>
   import("./LoginPage").then((m) => ({ default: m.LoginPage })),
 );
+const OAuthConsentPage = lazy(() =>
+  import("./OAuthConsentPage").then((m) => ({ default: m.OAuthConsentPage })),
+);
 const ChatHome = lazy(loadChatHome);
 const BoardPage = lazy(loadBoardPage);
 const PlanPage = lazy(loadPlanPage);
@@ -192,6 +195,20 @@ function Authenticated() {
         <ErrorView error={me.error} onRetry={() => void me.refetch()} />
       </main>
     );
+  // MCP OAuth 授权确认页使用独立居中布局，不包裹侧边栏 Shell，避免主工作台干扰。
+  if (location.pathname === "/oauth/consent") {
+    return (
+      <Suspense
+        fallback={
+          <main className="grid h-full min-h-0 place-items-center bg-canvas">
+            <Spinner text={t("正在加载授权页…")} />
+          </main>
+        }
+      >
+        <OAuthConsentPage />
+      </Suspense>
+    );
+  }
   return (
     <ProjectProvider>
       <DeviceSelectionProvider key={me.data.workspace.id}>

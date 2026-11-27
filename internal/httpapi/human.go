@@ -126,6 +126,8 @@ func (api *API) mountHumanRoutes(r chi.Router) {
 	r.Delete("/agent/model-auth/{provider}/{credentialID}", api.disconnectModelAuth)
 	r.Get("/agent/models", api.listAgentModels)
 	r.Get("/agent/oauth-clients", api.listAuthorizedAIClients)
+	r.Get("/oauth/consent", api.oauthConsentGet)
+	r.Post("/oauth/consent", api.oauthConsentSubmit)
 	r.Post("/agent/mcp-test", api.testAgentMCP)
 	r.Get("/agent/mcp-connections", api.listAgentMCPConnections)
 	r.Post("/agent/mcp-connections", api.createAgentMCPConnection)
