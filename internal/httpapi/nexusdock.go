@@ -63,7 +63,8 @@ func (api *API) listNexusDockDevices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	devices, err := api.nexusDock.Devices(r.Context(), identityFromRequest(r).WorkspaceID)
+	forceRefresh := r.URL.Query().Get("refresh") == "true" || r.URL.Query().Get("refresh") == "1"
+	devices, err := api.nexusDock.Devices(r.Context(), identityFromRequest(r).WorkspaceID, forceRefresh)
 	if errors.Is(err, nexusdock.ErrNotConnected) {
 		writeJSON(w, http.StatusOK, response)
 		return
