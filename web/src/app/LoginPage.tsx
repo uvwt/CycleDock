@@ -22,10 +22,17 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const location = useLocation();
   const returnTo = new URLSearchParams(location.search).get("return_to");
+  const currentLocationTarget =
+    location.pathname &&
+    location.pathname !== "/" &&
+    location.pathname.startsWith("/") &&
+    !location.pathname.startsWith("//")
+      ? `${location.pathname}${location.search}`
+      : "";
   const safeReturn =
     returnTo?.startsWith("/") && !returnTo.startsWith("//")
       ? returnTo
-      : "/chat";
+      : currentLocationTarget || "/chat";
   const login = useMutation({
     mutationFn: () => api.login(password),
     onSuccess: (me) => {

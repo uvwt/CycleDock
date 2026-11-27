@@ -173,6 +173,99 @@ func TestConcurrentOAuthApprovalReusesOneSource(t *testing.T) {
 	}
 }
 
+func TestOAuthCompatibilityDefaultsAndNormalization(t *testing.T) {
+	service, humanAuth, _ := newOAuthIntegration(t)
+	ctx := context.Background()
+	session, err := humanAuth.Login(ctx, "phase3-local-admin-password")
+	if err != nil {
+		t.Fatalf("human login: %v", err)
+	}
+
+	// 允许缺省 client_name 注册，自动回退默认名称。
+	client, err := service.RegisterClient(ctx, "   ", []string{"http://127.0.0.1:9877/callback"})
+	if err != nil {
+		t.Fatalf("register client with blank name: %v", err)
+	}
+	if client.Name != defaultClientName {
+		t.Fatalf("default client name=%q, want %q", client.Name, defaultClientName)
+	}
+
+	// 允许省略 resource、携带尾斜杠 resource，以及顺带携带标准 OIDC/离线辅助 scope。
+	verifier := strings.Repeat("d", 64)
+	cases := []struct {
+		name     string
+		scope    string
+		resource string
+	}{
+		{name: "omitted resource and auxiliary scopes", scope: "openid profile email offline_access cycledock:mcp", resource: ""},
+		{name: "auxiliary scopes only with trailing slash resource", scope: "openid email", resource: service.Resource() + "/"},
+		{name: "uppercase host with trailing slash", scope: "", resource: "HTTP://127.0.0.1:18083/mcp/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := AuthorizeRequest{
+				ClientID:      client.ID,
+				RedirectURI:   client.RedirectURIs[0],
+				CodeChallenge: pkceChallenge(verifier),
+				Scope:         tc.scope,
+				Resource:      tc.resource,
+			}
+			_, normalized, err := service.NormalizeAuthorizationRequest(ctx, req)
+			if err != nil {
+				t.Fatalf("NormalizeAuthorizationRequest: %v", err)
+			}
+			if normalized.Scope != ScopeMCP || normalized.Resource != service.Resource() {
+				t.Fatalf("normalized=%+v, want scope=%q resource=%q", normalized, ScopeMCP, service.Resource())
+			}
+
+			code, err := service.Authorize(ctx, session.Identity, req)
+			if err != nil {
+				t.Fatalf("authorize: %v", err)
+			}
+			// 换 token 时省略 resource 或带尾斜杠均应通过。
+			tokens, err := service.ExchangeCode(ctx, CodeTokenRequest{
+				Code:         code.Code,
+				ClientID:     client.ID,
+				RedirectURI:  client.RedirectURIs[0],
+				CodeVerifier: verifier,
+				Resource:     tc.resource,
+			})
+			if err != nil {
+				t.Fatalf("exchange code: %v", err)
+			}
+			if tokens.Scope != ScopeMCP || tokens.Resource != service.Resource() {
+				t.Fatalf("unexpected tokens: %+v", tokens)
+			}
+			// refresh 时同样支持省略或尾斜杠 resource。
+			if _, err := service.Refresh(ctx, RefreshTokenRequest{
+				RefreshToken: tokens.RefreshToken,
+				ClientID:     client.ID,
+				Resource:     service.Resource() + "/",
+			}); err != nil {
+				t.Fatalf("refresh with trailing slash resource: %v", err)
+			}
+		})
+	}
+
+	// 未知 scope 与非法 resource 仍必须严格拒绝。
+	if _, _, err := service.NormalizeAuthorizationRequest(ctx, AuthorizeRequest{
+		ClientID:      client.ID,
+		RedirectURI:   client.RedirectURIs[0],
+		CodeChallenge: pkceChallenge(verifier),
+		Scope:         "openid admin:all",
+	}); !errors.Is(err, ErrInvalidScope) {
+		t.Fatalf("unknown scope err=%v, want ErrInvalidScope", err)
+	}
+	if _, _, err := service.NormalizeAuthorizationRequest(ctx, AuthorizeRequest{
+		ClientID:      client.ID,
+		RedirectURI:   client.RedirectURIs[0],
+		CodeChallenge: pkceChallenge(verifier),
+		Resource:      "https://evil.example/mcp",
+	}); !errors.Is(err, ErrInvalidResource) {
+		t.Fatalf("wrong resource err=%v, want ErrInvalidResource", err)
+	}
+}
+
 func TestOAuthRejectsUnsafeRedirectURI(t *testing.T) {
 	service, _, _ := newOAuthIntegration(t)
 	if _, err := service.RegisterClient(context.Background(), "Unsafe", []string{"http://example.com/callback"}); !errors.Is(err, ErrInvalidRequest) {
