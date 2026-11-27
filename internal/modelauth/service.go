@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type Provider string
@@ -84,7 +83,7 @@ type credentialPayload struct {
 }
 
 type Service struct {
-	pool                                  *pgxpool.Pool
+	pool                                  *sqldb.DB
 	httpClient                            *http.Client
 	vault                                 *vault
 	publicURL                             string
@@ -93,7 +92,7 @@ type Service struct {
 	hostID                                string
 }
 
-func New(pool *pgxpool.Pool, config Config) (*Service, error) {
+func New(pool *sqldb.DB, config Config) (*Service, error) {
 	if pool == nil {
 		return nil, errors.New("model auth database pool is required")
 	}
@@ -314,7 +313,7 @@ func (s *Service) credential(
 			FOR UPDATE
 		`, workspaceID, string(provider), credentialID).Scan(&id, &ciphertext, &expiresAt)
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RuntimeCredential{}, ErrNotConnected
 	}
 	if err != nil {
@@ -399,21 +398,43 @@ func (s *Service) saveCredential(
 		`, id, workspaceID, string(provider), encrypted, expiresAt, displayLabel).Scan(&id)
 		return id, err
 	}
-	err = s.pool.QueryRow(ctx, `
-		INSERT INTO model_oauth_credentials (
-			id, workspace_id, provider, account_subject,
-			credential_ciphertext, expires_at, display_label
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (workspace_id, provider, account_subject)
-		WHERE btrim(account_subject) <> ''
-		DO UPDATE
-		SET credential_ciphertext=EXCLUDED.credential_ciphertext,
-		    expires_at=EXCLUDED.expires_at,
-		    display_label=EXCLUDED.display_label,
-		    updated_at=now()
-		RETURNING id
-	`, id, workspaceID, string(provider), accountSubject, encrypted, expiresAt, displayLabel).Scan(&id)
+	// 索引：按工作空间 + 提供方 + 账号主体唯一（非空）
+	// PostgreSQL 上对应部分索引 WHERE btrim(account_subject) <> ''，SQLite 上对应 WHERE trim(account_subject) <> ''。
+	var upsertSQL string
+	if s.pool.Dialect() == sqldb.DialectSQLite {
+		upsertSQL = `
+			INSERT INTO model_oauth_credentials (
+				id, workspace_id, provider, account_subject,
+				credential_ciphertext, expires_at, display_label
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (workspace_id, provider, account_subject)
+			WHERE trim(account_subject) <> ''
+			DO UPDATE
+			SET credential_ciphertext=EXCLUDED.credential_ciphertext,
+			    expires_at=EXCLUDED.expires_at,
+			    display_label=EXCLUDED.display_label,
+			    updated_at=now()
+			RETURNING id
+		`
+	} else {
+		upsertSQL = `
+			INSERT INTO model_oauth_credentials (
+				id, workspace_id, provider, account_subject,
+				credential_ciphertext, expires_at, display_label
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (workspace_id, provider, account_subject)
+			WHERE btrim(account_subject) <> ''
+			DO UPDATE
+			SET credential_ciphertext=EXCLUDED.credential_ciphertext,
+			    expires_at=EXCLUDED.expires_at,
+			    display_label=EXCLUDED.display_label,
+			    updated_at=now()
+			RETURNING id
+		`
+	}
+	err = s.pool.QueryRow(ctx, upsertSQL, id, workspaceID, string(provider), accountSubject, encrypted, expiresAt, displayLabel).Scan(&id)
 	return id, err
 }
 

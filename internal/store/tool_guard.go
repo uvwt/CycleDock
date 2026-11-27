@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -105,7 +105,7 @@ func (s *Store) GetToolApproval(ctx context.Context, workspaceID, cardID, approv
 		CardID:      cardID,
 		ID:          approvalID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.CardToolApproval{}, domain.ErrNotFound
 	}
 	return approval, err
@@ -148,7 +148,7 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 		ResolutionComment:  strings.TrimSpace(p.Comment),
 		ResolvedBySourceID: sourceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		// 区分“记录不存在”与“并发下已被处理或自动失效”，避免将状态冲突误报为 404
 		current, getErr := s.GetToolApproval(ctx, p.WorkspaceID, p.CardID, p.ApprovalID)
 		if getErr != nil {
@@ -169,7 +169,7 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 // 确保后续对话推进、打断或状态结束时不会留下僵尸待确认记录。
 func supersedePendingToolApprovalsTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	reason string,
 ) error {
@@ -253,7 +253,7 @@ func (s *Store) GetDeviceToolGuard(ctx context.Context, workspaceID uuid.UUID, n
 		WorkspaceID:  workspaceID,
 		DeviceNodeID: strings.TrimSpace(nodeID),
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WorkspaceDeviceToolGuard{}, domain.ErrNotFound
 	}
 	return guard, err
@@ -410,7 +410,7 @@ func (s *Store) EnqueueToolApprovalTurn(
 			FROM card_turns
 			WHERE workspace_id = $1 AND card_id = $2 AND id = $3
 		`, p.WorkspaceID, p.CardID, p.OriginTurnID.UUID).Scan(&deviceNodeID, &deviceName, &preferredRouteID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
 			return CreateTurnResult{}, err
 		}
 	}

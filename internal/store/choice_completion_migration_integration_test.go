@@ -5,13 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
 func TestWaitingMigrationCompletesAttemptAndPreservesQuestion(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 	if _, err := s.CreateHumanTurn(ctx, f.WorkspaceID, f.CardID, f.HumanID, "Choose a target", "migration-question", domain.DispatchModeEnqueue); err != nil {
@@ -29,9 +28,8 @@ func TestWaitingMigrationCompletesAttemptAndPreservesQuestion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database := stdlib.OpenDB(*s.pool.Config().ConnConfig)
-	defer database.Close()
-	const migrations = "../../db/migrations"
+	database := s.pool.StdDB()
+	const migrations = "../../db/migrations/postgres"
 	defer func() {
 		if err := goose.Up(database, migrations); err != nil {
 			t.Errorf("restore latest schema: %v", err)

@@ -1,7 +1,7 @@
 version: "2"
 sql:
   - engine: postgresql
-    schema: db/migrations
+    schema: db/migrations/postgres
     queries: db/query
     gen:
       go:
@@ -18,3 +18,56 @@ sql:
             go_type:
               import: github.com/google/uuid
               type: NullUUID
+          - db_type: text
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Text
+          - db_type: pg_catalog.timestamptz
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Timestamptz
+          - db_type: pg_catalog.timestamptz
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Timestamptz
+          - db_type: timestamptz
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Timestamptz
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Timestamptz
+          - db_type: pg_catalog.int2
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Int2
+          - db_type: pg_catalog.int4
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Int4
+          - db_type: pg_catalog.int8
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Int8
+          - db_type: pg_catalog.bool
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Bool
+          - db_type: pg_catalog.time
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Time
+          - db_type: pg_catalog.time
+            nullable: true
+            go_type:
+              import: github.com/uvwt/CycleDock/internal/sqldb
+              type: Time
+

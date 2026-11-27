@@ -16,7 +16,8 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const (
@@ -189,7 +190,7 @@ func (s *Service) CompleteChatGPT(
 
 	var flowID, workspaceID uuid.UUID
 	var encrypted []byte
-	var row pgx.Row
+	var row *sqldb.Row
 	if expectedWorkspaceID == uuid.Nil {
 		row = s.pool.QueryRow(ctx, `
 			DELETE FROM model_auth_flows
@@ -209,7 +210,7 @@ func (s *Service) CompleteChatGPT(
 		`, stateDigest[:], string(ProviderChatGPT), expectedWorkspaceID)
 	}
 	err := row.Scan(&flowID, &workspaceID, &encrypted)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, ErrFlowNotFound
 	}
 	if err != nil {
@@ -365,7 +366,7 @@ func (s *Service) PollGrok(
 		FROM model_auth_flows
 		WHERE id=$1 AND workspace_id=$2 AND provider=$3
 	`, flowID, workspaceID, string(ProviderGrok)).Scan(&encrypted, &expiresAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return DevicePollResult{}, ErrFlowNotFound
 	}
 	if err != nil {

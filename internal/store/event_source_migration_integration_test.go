@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
@@ -21,11 +20,10 @@ func TestEventSourceMigrationReconcilesVersion18Collision(t *testing.T) {
 		{name: "existing_column_without_constraint", legacySource: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			s := requireIntegration(t)
+			s := requirePostgresIntegration(t)
 			f := newFixture(t, s, domain.CardKindTodo)
-			database := stdlib.OpenDB(*s.pool.Config().ConnConfig)
-			defer database.Close()
-			const migrations = "../../db/migrations"
+			database := s.pool.StdDB()
+			const migrations = "../../db/migrations/postgres"
 			defer func() {
 				if err := goose.Up(database, migrations); err != nil {
 					t.Errorf("restore latest schema: %v", err)

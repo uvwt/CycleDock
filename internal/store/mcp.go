@@ -9,11 +9,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -116,7 +115,7 @@ func (s *Store) CreateAgentDiscussion(
 		"SELECT id FROM projects WHERE workspace_id = $1 AND id = $2",
 		p.WorkspaceID, p.ProjectID,
 	).Scan(&projectID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return AgentCardCreateResult{}, domain.ErrNotFound
 		}
 		return AgentCardCreateResult{}, err
@@ -127,11 +126,11 @@ func (s *Store) CreateAgentDiscussion(
 		WorkspaceID:           p.WorkspaceID,
 		ProjectID:             p.ProjectID,
 		Kind:                  string(domain.CardKindDiscussion),
-		DiscussionState:       pgtype.Text{String: string(domain.DiscussionStateActive), Valid: true},
+		DiscussionState:       sqldb.Text{String: string(domain.DiscussionStateActive), Valid: true},
 		RequiredConfirmations: 1,
 		CreatedBySourceID:     p.SourceID,
-		CreateIdempotencyKey:  pgtype.Text{String: p.IdempotencyKey, Valid: true},
-		CreateRequestHash:     pgtype.Text{String: requestHash, Valid: true},
+		CreateIdempotencyKey:  sqldb.Text{String: p.IdempotencyKey, Valid: true},
+		CreateRequestHash:     sqldb.Text{String: requestHash, Valid: true},
 	})
 	if err != nil {
 		return AgentCardCreateResult{}, mapConstraintError(err)
@@ -204,7 +203,7 @@ func (s *Store) GenerateWorkFromDiscussion(
 		WHERE workspace_id = $1 AND id = $2
 		FOR UPDATE
 	`, p.WorkspaceID, p.DiscussionID).Scan(&projectID, &kind, &discussionState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sqldb.ErrNoRows) {
 			return AgentCardCreateResult{}, domain.ErrNotFound
 		}
 		return AgentCardCreateResult{}, err
@@ -216,11 +215,11 @@ func (s *Store) GenerateWorkFromDiscussion(
 		)
 	}
 
-	var todoState, ongoingState pgtype.Text
+	var todoState, ongoingState sqldb.Text
 	if p.Kind == domain.CardKindTodo {
-		todoState = pgtype.Text{String: string(domain.TodoStateTodo), Valid: true}
+		todoState = sqldb.Text{String: string(domain.TodoStateTodo), Valid: true}
 	} else {
-		ongoingState = pgtype.Text{String: string(domain.OngoingStateActive), Valid: true}
+		ongoingState = sqldb.Text{String: string(domain.OngoingStateActive), Valid: true}
 	}
 	card, err := q.CreateAgentCard(ctx, db.CreateAgentCardParams{
 		ID:                    uuid.New(),
@@ -234,8 +233,8 @@ func (s *Store) GenerateWorkFromDiscussion(
 		SourceDiscussionID:    uuid.NullUUID{UUID: p.DiscussionID, Valid: true},
 		RequiredConfirmations: p.RequiredConfirmations,
 		CreatedBySourceID:     p.SourceID,
-		CreateIdempotencyKey:  pgtype.Text{String: p.IdempotencyKey, Valid: true},
-		CreateRequestHash:     pgtype.Text{String: requestHash, Valid: true},
+		CreateIdempotencyKey:  sqldb.Text{String: p.IdempotencyKey, Valid: true},
+		CreateRequestHash:     sqldb.Text{String: requestHash, Valid: true},
 	})
 	if err != nil {
 		return AgentCardCreateResult{}, mapConstraintError(err)
@@ -350,7 +349,7 @@ func (s *Store) StartCardExecution(
 		FROM cards
 		WHERE workspace_id = $1 AND id = $2
 	`, p.WorkspaceID, p.CardID).Scan(&kind, &title, &description, &todoState, &ongoingState)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CreateTurnResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -420,9 +419,9 @@ func findCreatedCardRetry(
 	existing, err := q.GetCreatedCardRequest(ctx, db.GetCreatedCardRequestParams{
 		WorkspaceID:          workspaceID,
 		CreatedBySourceID:    sourceID,
-		CreateIdempotencyKey: pgtype.Text{String: idempotencyKey, Valid: true},
+		CreateIdempotencyKey: sqldb.Text{String: idempotencyKey, Valid: true},
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.Card{}, false, nil
 	}
 	if err != nil {
@@ -465,7 +464,7 @@ func (s *Store) AddAgentComment(
 	event, err := q.GetAgentEventRequest(ctx, db.GetAgentEventRequestParams{
 		WorkspaceID: workspaceID, ActorSourceID: sourceID,
 		EventType:      string(domain.EventTypeComment),
-		IdempotencyKey: pgtype.Text{String: idempotencyKey, Valid: true},
+		IdempotencyKey: sqldb.Text{String: idempotencyKey, Valid: true},
 	})
 	if err == nil {
 		if !event.RequestHash.Valid || event.RequestHash.String != requestHash || event.CardID != cardID {
@@ -476,7 +475,7 @@ func (s *Store) AddAgentComment(
 		}
 		return event.ID, true, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, err
 	}
 	if err := ensureDiscussionAcceptsWork(ctx, tx, workspaceID, cardID); err != nil {
@@ -487,8 +486,8 @@ func (s *Store) AddAgentComment(
 		ID: uuid.New(), WorkspaceID: workspaceID, CardID: cardID,
 		EventType: string(domain.EventTypeComment), ActorSourceID: sourceID,
 		Content:        content,
-		IdempotencyKey: pgtype.Text{String: idempotencyKey, Valid: true},
-		RequestHash:    pgtype.Text{String: requestHash, Valid: true},
+		IdempotencyKey: sqldb.Text{String: idempotencyKey, Valid: true},
+		RequestHash:    sqldb.Text{String: requestHash, Valid: true},
 	})
 	if err != nil {
 		return uuid.Nil, false, mapConstraintError(err)
@@ -534,7 +533,7 @@ func (s *Store) ConfirmCard(
 	existing, err := q.GetAgentEventRequest(ctx, db.GetAgentEventRequestParams{
 		WorkspaceID: workspaceID, ActorSourceID: sourceID,
 		EventType:      string(domain.EventTypeConfirm),
-		IdempotencyKey: pgtype.Text{String: idempotencyKey, Valid: true},
+		IdempotencyKey: sqldb.Text{String: idempotencyKey, Valid: true},
 	})
 	if err == nil {
 		if !existing.RequestHash.Valid || existing.RequestHash.String != requestHash || existing.CardID != cardID {
@@ -561,7 +560,7 @@ func (s *Store) ConfirmCard(
 			MovedToReview: column == string(domain.TodoStateReview), Reused: true,
 		}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return ConfirmResult{}, err
 	}
 
@@ -583,8 +582,8 @@ func (s *Store) ConfirmCard(
 		EventType: string(domain.EventTypeConfirm), ActorSourceID: sourceID,
 		ConfirmationRound: confirmationRound,
 		Content:           content,
-		IdempotencyKey:    pgtype.Text{String: idempotencyKey, Valid: true},
-		RequestHash:       pgtype.Text{String: requestHash, Valid: true},
+		IdempotencyKey:    sqldb.Text{String: idempotencyKey, Valid: true},
+		RequestHash:       sqldb.Text{String: requestHash, Valid: true},
 	})
 	if err != nil {
 		return ConfirmResult{}, mapConstraintError(err)
@@ -617,7 +616,7 @@ func (s *Store) ConfirmCard(
 			LIMIT 1
 		`, workspaceID, cardID).Scan(&runningAttemptID.UUID); err == nil {
 			runningAttemptID.Valid = true
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		} else if !errors.Is(err, sqldb.ErrNoRows) {
 			return ConfirmResult{}, err
 		}
 		if _, err := tx.Exec(ctx,
@@ -638,10 +637,10 @@ func (s *Store) ConfirmCard(
 	}, nil
 }
 
-func ensureAgentSource(ctx context.Context, tx pgx.Tx, workspaceID, sourceID uuid.UUID) error {
+func ensureAgentSource(ctx context.Context, tx *sqldb.Tx, workspaceID, sourceID uuid.UUID) error {
 	var kind string
 	err := tx.QueryRow(ctx, "SELECT kind FROM sources WHERE workspace_id=$1 AND id=$2", workspaceID, sourceID).Scan(&kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -653,10 +652,9 @@ func ensureAgentSource(ctx context.Context, tx pgx.Tx, workspaceID, sourceID uui
 	return nil
 }
 
-func lockRequestKey(ctx context.Context, tx pgx.Tx, workspaceID, sourceID uuid.UUID, key string) error {
+func lockRequestKey(ctx context.Context, tx *sqldb.Tx, workspaceID, sourceID uuid.UUID, key string) error {
 	lockKey := "cycledock/request/" + workspaceID.String() + "/" + sourceID.String() + "/" + key
-	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey)
-	return err
+	return tx.AdvisoryLock(ctx, lockKey)
 }
 
 func stableRequestHash(parts ...string) string {

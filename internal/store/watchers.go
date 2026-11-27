@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/trigger"
 )
 
@@ -402,7 +402,7 @@ func (s *Store) processDueCardWatcher(
 		FROM card_watchers
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, watcherID).Scan(&cardID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
@@ -520,11 +520,16 @@ func (s *Store) processDueCardWatcher(
 
 func loadArmedEventWatchersForUpdate(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID uuid.UUID,
 	matchKeys []string,
 ) ([]CardWatcher, error) {
-	rows, err := tx.Query(ctx, `
+	if len(matchKeys) == 0 {
+		return nil, nil
+	}
+	args := []any{workspaceID}
+	inClause := sqldb.AppendInPlaceholders(&args, matchKeys)
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT id, workspace_id, card_id, kind, match_key, note,
 		       dispatch_mode, status, expires_at,
 		       created_by_source_id, created_by_attempt_id, triggered_turn_id,
@@ -534,10 +539,10 @@ func loadArmedEventWatchersForUpdate(
 		WHERE workspace_id=$1
 		  AND status='armed'
 		  AND kind='event'
-		  AND lower(match_key) = ANY($2::text[])
+		  AND lower(match_key) IN (%s)
 		ORDER BY created_at ASC
 		FOR UPDATE
-	`, workspaceID, matchKeys)
+	`, inClause), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +561,7 @@ func loadArmedEventWatchersForUpdate(
 
 func findCardWatcherByIdempotency(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	key string,
 ) (CardWatcher, bool, error) {
@@ -570,7 +575,7 @@ func findCardWatcherByIdempotency(
 		WHERE workspace_id=$1 AND card_id=$2 AND idempotency_key=$3
 	`, workspaceID, cardID, key)
 	item, err := scanCardWatcher(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CardWatcher{}, false, nil
 	}
 	if err != nil {
@@ -581,7 +586,7 @@ func findCardWatcherByIdempotency(
 
 func loadCardWatcher(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID, watcherID uuid.UUID,
 ) (CardWatcher, error) {
 	row := tx.QueryRow(ctx, `
@@ -594,7 +599,7 @@ func loadCardWatcher(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 	`, workspaceID, cardID, watcherID)
 	item, err := scanCardWatcher(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CardWatcher{}, domain.ErrNotFound
 	}
 	return item, err
@@ -602,7 +607,7 @@ func loadCardWatcher(
 
 func loadCardWatcherForUpdate(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, watcherID uuid.UUID,
 ) (CardWatcher, error) {
 	row := tx.QueryRow(ctx, `
@@ -616,7 +621,7 @@ func loadCardWatcherForUpdate(
 		FOR UPDATE
 	`, workspaceID, watcherID)
 	item, err := scanCardWatcher(row)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CardWatcher{}, domain.ErrNotFound
 	}
 	return item, err

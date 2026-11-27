@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/agentartifact"
 	"github.com/uvwt/CycleDock/internal/agentsession"
@@ -29,6 +27,7 @@ import (
 	cycledockoauth "github.com/uvwt/CycleDock/internal/oauth"
 	"github.com/uvwt/CycleDock/internal/realtime"
 	"github.com/uvwt/CycleDock/internal/retention"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 	"github.com/uvwt/CycleDock/internal/webpush"
 )
@@ -50,13 +49,13 @@ func main() {
 		logger.Error("configure db retention cleaner", "error", err)
 		os.Exit(1)
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		logger.Error("DATABASE_URL is required")
+	dbCfg, err := sqldb.ConfigFromEnv()
+	if err != nil {
+		logger.Error("configure database", "error", err)
 		os.Exit(1)
 	}
 
-	pool, err := pgxpool.New(context.Background(), databaseURL)
+	pool, err := sqldb.Open(context.Background(), dbCfg)
 	if err != nil {
 		logger.Error("create database pool", "error", err)
 		os.Exit(1)
@@ -66,6 +65,22 @@ func main() {
 	if err := pool.Ping(context.Background()); err != nil {
 		logger.Error("database ping failed", "error", err)
 		os.Exit(1)
+	}
+
+	// SQLite 单文件模式下默认启动时自动应用内嵌迁移，实现零依赖开箱即用；
+	// PostgreSQL 也可通过 CYCLEDOCK_AUTO_MIGRATE=true 启用启动自动迁移。
+	autoMigrate := pool.Dialect() == sqldb.DialectSQLite
+	if configured, ok, err := envBool("CYCLEDOCK_AUTO_MIGRATE"); err != nil {
+		logger.Error("invalid CYCLEDOCK_AUTO_MIGRATE", "error", err)
+		os.Exit(1)
+	} else if ok {
+		autoMigrate = configured
+	}
+	if autoMigrate {
+		if err := sqldb.MigrateUp(context.Background(), pool, os.Getenv("MIGRATIONS_DIR")); err != nil {
+			logger.Error("auto database migration failed", "dialect", pool.Dialect(), "error", err)
+			os.Exit(1)
+		}
 	}
 
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CYCLEDOCK_PUBLIC_URL")), "/")
@@ -268,7 +283,7 @@ func main() {
 		}
 	}()
 
-	logger.Info("cycledock server starting", "addr", server.Addr,
+	logger.Info("cycledock server starting", "addr", server.Addr, "db_dialect", pool.Dialect(),
 		"agent_max_concurrent", maxConcurrent, "agent_max_concurrent_per_workspace", maxPerWorkspace)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", "error", err)

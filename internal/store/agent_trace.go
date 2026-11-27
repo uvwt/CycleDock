@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -72,8 +72,8 @@ func (s *Store) RecordModelCall(ctx context.Context, params RecordModelCallParam
 		ModelID:               params.ModelID,
 		ResponseModel:         params.ResponseModel,
 		Provider:              params.Provider,
-		StartedAt:             pgtype.Timestamptz{Time: params.StartedAt.UTC(), Valid: true},
-		FinishedAt:            pgtype.Timestamptz{Time: params.FinishedAt.UTC(), Valid: true},
+		StartedAt:             sqldb.Timestamptz{Time: params.StartedAt.UTC(), Valid: true},
+		FinishedAt:            sqldb.Timestamptz{Time: params.FinishedAt.UTC(), Valid: true},
 		DurationMs:            int32(params.DurationMS),
 		Status:                params.Status,
 		InputTokens:           int32(params.InputTokens),

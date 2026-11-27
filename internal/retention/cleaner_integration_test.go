@@ -8,17 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -26,64 +19,23 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentartifact"
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
-var retentionIntegrationPool *pgxpool.Pool
+var retentionIntegrationPool *sqldb.DB
 
 func TestMain(m *testing.M) {
 	os.Exit(runRetentionTests(m))
 }
 
 func runRetentionTests(m *testing.M) int {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
-		return m.Run()
-	}
-
-	adminPool, err := pgxpool.New(context.Background(), databaseURL)
+	pool, cleanup, err := testdb.SetupPackagePool("retention")
 	if err != nil {
 		panic(err)
 	}
-	defer adminPool.Close()
-
-	// 集成测试必须在独立临时 schema 中执行迁移，避免污染开发库 public schema。
-	schema := "retention_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if _, err := adminPool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			panic(err)
-		}
-	}()
-
-	cfg, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*cfg.ConnConfig)
-	defer sqlDB.Close()
-
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		panic(err)
-	}
-	if err := goose.Up(sqlDB, migrations); err != nil {
-		panic(err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
-	if err != nil {
-		panic(err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		panic(err)
-	}
-	defer pool.Close()
+	defer cleanup()
 	retentionIntegrationPool = pool
 
 	return m.Run()
@@ -91,7 +43,7 @@ func runRetentionTests(m *testing.M) int {
 
 type retentionFixture struct {
 	t               *testing.T
-	pool            *pgxpool.Pool
+	pool            *sqldb.DB
 	dataStore       *store.Store
 	sessionService  *agentsession.PostgresService
 	artifactService *agentartifact.PostgresService
@@ -108,13 +60,7 @@ func newRetentionFixture(t *testing.T) *retentionFixture {
 		t.Skip("TEST_DATABASE_URL is not set")
 	}
 	ctx := context.Background()
-	if _, err := retentionIntegrationPool.Exec(ctx, `
-		TRUNCATE agent_artifacts, agent_session_events, agent_sessions,
-		         agent_model_calls, turn_attempts, card_turns, events, cards, projects, sources, workspaces
-		CASCADE
-	`); err != nil {
-		t.Fatalf("truncate tables before test: %v", err)
-	}
+	testdb.TruncateAll(t, retentionIntegrationPool)
 	dataStore := store.New(retentionIntegrationPool)
 	workspace, err := dataStore.CreateWorkspace(ctx, "Retention Test Workspace")
 	if err != nil {
@@ -628,32 +574,38 @@ func TestMainDiscussionProtectedAndAdvisoryLockSkipsOverlap(t *testing.T) {
 	f.insertRawEvent(archivedDiscussion, "disc-old-1", "inv-ds1", "user", "archived discussion detail", now.Add(-16*24*time.Hour))
 	f.insertArtifact(archivedDiscussion, "disc-old.json", "application/json", []byte(`{"prune":true}`), now.Add(-16*24*time.Hour))
 
-	// 2. 验证多实例并发保护：当另一条连接持有 advisory lock 时，本轮安全跳过而不报错。
-	holderConn, err := f.pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire holder conn: %v", err)
-	}
-	defer holderConn.Release()
-	var locked bool
-	if err := holderConn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, advisoryLockKey).Scan(&locked); err != nil || !locked {
-		t.Fatalf("acquire advisory lock in test failed: locked=%v err=%v", locked, err)
-	}
-
 	cleaner := NewCleaner(f.pool, Config{
 		Enabled:       true,
 		RetentionDays: 7,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cleaner.now = func() time.Time { return now }
 
+	// 2. 验证并发保护：当另一协程已持有 session lock 时，本轮安全跳过而不报错。
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		err := f.pool.WithSessionLock(ctx, advisoryLockKey, func(context.Context) error {
+			close(lockHeld)
+			<-releaseLock
+			return nil
+		})
+		holderDone <- err
+	}()
+	<-lockHeld
+
 	skipped, err := cleaner.RunOnce(ctx)
 	if err != nil {
+		close(releaseLock)
 		t.Fatalf("RunOnce under lock failed: %v", err)
 	}
 	if !skipped.SkippedByLock || skipped.TotalDeleted() != 0 {
+		close(releaseLock)
 		t.Fatalf("expected skipped by lock, got %+v", skipped)
 	}
 
-	if _, err := holderConn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, advisoryLockKey); err != nil {
+	close(releaseLock)
+	if err := <-holderDone; err != nil {
 		t.Fatalf("release advisory lock: %v", err)
 	}
 

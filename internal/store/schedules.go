@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type CardSchedule struct {
@@ -98,17 +97,17 @@ type scheduleRow struct {
 	CardID          uuid.UUID
 	Enabled         bool
 	Frequency       domain.ScheduleFrequency
-	DayOfWeek       pgtype.Int2
-	DayOfMonth      pgtype.Int2
-	TimeOfDay       pgtype.Time
+	DayOfWeek       sqldb.Int2
+	DayOfMonth      sqldb.Int2
+	TimeOfDay       sqldb.Time
 	Timezone        string
 	NextTriggerAt   time.Time
-	IntervalMinutes pgtype.Int4
+	IntervalMinutes sqldb.Int4
 	CardKind        domain.CardKind
 	OngoingState    domain.OngoingState
 }
 
-func loadScheduleForUpdate(ctx context.Context, tx pgx.Tx, workspaceID, scheduleID uuid.UUID) (scheduleRow, error) {
+func loadScheduleForUpdate(ctx context.Context, tx *sqldb.Tx, workspaceID, scheduleID uuid.UUID) (scheduleRow, error) {
 	var row scheduleRow
 	err := tx.QueryRow(ctx, `
 		SELECT cs.card_id, cs.enabled, cs.frequency, cs.day_of_week, cs.day_of_month,
@@ -220,7 +219,7 @@ func (s *Store) ProcessDueScheduleTurn(
 		FROM card_schedules
 		WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 	`, workspaceID, scheduleID).Scan(&cardID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, domain.ErrNotFound
 	}
 	if err != nil {
@@ -231,7 +230,7 @@ func (s *Store) ProcessDueScheduleTurn(
 	}
 
 	row, err := loadScheduleForUpdate(ctx, tx, workspaceID, scheduleID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return uuid.Nil, false, domain.ErrNotFound
 	}
 	if err != nil {
@@ -273,7 +272,7 @@ func (s *Store) ProcessDueScheduleTurn(
 			scheduleID, row.NextTriggerAt).Scan(&turnID)
 		if err == nil {
 			created = true
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		} else if !errors.Is(err, sqldb.ErrNoRows) {
 			return uuid.Nil, false, err
 		}
 	}
@@ -302,7 +301,7 @@ func (s *Store) ProcessDueScheduleTurn(
 
 func recalculateCardSchedulesTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	now time.Time,
 ) error {

@@ -15,10 +15,9 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/oauth2"
 
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -151,7 +150,7 @@ func (s *Service) BeginOIDCLogin(ctx context.Context) (OIDCLoginStart, error) {
 		StateDigest:  digest[:],
 		CodeVerifier: verifier,
 		Nonce:        nonce,
-		ExpiresAt:    pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt:    sqldb.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
 		return OIDCLoginStart{}, fmt.Errorf("create OIDC web auth flow: %w", err)
 	}
@@ -245,7 +244,7 @@ func (s *Service) consumeOIDCFlow(ctx context.Context, state string) (db.WebAuth
 	}
 	digest := sha256.Sum256([]byte(state))
 	flow, err := s.queries.ConsumeWebAuthFlow(ctx, digest[:])
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return db.WebAuthFlow{}, ErrInvalidOIDCState
 	}
 	if err != nil {

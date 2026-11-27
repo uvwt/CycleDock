@@ -5,16 +5,16 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // lockCard is the shared row-lock primitive for every Card mutation. It is not
 // tied to the retired Trigger/Run runtime.
 func lockCard(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 ) error {
 	var id uuid.UUID
@@ -24,7 +24,7 @@ func lockCard(
 		workspaceID,
 		cardID,
 	).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	return err
@@ -33,7 +33,7 @@ func lockCard(
 // requireHumanSource protects product transitions that remain Human-only.
 func requireHumanSource(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, sourceID uuid.UUID,
 ) error {
 	var kind string
@@ -42,7 +42,7 @@ func requireHumanSource(
 		FROM sources
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, sourceID).Scan(&kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {

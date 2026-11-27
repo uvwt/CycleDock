@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/uvwt/CycleDock/internal/agentconfig"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -557,9 +557,9 @@ func TestCompactionSummarizerFailsOverOnPrimaryTimeoutAndSharesActiveRoute(t *te
 			Enabled:             true,
 			ProviderBaseUrl:     primarySrv.URL,
 			Model:               "gpt-5.4-primary-hung",
-			ContextWindowTokens: pgtype.Int4{Int32: 400000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 400000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 400000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 400000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 		{
@@ -567,9 +567,9 @@ func TestCompactionSummarizerFailsOverOnPrimaryTimeoutAndSharesActiveRoute(t *te
 			Enabled:             true,
 			ProviderBaseUrl:     backupSrv.URL,
 			Model:               "grok-4.7-backup",
-			ContextWindowTokens: pgtype.Int4{Int32: 239000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 239000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 239000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 239000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 	}
@@ -673,9 +673,9 @@ func TestEmergencyFallbackCompactsLargeBacklogWithoutBreakingToolCallPairing(t *
 			Enabled:             true,
 			ProviderBaseUrl:     deadSummarySrv.URL,
 			Model:               "dead-summary-primary",
-			ContextWindowTokens: pgtype.Int4{Int32: 200000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 200000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 200000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 200000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 		{
@@ -683,9 +683,9 @@ func TestEmergencyFallbackCompactsLargeBacklogWithoutBreakingToolCallPairing(t *
 			Enabled:             true,
 			ProviderBaseUrl:     deadSummarySrv.URL,
 			Model:               "dead-summary-backup",
-			ContextWindowTokens: pgtype.Int4{Int32: 200000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 200000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 16000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 200000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 200000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 16000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 	}

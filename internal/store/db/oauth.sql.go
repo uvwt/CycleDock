@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const consumeOAuthAuthorizationCode = `-- name: ConsumeOAuthAuthorizationCode :execrows
@@ -38,13 +38,13 @@ VALUES (
 `
 
 type CreateOAuthAuthorizationCodeParams struct {
-	CodeDigest    []byte             `json:"code_digest"`
-	GrantID       uuid.UUID          `json:"grant_id"`
-	RedirectUri   string             `json:"redirect_uri"`
-	CodeChallenge string             `json:"code_challenge"`
-	Scope         string             `json:"scope"`
-	Resource      string             `json:"resource"`
-	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CodeDigest    []byte            `json:"code_digest"`
+	GrantID       uuid.UUID         `json:"grant_id"`
+	RedirectUri   string            `json:"redirect_uri"`
+	CodeChallenge string            `json:"code_challenge"`
+	Scope         string            `json:"scope"`
+	Resource      string            `json:"resource"`
+	ExpiresAt     sqldb.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreateOAuthAuthorizationCode(ctx context.Context, arg CreateOAuthAuthorizationCodeParams) error {
@@ -148,13 +148,13 @@ VALUES (
 `
 
 type CreateOAuthTokenParams struct {
-	ID                 uuid.UUID          `json:"id"`
-	GrantID            uuid.UUID          `json:"grant_id"`
-	FamilyID           uuid.UUID          `json:"family_id"`
-	AccessTokenDigest  []byte             `json:"access_token_digest"`
-	RefreshTokenDigest []byte             `json:"refresh_token_digest"`
-	AccessExpiresAt    pgtype.Timestamptz `json:"access_expires_at"`
-	RefreshExpiresAt   pgtype.Timestamptz `json:"refresh_expires_at"`
+	ID                 uuid.UUID         `json:"id"`
+	GrantID            uuid.UUID         `json:"grant_id"`
+	FamilyID           uuid.UUID         `json:"family_id"`
+	AccessTokenDigest  []byte            `json:"access_token_digest"`
+	RefreshTokenDigest []byte            `json:"refresh_token_digest"`
+	AccessExpiresAt    sqldb.Timestamptz `json:"access_expires_at"`
+	RefreshExpiresAt   sqldb.Timestamptz `json:"refresh_expires_at"`
 }
 
 func (q *Queries) CreateOAuthToken(ctx context.Context, arg CreateOAuthTokenParams) error {
@@ -204,13 +204,13 @@ WHERE t.access_token_digest = $1
 `
 
 type GetOAuthAccessTokenIdentityRow struct {
-	WorkspaceID     uuid.UUID          `json:"workspace_id"`
-	SourceID        uuid.UUID          `json:"source_id"`
-	ClientID        string             `json:"client_id"`
-	ClientName      string             `json:"client_name"`
-	Scope           string             `json:"scope"`
-	Resource        string             `json:"resource"`
-	AccessExpiresAt pgtype.Timestamptz `json:"access_expires_at"`
+	WorkspaceID     uuid.UUID         `json:"workspace_id"`
+	SourceID        uuid.UUID         `json:"source_id"`
+	ClientID        string            `json:"client_id"`
+	ClientName      string            `json:"client_name"`
+	Scope           string            `json:"scope"`
+	Resource        string            `json:"resource"`
+	AccessExpiresAt sqldb.Timestamptz `json:"access_expires_at"`
 }
 
 func (q *Queries) GetOAuthAccessTokenIdentity(ctx context.Context, accessTokenDigest []byte) (GetOAuthAccessTokenIdentityRow, error) {
@@ -249,18 +249,18 @@ FOR UPDATE OF c
 `
 
 type GetOAuthAuthorizationCodeForUpdateRow struct {
-	CodeDigest     []byte             `json:"code_digest"`
-	GrantID        uuid.UUID          `json:"grant_id"`
-	RedirectUri    string             `json:"redirect_uri"`
-	CodeChallenge  string             `json:"code_challenge"`
-	Scope          string             `json:"scope"`
-	Resource       string             `json:"resource"`
-	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
-	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
-	ClientID       string             `json:"client_id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	GrantRevokedAt pgtype.Timestamptz `json:"grant_revoked_at"`
+	CodeDigest     []byte            `json:"code_digest"`
+	GrantID        uuid.UUID         `json:"grant_id"`
+	RedirectUri    string            `json:"redirect_uri"`
+	CodeChallenge  string            `json:"code_challenge"`
+	Scope          string            `json:"scope"`
+	Resource       string            `json:"resource"`
+	ExpiresAt      sqldb.Timestamptz `json:"expires_at"`
+	ConsumedAt     sqldb.Timestamptz `json:"consumed_at"`
+	ClientID       string            `json:"client_id"`
+	WorkspaceID    uuid.UUID         `json:"workspace_id"`
+	SourceID       uuid.UUID         `json:"source_id"`
+	GrantRevokedAt sqldb.Timestamptz `json:"grant_revoked_at"`
 }
 
 func (q *Queries) GetOAuthAuthorizationCodeForUpdate(ctx context.Context, codeDigest []byte) (GetOAuthAuthorizationCodeForUpdateRow, error) {
@@ -322,18 +322,18 @@ type GetOAuthGrantForUpdateParams struct {
 }
 
 type GetOAuthGrantForUpdateRow struct {
-	ID             uuid.UUID          `json:"id"`
-	WorkspaceID    uuid.UUID          `json:"workspace_id"`
-	HumanAccountID uuid.UUID          `json:"human_account_id"`
-	HumanSourceID  uuid.UUID          `json:"human_source_id"`
-	ClientID       string             `json:"client_id"`
-	SourceID       uuid.UUID          `json:"source_id"`
-	Resource       string             `json:"resource"`
-	Scope          string             `json:"scope"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
-	SourceKind     string             `json:"source_kind"`
+	ID             uuid.UUID         `json:"id"`
+	WorkspaceID    uuid.UUID         `json:"workspace_id"`
+	HumanAccountID uuid.UUID         `json:"human_account_id"`
+	HumanSourceID  uuid.UUID         `json:"human_source_id"`
+	ClientID       string            `json:"client_id"`
+	SourceID       uuid.UUID         `json:"source_id"`
+	Resource       string            `json:"resource"`
+	Scope          string            `json:"scope"`
+	CreatedAt      sqldb.Timestamptz `json:"created_at"`
+	UpdatedAt      sqldb.Timestamptz `json:"updated_at"`
+	RevokedAt      sqldb.Timestamptz `json:"revoked_at"`
+	SourceKind     string            `json:"source_kind"`
 }
 
 func (q *Queries) GetOAuthGrantForUpdate(ctx context.Context, arg GetOAuthGrantForUpdateParams) (GetOAuthGrantForUpdateRow, error) {
@@ -419,17 +419,17 @@ FOR UPDATE OF t
 `
 
 type GetOAuthRefreshTokenForUpdateRow struct {
-	TokenID          uuid.UUID          `json:"token_id"`
-	GrantID          uuid.UUID          `json:"grant_id"`
-	FamilyID         uuid.UUID          `json:"family_id"`
-	RefreshExpiresAt pgtype.Timestamptz `json:"refresh_expires_at"`
-	TokenRevokedAt   pgtype.Timestamptz `json:"token_revoked_at"`
-	WorkspaceID      uuid.UUID          `json:"workspace_id"`
-	SourceID         uuid.UUID          `json:"source_id"`
-	ClientID         string             `json:"client_id"`
-	Scope            string             `json:"scope"`
-	Resource         string             `json:"resource"`
-	GrantRevokedAt   pgtype.Timestamptz `json:"grant_revoked_at"`
+	TokenID          uuid.UUID         `json:"token_id"`
+	GrantID          uuid.UUID         `json:"grant_id"`
+	FamilyID         uuid.UUID         `json:"family_id"`
+	RefreshExpiresAt sqldb.Timestamptz `json:"refresh_expires_at"`
+	TokenRevokedAt   sqldb.Timestamptz `json:"token_revoked_at"`
+	WorkspaceID      uuid.UUID         `json:"workspace_id"`
+	SourceID         uuid.UUID         `json:"source_id"`
+	ClientID         string            `json:"client_id"`
+	Scope            string            `json:"scope"`
+	Resource         string            `json:"resource"`
+	GrantRevokedAt   sqldb.Timestamptz `json:"grant_revoked_at"`
 }
 
 func (q *Queries) GetOAuthRefreshTokenForUpdate(ctx context.Context, refreshTokenDigest []byte) (GetOAuthRefreshTokenForUpdateRow, error) {
@@ -476,11 +476,11 @@ type ListAuthorizedOAuthClientsParams struct {
 }
 
 type ListAuthorizedOAuthClientsRow struct {
-	ClientID     string             `json:"client_id"`
-	ClientName   string             `json:"client_name"`
-	SourceID     uuid.UUID          `json:"source_id"`
-	SourceName   string             `json:"source_name"`
-	AuthorizedAt pgtype.Timestamptz `json:"authorized_at"`
+	ClientID     string            `json:"client_id"`
+	ClientName   string            `json:"client_name"`
+	SourceID     uuid.UUID         `json:"source_id"`
+	SourceName   string            `json:"source_name"`
+	AuthorizedAt sqldb.Timestamptz `json:"authorized_at"`
 }
 
 func (q *Queries) ListAuthorizedOAuthClients(ctx context.Context, arg ListAuthorizedOAuthClientsParams) ([]ListAuthorizedOAuthClientsRow, error) {

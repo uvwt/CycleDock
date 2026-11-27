@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -129,7 +128,7 @@ func (s *Store) UpdateCardFromAgentAttempt(
 		WorkspaceID: p.WorkspaceID,
 		ID:          p.TargetCardID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return UpdateCardFromAttemptResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -194,9 +193,9 @@ func (s *Store) UpdateCardFromAgentAttempt(
 		currentlyPinned := current.PinnedAt.Valid
 		if *p.Pinned != currentlyPinned {
 			if *p.Pinned {
-				newPinnedAt = pgtype.Timestamptz{Time: now, Valid: true}
+				newPinnedAt = sqldb.Timestamptz{Time: now, Valid: true}
 			} else {
-				newPinnedAt = pgtype.Timestamptz{}
+				newPinnedAt = sqldb.Timestamptz{}
 			}
 			metadataChanged = true
 		}
@@ -306,17 +305,17 @@ func (s *Store) UpdateCardFromAgentAttempt(
 					return UpdateCardFromAttemptResult{}, err
 				}
 				if _, err := tx.Exec(ctx, `
-					UPDATE card_turns pending
+					UPDATE card_turns
 					SET cancelled_at = now(),
 					    cancelled_by_source_id = $3,
 					    cancel_reason = 'discussion archived'
-					WHERE pending.workspace_id = $1
-					  AND pending.card_id = $2
-					  AND pending.cancelled_at IS NULL
+					WHERE workspace_id = $1
+					  AND card_id = $2
+					  AND cancelled_at IS NULL
 					  AND NOT EXISTS (
 						SELECT 1 FROM turn_attempts existing
-						WHERE existing.workspace_id = pending.workspace_id
-						  AND existing.turn_id = pending.id
+						WHERE existing.workspace_id = card_turns.workspace_id
+						  AND existing.turn_id = card_turns.id
 					  )
 				`, p.WorkspaceID, p.TargetCardID, p.RunnerSourceID); err != nil {
 					return UpdateCardFromAttemptResult{}, err

@@ -655,7 +655,7 @@ func TestADKTailCompactionKeepsPromptBoundedAndHistoryRecoversExactOldValue(t *t
 		SELECT count(*)
 		FROM agent_session_events
 		WHERE app_name=$1 AND user_id=$2 AND session_id=$3
-		  AND strpos(event::text, $4) > 0
+		  AND event::text LIKE '%' || $4 || '%'
 	`, appName, userID, sessionID, oldValue).Scan(&rawOldEvents); err != nil {
 		t.Fatal(err)
 	}

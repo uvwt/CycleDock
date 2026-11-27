@@ -29,81 +29,78 @@ ORDER BY created_at, id;
 -- name: ListProjectCardSummaries :many
 SELECT
     c.*,
-    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
+    COALESCE((
+        SELECT
+            CASE
+                WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                    SELECT 1 FROM events ack
+                    WHERE ack.workspace_id = e.workspace_id
+                      AND ack.card_id = e.card_id
+                      AND ack.event_type = 'checkin_ack'
+                      AND ack.sequence > e.sequence
+                ) THEN 'acknowledged'
+                ELSE e.checkin_status
+            END
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type = 'checkin'
+        ORDER BY e.sequence DESC
+        LIMIT 1
+    ), 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
-    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE((
+        SELECT a.status
+        FROM turn_attempts a
+        WHERE a.workspace_id = c.workspace_id
+          AND a.card_id = c.id
+        ORDER BY a.created_at DESC, a.attempt_number DESC
+        LIMIT 1
+    ), '')::text AS latest_attempt_status,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
     (CASE
         WHEN COALESCE(read_cursor.marked_unread, false)
-          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+          OR COALESCE((
+              SELECT MAX(e.sequence)
+              FROM events e
+              WHERE e.workspace_id = c.workspace_id
+                AND e.card_id = c.id
+                AND e.event_type IN ('comment', 'message')
+                AND e.actor_source_id <> sqlc.arg(source_id)
+          ), 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
         THEN true
         ELSE false
     END)::boolean AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
-    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_tool_approvals ta
+        WHERE ta.workspace_id = c.workspace_id
+          AND ta.card_id = c.id
+          AND ta.status = 'pending'
+    ), 0)::bigint AS pending_tool_approval_count,
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_attachments ca
+        WHERE ca.workspace_id = c.workspace_id
+          AND ca.card_id = c.id
+    ), 0)::bigint AS attachment_count
 FROM cards c
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-                SELECT 1 FROM events ack
-                WHERE ack.workspace_id = e.workspace_id
-                  AND ack.card_id = e.card_id
-                  AND ack.event_type = 'checkin_ack'
-                  AND ack.sequence > e.sequence
-            ) THEN 'acknowledged'
-            ELSE e.checkin_status
-        END::text AS checkin_status
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type = 'checkin'
-    ORDER BY e.sequence DESC
-    LIMIT 1
-) latest_checkin ON true
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running')
-LEFT JOIN LATERAL (
-    SELECT a.status
-    FROM turn_attempts a
-    WHERE a.workspace_id = c.workspace_id
-      AND a.card_id = c.id
-    ORDER BY a.created_at DESC, a.attempt_number DESC
-    LIMIT 1
-) latest_attempt ON true
-LEFT JOIN LATERAL (
-    SELECT
-        MAX(e.sequence) AS latest_message_sequence,
-        MAX(e.sequence) FILTER (
-            WHERE e.actor_source_id <> sqlc.arg(source_id)
-        ) AS latest_other_message_sequence
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type IN ('comment', 'message')
-) message_state ON true
 LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = sqlc.arg(source_id)
--- 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS pending_count
-    FROM card_tool_approvals ta
-    WHERE ta.workspace_id = c.workspace_id
-      AND ta.card_id = c.id
-      AND ta.status = 'pending'
-) pending_approval ON true
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS attachment_count
-    FROM card_attachments ca
-    WHERE ca.workspace_id = c.workspace_id
-      AND ca.card_id = c.id
-) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
 ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
@@ -111,81 +108,78 @@ ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
 -- name: ListProjectActiveCardSummaries :many
 SELECT
     c.*,
-    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
+    COALESCE((
+        SELECT
+            CASE
+                WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                    SELECT 1 FROM events ack
+                    WHERE ack.workspace_id = e.workspace_id
+                      AND ack.card_id = e.card_id
+                      AND ack.event_type = 'checkin_ack'
+                      AND ack.sequence > e.sequence
+                ) THEN 'acknowledged'
+                ELSE e.checkin_status
+            END
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type = 'checkin'
+        ORDER BY e.sequence DESC
+        LIMIT 1
+    ), 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
-    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE((
+        SELECT a.status
+        FROM turn_attempts a
+        WHERE a.workspace_id = c.workspace_id
+          AND a.card_id = c.id
+        ORDER BY a.created_at DESC, a.attempt_number DESC
+        LIMIT 1
+    ), '')::text AS latest_attempt_status,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
     (CASE
         WHEN COALESCE(read_cursor.marked_unread, false)
-          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+          OR COALESCE((
+              SELECT MAX(e.sequence)
+              FROM events e
+              WHERE e.workspace_id = c.workspace_id
+                AND e.card_id = c.id
+                AND e.event_type IN ('comment', 'message')
+                AND e.actor_source_id <> sqlc.arg(source_id)
+          ), 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
         THEN true
         ELSE false
     END)::boolean AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
-    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_tool_approvals ta
+        WHERE ta.workspace_id = c.workspace_id
+          AND ta.card_id = c.id
+          AND ta.status = 'pending'
+    ), 0)::bigint AS pending_tool_approval_count,
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_attachments ca
+        WHERE ca.workspace_id = c.workspace_id
+          AND ca.card_id = c.id
+    ), 0)::bigint AS attachment_count
 FROM cards c
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-                SELECT 1 FROM events ack
-                WHERE ack.workspace_id = e.workspace_id
-                  AND ack.card_id = e.card_id
-                  AND ack.event_type = 'checkin_ack'
-                  AND ack.sequence > e.sequence
-            ) THEN 'acknowledged'
-            ELSE e.checkin_status
-        END::text AS checkin_status
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type = 'checkin'
-    ORDER BY e.sequence DESC
-    LIMIT 1
-) latest_checkin ON true
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running')
-LEFT JOIN LATERAL (
-    SELECT a.status
-    FROM turn_attempts a
-    WHERE a.workspace_id = c.workspace_id
-      AND a.card_id = c.id
-    ORDER BY a.created_at DESC, a.attempt_number DESC
-    LIMIT 1
-) latest_attempt ON true
-LEFT JOIN LATERAL (
-    SELECT
-        MAX(e.sequence) AS latest_message_sequence,
-        MAX(e.sequence) FILTER (
-            WHERE e.actor_source_id <> sqlc.arg(source_id)
-        ) AS latest_other_message_sequence
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type IN ('comment', 'message')
-) message_state ON true
 LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = sqlc.arg(source_id)
--- 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS pending_count
-    FROM card_tool_approvals ta
-    WHERE ta.workspace_id = c.workspace_id
-      AND ta.card_id = c.id
-      AND ta.status = 'pending'
-) pending_approval ON true
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS attachment_count
-    FROM card_attachments ca
-    WHERE ca.workspace_id = c.workspace_id
-      AND ca.card_id = c.id
-) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
   AND (c.todo_state IS NULL OR c.todo_state <> 'done')
@@ -194,81 +188,78 @@ ORDER BY c.pinned_at DESC NULLS LAST, c.updated_at DESC, c.id;
 -- name: ListProjectDoneCardsPaged :many
 SELECT
     c.*,
-    COALESCE(latest_checkin.checkin_status, 'unknown')::text AS health,
+    COALESCE((
+        SELECT
+            CASE
+                WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
+                    SELECT 1 FROM events ack
+                    WHERE ack.workspace_id = e.workspace_id
+                      AND ack.card_id = e.card_id
+                      AND ack.event_type = 'checkin_ack'
+                      AND ack.sequence > e.sequence
+                ) THEN 'acknowledged'
+                ELSE e.checkin_status
+            END
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type = 'checkin'
+        ORDER BY e.sequence DESC
+        LIMIT 1
+    ), 'unknown')::text AS health,
     current_attempt.status AS current_attempt_status,
-    COALESCE(latest_attempt.status, '') AS latest_attempt_status,
-    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE((
+        SELECT a.status
+        FROM turn_attempts a
+        WHERE a.workspace_id = c.workspace_id
+          AND a.card_id = c.id
+        ORDER BY a.created_at DESC, a.attempt_number DESC
+        LIMIT 1
+    ), '')::text AS latest_attempt_status,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
     (CASE
         WHEN COALESCE(read_cursor.marked_unread, false)
-          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+          OR COALESCE((
+              SELECT MAX(e.sequence)
+              FROM events e
+              WHERE e.workspace_id = c.workspace_id
+                AND e.card_id = c.id
+                AND e.event_type IN ('comment', 'message')
+                AND e.actor_source_id <> sqlc.arg(source_id)
+          ), 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
         THEN true
         ELSE false
     END)::boolean AS unread,
-    COALESCE(pending_approval.pending_count, 0)::bigint AS pending_tool_approval_count,
-    COALESCE(card_att.attachment_count, 0)::bigint AS attachment_count
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_tool_approvals ta
+        WHERE ta.workspace_id = c.workspace_id
+          AND ta.card_id = c.id
+          AND ta.status = 'pending'
+    ), 0)::bigint AS pending_tool_approval_count,
+    COALESCE((
+        SELECT COUNT(*)
+        FROM card_attachments ca
+        WHERE ca.workspace_id = c.workspace_id
+          AND ca.card_id = c.id
+    ), 0)::bigint AS attachment_count
 FROM cards c
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN e.checkin_status IN ('warning', 'critical') AND EXISTS (
-                SELECT 1 FROM events ack
-                WHERE ack.workspace_id = e.workspace_id
-                  AND ack.card_id = e.card_id
-                  AND ack.event_type = 'checkin_ack'
-                  AND ack.sequence > e.sequence
-            ) THEN 'acknowledged'
-            ELSE e.checkin_status
-        END::text AS checkin_status
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type = 'checkin'
-    ORDER BY e.sequence DESC
-    LIMIT 1
-) latest_checkin ON true
 LEFT JOIN turn_attempts current_attempt
   ON current_attempt.workspace_id = c.workspace_id
  AND current_attempt.card_id = c.id
  AND current_attempt.status IN ('queued', 'running')
-LEFT JOIN LATERAL (
-    SELECT a.status
-    FROM turn_attempts a
-    WHERE a.workspace_id = c.workspace_id
-      AND a.card_id = c.id
-    ORDER BY a.created_at DESC, a.attempt_number DESC
-    LIMIT 1
-) latest_attempt ON true
-LEFT JOIN LATERAL (
-    SELECT
-        MAX(e.sequence) AS latest_message_sequence,
-        MAX(e.sequence) FILTER (
-            WHERE e.actor_source_id <> sqlc.arg(source_id)
-        ) AS latest_other_message_sequence
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type IN ('comment', 'message')
-) message_state ON true
 LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
  AND read_cursor.source_id = sqlc.arg(source_id)
--- 工具调用被安全守卫挂起后 Attempt 已结束，只有未处理的审批记录能说明卡片正在等人工确认。
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS pending_count
-    FROM card_tool_approvals ta
-    WHERE ta.workspace_id = c.workspace_id
-      AND ta.card_id = c.id
-      AND ta.status = 'pending'
-) pending_approval ON true
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS attachment_count
-    FROM card_attachments ca
-    WHERE ca.workspace_id = c.workspace_id
-      AND ca.card_id = c.id
-) card_att ON true
 WHERE c.workspace_id = sqlc.arg(workspace_id)
   AND c.project_id = sqlc.arg(project_id)
   AND c.todo_state = 'done'
@@ -285,27 +276,29 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 
 -- name: GetCardReadState :one
 SELECT
-    COALESCE(message_state.latest_message_sequence, 0)::bigint AS latest_message_sequence,
+    COALESCE((
+        SELECT MAX(e.sequence)
+        FROM events e
+        WHERE e.workspace_id = c.workspace_id
+          AND e.card_id = c.id
+          AND e.event_type IN ('comment', 'message')
+    ), 0)::bigint AS latest_message_sequence,
     COALESCE(read_cursor.last_read_message_sequence, 0)::bigint AS last_read_message_sequence,
     COALESCE(read_cursor.marked_unread, false)::boolean AS marked_unread,
     (CASE
         WHEN COALESCE(read_cursor.marked_unread, false)
-          OR COALESCE(message_state.latest_other_message_sequence, 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
+          OR COALESCE((
+              SELECT MAX(e.sequence)
+              FROM events e
+              WHERE e.workspace_id = c.workspace_id
+                AND e.card_id = c.id
+                AND e.event_type IN ('comment', 'message')
+                AND e.actor_source_id <> sqlc.arg(source_id)
+          ), 0) > COALESCE(read_cursor.last_read_message_sequence, 0)
         THEN true
         ELSE false
     END)::boolean AS unread
 FROM cards c
-LEFT JOIN LATERAL (
-    SELECT
-        MAX(e.sequence) AS latest_message_sequence,
-        MAX(e.sequence) FILTER (
-            WHERE e.actor_source_id <> sqlc.arg(source_id)
-        ) AS latest_other_message_sequence
-    FROM events e
-    WHERE e.workspace_id = c.workspace_id
-      AND e.card_id = c.id
-      AND e.event_type IN ('comment', 'message')
-) message_state ON true
 LEFT JOIN card_read_cursors read_cursor
   ON read_cursor.workspace_id = c.workspace_id
  AND read_cursor.card_id = c.id
@@ -384,24 +377,34 @@ SELECT
     cs.timezone,
     cs.next_trigger_at,
     cs.last_triggered_at,
-    latest_attempt.status AS last_attempt_status,
-    latest_attempt.finished_at AS last_attempt_finished_at
+    (
+        SELECT a.status
+        FROM card_turns t
+        LEFT JOIN turn_attempts a
+          ON a.workspace_id = t.workspace_id
+         AND a.turn_id = t.id
+        WHERE t.workspace_id = cs.workspace_id
+          AND t.card_id = cs.card_id
+          AND t.schedule_id = cs.id
+        ORDER BY t.scheduled_for DESC, a.attempt_number DESC NULLS LAST, t.created_at DESC
+        LIMIT 1
+    ) AS last_attempt_status,
+    (
+        SELECT a.finished_at
+        FROM card_turns t
+        LEFT JOIN turn_attempts a
+          ON a.workspace_id = t.workspace_id
+         AND a.turn_id = t.id
+        WHERE t.workspace_id = cs.workspace_id
+          AND t.card_id = cs.card_id
+          AND t.schedule_id = cs.id
+        ORDER BY t.scheduled_for DESC, a.attempt_number DESC NULLS LAST, t.created_at DESC
+        LIMIT 1
+    ) AS last_attempt_finished_at
 FROM card_schedules cs
 JOIN cards c
   ON c.workspace_id = cs.workspace_id
  AND c.id = cs.card_id
-LEFT JOIN LATERAL (
-    SELECT a.status, a.finished_at
-    FROM card_turns t
-    LEFT JOIN turn_attempts a
-      ON a.workspace_id = t.workspace_id
-     AND a.turn_id = t.id
-    WHERE t.workspace_id = cs.workspace_id
-      AND t.card_id = cs.card_id
-      AND t.schedule_id = cs.id
-    ORDER BY t.scheduled_for DESC, a.attempt_number DESC NULLS LAST, t.created_at DESC
-    LIMIT 1
-) latest_attempt ON true
 WHERE cs.workspace_id = sqlc.arg(workspace_id)
   AND cs.archived_at IS NULL
   AND c.project_id = sqlc.arg(project_id)

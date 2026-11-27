@@ -3,23 +3,16 @@ package oauth
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
-	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/auth"
+	"github.com/uvwt/CycleDock/internal/sqldb"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
 func TestOAuthAuthorizationCodePKCEAndRefreshReplayProtection(t *testing.T) {
@@ -187,56 +180,9 @@ func TestOAuthRejectsUnsafeRedirectURI(t *testing.T) {
 	}
 }
 
-func newOAuthIntegration(t *testing.T) (*Service, *auth.Service, *pgxpool.Pool) {
+func newOAuthIntegration(t *testing.T) (*Service, *auth.Service, *sqldb.DB) {
 	t.Helper()
-	baseURL := os.Getenv("TEST_DATABASE_URL")
-	if baseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
-	}
-	adminPool, err := pgxpool.New(context.Background(), baseURL)
-	if err != nil {
-		t.Fatalf("connect integration database: %v", err)
-	}
-	t.Cleanup(adminPool.Close)
-
-	schema := "oauth_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE")
-	})
-
-	query := parsedURL.Query()
-	query.Set("search_path", schema)
-	parsedURL.RawQuery = query.Encode()
-	scopedURL := parsedURL.String()
-
-	migrationDB, err := sql.Open("pgx", scopedURL)
-	if err != nil {
-		t.Fatalf("open migration db: %v", err)
-	}
-	t.Cleanup(func() { _ = migrationDB.Close() })
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		t.Fatal(err)
-	}
-	if err := goose.Up(migrationDB, migrations); err != nil {
-		t.Fatalf("migrate schema: %v", err)
-	}
-
-	pool, err := pgxpool.New(context.Background(), scopedURL)
-	if err != nil {
-		t.Fatalf("connect scoped db: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
+	pool := testdb.OpenDefault(t)
 	humanAuth, err := auth.New(pool, auth.Config{AdminPassword: "phase3-local-admin-password"})
 	if err != nil {
 		t.Fatalf("create human auth: %v", err)

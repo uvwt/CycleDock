@@ -2,22 +2,20 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
 var integrationStore *Store
@@ -27,52 +25,15 @@ func TestMain(m *testing.M) {
 }
 
 func runStoreTests(m *testing.M) int {
-	databaseURL := os.Getenv("TEST_DATABASE_URL")
-	if databaseURL == "" {
+	pool, cleanup, err := testdb.SetupPackagePool("store")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if pool == nil {
 		return m.Run()
 	}
-
-	adminPool, err := pgxpool.New(context.Background(), databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	defer adminPool.Close()
-	// 所有迁移和清表都只能发生在本次测试的独立 schema 中，
-	// 即使误传开发库连接串，也不得修改已有业务表。
-	schema := "store_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if _, err := adminPool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			panic(err)
-		}
-	}()
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		panic(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*config.ConnConfig)
-	defer sqlDB.Close()
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		panic(err)
-	}
-	if err := goose.Up(sqlDB, migrations); err != nil {
-		panic(err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
-	if err != nil {
-		panic(err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		panic(err)
-	}
-	defer pool.Close()
+	defer cleanup()
 	integrationStore = New(pool)
 
 	return m.Run()
@@ -105,20 +66,45 @@ func requireIntegration(t *testing.T) *Store {
 	return integrationStore
 }
 
+// requirePostgresIntegration 仅在 PostgreSQL 测试模式下执行历史增量迁移回放用例；
+// SQLite 的完整 Schema 与迁移升降级由 internal/sqldb 专项测试覆盖。
+func requirePostgresIntegration(t *testing.T) *Store {
+	t.Helper()
+	s := requireIntegration(t)
+	if !s.pool.IsPostgres() {
+		t.Skip("PostgreSQL-only historical migration test")
+	}
+	return s
+}
+
+// openPostgresMigrationDB 在给定 PostgreSQL 测试库上打开一条独立 *sql.DB（可选指定 search_path）。
+func openPostgresMigrationDB(t *testing.T, searchPath string) *sql.DB {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Fatal("TEST_DATABASE_URL is required for PostgreSQL migration test")
+	}
+	if searchPath != "" {
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatalf("parse TEST_DATABASE_URL: %v", err)
+		}
+		q := parsed.Query()
+		q.Set("search_path", searchPath)
+		parsed.RawQuery = q.Encode()
+		dsn = parsed.String()
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open pgx sql.DB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
 func resetDatabase(t *testing.T) {
 	t.Helper()
-	_, err := integrationStore.pool.Exec(context.Background(), `
-		TRUNCATE TABLE
-			card_attachments,
-			workspace_attachments,
-			agent_artifacts, agent_session_events, agent_sessions,
-			turn_attempts, card_turns, events, card_schedules,
-			cards, projects, sources, workspaces
-		RESTART IDENTITY CASCADE
-	`)
-	if err != nil {
-		t.Fatalf("reset database: %v", err)
-	}
+	testdb.TruncateAll(t, integrationStore.pool)
 }
 
 func newFixture(t *testing.T, s *Store, kind domain.CardKind) testFixture {

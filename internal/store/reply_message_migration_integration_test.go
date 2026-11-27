@@ -12,14 +12,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 func TestReplyMigrationRollbackPreservesMessagesAndAttemptLinks(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 	schema := pgx.Identifier{"reply_rollback_" + uuid.NewString()}.Sanitize()
 	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
@@ -38,11 +38,11 @@ func TestReplyMigrationRollbackPreservesMessagesAndAttemptLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	const migrations = "../../db/migrations"
+	const migrations = "../../db/migrations/postgres"
 	if err := goose.Up(database, migrations); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := pgxpool.New(ctx, connectionURL.String())
+	pool, err := sqldb.Open(ctx, sqldb.Config{Driver: sqldb.DialectPostgres, DatabaseURL: connectionURL.String()})
 	if err != nil {
 		t.Fatal(err)
 	}

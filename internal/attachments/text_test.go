@@ -7,72 +7,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
+
+	"github.com/uvwt/CycleDock/internal/sqldb"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
-func setupAttachmentTestDB(t *testing.T) (*pgxpool.Pool, uuid.UUID, uuid.UUID) {
+func seedAttachmentWorkspace(t *testing.T, db *sqldb.DB) (uuid.UUID, uuid.UUID) {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
 	ctx := context.Background()
-	adminPool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect test db: %v", err)
-	}
-	t.Cleanup(adminPool.Close)
-
-	schema := "att_txt_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatalf("create test schema: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE")
-	})
-
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("parse test db url: %v", err)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*cfg.ConnConfig)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(sqlDB, migrations); err != nil {
-		t.Fatalf("migrate test schema: %v", err)
-	}
-
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatalf("connect test schema pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
 	wsID := uuid.New()
 	srcID := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'WS1')`, wsID); err != nil {
+	if _, err := db.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'WS1')`, wsID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO sources (id, workspace_id, kind, name) VALUES ($1, $2, 'human', 'U1')`, srcID, wsID); err != nil {
+	if _, err := db.Exec(ctx, `INSERT INTO sources (id, workspace_id, kind, name) VALUES ($1, $2, 'human', 'U1')`, srcID, wsID); err != nil {
 		t.Fatalf("insert source: %v", err)
 	}
-	return pool, wsID, srcID
+	return wsID, srcID
 }
 
 func TestIsAllowedTextFileNameAndValidation(t *testing.T) {
@@ -201,110 +157,112 @@ func TestProcessTextFileGzipCompressionAndRejections(t *testing.T) {
 }
 
 func TestServiceUploadTextGzipDedupAndCleanup(t *testing.T) {
-	pool, wsID, sourceID := setupAttachmentTestDB(t)
-	uploadDir := t.TempDir()
+	testdb.ForEach(t, func(t *testing.T, db *sqldb.DB) {
+		wsID, sourceID := seedAttachmentWorkspace(t, db)
+		uploadDir := t.TempDir()
 
-	svc, err := New(pool, Config{
-		Dir:                uploadDir,
-		TTL:                24 * time.Hour,
-		MaxTotalBytes:      4096, // 仅按 gzip 物理落盘字节数控制配额
-		MaxTextUploadBytes: 2 << 20,
+		svc, err := New(db, Config{
+			Dir:                uploadDir,
+			TTL:                24 * time.Hour,
+			MaxTotalBytes:      4096, // 仅按 gzip 物理落盘字节数控制配额
+			MaxTextUploadBytes: 2 << 20,
+		})
+		if err != nil {
+			t.Fatalf("New service: %v", err)
+		}
+
+		ctx := context.Background()
+		var sb strings.Builder
+		for i := 1; i <= 250; i++ {
+			fmt.Fprintf(&sb, "line %03d: repeated application log payload for gzip compression ratio verification\n", i)
+		}
+		rawText := []byte(sb.String())
+
+		// 1. 上传纯文本日志，校验磁盘上是 gzip 压缩文件，而 ReadBytes 返回解压后的原文
+		first, err := svc.Upload(ctx, UploadParams{
+			WorkspaceID:        wsID,
+			UploadedBySourceID: sourceID,
+			FileName:           "app.log",
+			RawData:            rawText,
+		})
+		if err != nil {
+			t.Fatalf("Upload text failed: %v", err)
+		}
+		if first.Kind != KindText || first.StorageEncoding != EncodingGzip {
+			t.Fatalf("unexpected kind=%q encoding=%q", first.Kind, first.StorageEncoding)
+		}
+		if first.FileName != "app.log" || first.LineCount != 250 {
+			t.Fatalf("unexpected file_name=%q line_count=%d", first.FileName, first.LineCount)
+		}
+		if first.SizeBytes != int64(len(rawText)) {
+			t.Fatalf("expected size_bytes=%d, got %d", len(rawText), first.SizeBytes)
+		}
+		if first.StoredSizeBytes <= 0 || first.StoredSizeBytes >= first.SizeBytes/4 {
+			t.Fatalf("expected compressed stored_size_bytes (%d) << size_bytes (%d)", first.StoredSizeBytes, first.SizeBytes)
+		}
+
+		diskPath := filepath.Join(uploadDir, filepath.FromSlash(first.RelativePath))
+		diskInfo, err := os.Stat(diskPath)
+		if err != nil {
+			t.Fatalf("stat gzip disk file: %v", err)
+		}
+		if diskInfo.Size() != first.StoredSizeBytes {
+			t.Fatalf("disk size %d != stored_size_bytes %d", diskInfo.Size(), first.StoredSizeBytes)
+		}
+
+		readAtt, readBytes, err := svc.ReadBytes(ctx, wsID, first.ID)
+		if err != nil {
+			t.Fatalf("ReadBytes failed: %v", err)
+		}
+		if readAtt.FileName != "app.log" || !bytes.Equal(readBytes, rawText) {
+			t.Fatalf("ReadBytes content mismatch")
+		}
+
+		// 2. 同工作区重复上传同内容文本应复用同一物理文件
+		second, err := svc.Upload(ctx, UploadParams{
+			WorkspaceID:        wsID,
+			UploadedBySourceID: sourceID,
+			FileName:           "copy.log",
+			RawData:            rawText,
+		})
+		if err != nil {
+			t.Fatalf("second Upload failed: %v", err)
+		}
+		if second.RelativePath != first.RelativePath {
+			t.Fatalf("expected dedup relative_path %q, got %q", first.RelativePath, second.RelativePath)
+		}
+		if second.FileName != "copy.log" {
+			t.Fatalf("expected second record to keep its own filename copy.log, got %q", second.FileName)
+		}
+
+		// 3. 仅第一条过期被清理时，物理文件仍被 second 引用，不可删除
+		_, err = db.Exec(ctx, `UPDATE workspace_attachments SET expires_at = $2 WHERE id = $1`, first.ID, time.Now().UTC().Add(-time.Minute))
+		if err != nil {
+			t.Fatalf("expire first: %v", err)
+		}
+		if _, err := svc.RunCleanup(ctx, time.Now().UTC()); err != nil {
+			t.Fatalf("RunCleanup(first): %v", err)
+		}
+		if _, err := os.Stat(diskPath); err != nil {
+			t.Fatalf("expected shared gzip file to remain while second is active: %v", err)
+		}
+		if _, _, err := svc.ReadBytes(ctx, wsID, first.ID); !errors.Is(err, ErrExpired) {
+			t.Fatalf("expected first to return ErrExpired, got %v", err)
+		}
+		if _, data2, err := svc.ReadBytes(ctx, wsID, second.ID); err != nil || !bytes.Equal(data2, rawText) {
+			t.Fatalf("expected second still readable, err=%v", err)
+		}
+
+		// 4. 第二条也过期后，物理文件被彻底删除
+		_, err = db.Exec(ctx, `UPDATE workspace_attachments SET expires_at = $2 WHERE id = $1`, second.ID, time.Now().UTC().Add(-time.Minute))
+		if err != nil {
+			t.Fatalf("expire second: %v", err)
+		}
+		if _, err := svc.RunCleanup(ctx, time.Now().UTC()); err != nil {
+			t.Fatalf("RunCleanup(second): %v", err)
+		}
+		if _, err := os.Stat(diskPath); !os.IsNotExist(err) {
+			t.Fatalf("expected shared gzip file removed after all refs expired, stat err=%v", err)
+		}
 	})
-	if err != nil {
-		t.Fatalf("New service: %v", err)
-	}
-
-	ctx := context.Background()
-	var sb strings.Builder
-	for i := 1; i <= 250; i++ {
-		fmt.Fprintf(&sb, "line %03d: repeated application log payload for gzip compression ratio verification\n", i)
-	}
-	rawText := []byte(sb.String())
-
-	// 1. 上传纯文本日志，校验磁盘上是 gzip 压缩文件，而 ReadBytes 返回解压后的原文
-	first, err := svc.Upload(ctx, UploadParams{
-		WorkspaceID:        wsID,
-		UploadedBySourceID: sourceID,
-		FileName:           "app.log",
-		RawData:            rawText,
-	})
-	if err != nil {
-		t.Fatalf("Upload text failed: %v", err)
-	}
-	if first.Kind != KindText || first.StorageEncoding != EncodingGzip {
-		t.Fatalf("unexpected kind=%q encoding=%q", first.Kind, first.StorageEncoding)
-	}
-	if first.FileName != "app.log" || first.LineCount != 250 {
-		t.Fatalf("unexpected file_name=%q line_count=%d", first.FileName, first.LineCount)
-	}
-	if first.SizeBytes != int64(len(rawText)) {
-		t.Fatalf("expected size_bytes=%d, got %d", len(rawText), first.SizeBytes)
-	}
-	if first.StoredSizeBytes <= 0 || first.StoredSizeBytes >= first.SizeBytes/4 {
-		t.Fatalf("expected compressed stored_size_bytes (%d) << size_bytes (%d)", first.StoredSizeBytes, first.SizeBytes)
-	}
-
-	diskPath := filepath.Join(uploadDir, filepath.FromSlash(first.RelativePath))
-	diskInfo, err := os.Stat(diskPath)
-	if err != nil {
-		t.Fatalf("stat gzip disk file: %v", err)
-	}
-	if diskInfo.Size() != first.StoredSizeBytes {
-		t.Fatalf("disk size %d != stored_size_bytes %d", diskInfo.Size(), first.StoredSizeBytes)
-	}
-
-	readAtt, readBytes, err := svc.ReadBytes(ctx, wsID, first.ID)
-	if err != nil {
-		t.Fatalf("ReadBytes failed: %v", err)
-	}
-	if readAtt.FileName != "app.log" || !bytes.Equal(readBytes, rawText) {
-		t.Fatalf("ReadBytes content mismatch")
-	}
-
-	// 2. 同工作区重复上传同内容文本应复用同一物理文件
-	second, err := svc.Upload(ctx, UploadParams{
-		WorkspaceID:        wsID,
-		UploadedBySourceID: sourceID,
-		FileName:           "copy.log",
-		RawData:            rawText,
-	})
-	if err != nil {
-		t.Fatalf("second Upload failed: %v", err)
-	}
-	if second.RelativePath != first.RelativePath {
-		t.Fatalf("expected dedup relative_path %q, got %q", first.RelativePath, second.RelativePath)
-	}
-	if second.FileName != "copy.log" {
-		t.Fatalf("expected second record to keep its own filename copy.log, got %q", second.FileName)
-	}
-
-	// 3. 仅第一条过期被清理时，物理文件仍被 second 引用，不可删除
-	_, err = pool.Exec(ctx, `UPDATE workspace_attachments SET expires_at = $2 WHERE id = $1`, first.ID, time.Now().UTC().Add(-time.Minute))
-	if err != nil {
-		t.Fatalf("expire first: %v", err)
-	}
-	if _, err := svc.RunCleanup(ctx, time.Now().UTC()); err != nil {
-		t.Fatalf("RunCleanup(first): %v", err)
-	}
-	if _, err := os.Stat(diskPath); err != nil {
-		t.Fatalf("expected shared gzip file to remain while second is active: %v", err)
-	}
-	if _, _, err := svc.ReadBytes(ctx, wsID, first.ID); !errors.Is(err, ErrExpired) {
-		t.Fatalf("expected first to return ErrExpired, got %v", err)
-	}
-	if _, data2, err := svc.ReadBytes(ctx, wsID, second.ID); err != nil || !bytes.Equal(data2, rawText) {
-		t.Fatalf("expected second still readable, err=%v", err)
-	}
-
-	// 4. 第二条也过期后，物理文件被彻底删除
-	_, err = pool.Exec(ctx, `UPDATE workspace_attachments SET expires_at = $2 WHERE id = $1`, second.ID, time.Now().UTC().Add(-time.Minute))
-	if err != nil {
-		t.Fatalf("expire second: %v", err)
-	}
-	if _, err := svc.RunCleanup(ctx, time.Now().UTC()); err != nil {
-		t.Fatalf("RunCleanup(second): %v", err)
-	}
-	if _, err := os.Stat(diskPath); !os.IsNotExist(err) {
-		t.Fatalf("expected shared gzip file removed after all refs expired, stat err=%v", err)
-	}
 }

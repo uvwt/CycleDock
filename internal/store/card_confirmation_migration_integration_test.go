@@ -4,14 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/domain"
 )
 
 func TestConfirmationMigrationRestoresReopenedRound(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	f := newFixture(t, s, domain.CardKindTodo)
 	ctx := context.Background()
 	if err := s.MoveTodo(ctx, f.WorkspaceID, f.CardID, f.AgentID, domain.TodoStateWorking); err != nil {
@@ -25,9 +24,8 @@ func TestConfirmationMigrationRestoresReopenedRound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	database := stdlib.OpenDB(*s.pool.Config().ConnConfig)
-	defer database.Close()
-	const migrations = "../../db/migrations"
+	database := s.pool.StdDB()
+	const migrations = "../../db/migrations/postgres"
 	// 退回旧表结构，再验证升级会从状态事件中还原轮次，而非把旧确认带入本轮。
 	defer func() {
 		if err := goose.Up(database, migrations); err != nil {

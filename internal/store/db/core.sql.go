@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 const createCard = `-- name: CreateCard :one
@@ -29,9 +29,9 @@ type CreateCardParams struct {
 	Kind                  string        `json:"kind"`
 	Title                 string        `json:"title"`
 	Description           string        `json:"description"`
-	DiscussionState       pgtype.Text   `json:"discussion_state"`
-	TodoState             pgtype.Text   `json:"todo_state"`
-	OngoingState          pgtype.Text   `json:"ongoing_state"`
+	DiscussionState       sqldb.Text    `json:"discussion_state"`
+	TodoState             sqldb.Text    `json:"todo_state"`
+	OngoingState          sqldb.Text    `json:"ongoing_state"`
 	SourceDiscussionID    uuid.NullUUID `json:"source_discussion_id"`
 	RequiredConfirmations int32         `json:"required_confirmations"`
 	CreatedBySourceID     uuid.UUID     `json:"created_by_source_id"`

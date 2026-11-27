@@ -43,18 +43,29 @@ jobs:
       - name: Generate and verify Go
         run: |
           sqlc generate
+          go run ./scripts/patch_sqlc_db.go
           git diff --exit-code
-          # 多包共用 TEST_DATABASE_URL；串行运行包，避免 goose 并发迁移冲突（不跳过任何用例）。
-          go test -p 1 ./...
           go vet ./...
-      - name: Race-sensitive integration tests
+      - name: Go tests (SQLite)
+        env:
+          TEST_DB_DIALECT: sqlite
         run: |
-          go test -p 1 -race ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi ./internal/modelauth ./internal/modelclient -count=1
+          go test -p 1 -count=1 ./...
+          go test -p 1 -race ./internal/sqldb ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi ./internal/modelauth ./internal/modelclient ./internal/retention -count=1
+      - name: Go tests (PostgreSQL)
+        env:
+          TEST_DB_DIALECT: postgres
+        run: |
+          # 多包共用 TEST_DATABASE_URL；各包在独立临时 schema 中串行运行，避免并发冲突（不跳过任何用例）。
+          go test -p 1 -count=1 ./...
+          go test -p 1 -race ./internal/sqldb ./internal/store ./internal/agent ./internal/oauth ./internal/httpapi ./internal/modelauth ./internal/modelclient ./internal/retention -count=1
       - name: Migration smoke
         run: |
-          goose -dir db/migrations postgres "$TEST_DATABASE_URL" up
-          goose -dir db/migrations postgres "$TEST_DATABASE_URL" down
-          goose -dir db/migrations postgres "$TEST_DATABASE_URL" up
+          goose -dir db/migrations/postgres postgres "$TEST_DATABASE_URL" up
+          goose -dir db/migrations/postgres postgres "$TEST_DATABASE_URL" down
+          goose -dir db/migrations/postgres postgres "$TEST_DATABASE_URL" up
+          # SQLite 单文件迁移升降级与约束由内嵌驱动校验（不依赖外部 sqlite3 CLI / CGO）
+          go test -v -count=1 -run "TestSQLiteMigrationsUpDownUpAndConstraints|TestDualDBRoundTripTypesAndSchemaContract" ./internal/sqldb
       - name: Verify web
         working-directory: web
         run: |
@@ -93,6 +104,22 @@ jobs:
           test "$(curl -sS -o /tmp/mcp-unauth -w '%{http_code}' http://127.0.0.1:8080/mcp)" = "401"
           curl -fsS -H 'Content-Type: application/json' -d '{"client_name":"CI MCP Client","redirect_uris":["http://127.0.0.1:18084/callback"],"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}' http://127.0.0.1:8080/oauth/register >/tmp/cycledock-dcr.json
           grep -q '"client_id"' /tmp/cycledock-dcr.json
+          docker compose down -v
+
+          # 额外验证 SQLite 零外部依赖单容器模式可一键拉起并通过登录/健康检查
+          trap 'docker compose -f docker-compose.sqlite.yml logs --no-color || true; docker compose -f docker-compose.sqlite.yml down -v' EXIT
+          CYCLEDOCK_IMAGE=ghcr.io/uvwt/cycledock:ci docker compose -f docker-compose.sqlite.yml up -d
+          ready_sqlite=0
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null; then
+              ready_sqlite=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready_sqlite" -eq 1
+          curl -fsS -H 'Content-Type: application/json' -c /tmp/cycledock-sqlite-cookie -d '{"password":"ci-local-admin-password"}' http://127.0.0.1:8080/api/v1/auth/login >/dev/null
+          curl -fsS -b /tmp/cycledock-sqlite-cookie http://127.0.0.1:8080/api/v1/me >/dev/null
 
   browser-smoke:
     runs-on: ubuntu-latest

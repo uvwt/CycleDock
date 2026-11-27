@@ -17,7 +17,7 @@ services:
     image: ${CYCLEDOCK_IMAGE:-ghcr.io/uvwt/cycledock:latest}
     environment:
       DATABASE_URL: postgres://cycledock:cycledock@postgres:5432/cycledock?sslmode=disable
-      MIGRATIONS_DIR: /app/db/migrations
+      MIGRATIONS_DIR: /app/db/migrations/postgres
     entrypoint: ["/usr/local/bin/cycledock-migrate"]
     depends_on:
       postgres:

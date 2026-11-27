@@ -3,28 +3,20 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 
 	"github.com/uvwt/CycleDock/internal/auth"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
+	"github.com/uvwt/CycleDock/internal/testdb"
 )
 
 const httpIntegrationPassword = "local-admin-password"
@@ -504,55 +496,9 @@ func TestHumanWebHTTPFlowAndTenantIsolation(t *testing.T) {
 	}
 }
 
-func newHTTPIntegration(t *testing.T) (http.Handler, *pgxpool.Pool, *store.Store) {
+func newHTTPIntegration(t *testing.T) (http.Handler, *sqldb.DB, *store.Store) {
 	t.Helper()
-	baseURL := os.Getenv("TEST_DATABASE_URL")
-	if baseURL == "" {
-		t.Skip("TEST_DATABASE_URL is not set")
-	}
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
-	}
-	adminPool, err := pgxpool.New(context.Background(), baseURL)
-	if err != nil {
-		t.Fatalf("connect integration database: %v", err)
-	}
-	t.Cleanup(adminPool.Close)
-
-	schema := "http_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := adminPool.Exec(context.Background(), "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatalf("create integration schema: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+quotedSchema+" CASCADE")
-	})
-
-	query := parsedURL.Query()
-	query.Set("search_path", schema)
-	parsedURL.RawQuery = query.Encode()
-	scopedURL := parsedURL.String()
-
-	migrationDB, err := sql.Open("pgx", scopedURL)
-	if err != nil {
-		t.Fatalf("open migration database: %v", err)
-	}
-	t.Cleanup(func() { _ = migrationDB.Close() })
-	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
-	if err := goose.SetDialect("postgres"); err != nil {
-		t.Fatalf("set goose dialect: %v", err)
-	}
-	if err := goose.Up(migrationDB, migrations); err != nil {
-		t.Fatalf("migrate integration schema: %v", err)
-	}
-
-	pool, err := pgxpool.New(context.Background(), scopedURL)
-	if err != nil {
-		t.Fatalf("connect integration schema: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := testdb.OpenDefault(t)
 	authService, err := auth.New(pool, auth.Config{AdminPassword: httpIntegrationPassword})
 	if err != nil {
 		t.Fatalf("create auth service: %v", err)

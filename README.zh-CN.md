@@ -91,6 +91,12 @@ CYCLEDOCK_CONNECTION_ENCRYPTION_KEY=<32字节base64密钥>
 docker compose up -d
 ```
 
+如果是 512MB/1GB 低配 VPS 或 NAS 自托管，不需要部署 PostgreSQL，可以直接使用零外部依赖的单容器 SQLite 模式：
+
+```bash
+docker compose -f docker-compose.sqlite.yml up -d
+```
+
 3. 浏览器访问 `http://127.0.0.1:8080`，使用管理员密码登录，在 **Agent 设置** 中添加模型路线并开启内置 Agent 即可开始使用。
 
 ## 相关文档

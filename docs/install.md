@@ -2,13 +2,60 @@
 
 ## 1. 适用范围
 
-默认发布形态是单个 CycleDock 应用 + PostgreSQL 17。仓库中的 `docker-compose.yml` 会依次启动：
+CycleDock 支持 **PostgreSQL 17** 与 **SQLite（纯 Go 单文件、零外部依赖）** 两种数据库后端（不支持 MySQL）：
 
-1. PostgreSQL。
-2. 一次性 migration service。
-3. CycleDock app。
+- **PostgreSQL 17（默认 / 多实例或中大规模推荐）**：`docker-compose.yml` 依次启动 PostgreSQL、一次性 migration service 与 CycleDock app。
+- **SQLite（轻量自托管 / 512MB~1GB 低配 VPS / NAS 推荐）**：`docker-compose.sqlite.yml` 仅启动单个 CycleDock 容器，内置纯 Go SQLite 驱动（开启 WAL、外键约束与单写串行化），首次启动自动应用内嵌迁移，无需额外数据库进程。
 
 生产环境必须由 HTTPS 反向代理暴露应用；Compose 默认只用于单机部署基线。
+
+### 轻量单容器部署（SQLite 零依赖模式）
+
+在 `.env` 中配置 `CYCLEDOCK_ADMIN_PASSWORD`（以及可选加密密钥）后，直接运行：
+
+```bash
+docker compose -f docker-compose.sqlite.yml up -d
+```
+
+或直接用单二进制启动（不依赖 Docker / PostgreSQL）：
+
+```bash
+CYCLEDOCK_DB_DRIVER=sqlite \
+CYCLEDOCK_SQLITE_PATH=./data/cycledock.db \
+CYCLEDOCK_ADMIN_PASSWORD=your-strong-password \
+./cycledock
+```
+
+数据库后端切换环境变量说明：
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `CYCLEDOCK_DB_DRIVER` | 显式指定数据库驱动：`postgres` 或 `sqlite` | 若 `DATABASE_URL` 为 `sqlite://` / `file:` 则自动识别为 `sqlite`，否则为 `postgres` |
+| `CYCLEDOCK_SQLITE_PATH` | SQLite 数据文件路径（启动自动创建父目录并开启 WAL） | `./data/cycledock.db` |
+| `CYCLEDOCK_AUTO_MIGRATE` | 是否在启动时自动执行内嵌数据库迁移 | SQLite 默认 `true`，PostgreSQL 默认 `false` |
+
+### 低内存 PostgreSQL 调优参考（1GB~2GB VPS）
+
+如果希望继续使用 PostgreSQL 但宿主机内存紧张，可在 `docker-compose.yml` 的 `postgres` 服务中追加 `command` 参数压低常驻内存：
+
+```yaml
+  postgres:
+    image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=192MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=40
+```
+
+同时可将 `CYCLEDOCK_AGENT_MAX_CONCURRENT` 与 `CYCLEDOCK_AGENT_MAX_CONCURRENT_PER_WORKSPACE` 适当调低（例如 `12` / `6`）。
 
 ## 2. 前置条件
 
@@ -130,7 +177,12 @@ Built-in Agent：
 
 ## 7. 备份
 
-至少备份 PostgreSQL volume / database。升级前必须先做可恢复备份。
+至少备份数据库数据卷：
+
+- **PostgreSQL 模式**：备份 PostgreSQL volume / `pg_dump`。
+- **SQLite 模式**：备份 `cycledock_sqlite_data` 数据卷（建议使用 `sqlite3 <db> ".backup <dst>"` 或先停服再打包 `.db` / `.db-wal` / `.db-shm` 完整目录）。
+
+升级前必须先做可恢复备份。
 
 CycleDock 不把 Model API Key / MCP Bearer Token 明文存入数据库。备份时须分别保留模型的环境配置与 MCP 加密主密钥；只恢复 PostgreSQL 而丢失密钥将无法使用原有 MCP Token。
 

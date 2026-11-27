@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/uvwt/CycleDock/internal/agentdata"
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 type CardTurn struct {
@@ -175,7 +174,7 @@ func (s *Store) CreateSystemTurn(
 		FROM sources
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, cycleAgentSourceID).Scan(&kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CreateTurnResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -251,7 +250,7 @@ func (s *Store) CreateScheduleTurn(
 		FROM card_schedules
 		WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 	`, workspaceID, scheduleID).Scan(&cardID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return CreateTurnResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -277,7 +276,7 @@ func (s *Store) CreateScheduleTurn(
 		}
 		return CreateTurnResult{Turn: turn, Reused: true}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return CreateTurnResult{}, err
 	}
 
@@ -334,7 +333,7 @@ func (s *Store) ClaimNextTurnAttempt(
 
 // claimNextTurnAttempt 由调用方提交事务，保证租户配额检查与实际领取使用同一个事务。
 func claimNextTurnAttempt(
-	ctx context.Context, tx pgx.Tx,
+	ctx context.Context, tx *sqldb.Tx,
 	workspaceID, runnerSourceID uuid.UUID,
 	now time.Time, leaseDuration time.Duration,
 ) (*AttemptClaim, error) {
@@ -394,7 +393,7 @@ func claimNextTurnAttempt(
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
 		&turn.ScheduledFor, &turn.CreatedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {
@@ -418,7 +417,7 @@ func claimNextTurnAttempt(
 
 func supersedeAttemptForHumanTurn(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	dispatchMode domain.DispatchMode,
 	now time.Time,
@@ -428,7 +427,7 @@ func supersedeAttemptForHumanTurn(
 
 func supersedeAttemptForTurn(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, cardID uuid.UUID,
 	dispatchMode domain.DispatchMode,
 	reason string,
@@ -502,7 +501,7 @@ func (s *Store) RetryAttemptWithModelRoute(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, attemptID), &target)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return RetryAttemptResult{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -525,7 +524,7 @@ func (s *Store) RetryAttemptWithModelRoute(
 		s.notifyWorkReady()
 		return RetryAttemptResult{Attempt: successor, Reused: true}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return RetryAttemptResult{}, err
 	}
 
@@ -713,7 +712,7 @@ func (s *Store) EditPendingTurn(
 	}
 	var eventID uuid.NullUUID
 	var source domain.TurnSource
-	var cancelledAt pgtype.Timestamptz
+	var cancelledAt sqldb.Timestamptz
 	var attempted bool
 	err = tx.QueryRow(ctx, `
 		SELECT t.source_event_id, t.source, t.cancelled_at, EXISTS (
@@ -724,7 +723,7 @@ func (s *Store) EditPendingTurn(
 		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, turnID).Scan(&eventID, &source, &cancelledAt, &attempted)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -772,7 +771,7 @@ func (s *Store) SteerPendingTurn(
 
 	var source domain.TurnSource
 	var mode domain.DispatchMode
-	var cancelledAt pgtype.Timestamptz
+	var cancelledAt sqldb.Timestamptz
 	var attempted bool
 	err = tx.QueryRow(ctx, `
 		SELECT t.source, t.dispatch_mode, t.cancelled_at, EXISTS (
@@ -783,7 +782,7 @@ func (s *Store) SteerPendingTurn(
 		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, turnID).Scan(&source, &mode, &cancelledAt, &attempted)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -797,12 +796,12 @@ func (s *Store) SteerPendingTurn(
 	}
 	// 新选择的引导成为唯一优先输入，其他未领取输入继续按原 FIFO 排队。
 	if _, err := tx.Exec(ctx, `
-		UPDATE card_turns t SET dispatch_mode='enqueue'
-		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id<>$3
-		  AND t.dispatch_mode='interrupt' AND t.cancelled_at IS NULL
+		UPDATE card_turns SET dispatch_mode='enqueue'
+		WHERE workspace_id=$1 AND card_id=$2 AND id<>$3
+		  AND dispatch_mode='interrupt' AND cancelled_at IS NULL
 		  AND NOT EXISTS (
 			SELECT 1 FROM turn_attempts a
-			WHERE a.workspace_id=t.workspace_id AND a.turn_id=t.id
+			WHERE a.workspace_id=card_turns.workspace_id AND a.turn_id=card_turns.id
 		  )
 	`, workspaceID, cardID, turnID); err != nil {
 		return err
@@ -847,7 +846,7 @@ func (s *Store) CancelPendingTurn(
 		return err
 	}
 
-	var cancelledAt pgtype.Timestamptz
+	var cancelledAt sqldb.Timestamptz
 	var attempted bool
 	err = tx.QueryRow(ctx, `
 		SELECT t.cancelled_at, EXISTS (
@@ -859,7 +858,7 @@ func (s *Store) CancelPendingTurn(
 		WHERE t.workspace_id=$1 AND t.card_id=$2 AND t.id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, turnID).Scan(&cancelledAt, &attempted)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -916,7 +915,7 @@ func (s *Store) CancelAttempt(
 		WHERE workspace_id=$1 AND card_id=$2 AND id=$3
 		FOR UPDATE
 	`, workspaceID, cardID, attemptID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -1085,10 +1084,10 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 	}
 
 	var attempt TurnAttempt
-	var invocationID pgtype.Text
+	var invocationID sqldb.Text
 	var sourceKind, cardKind string
 	var routeEnabled bool
-	var discussionState, todoState, ongoingState pgtype.Text
+	var discussionState, todoState, ongoingState sqldb.Text
 	err = tx.QueryRow(ctx, `
 		SELECT
 			a.id, a.workspace_id, a.card_id, a.turn_id, a.attempt_number, a.reason,
@@ -1116,7 +1115,7 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 		&sourceKind, &routeEnabled,
 		&cardKind, &discussionState, &todoState, &ongoingState,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return false, false, false, nil
 	}
 	if err != nil {
@@ -1160,7 +1159,7 @@ func (s *Store) expireAndRecoverBuiltInAttempt(
 		}
 		return true, false, false, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return false, false, false, err
 	}
 
@@ -1237,10 +1236,10 @@ func (s *Store) InterruptAttemptForShutdown(
 	}
 
 	var attempt TurnAttempt
-	var invocationID pgtype.Text
+	var invocationID sqldb.Text
 	var sourceKind, cardKind string
 	var routeEnabled bool
-	var discussionState, todoState, ongoingState pgtype.Text
+	var discussionState, todoState, ongoingState sqldb.Text
 	err = tx.QueryRow(ctx, `
 		SELECT
 			a.id, a.workspace_id, a.card_id, a.turn_id, a.attempt_number, a.reason,
@@ -1268,7 +1267,7 @@ func (s *Store) InterruptAttemptForShutdown(
 		&sourceKind, &routeEnabled,
 		&cardKind, &discussionState, &todoState, &ongoingState,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return ShutdownInterruptResult{}, nil
 	}
 	if err != nil {
@@ -1308,7 +1307,7 @@ func (s *Store) InterruptAttemptForShutdown(
 		}
 		return ShutdownInterruptResult{Interrupted: true}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return ShutdownInterruptResult{}, err
 	}
 
@@ -1358,7 +1357,7 @@ func (s *Store) InterruptAttemptForShutdown(
 
 func cardExecutableForAttempt(
 	cardKind string,
-	discussionState, todoState, ongoingState pgtype.Text,
+	discussionState, todoState, ongoingState sqldb.Text,
 ) bool {
 	switch cardKind {
 	case string(domain.CardKindDiscussion):
@@ -1385,7 +1384,7 @@ func (s *Store) GetAttempt(
 		FROM turn_attempts
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, attemptID), &attempt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return TurnAttempt{}, domain.ErrNotFound
 	}
 	return attempt, err
@@ -1408,7 +1407,7 @@ type insertTurnParams struct {
 	RequestHash           string
 }
 
-func insertTurn(ctx context.Context, tx pgx.Tx, p insertTurnParams) (CardTurn, error) {
+func insertTurn(ctx context.Context, tx *sqldb.Tx, p insertTurnParams) (CardTurn, error) {
 	turnID := uuid.New()
 	p.Content, _ = agentdata.NormalizeText(p.Content)
 	p.IdempotencyKey, _ = agentdata.NormalizeText(p.IdempotencyKey)
@@ -1442,7 +1441,7 @@ type existingTurnRequest struct {
 
 func findTurnByIdempotency(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, sourceID uuid.UUID,
 	key string,
 ) (existingTurnRequest, bool, error) {
@@ -1455,7 +1454,7 @@ func findTurnByIdempotency(
 		  AND created_by_source_id=$2
 		  AND idempotency_key=$3
 	`, workspaceID, sourceID, key).Scan(&turnID, &hash)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return existingTurnRequest{}, false, nil
 	}
 	if err != nil {
@@ -1469,7 +1468,7 @@ func findTurnByIdempotency(
 }
 
 func loadTurn(ctx context.Context, q interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
+	QueryRow(context.Context, string, ...any) *sqldb.Row
 }, workspaceID, turnID uuid.UUID) (CardTurn, error) {
 	var turn CardTurn
 	err := q.QueryRow(ctx, `
@@ -1488,14 +1487,14 @@ func loadTurn(ctx context.Context, q interface {
 
 func claimQueuedAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, runnerSourceID uuid.UUID,
 	now time.Time,
 	leaseDuration time.Duration,
 ) (*AttemptClaim, bool, error) {
 	var attempt TurnAttempt
 	var turn CardTurn
-	var invocationID pgtype.Text
+	var invocationID sqldb.Text
 	err := tx.QueryRow(ctx, `
 		SELECT
 			a.id, a.workspace_id, a.card_id, a.turn_id, a.attempt_number, a.reason,
@@ -1532,7 +1531,7 @@ func claimQueuedAttempt(
 		&turn.CreatedBySourceID, &turn.SourceEventID, &turn.DispatchMode, &turn.ScheduleID,
 		&turn.ScheduledFor, &turn.CreatedAt,
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -1566,7 +1565,7 @@ func claimQueuedAttempt(
 
 func insertRunningAttempt(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	turn CardTurn,
 	runnerSourceID uuid.UUID,
 	attemptNumber int,
@@ -1606,7 +1605,7 @@ func insertRunningAttempt(
 
 func requireRunnableSource(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx *sqldb.Tx,
 	workspaceID, sourceID uuid.UUID,
 ) error {
 	var kind string
@@ -1615,7 +1614,7 @@ func requireRunnableSource(
 		FROM sources
 		WHERE workspace_id=$1 AND id=$2
 	`, workspaceID, sourceID).Scan(&kind)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	if err != nil {
@@ -1627,9 +1626,9 @@ func requireRunnableSource(
 	return nil
 }
 
-func scanAttempt(row pgx.Row, attempt *TurnAttempt) error {
-	var invocationID pgtype.Text
-	var startedAt, leaseExpiresAt, finishedAt pgtype.Timestamptz
+func scanAttempt(row *sqldb.Row, attempt *TurnAttempt) error {
+	var invocationID sqldb.Text
+	var startedAt, leaseExpiresAt, finishedAt sqldb.Timestamptz
 	err := row.Scan(
 		&attempt.ID, &attempt.WorkspaceID, &attempt.CardID, &attempt.TurnID,
 		&attempt.AttemptNumber, &attempt.Reason, &attempt.RetryOfAttemptID,

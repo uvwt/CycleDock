@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
@@ -27,6 +26,7 @@ import (
 	"github.com/uvwt/CycleDock/internal/agentsession"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/modelclient"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store"
 )
 
@@ -107,9 +107,9 @@ func TestComputeRouteCompactionBudget(t *testing.T) {
 		route := store.ModelRoute{
 			ID:                  uuid.New(),
 			Model:               "custom-proxy-model",
-			ContextWindowTokens: pgtype.Int4{Int32: 64000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 48000, Valid: true},
-			MaxOutputTokens:     pgtype.Int4{Int32: 8192, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 64000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 48000, Valid: true},
+			MaxOutputTokens:     sqldb.Int4{Int32: 8192, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		}
 		limits := ResolveRouteModelLimits(route, nil)
@@ -200,8 +200,8 @@ func TestFailoverSkipsSmallAndUnknownBackupRoutesForOversizedPrompt(t *testing.T
 			Enabled:             true,
 			ProviderBaseUrl:     smallBackupServer.URL,
 			Model:               "small-backup-16k",
-			ContextWindowTokens: pgtype.Int4{Int32: 16000, Valid: true},
-			MaxInputTokens:      pgtype.Int4{Int32: 12000, Valid: true},
+			ContextWindowTokens: sqldb.Int4{Int32: 16000, Valid: true},
+			MaxInputTokens:      sqldb.Int4{Int32: 12000, Valid: true},
 			LimitsSource:        modelclient.LimitsSourceUser,
 		},
 		{

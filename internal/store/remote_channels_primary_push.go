@@ -2,15 +2,15 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 )
 
 // ProjectPrimaryPushKey 用于在跨工作区批量分发时索引项目的唯一主推路由。
@@ -39,9 +39,9 @@ type ResolvedProjectPrimaryPushRoute struct {
 }
 
 type primaryPushQuerier interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (*sqldb.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) *sqldb.Row
+	Exec(ctx context.Context, sql string, args ...any) (sqldb.Result, error)
 }
 
 // NormalizeProjectPrimaryPushMode 校验并规整项目主推路由模式。
@@ -179,7 +179,7 @@ func (s *Store) GetProjectPrimaryPushRoute(
 		FROM projects
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, projectID).Scan(&modeStr, &channelID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return ResolvedProjectPrimaryPushRoute{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -309,7 +309,7 @@ func (s *Store) UpdateProjectPrimaryPushRoute(
 		WHERE workspace_id = $1 AND id = $2
 		FOR UPDATE
 	`, workspaceID, projectID).Scan(&oldModeStr, &oldChannelID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return ResolvedProjectPrimaryPushRoute{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -412,69 +412,140 @@ func alignChannelProjectPushCursorsTx(
 	workspaceID, projectID, channelID uuid.UUID,
 	excludeConversationCardID uuid.NullUUID,
 ) error {
-	_, err := q.Exec(ctx, `
-		INSERT INTO remote_channel_outbound_cursors (
-			workspace_id, channel_id, card_id,
-			last_message_seq, last_comment_seq, last_checkin_seq, last_status_seq,
-			last_attempt_id, last_attempt_status, last_approval_id, updated_at
-		)
-		SELECT
-			c.workspace_id,
-			$3::uuid AS channel_id,
-			c.id AS card_id,
-			COALESCE(ev.max_message_seq, 0),
-			COALESCE(ev.max_comment_seq, 0),
-			COALESCE(ev.max_checkin_seq, 0),
-			COALESCE(ev.max_status_seq, 0),
-			la.id,
-			COALESCE(la.status, ''),
-			ap.id,
-			now()
+	cardRows, err := q.Query(ctx, `
+		SELECT c.id,
+		       (
+		         SELECT a.id FROM turn_attempts a
+		         WHERE a.workspace_id = c.workspace_id AND a.card_id = c.id
+		         ORDER BY a.created_at DESC, a.attempt_number DESC
+		         LIMIT 1
+		       ) AS last_attempt_id,
+		       COALESCE((
+		         SELECT a.status FROM turn_attempts a
+		         WHERE a.workspace_id = c.workspace_id AND a.card_id = c.id
+		         ORDER BY a.created_at DESC, a.attempt_number DESC
+		         LIMIT 1
+		       ), '') AS last_attempt_status,
+		       (
+		         SELECT ta.id FROM card_tool_approvals ta
+		         WHERE ta.workspace_id = c.workspace_id AND ta.card_id = c.id AND ta.status = 'pending'
+		         ORDER BY ta.created_at DESC
+		         LIMIT 1
+		       ) AS last_approval_id,
+		       COALESCE((
+		         SELECT MAX(e.sequence) FROM events e
+		         WHERE e.workspace_id = c.workspace_id AND e.card_id = c.id AND e.event_type = 'comment'
+		       ), 0) AS max_comment_seq,
+		       COALESCE((
+		         SELECT MAX(e.sequence) FROM events e
+		         WHERE e.workspace_id = c.workspace_id AND e.card_id = c.id AND e.event_type = 'checkin'
+		       ), 0) AS max_checkin_seq,
+		       COALESCE((
+		         SELECT MAX(e.sequence) FROM events e
+		         WHERE e.workspace_id = c.workspace_id AND e.card_id = c.id AND e.event_type = 'status_change'
+		       ), 0) AS max_status_seq
 		FROM cards c
-		LEFT JOIN LATERAL (
-			SELECT
-				MAX(e.sequence) FILTER (
-					WHERE e.event_type = 'message'
-					  AND NOT COALESCE((e.message->>'preview')::boolean, false)
-				) AS max_message_seq,
-				MAX(e.sequence) FILTER (WHERE e.event_type = 'comment') AS max_comment_seq,
-				MAX(e.sequence) FILTER (WHERE e.event_type = 'checkin') AS max_checkin_seq,
-				MAX(e.sequence) FILTER (WHERE e.event_type = 'status_change') AS max_status_seq
-			FROM events e
-			WHERE e.workspace_id = c.workspace_id AND e.card_id = c.id
-		) ev ON true
-		LEFT JOIN LATERAL (
-			SELECT a.id, a.status
-			FROM turn_attempts a
-			WHERE a.workspace_id = c.workspace_id AND a.card_id = c.id
-			ORDER BY a.created_at DESC, a.attempt_number DESC
-			LIMIT 1
-		) la ON true
-		LEFT JOIN LATERAL (
-			SELECT ta.id
-			FROM card_tool_approvals ta
-			WHERE ta.workspace_id = c.workspace_id AND ta.card_id = c.id AND ta.status = 'pending'
-			ORDER BY ta.created_at DESC
-			LIMIT 1
-		) ap ON true
 		WHERE c.workspace_id = $1
 		  AND c.project_id = $2
-		  AND ($4::uuid IS NULL OR c.id <> $4::uuid)
-		ON CONFLICT (workspace_id, channel_id, card_id)
-		DO UPDATE SET
-			last_message_seq = GREATEST(remote_channel_outbound_cursors.last_message_seq, EXCLUDED.last_message_seq),
-			last_comment_seq = GREATEST(remote_channel_outbound_cursors.last_comment_seq, EXCLUDED.last_comment_seq),
-			last_checkin_seq = GREATEST(remote_channel_outbound_cursors.last_checkin_seq, EXCLUDED.last_checkin_seq),
-			last_status_seq = GREATEST(remote_channel_outbound_cursors.last_status_seq, EXCLUDED.last_status_seq),
-			last_attempt_id = COALESCE(EXCLUDED.last_attempt_id, remote_channel_outbound_cursors.last_attempt_id),
-			last_attempt_status = CASE
-				WHEN EXCLUDED.last_attempt_id IS NOT NULL THEN EXCLUDED.last_attempt_status
-				ELSE remote_channel_outbound_cursors.last_attempt_status
-			END,
-			last_approval_id = COALESCE(EXCLUDED.last_approval_id, remote_channel_outbound_cursors.last_approval_id),
-			updated_at = now()
-	`, workspaceID, projectID, channelID, excludeConversationCardID)
-	return err
+		  AND ($3::uuid IS NULL OR c.id <> $3::uuid)
+	`, workspaceID, projectID, excludeConversationCardID)
+	if err != nil {
+		return err
+	}
+	type cardWaterline struct {
+		cardID            uuid.UUID
+		lastAttemptID     uuid.NullUUID
+		lastAttemptStatus string
+		lastApprovalID    uuid.NullUUID
+		maxMessageSeq     int64
+		maxCommentSeq     int64
+		maxCheckinSeq     int64
+		maxStatusSeq      int64
+	}
+	var cards []cardWaterline
+	for cardRows.Next() {
+		var w cardWaterline
+		if err := cardRows.Scan(
+			&w.cardID, &w.lastAttemptID, &w.lastAttemptStatus, &w.lastApprovalID,
+			&w.maxCommentSeq, &w.maxCheckinSeq, &w.maxStatusSeq,
+		); err != nil {
+			cardRows.Close()
+			return err
+		}
+		cards = append(cards, w)
+	}
+	if err := cardRows.Err(); err != nil {
+		cardRows.Close()
+		return err
+	}
+	cardRows.Close()
+	if len(cards) == 0 {
+		return nil
+	}
+
+	// 查询每张卡最新的非 preview=true 的 message 序号（跨 PG/SQLite 公共 SQL，Go 侧解析 JSON）。
+	for i := range cards {
+		msgRows, err := q.Query(ctx, `
+			SELECT sequence, message
+			FROM events
+			WHERE workspace_id = $1 AND card_id = $2 AND event_type = 'message'
+			ORDER BY sequence DESC
+		`, workspaceID, cards[i].cardID)
+		if err != nil {
+			return err
+		}
+		for msgRows.Next() {
+			var seq int64
+			var raw []byte
+			if err := msgRows.Scan(&seq, &raw); err != nil {
+				msgRows.Close()
+				return err
+			}
+			var previewFlag struct {
+				Preview bool `json:"preview"`
+			}
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &previewFlag)
+			}
+			if !previewFlag.Preview {
+				cards[i].maxMessageSeq = seq
+				break
+			}
+		}
+		if err := msgRows.Err(); err != nil {
+			msgRows.Close()
+			return err
+		}
+		msgRows.Close()
+	}
+
+	for _, w := range cards {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO remote_channel_outbound_cursors (
+				workspace_id, channel_id, card_id,
+				last_message_seq, last_comment_seq, last_checkin_seq, last_status_seq,
+				last_attempt_id, last_attempt_status, last_approval_id, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+			ON CONFLICT (workspace_id, channel_id, card_id)
+			DO UPDATE SET
+				last_message_seq = GREATEST(remote_channel_outbound_cursors.last_message_seq, EXCLUDED.last_message_seq),
+				last_comment_seq = GREATEST(remote_channel_outbound_cursors.last_comment_seq, EXCLUDED.last_comment_seq),
+				last_checkin_seq = GREATEST(remote_channel_outbound_cursors.last_checkin_seq, EXCLUDED.last_checkin_seq),
+				last_status_seq = GREATEST(remote_channel_outbound_cursors.last_status_seq, EXCLUDED.last_status_seq),
+				last_attempt_id = COALESCE(EXCLUDED.last_attempt_id, remote_channel_outbound_cursors.last_attempt_id),
+				last_attempt_status = CASE
+					WHEN EXCLUDED.last_attempt_id IS NOT NULL THEN EXCLUDED.last_attempt_status
+					ELSE remote_channel_outbound_cursors.last_attempt_status
+				END,
+				last_approval_id = COALESCE(EXCLUDED.last_approval_id, remote_channel_outbound_cursors.last_approval_id),
+				updated_at = now()
+		`, workspaceID, channelID, w.cardID, w.maxMessageSeq, w.maxCommentSeq, w.maxCheckinSeq, w.maxStatusSeq,
+			w.lastAttemptID, w.lastAttemptStatus, w.lastApprovalID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // alignCursorsOnLastActiveTakeover 在 last_active 模式下，当某个非当前主推的双向通道收到新入站消息

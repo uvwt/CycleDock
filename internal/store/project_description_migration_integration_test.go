@@ -5,20 +5,18 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
 
 func TestProjectInstructionsMigrationPreservesContent(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 	workspace, err := s.CreateWorkspace(ctx, "Project description migration")
 	if err != nil {
 		t.Fatal(err)
 	}
-	database := stdlib.OpenDB(*s.pool.Config().ConnConfig)
-	defer database.Close()
-	const migrations = "../../db/migrations"
+	database := s.pool.StdDB()
+	const migrations = "../../db/migrations/postgres"
 	defer func() {
 		if err := goose.Up(database, migrations); err != nil {
 			t.Errorf("restore latest schema: %v", err)

@@ -9,12 +9,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
 
 func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 
 	var cardTurns, turnAttempts, triggers, agentRuns *string
@@ -92,7 +91,7 @@ func TestFinalBaselineUsesOnlyTurnAttemptExecutionSchema(t *testing.T) {
 }
 
 func TestMigration000051CompositeSetNullFKsUpDownUp(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 
 	schema := "mig51_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -104,13 +103,10 @@ func TestMigration000051CompositeSetNullFKsUpDownUp(t *testing.T) {
 		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
 	})
 
-	cfg := s.pool.Config().ConnConfig.Copy()
-	cfg.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*cfg)
-	defer sqlDB.Close()
+	sqlDB := openPostgresMigrationDB(t, schema)
 
 	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations", "postgres")
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +166,7 @@ func TestMigration000051CompositeSetNullFKsUpDownUp(t *testing.T) {
 }
 
 func TestMigration000050PrimaryPushRouteUpDownUp(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 
 	schema := "mig50_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -182,13 +178,10 @@ func TestMigration000050PrimaryPushRouteUpDownUp(t *testing.T) {
 		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
 	})
 
-	cfg := s.pool.Config().ConnConfig.Copy()
-	cfg.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*cfg)
-	defer sqlDB.Close()
+	sqlDB := openPostgresMigrationDB(t, schema)
 
 	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations", "postgres")
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +222,7 @@ func TestMigration000050PrimaryPushRouteUpDownUp(t *testing.T) {
 }
 
 func TestMigration000047MarkedUnreadUpDownUp(t *testing.T) {
-	s := requireIntegration(t)
+	s := requirePostgresIntegration(t)
 	ctx := context.Background()
 
 	schema := "mig47_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -241,13 +234,10 @@ func TestMigration000047MarkedUnreadUpDownUp(t *testing.T) {
 		_, _ = s.pool.Exec(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE")
 	})
 
-	cfg := s.pool.Config().ConnConfig.Copy()
-	cfg.RuntimeParams["search_path"] = schema
-	sqlDB := stdlib.OpenDB(*cfg)
-	defer sqlDB.Close()
+	sqlDB := openPostgresMigrationDB(t, schema)
 
 	_, filename, _, _ := runtime.Caller(0)
-	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations")
+	migrations := filepath.Join(filepath.Dir(filename), "..", "..", "db", "migrations", "postgres")
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatal(err)
 	}

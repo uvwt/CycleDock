@@ -11,11 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/uvwt/CycleDock/internal/domain"
+	"github.com/uvwt/CycleDock/internal/sqldb"
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
@@ -64,14 +62,14 @@ type WorkspaceMembership struct {
 }
 
 type Service struct {
-	pool          *pgxpool.Pool
+	pool          *sqldb.DB
 	queries       *db.Queries
 	adminPassword []byte
 	sessionTTL    time.Duration
 	oidc          oidcRuntime
 }
 
-func New(pool *pgxpool.Pool, config Config) (*Service, error) {
+func New(pool *sqldb.DB, config Config) (*Service, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("%w: database pool is required", ErrInvalidConfig)
 	}
@@ -111,7 +109,7 @@ func (s *Service) EnsureSelfHostedIdentity(ctx context.Context) (Identity, error
 
 	// Self-hosted fallback 只有一个管理员身份。事务锁让多进程启动或并发首登
 	// 不会各自创建一套 Workspace / Human Source。
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('cycledock/local-admin-bootstrap'))"); err != nil {
+	if err := tx.AdvisoryLock(ctx, "cycledock/local-admin-bootstrap"); err != nil {
 		return Identity{}, fmt.Errorf("lock self-hosted identity bootstrap: %w", err)
 	}
 
@@ -127,7 +125,7 @@ func (s *Service) EnsureSelfHostedIdentity(ctx context.Context) (Identity, error
 		}
 		return identity, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return Identity{}, fmt.Errorf("load self-hosted identity: %w", err)
 	}
 
@@ -155,7 +153,7 @@ func (s *Service) EnsureSelfHostedIdentity(ctx context.Context) (Identity, error
 	// Workspace/Source 删除会级联移除成员关系，但管理员账户独立保留。
 	// 找不到完整身份时仍须复用原账户，不能再次插入唯一的本地管理员。
 	account, err := q.GetLocalAdminAccount(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		account, err = q.CreateHumanAccount(ctx, db.CreateHumanAccountParams{
 			ID:           uuid.New(),
 			DisplayName:  defaultAdminName,
@@ -209,7 +207,7 @@ func (s *Service) ensureOIDCPersonalIdentity(
 
 	// issuer + sub 是 Hosted 唯一稳定身份。只串行同一身份的首登，不阻塞其他用户。
 	lockKey := "cycledock/oidc/" + issuer + "|" + subject
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lockKey); err != nil {
+	if err := tx.AdvisoryLock(ctx, lockKey); err != nil {
 		return Identity{}, fmt.Errorf("lock OIDC identity bootstrap: %w", err)
 	}
 
@@ -238,7 +236,7 @@ func (s *Service) ensureOIDCPersonalIdentity(
 		}
 		return identityFromOIDCRow(row, displayName, email), nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sqldb.ErrNoRows) {
 		return Identity{}, fmt.Errorf("load OIDC identity: %w", err)
 	}
 
@@ -328,7 +326,7 @@ func (s *Service) createSession(ctx context.Context, identity Identity) (Session
 		WorkspaceID:    identity.WorkspaceID,
 		SourceID:       identity.SourceID,
 		TokenDigest:    digest[:],
-		ExpiresAt:      pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt:      sqldb.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
 		return Session{}, fmt.Errorf("create web session: %w", err)
 	}
@@ -341,7 +339,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Identity, err
 	}
 	digest := sha256.Sum256([]byte(token))
 	row, err := s.queries.GetWebSessionIdentity(ctx, digest[:])
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sqldb.ErrNoRows) {
 		return Identity{}, ErrUnauthorized
 	}
 	if err != nil {
@@ -433,14 +431,14 @@ func identityFromOIDCRow(row db.GetOIDCPersonalIdentityRow, displayName, email s
 	}
 }
 
-func nullableText(value string) pgtype.Text {
+func nullableText(value string) sqldb.Text {
 	if value == "" {
-		return pgtype.Text{}
+		return sqldb.Text{}
 	}
-	return pgtype.Text{String: value, Valid: true}
+	return sqldb.Text{String: value, Valid: true}
 }
 
-func textValue(value pgtype.Text) string {
+func textValue(value sqldb.Text) string {
 	if !value.Valid {
 		return ""
 	}

@@ -81,7 +81,8 @@ async function main() {
   if (!existsSync('.env.local')) throw new Error('缺少 .env.local，请先运行 make setup。')
   // 外部环境变量优先，便于临时切换端口或使用独立测试数据库。
   process.loadEnvFile('.env.local')
-  if (!process.env.DATABASE_URL) throw new Error('请在 .env.local 配置 DATABASE_URL。')
+  const isSQLite = (process.env.CYCLEDOCK_DB_DRIVER || '').toLowerCase() === 'sqlite'
+  if (!isSQLite && !process.env.DATABASE_URL) throw new Error('请在 .env.local 配置 DATABASE_URL（或设置 CYCLEDOCK_DB_DRIVER=sqlite）。')
 
   if (action === 'dev') {
     if (!existsSync('web/node_modules/.bin/vite')) {
