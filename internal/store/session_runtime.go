@@ -26,6 +26,17 @@ type CardStatusChange struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type SupersededToolApproval struct {
+	ID                uuid.UUID `json:"id"`
+	ToolName          string    `json:"tool_name"`
+	RiskLevel         string    `json:"risk_level"`
+	ScopeLabel        string    `json:"scope_label"`
+	Reason            string    `json:"reason"`
+	ResolutionComment string    `json:"resolution_comment"`
+	CreatedAt         time.Time `json:"created_at"`
+	ResolvedAt        time.Time `json:"resolved_at"`
+}
+
 type AgentCardContext struct {
 	DeviceNodeID          string
 	DeviceName            string
@@ -67,6 +78,10 @@ type AgentCardContext struct {
 	// StatusChanges 记录自上一轮已执行 Turn/Attempt 以来卡片发生的外部状态变更（例如用户由 review 移回 working）。
 	// 供 Agent Runner 在下次发消息时隐式注入模型上下文，聊天前端不产生可见气泡。
 	StatusChanges []CardStatusChange
+
+	// SupersededToolApprovals 记录自上一轮已执行 Turn/Attempt 以来被自动作废（superseded）的旧工具审批。
+	// 供 Agent Runner 在本轮输入中静默告知模型，避免模型仍以为旧审批卡片处于待点击确认状态。
+	SupersededToolApprovals []SupersededToolApproval
 }
 
 // LoadAgentCardContext returns only business/runtime metadata. Conversation
@@ -207,6 +222,14 @@ func (s *Store) LoadAgentCardContext(
 		return AgentCardContext{}, fmt.Errorf("load status changes: %w", err)
 	}
 	out.StatusChanges = changes
+
+	supersededApprovals, err := s.loadSupersededToolApprovalsSinceLastExecutedTurn(
+		ctx, out.WorkspaceID, out.CardID, out.TurnID, out.TurnSequence, out.TurnCreatedAt,
+	)
+	if err != nil {
+		return AgentCardContext{}, fmt.Errorf("load superseded tool approvals: %w", err)
+	}
+	out.SupersededToolApprovals = supersededApprovals
 	return out, nil
 }
 
@@ -334,6 +357,143 @@ func (s *Store) loadStatusChangesSinceLastExecutedTurn(
 		return nil, err
 	}
 	return changes, nil
+}
+
+// loadSupersededToolApprovalsSinceLastExecutedTurn 查询自上一次已执行 Turn/Attempt 以来、
+// 到当前 Turn 首次进入执行前被自动作废（status = 'superseded'）的工具审批记录。
+//
+// 边界设计说明：
+//  1. 统一以数据库时钟生成的 turn_attempts.created_at（attempt_number = 1）与 card_turns.created_at
+//     的较大值作为每轮的快照截止点 B(T)，与 card_tool_approvals.resolved_at（同样由数据库 now() 写入）
+//     保持时钟同源，避免 Go 应用时钟或测试模拟时钟偏移导致漏捞。
+//  2. 上下界按 B(prevTurn) 与 B(curTurn) 严格衔接，保证多次技术重试（Attempt #2+）看到完全一致的快照，
+//     同时后续更晚的 Turn 不会重复注入已告知过的失效审批。
+//  3. SQLite 默认时间戳精度为毫秒，极快连续事务中前序 Turn 产生的审批可能与 B(prevTurn) 落在同一毫秒；
+//     因此对明确归属于 prevTurn 的审批放宽到 resolved_at >= B(prevTurn)，而更早 Turn 的审批仅接受
+//     resolved_at > B(prevTurn)，兼顾防漏与防重。
+func (s *Store) loadSupersededToolApprovalsSinceLastExecutedTurn(
+	ctx context.Context,
+	workspaceID, cardID, turnID uuid.UUID,
+	turnSequence int64,
+	turnCreatedAt time.Time,
+) ([]SupersededToolApproval, error) {
+	// 1. 查找在当前 Turn 之前真正执行过的最近一次前序 Turn 及其首个 Attempt 的基准时间。
+	var prevTurnID uuid.UUID
+	var prevTurnCreatedAt sqldb.Timestamptz
+	var prevFirstAttemptCreatedAt sqldb.Timestamptz
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			t_prev.id,
+			t_prev.created_at,
+			(
+				SELECT a1.created_at
+				FROM turn_attempts a1
+				WHERE a1.workspace_id = t_prev.workspace_id
+				  AND a1.card_id = t_prev.card_id
+				  AND a1.turn_id = t_prev.id
+				  AND a1.attempt_number = 1
+				LIMIT 1
+			)
+		FROM turn_attempts a_prev
+		JOIN card_turns t_prev
+		  ON t_prev.workspace_id = a_prev.workspace_id
+		 AND t_prev.card_id = a_prev.card_id
+		 AND t_prev.id = a_prev.turn_id
+		WHERE a_prev.workspace_id = $1
+		  AND a_prev.card_id = $2
+		  AND t_prev.sequence < $3
+		  AND a_prev.started_at IS NOT NULL
+		ORDER BY t_prev.sequence DESC, a_prev.attempt_number DESC
+		LIMIT 1
+	`, workspaceID, cardID, turnSequence).Scan(&prevTurnID, &prevTurnCreatedAt, &prevFirstAttemptCreatedAt)
+	if errors.Is(err, sqldb.ErrNoRows) {
+		// 卡片首次执行，前序尚无执行过的 Turn/Attempt，无需生成增量失效审批提示。
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	prevBoundary := prevTurnCreatedAt.Time
+	if prevFirstAttemptCreatedAt.Valid && prevFirstAttemptCreatedAt.Time.After(prevBoundary) {
+		prevBoundary = prevFirstAttemptCreatedAt.Time
+	}
+
+	// 2. 计算当前 Turn 的快照截止时间，锚定在 attempt_number = 1 的创建时间与 Turn 创建时间中的较大值。
+	var curFirstAttemptCreatedAt sqldb.Timestamptz
+	err = s.pool.QueryRow(ctx, `
+		SELECT created_at
+		FROM turn_attempts
+		WHERE workspace_id = $1
+		  AND card_id = $2
+		  AND turn_id = $3
+		  AND attempt_number = 1
+		LIMIT 1
+	`, workspaceID, cardID, turnID).Scan(&curFirstAttemptCreatedAt)
+	if err != nil && !errors.Is(err, sqldb.ErrNoRows) {
+		return nil, err
+	}
+
+	curBoundary := turnCreatedAt
+	if curFirstAttemptCreatedAt.Valid && (curBoundary.IsZero() || curFirstAttemptCreatedAt.Time.After(curBoundary)) {
+		curBoundary = curFirstAttemptCreatedAt.Time
+	}
+	if curBoundary.IsZero() {
+		curBoundary = time.Now().UTC()
+	}
+
+	// 3. 增量加载本轮窗口内被自动作废的工具审批，按作废时间、创建时间、ID 稳定排序。
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			a.id,
+			a.tool_name,
+			a.risk_level,
+			a.scope_label,
+			a.reason,
+			a.resolution_comment,
+			a.created_at,
+			a.resolved_at
+		FROM card_tool_approvals a
+		WHERE a.workspace_id = $1
+		  AND a.card_id = $2
+		  AND a.status = 'superseded'
+		  AND a.resolved_at IS NOT NULL
+		  AND a.resolved_at <= $3
+		  AND (
+			a.resolved_at > $4
+			OR (a.turn_id = $5 AND a.resolved_at >= $4)
+		  )
+		ORDER BY a.resolved_at ASC, a.created_at ASC, a.id ASC
+	`, workspaceID, cardID, curBoundary, prevBoundary, prevTurnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var approvals []SupersededToolApproval
+	for rows.Next() {
+		var item SupersededToolApproval
+		var createdAt, resolvedAt sqldb.Timestamptz
+		if err := rows.Scan(
+			&item.ID,
+			&item.ToolName,
+			&item.RiskLevel,
+			&item.ScopeLabel,
+			&item.Reason,
+			&item.ResolutionComment,
+			&createdAt,
+			&resolvedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = createdAt.Time
+		item.ResolvedAt = resolvedAt.Time
+		approvals = append(approvals, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return approvals, nil
 }
 
 type AttemptProgressParams struct {
