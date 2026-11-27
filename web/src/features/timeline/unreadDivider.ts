@@ -219,3 +219,24 @@ export function resolveUnreadDividerPlacement<TRow extends TimelineRowLike>(
     unreadCount,
   };
 }
+
+/**
+ * 判断处于停留态（已完成首次进入初始化）的卡片是否需要再次触发自动已读。
+ *
+ * 关键不变量：
+ * 1. 同一消息水位线（effectiveLatestSequence <= lastMarkedSequence）绝不重复发送 POST /read：
+ *    即使列表缓存 / 详情接口返回了尚未刷新的旧 unread: true，也不应触发二次或多次请求；
+ * 2. 只有首次进入尚未标过（lastMarkedSequence < 0，例如进入时处于后台隐藏或刚被手动标未读抑制）
+ *    或者可见消息序号严格推进（effectiveLatestSequence > lastMarkedSequence）时，才再次标已读。
+ */
+export function shouldTriggerStayAutoRead(params: {
+  lastMarkedSequence: number;
+  effectiveLatestSequence: number;
+  suppressed: boolean;
+}): boolean {
+  const { lastMarkedSequence, effectiveLatestSequence, suppressed } = params;
+  if (suppressed) {
+    return false;
+  }
+  return lastMarkedSequence < 0 || effectiveLatestSequence > lastMarkedSequence;
+}

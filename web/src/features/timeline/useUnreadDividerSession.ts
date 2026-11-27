@@ -9,6 +9,7 @@ import {
   mergeCardReadSnapshots,
   resolveIncomingUnreadDividerAnchor,
   resolveInitialUnreadDividerAnchor,
+  shouldTriggerStayAutoRead,
 } from "./unreadDivider";
 
 interface UseUnreadDividerSessionOptions {
@@ -95,14 +96,28 @@ export function useUnreadDividerSession({
   );
 
   const markCurrentCardRead = useCallback(
-    (targetCardID?: string, targetProjectID?: string) => {
+    (targetCardID?: string, targetProjectID?: string, markedSequence?: number) => {
       const resolvedCardID = targetCardID || cardID;
       const resolvedProjectID = targetProjectID || projectID;
       if (!resolvedCardID) return;
+      if (
+        typeof markedSequence === "number" &&
+        Number.isFinite(markedSequence) &&
+        resolvedCardID === cardID &&
+        markedSequence > lastMarkedSeqRef.current
+      ) {
+        lastMarkedSeqRef.current = markedSequence;
+      }
 
       void api
         .markCardRead(resolvedCardID)
         .then((result) => {
+          if (
+            resolvedCardID === cardID &&
+            result.last_read_message_sequence > lastMarkedSeqRef.current
+          ) {
+            lastMarkedSeqRef.current = result.last_read_message_sequence;
+          }
           patchCachedCard(queryClient, resolvedCardID, resolvedProjectID || undefined, {
             last_read_message_sequence: result.last_read_message_sequence,
             unread: false,
@@ -188,7 +203,7 @@ export function useUnreadDividerSession({
         )
       ) {
         lastMarkedSeqRef.current = effectiveLatestSeq;
-        markCurrentCardRead(cardID, effectiveProjectID);
+        markCurrentCardRead(cardID, effectiveProjectID, effectiveLatestSeq);
       }
       return;
     }
@@ -232,22 +247,19 @@ export function useUnreadDividerSession({
       lastSeenMessageSeqRef.current = effectiveLatestSeq;
     }
 
-    if (
-      activeCardAutoReadSuppression.shouldSuppressAutoRead(
-        cardID,
-        effectiveLatestSeq,
-      )
-    ) {
-      return;
-    }
-
-    const needsMarkRead =
-      effectiveLatestSeq > lastMarkedSeqRef.current ||
-      Boolean(snapshot?.unread && !snapshot?.marked_unread);
+    const suppressed = activeCardAutoReadSuppression.shouldSuppressAutoRead(
+      cardID,
+      effectiveLatestSeq,
+    );
+    const needsMarkRead = shouldTriggerStayAutoRead({
+      lastMarkedSequence: lastMarkedSeqRef.current,
+      effectiveLatestSequence: effectiveLatestSeq,
+      suppressed,
+    });
 
     if (needsMarkRead) {
       lastMarkedSeqRef.current = effectiveLatestSeq;
-      markCurrentCardRead(cardID, effectiveProjectID);
+      markCurrentCardRead(cardID, effectiveProjectID, effectiveLatestSeq);
     }
   }, [
     active,

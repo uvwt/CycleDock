@@ -6,6 +6,7 @@ import {
   resolveIncomingUnreadDividerAnchor,
   resolveInitialUnreadDividerAnchor,
   resolveUnreadDividerPlacement,
+  shouldTriggerStayAutoRead,
 } from "../src/features/timeline/unreadDivider.ts";
 
 function makeEvent(overrides = {}) {
@@ -211,4 +212,60 @@ test("合并单卡详情与列表缓存时优先保留更新的未读快照", ()
   assert.equal(merged?.unread, true);
   assert.equal(merged?.latest_message_sequence, 5);
   assert.equal(merged?.last_read_message_sequence, 3);
+});
+
+test("停留期间自动已读防重入：同一消息序号不重复发 POST /read，新消息到达或后台首读后再推进", () => {
+  // 首次进入已以 seq=2 发过一次 POST /read：后续缓存刷新或详情重渲染（即使旧 fixture 仍带 unread: true）都不得重复发
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: 2,
+      effectiveLatestSequence: 2,
+      suppressed: false,
+    }),
+    false,
+  );
+  // 即使是空时间线（seq=0）首次已标记过，也不得重复触发
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: 0,
+      effectiveLatestSequence: 0,
+      suppressed: false,
+    }),
+    false,
+  );
+  // 进入时处于后台隐藏未发送过（lastMarkedSequence = -1），切回前台后补发一次
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: -1,
+      effectiveLatestSequence: 2,
+      suppressed: false,
+    }),
+    true,
+  );
+  // 停留期间来了新消息（seq 推进到 3），再次触发已读推进
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: 2,
+      effectiveLatestSequence: 3,
+      suppressed: false,
+    }),
+    true,
+  );
+  // 手动标未读处于抑制状态时，一律不自动触发
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: -1,
+      effectiveLatestSequence: 2,
+      suppressed: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldTriggerStayAutoRead({
+      lastMarkedSequence: 2,
+      effectiveLatestSequence: 3,
+      suppressed: true,
+    }),
+    false,
+  );
 });

@@ -134,6 +134,33 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 		t.Fatalf("unexpected detail read contract: detail=%+v summary=%+v", detail.Card, afterReply)
 	}
 	if kind == domain.CardKindDiscussion {
+		mainCardCreated, _, err := dataStore.EnsureMainDiscussion(ctx, workspaceID, project.ID, humanSourceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 给主讨论写入一条 Agent 回复，确保 GET /main-discussion 返回真实未读水位线。
+		if _, err := dataStore.SubmitSessionComment(ctx, store.SubmitSessionCommentParams{
+			WorkspaceID: workspaceID, CardID: mainCardCreated.ID, AuthorSourceID: humanSourceID,
+			Content: "主讨论启动检查", IdempotencyKey: "main-read-self-1",
+			DispatchMode: domain.DispatchModeEnqueue,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		mainClaim, err := dataStore.ClaimCardTurnAttempt(
+			ctx, workspaceID, mainCardCreated.ID, agent.ID, time.Now().UTC(), time.Minute,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+			WorkspaceID: workspaceID, CardID: mainCardCreated.ID, AttemptID: mainClaim.Attempt.ID,
+			RunnerSourceID: agent.ID, IdempotencyKey: "main-read-reply-1",
+			Message:     store.ReplyMessage{Type: "text", Content: "主讨论新回复", EndTurn: true},
+			FinishOnEnd: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
 		mainRec := doJSON(t, handler, http.MethodGet,
 			"/api/v1/projects/"+project.ID.String()+"/main-discussion", nil, cookie, nil)
 		if mainRec.Code != http.StatusOK {
@@ -141,8 +168,11 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 		}
 		var mainCard cardResponse
 		decodeRecorder(t, mainRec, &mainCard)
-		if mainCard.Unread == nil || mainCard.LatestMessageSequence == nil || mainCard.LastReadMessageSequence == nil {
-			t.Fatalf("main discussion omitted read state: %+v", mainCard)
+		if mainCard.ID != mainCardCreated.ID.String() ||
+			mainCard.Unread == nil || !*mainCard.Unread ||
+			mainCard.LatestMessageSequence == nil || mainCard.LastReadMessageSequence == nil ||
+			*mainCard.LatestMessageSequence <= *mainCard.LastReadMessageSequence {
+			t.Fatalf("main discussion unexpected read state: %+v", mainCard)
 		}
 	}
 
