@@ -144,32 +144,67 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 		"code_challenge_method": {"S256"},
 		"resource":              {publicURL + "/mcp"},
 	}
-	consentResponse, err := browser.Get(publicURL + "/oauth/authorize?" + authorizeValues.Encode())
+	authorizeResponse, err := browser.Get(publicURL + "/oauth/authorize?" + authorizeValues.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if consentResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(consentResponse.Body)
-		t.Fatalf("consent status=%d body=%s", consentResponse.StatusCode, body)
+	if authorizeResponse.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(authorizeResponse.Body)
+		t.Fatalf("authorize redirect status=%d body=%s", authorizeResponse.StatusCode, body)
 	}
-	_ = consentResponse.Body.Close()
+	consentLocation, err := url.Parse(authorizeResponse.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = authorizeResponse.Body.Close()
+	if consentLocation.Path != "/oauth/consent" || consentLocation.Query().Get("client_id") != registration.ClientID {
+		t.Fatalf("expected 302 to /oauth/consent, got %s", consentLocation.String())
+	}
 
-	authorizeValues.Set("decision", "approve")
+	consentAPIResponse, err := browser.Get(publicURL + "/api/v1/oauth/consent?" + consentLocation.RawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consentAPIResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(consentAPIResponse.Body)
+		t.Fatalf("GET /api/v1/oauth/consent status=%d body=%s", consentAPIResponse.StatusCode, body)
+	}
+	var consentInfo oauthConsentResponse
+	decodeHTTPBody(t, consentAPIResponse, &consentInfo)
+	if consentInfo.ClientID != registration.ClientID ||
+		consentInfo.ClientName != registration.ClientName ||
+		consentInfo.RedirectURI != callbackURL ||
+		consentInfo.WorkspaceName == "" {
+		t.Fatalf("unexpected consent info: %+v", consentInfo)
+	}
+
+	approvePayload, _ := json.Marshal(oauthConsentSubmitRequest{
+		ResponseType:        "code",
+		ClientID:            registration.ClientID,
+		RedirectURI:         callbackURL,
+		Scope:               consentInfo.Scope,
+		State:               state,
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Resource:            consentInfo.Resource,
+		Decision:            "approve",
+	})
 	approveRequest, _ := http.NewRequestWithContext(
-		ctx, http.MethodPost, publicURL+"/oauth/authorize",
-		strings.NewReader(authorizeValues.Encode()),
+		ctx, http.MethodPost, publicURL+"/api/v1/oauth/consent",
+		bytes.NewReader(approvePayload),
 	)
-	approveRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	approveRequest.Header.Set("Content-Type", "application/json")
 	approveResponse, err := browser.Do(approveRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer approveResponse.Body.Close()
-	if approveResponse.StatusCode != http.StatusFound {
+	if approveResponse.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(approveResponse.Body)
-		t.Fatalf("approve status=%d body=%s", approveResponse.StatusCode, body)
+		t.Fatalf("POST /api/v1/oauth/consent status=%d body=%s", approveResponse.StatusCode, body)
 	}
-	redirect, err := url.Parse(approveResponse.Header.Get("Location"))
+	var consentResult oauthConsentSubmitResponse
+	decodeHTTPBody(t, approveResponse, &consentResult)
+	redirect, err := url.Parse(consentResult.RedirectTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,6 +551,277 @@ func TestOAuthHTTPToOfficialMCPClientEndToEnd(t *testing.T) {
 	}
 	if !crossTenant.IsError {
 		t.Fatalf("OAuth Workspace token read another Workspace card: %+v", crossTenant.StructuredContent)
+	}
+}
+
+func TestOAuthSPAConsentFlowAndProtocolCompatibility(t *testing.T) {
+	_, pool, dataStore := newHTTPIntegration(t)
+	humanAuth, err := auth.New(pool, auth.Config{AdminPassword: httpIntegrationPassword})
+	if err != nil {
+		t.Fatalf("create human auth: %v", err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	publicURL := "http://" + listener.Addr().String()
+
+	oauthService, err := cycledockoauth.New(pool, cycledockoauth.Config{PublicURL: publicURL})
+	if err != nil {
+		t.Fatalf("create oauth service: %v", err)
+	}
+	handler := NewRouter(pool, dataStore, humanAuth, Config{OAuth: oauthService})
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 1. Metadata 需声明 resource_indicators_supported=true。
+	metaResp, err := http.Get(publicURL + "/.well-known/oauth-authorization-server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authMeta oauthAuthorizationServerMetadataResponse
+	decodeHTTPBody(t, metaResp, &authMeta)
+	if !authMeta.ResourceIndicatorsSupported {
+		t.Fatalf("expected resource_indicators_supported=true, got %+v", authMeta)
+	}
+
+	// 2. DCR 仅传 authorization_code 且省略 client_name、附带 RFC 7591 扩展字段也能注册成功。
+	callbackURL := "http://127.0.0.1:65533/callback"
+	dcrPayload, _ := json.Marshal(map[string]any{
+		"redirect_uris":              []string{callbackURL},
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code"},
+		"response_types":             []string{"code"},
+		"software_id":                "chatgpt-mcp-connector",
+	})
+	dcrReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/oauth/register", bytes.NewReader(dcrPayload))
+	dcrReq.Header.Set("Content-Type", "application/json")
+	dcrResp, err := http.DefaultClient.Do(dcrReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dcrResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(dcrResp.Body)
+		t.Fatalf("DCR compat status=%d body=%s", dcrResp.StatusCode, body)
+	}
+	var registration oauthClientRegistrationResponse
+	decodeHTTPBody(t, dcrResp, &registration)
+	if registration.ClientName == "" || len(registration.GrantTypes) != 1 || registration.GrantTypes[0] != "authorization_code" {
+		t.Fatalf("unexpected DCR compat registration: %+v", registration)
+	}
+
+	jar, _ := cookiejar.New(nil)
+	browser := &http.Client{
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	// 3. 不可信 redirect_uri 绝不开放重定向，只落在 /oauth/consent?error=invalid_request。
+	untrustedResp, err := browser.Get(publicURL + "/oauth/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {registration.ClientID},
+		"redirect_uri":          {"https://evil.example/cb"},
+		"code_challenge":        {strings.Repeat("a", 43)},
+		"code_challenge_method": {"S256"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = untrustedResp.Body.Close()
+	if untrustedResp.StatusCode != http.StatusFound || untrustedResp.Header.Get("Location") != "/oauth/consent?error=invalid_request" {
+		t.Fatalf("untrusted redirect status=%d location=%q", untrustedResp.StatusCode, untrustedResp.Header.Get("Location"))
+	}
+
+	// 4. 可信 client + redirect_uri 但 scope 非法时，按 RFC 6749 重定向回客户端携带 error=invalid_scope。
+	verifier := strings.Repeat("f", 64)
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	badScopeResp, err := browser.Get(publicURL + "/oauth/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {registration.ClientID},
+		"redirect_uri":          {callbackURL},
+		"scope":                 {"openid super:admin"},
+		"state":                 {"st-bad-scope"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = badScopeResp.Body.Close()
+	badScopeLoc, err := url.Parse(badScopeResp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if badScopeResp.StatusCode != http.StatusFound ||
+		badScopeLoc.Scheme+"://"+badScopeLoc.Host+badScopeLoc.Path != callbackURL ||
+		badScopeLoc.Query().Get("error") != "invalid_scope" ||
+		badScopeLoc.Query().Get("state") != "st-bad-scope" {
+		t.Fatalf("bad scope redirect status=%d location=%q", badScopeResp.StatusCode, badScopeLoc.String())
+	}
+
+	// 5. 未登录时 GET /oauth/authorize 应归一化参数并 302 跳转到 /?return_to=/oauth/consent?...
+	compatAuthorize := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {registration.ClientID},
+		"redirect_uri":          {callbackURL},
+		"scope":                 {"openid email"},
+		"state":                 {"st-compat"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		// 故意省略 resource 验证缺省归一化。
+	}
+	unauthResp, err := browser.Get(publicURL + "/oauth/authorize?" + compatAuthorize.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusFound {
+		t.Fatalf("unauth authorize status=%d", unauthResp.StatusCode)
+	}
+	loginLoc, err := url.Parse(unauthResp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	returnTo := loginLoc.Query().Get("return_to")
+	returnToURL, err := url.Parse(returnTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginLoc.Path != "/" || returnToURL.Path != "/oauth/consent" ||
+		returnToURL.Query().Get("scope") != cycledockoauth.ScopeMCP ||
+		returnToURL.Query().Get("resource") != publicURL+"/mcp" {
+		t.Fatalf("unexpected login return_to=%q", returnTo)
+	}
+
+	// 登录人类会话。
+	loginBody := []byte(`{"password":"` + httpIntegrationPassword + `"}`)
+	loginReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/api/v1/auth/login", bytes.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := browser.Do(loginReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login status=%d", loginResp.StatusCode)
+	}
+
+	// 6. 拒绝授权返回带 error=access_denied 的 redirect_to。
+	denyPayload, _ := json.Marshal(oauthConsentSubmitRequest{
+		ResponseType:        "code",
+		ClientID:            registration.ClientID,
+		RedirectURI:         callbackURL,
+		Scope:               "openid email",
+		State:               "st-deny",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Resource:            publicURL + "/mcp/",
+		Decision:            "deny",
+	})
+	denyReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/api/v1/oauth/consent", bytes.NewReader(denyPayload))
+	denyReq.Header.Set("Content-Type", "application/json")
+	denyResp, err := browser.Do(denyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denyResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(denyResp.Body)
+		t.Fatalf("deny status=%d body=%s", denyResp.StatusCode, body)
+	}
+	var denyResult oauthConsentSubmitResponse
+	decodeHTTPBody(t, denyResp, &denyResult)
+	denyTarget, _ := url.Parse(denyResult.RedirectTo)
+	if denyTarget.Query().Get("error") != "access_denied" || denyTarget.Query().Get("state") != "st-deny" {
+		t.Fatalf("unexpected deny redirect_to=%q", denyResult.RedirectTo)
+	}
+
+	// 7. 批准授权（使用 allow 别名 + 省略 resource），再用省略 resource 的 /oauth/token 换取 token。
+	allowPayload, _ := json.Marshal(oauthConsentSubmitRequest{
+		ResponseType:        "code",
+		ClientID:            registration.ClientID,
+		RedirectURI:         callbackURL,
+		Scope:               "openid email",
+		State:               "st-allow",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Decision:            "allow",
+	})
+	allowReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/api/v1/oauth/consent", bytes.NewReader(allowPayload))
+	allowReq.Header.Set("Content-Type", "application/json")
+	allowResp, err := browser.Do(allowReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(allowResp.Body)
+		t.Fatalf("allow status=%d body=%s", allowResp.StatusCode, body)
+	}
+	var allowResult oauthConsentSubmitResponse
+	decodeHTTPBody(t, allowResp, &allowResult)
+	allowTarget, _ := url.Parse(allowResult.RedirectTo)
+	code := allowTarget.Query().Get("code")
+	if code == "" || allowTarget.Query().Get("state") != "st-allow" {
+		t.Fatalf("unexpected allow redirect_to=%q", allowResult.RedirectTo)
+	}
+
+	tokenValues := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {registration.ClientID},
+		"redirect_uri":  {callbackURL},
+		"code_verifier": {verifier},
+		// 故意省略 resource 验证 Google / 部分 MCP 客户端兼容。
+	}
+	tokenReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/oauth/token", strings.NewReader(tokenValues.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tokenResp.Body)
+		t.Fatalf("token without resource status=%d body=%s", tokenResp.StatusCode, body)
+	}
+	var tokens oauthTokenResponse
+	decodeHTTPBody(t, tokenResp, &tokens)
+	if tokens.AccessToken == "" || tokens.Scope != cycledockoauth.ScopeMCP {
+		t.Fatalf("unexpected compat tokens: %+v", tokens)
+	}
+
+	// 8. 兼容旧 POST /oauth/authorize 提交：响应不应带 form-action 限制，且能正常签发 code。
+	legacyForm := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {registration.ClientID},
+		"redirect_uri":          {callbackURL},
+		"scope":                 {cycledockoauth.ScopeMCP},
+		"state":                 {"st-legacy"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"resource":              {publicURL + "/mcp/"},
+		"decision":              {"approve"},
+	}
+	legacyReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/oauth/authorize", strings.NewReader(legacyForm.Encode()))
+	legacyReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	legacyResp, err := browser.Do(legacyReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = legacyResp.Body.Close()
+	if legacyResp.StatusCode != http.StatusFound {
+		t.Fatalf("legacy POST /oauth/authorize status=%d", legacyResp.StatusCode)
+	}
+	if strings.Contains(legacyResp.Header.Get("Content-Security-Policy"), "form-action") {
+		t.Fatalf("legacy POST /oauth/authorize should omit form-action CSP, got %q", legacyResp.Header.Get("Content-Security-Policy"))
 	}
 }
 

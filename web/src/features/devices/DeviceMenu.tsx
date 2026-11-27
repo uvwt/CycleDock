@@ -1,5 +1,5 @@
 import { useDeviceSelection } from "./device-selection";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -28,10 +28,15 @@ export function DeviceMenu({ className }: { className?: string } = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const forceRefreshRef = useRef(false);
   const me = useQuery({ queryKey: keys.me, queryFn: api.me });
   const devices = useQuery({
     queryKey: keys.nexusDevices(me.data?.workspace.id || ""),
-    queryFn: api.nexusDevices,
+    queryFn: () => {
+      const refresh = forceRefreshRef.current;
+      forceRefreshRef.current = false;
+      return api.nexusDevices(refresh);
+    },
     enabled: Boolean(me.data?.workspace.id),
     staleTime: 15_000,
     retry: false,
@@ -212,6 +217,8 @@ export function DeviceMenu({ className }: { className?: string } = {}) {
           disabled={devices.isFetching}
           onSelect={(event) => {
             event.preventDefault();
+            // 用户主动点击刷新时穿透后端 15 秒短缓存，立即拉取最新在线状态。
+            forceRefreshRef.current = true;
             void devices.refetch();
           }}
           className="cursor-pointer rounded-lg px-2.5 py-2 text-xs"

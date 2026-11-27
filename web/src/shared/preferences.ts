@@ -950,6 +950,43 @@ const en = {
   "已完成 {{succeeded}} 张卡片，{{failed}} 张失败":
     "Completed {{succeeded}} cards, {{failed}} failed",
   "批量验收失败（{{failed}} 张）": "Batch accept failed ({{failed}})",
+  查看原消息: "View original",
+  点击查看原消息: "Click to view original message",
+  取消引用: "Cancel quote",
+  "引用自 {{sender}}，点击查看原消息":
+    "Quoted from {{sender}}, click to view original message",
+  "引用自 {{sender}}，点击查看完整引用":
+    "Quoted from {{sender}}, click to view full quote",
+  "正在加载授权页…": "Loading authorization page…",
+  授权访问工作空间: "Authorize MCP access",
+  "无法完成本次授权请求。": "Unable to complete this authorization request.",
+  "OAuth 授权服务暂时不可用，请稍后回到客户端重试。":
+    "OAuth authorization is temporarily unavailable. Return to the client and try again.",
+  "授权请求无效或已失效，请回到客户端重新发起授权。":
+    "This authorization request is invalid or expired. Return to the client and start again.",
+  "授权参数不完整，请回到客户端重新发起授权。":
+    "Missing authorization parameters. Return to the client and start again.",
+  返回工作台: "Back to workspace",
+  "未命名 MCP 客户端": "Unnamed MCP client",
+  "请确认是否允许该外部客户端通过 MCP 接入你的 CycleDock 工作空间。":
+    "Confirm whether to allow this external client to connect to your CycleDock workspace via MCP.",
+  请求客户端: "Client",
+  目标工作空间: "Workspace",
+  授权回调地址: "Redirect URI",
+  "独立的 OAuth Client Source": "Dedicated OAuth Client Source",
+  "为该客户端分配独立身份标识，可在设置中随时查看或撤销授权。":
+    "Assigns an isolated client identity that you can audit or revoke anytime in settings.",
+  "通过 MCP 读取和更新工作": "Read and update work via MCP",
+  "可读取项目与卡片上下文，并提交进度回复、巡检结论与待验收确认。":
+    "Can read project and card context, post replies, record check-ins, and confirm work for review.",
+  人工验收边界受保护: "Human review boundary enforced",
+  "不可代替人类完成 Review → Done 最终验收。":
+    "Cannot complete final Review → Done approval on behalf of a human.",
+  授权: "Authorize",
+  "正在授权…": "Authorizing…",
+  "正在处理…": "Processing…",
+  "授权后可随时在 CycleDock 设置 → AI 客户端中撤销访问权限。":
+    "You can revoke access anytime in CycleDock Settings → AI Clients.",
 } as const;
 
 void i18n.use(initReactI18next).init({

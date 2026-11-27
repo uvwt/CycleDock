@@ -1,6 +1,14 @@
 export const MAX_QUOTE_TEXT_LENGTH = 1000;
 export const MAX_QUOTE_SENDER_LENGTH = 100;
 export const MAX_QUOTE_PREVIEW_LENGTH = 140;
+export const MAX_INLINE_QUOTE_BODY_LENGTH = 120;
+
+export interface InlineQuoteEligibilityOptions {
+  hasPrefix?: boolean;
+  hasAttachments?: boolean;
+  hasImages?: boolean;
+  maxLength?: number;
+}
 
 export interface TextSelectionAnchor {
   startContainer: Node | null;
@@ -140,5 +148,117 @@ export function computeSelectionPopoverPosition(
     top: Math.min(bottomCandidate, maxTop),
     left,
     placement: "bottom",
+  };
+}
+
+const INLINE_BLOCK_MARKDOWN_PATTERNS = [
+  // 围栏代码块（行首或行内出现三反引号/三波浪线）
+  /(?:^|\s)(?:`{3,}|~{3,})/,
+  // ATX 标题
+  /^#{1,6}(?:\s|$)/,
+  // Markdown 引用块
+  /^>\s?/,
+  // 无序列表 / 任务列表
+  /^[-*+]\s+/,
+  // 有序列表
+  /^\d{1,9}[.)]\s+/,
+  // 分隔线
+  /^(?:[-*_]\s*){3,}$/,
+  // 表格行
+  /^\|.*\|$/,
+  // Markdown 图片
+  /!\[[^\]]*\]\([^)]+\)/,
+];
+
+const INLINE_CARD_LINK_PATTERNS = [
+  /cycledock:\/\/card\//i,
+  /\[card:[^\]]+\]/i,
+  /(?:^|\s)card:[0-9a-fA-F-]{6,}\b/i,
+  /\[[^\]]*\]\((?:https?:\/\/[^)\s]+)?\/(?:cards|chat)\/[^)\s]+\)/i,
+];
+
+/**
+ * 判断一条带引用的消息正文是否适合与轻引用片段排在同一行内：
+ * 仅当正文为单行简单短句，且不含块级 Markdown、卡片链接、图片、附件或 finding/result 前缀时允许行内混排；
+ * 其余复杂内容自动将轻引用放在正文上方独立一行，避免破坏正文排版。
+ */
+export function canRenderInlineQuote(
+  body: string,
+  options: InlineQuoteEligibilityOptions = {},
+): boolean {
+  if (options.hasPrefix || options.hasAttachments || options.hasImages) {
+    return false;
+  }
+  const trimmed = body.trim();
+  if (!trimmed) return false;
+  if (/\r|\n/.test(trimmed)) return false;
+
+  const maxLength = options.maxLength ?? MAX_INLINE_QUOTE_BODY_LENGTH;
+  if (Array.from(trimmed).length > maxLength) {
+    return false;
+  }
+
+  for (const pattern of INLINE_BLOCK_MARKDOWN_PATTERNS) {
+    if (pattern.test(trimmed)) return false;
+  }
+  for (const pattern of INLINE_CARD_LINK_PATTERNS) {
+    if (pattern.test(trimmed)) return false;
+  }
+  return true;
+}
+
+/**
+ * 计算气泡轻引用完整预览浮层的 fixed 坐标：
+ * - 优先贴在引用片段正上方；顶部空间不足时自动翻转到下方（按可用空间择优）；
+ * - 左右严格夹紧在视口安全边距内，防止气泡靠边或窄屏下裁切溢出。
+ * 返回的 left/top 为浮层左上角像素坐标。
+ */
+export function computeQuotePopoverPosition(
+  triggerRect: SelectionPopoverBounds,
+  viewport: { width: number; height: number },
+  popoverSize: { width: number; height: number },
+  gap = 8,
+  edgePadding = 12,
+): PopoverPlacement {
+  const maxLeft = Math.max(
+    edgePadding,
+    viewport.width - edgePadding - popoverSize.width,
+  );
+  const rawLeft =
+    triggerRect.left + triggerRect.width / 2 - popoverSize.width / 2;
+  const left = Math.round(Math.min(Math.max(rawLeft, edgePadding), maxLeft));
+
+  const topCandidate = triggerRect.top - popoverSize.height - gap;
+  if (topCandidate >= edgePadding) {
+    return { top: Math.round(topCandidate), left, placement: "top" };
+  }
+
+  const bottomCandidate = triggerRect.top + triggerRect.height + gap;
+  const maxTop = Math.max(
+    edgePadding,
+    viewport.height - popoverSize.height - edgePadding,
+  );
+  const spaceAbove = triggerRect.top - edgePadding - gap;
+  const spaceBelow =
+    viewport.height -
+    (triggerRect.top + triggerRect.height) -
+    edgePadding -
+    gap;
+
+  if (
+    bottomCandidate + popoverSize.height <= viewport.height - edgePadding ||
+    spaceBelow >= spaceAbove
+  ) {
+    return {
+      top: Math.round(Math.min(Math.max(bottomCandidate, edgePadding), maxTop)),
+      left,
+      placement: "bottom",
+    };
+  }
+
+  return {
+    top: Math.round(edgePadding),
+    left,
+    placement: "top",
   };
 }

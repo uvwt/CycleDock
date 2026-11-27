@@ -12,6 +12,10 @@ import type {
   GrokStart,
   Identity,
   LoginMethods,
+  OAuthConsentDecisionInput,
+  OAuthConsentDecisionResult,
+  OAuthConsentInfo,
+  OAuthConsentParams,
   MCPConnection,
   MCPInput,
   ModelAuth,
@@ -111,6 +115,15 @@ export const api = {
   login: (password: string) =>
     request<Identity>("/auth/login", "POST", { password }),
   logout: () => request<void>("/auth/logout", "POST", {}),
+  getOAuthConsent: (params: OAuthConsentParams) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return request<OAuthConsentInfo>(`/oauth/consent?${query.toString()}`);
+  },
+  submitOAuthConsent: (input: OAuthConsentDecisionInput) =>
+    request<OAuthConsentDecisionResult>("/oauth/consent", "POST", input),
   pushConfig: () => request<{ public_key: string }>("/notifications/push"),
   savePushSubscription: (value: {
     endpoint: string;
@@ -492,7 +505,10 @@ export const api = {
       125_000,
     ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
-  nexusDevices: () => request<NexusDevices>("/agent/nexusdock/devices"),
+  nexusDevices: (refresh = false) =>
+    request<NexusDevices>(
+      `/agent/nexusdock/devices${refresh ? "?refresh=true" : ""}`,
+    ),
   nexusFleet: (refresh = false) =>
     request<NexusFleetResponse>(
       `/agent/nexusdock/fleet${refresh ? "?refresh=true" : ""}`,
