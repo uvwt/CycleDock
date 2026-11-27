@@ -120,6 +120,46 @@ func (q *Queries) CreateCardToolApproval(ctx context.Context, arg CreateCardTool
 	return i, err
 }
 
+const deleteAllCardToolWhitelists = `-- name: DeleteAllCardToolWhitelists :execrows
+DELETE FROM card_tool_whitelists
+WHERE workspace_id = $1
+  AND card_id = $2
+`
+
+type DeleteAllCardToolWhitelistsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+func (q *Queries) DeleteAllCardToolWhitelists(ctx context.Context, arg DeleteAllCardToolWhitelistsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAllCardToolWhitelists, arg.WorkspaceID, arg.CardID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCardToolWhitelist = `-- name: DeleteCardToolWhitelist :execrows
+DELETE FROM card_tool_whitelists
+WHERE workspace_id = $1
+  AND card_id = $2
+  AND id = $3
+`
+
+type DeleteCardToolWhitelistParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	ID          uuid.UUID `json:"id"`
+}
+
+func (q *Queries) DeleteCardToolWhitelist(ctx context.Context, arg DeleteCardToolWhitelistParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCardToolWhitelist, arg.WorkspaceID, arg.CardID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteWorkspaceAPICredential = `-- name: DeleteWorkspaceAPICredential :execrows
 DELETE FROM workspace_api_credentials
 WHERE workspace_id = $1
@@ -488,6 +528,97 @@ func (q *Queries) ListCardToolApprovals(ctx context.Context, arg ListCardToolApp
 			&i.ScopeTarget,
 			&i.ScopeLabel,
 			&i.AllowSessionWhitelist,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCardToolWhitelists = `-- name: ListCardToolWhitelists :many
+SELECT
+    w.id,
+    w.workspace_id,
+    w.card_id,
+    w.tool_name,
+    w.pattern,
+    w.scope_type,
+    w.scope_target,
+    COALESCE(
+        (
+            SELECT a.scope_label
+            FROM card_tool_approvals a
+            WHERE a.workspace_id = w.workspace_id
+              AND a.card_id = w.card_id
+              AND a.scope_type = w.scope_type
+              AND a.scope_target = w.scope_target
+              AND a.scope_label <> ''
+            ORDER BY a.created_at DESC
+            LIMIT 1
+        ),
+        CASE
+            WHEN w.scope_type = 'device' THEN (
+                SELECT g.device_name
+                FROM workspace_device_tool_guards g
+                WHERE g.workspace_id = w.workspace_id
+                  AND g.device_node_id = w.scope_target
+                  AND g.device_name <> ''
+                LIMIT 1
+            )
+            ELSE NULL
+        END,
+        ''
+    )::text AS scope_label,
+    w.created_by_source_id,
+    w.created_at
+FROM card_tool_whitelists w
+WHERE w.workspace_id = $1
+  AND w.card_id = $2
+ORDER BY w.created_at DESC, w.id DESC
+`
+
+type ListCardToolWhitelistsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+}
+
+type ListCardToolWhitelistsRow struct {
+	ID                uuid.UUID         `json:"id"`
+	WorkspaceID       uuid.UUID         `json:"workspace_id"`
+	CardID            uuid.UUID         `json:"card_id"`
+	ToolName          string            `json:"tool_name"`
+	Pattern           string            `json:"pattern"`
+	ScopeType         string            `json:"scope_type"`
+	ScopeTarget       string            `json:"scope_target"`
+	ScopeLabel        string            `json:"scope_label"`
+	CreatedBySourceID uuid.NullUUID     `json:"created_by_source_id"`
+	CreatedAt         sqldb.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListCardToolWhitelists(ctx context.Context, arg ListCardToolWhitelistsParams) ([]ListCardToolWhitelistsRow, error) {
+	rows, err := q.db.Query(ctx, listCardToolWhitelists, arg.WorkspaceID, arg.CardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCardToolWhitelistsRow{}
+	for rows.Next() {
+		var i ListCardToolWhitelistsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.CardID,
+			&i.ToolName,
+			&i.Pattern,
+			&i.ScopeType,
+			&i.ScopeTarget,
+			&i.ScopeLabel,
+			&i.CreatedBySourceID,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

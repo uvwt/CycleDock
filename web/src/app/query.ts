@@ -33,6 +33,8 @@ export const keys = {
   triggerDeliveries: (triggerID = "") =>
     ["trigger-deliveries", triggerID] as const,
   cardWatchers: (cardID: string) => ["card-watchers", cardID] as const,
+  cardToolWhitelists: (cardID: string) =>
+    ["card-tool-whitelists", cardID] as const,
   workspaceWatchers: (armedOnly = true, projectID = "") =>
     ["workspace-watchers", armedOnly ? "armed" : "all", projectID] as const,
 };

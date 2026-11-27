@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/uvwt/CycleDock/internal/agent"
 	"github.com/uvwt/CycleDock/internal/domain"
 	"github.com/uvwt/CycleDock/internal/store"
 )
@@ -265,5 +266,215 @@ func TestResolveToolApproval_CriticalRedlineRejectsSessionWhitelistAndMCPSavesSc
 	whitelisted, err := dataStore.IsCardScopeWhitelisted(ctx, workspaceID, card.ID, "mcp", "github")
 	if err != nil || !whitelisted {
 		t.Fatalf("expected mcp github to be whitelisted on card, got whitelisted=%v err=%v", whitelisted, err)
+	}
+}
+
+func TestCardToolWhitelists_ListRevokeIsolationAndReevaluate(t *testing.T) {
+	handler, _, dataStore := newHTTPIntegration(t)
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login",
+		map[string]any{"password": httpIntegrationPassword}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+	var identity identityResponse
+	decodeRecorder(t, login, &identity)
+	workspaceID := uuid.MustParse(identity.Workspace.ID)
+	humanSourceID := uuid.MustParse(identity.Source.ID)
+
+	ctx := context.Background()
+	project, err := dataStore.CreateProject(ctx, workspaceID, "Whitelist Manage Project", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardA, err := dataStore.CreateDiscussion(ctx, workspaceID, project.ID, humanSourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardB, err := dataStore.CreateDiscussion(ctx, workspaceID, project.ID, humanSourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 开启设备守卫，验证白名单放行与撤销后重新触发 ask_human
+	if _, err := dataStore.SaveDeviceToolGuard(ctx, workspaceID, store.DeviceToolGuardInput{
+		DeviceNodeID: "node-prod",
+		DeviceName:   "Prod VPS",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatalf("save device tool guard: %v", err)
+	}
+
+	// 1. 初始列表为空数组
+	emptyRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists", nil, cookie, nil)
+	if emptyRec.Code != http.StatusOK {
+		t.Fatalf("list empty whitelists: %d %s", emptyRec.Code, emptyRec.Body.String())
+	}
+	var emptyResp struct {
+		Whitelists []cardToolWhitelistResponse `json:"whitelists"`
+	}
+	decodeRecorder(t, emptyRec, &emptyResp)
+	if emptyResp.Whitelists == nil || len(emptyResp.Whitelists) != 0 {
+		t.Fatalf("expected empty non-nil whitelists slice, got %+v", emptyResp.Whitelists)
+	}
+
+	// 2. 通过工具审批写入设备白名单，并直接写入一条 MCP 白名单
+	devApproval, err := dataStore.CreateToolApproval(ctx, store.CreateToolApprovalParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardA.ID,
+		ToolCallID:  "call-dev-1",
+		ToolName:    "exec_command",
+		Arguments:   map[string]any{"node_id": "node-prod", "cmd": "systemctl status nginx"},
+		RiskLevel:   "medium",
+		Reversible:  true,
+		Reason:      "检查生产服务状态",
+		ScopeType:   "device",
+		ScopeTarget: "node-prod",
+		ScopeLabel:  "Prod VPS",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveRec := doJSON(t, handler, http.MethodPost,
+		"/api/v1/cards/"+cardA.ID.String()+"/tool-approvals/"+devApproval.ID.String()+"/resolve",
+		map[string]any{"action": "approve_session"}, cookie, nil)
+	if resolveRec.Code != http.StatusOK {
+		t.Fatalf("resolve device approval: %d %s", resolveRec.Code, resolveRec.Body.String())
+	}
+	if err := dataStore.AddCardScopeWhitelist(ctx, workspaceID, cardA.ID, "mcp", "github", humanSourceID); err != nil {
+		t.Fatalf("add mcp whitelist: %v", err)
+	}
+
+	strictSettings := store.AgentSettings{}
+	strictSettings.ToolGuardMode = "strict"
+
+	// 确认白名单生效：同一设备上的新命令应直接被工具守卫放行
+	allowedDecision := agent.EvaluateToolGuard(
+		ctx, dataStore, nil, nil, strictSettings,
+		workspaceID, cardA.ID, "node-prod", map[string]string{"node-prod": "Prod VPS"},
+		cardA.Title, cardA.Description,
+		"exec_command", map[string]any{"node_id": "node-prod", "cmd": "systemctl restart nginx"},
+	)
+	if allowedDecision.Decision != "allow" {
+		t.Fatalf("expected whitelisted device call to be allowed, got %+v", allowedDecision)
+	}
+
+	// 3. 列出白名单，核实数量、字段与友好名称
+	listRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists", nil, cookie, nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list whitelists: %d %s", listRec.Code, listRec.Body.String())
+	}
+	var listResp struct {
+		Whitelists []cardToolWhitelistResponse `json:"whitelists"`
+	}
+	decodeRecorder(t, listRec, &listResp)
+	if len(listResp.Whitelists) != 2 {
+		t.Fatalf("expected 2 whitelists, got %d: %+v", len(listResp.Whitelists), listResp.Whitelists)
+	}
+	var deviceWhitelistID string
+	for _, item := range listResp.Whitelists {
+		if item.ScopeType == "device" && item.ScopeTarget == "node-prod" {
+			deviceWhitelistID = item.ID
+			if item.ScopeLabel != "Prod VPS" {
+				t.Fatalf("expected device scope_label Prod VPS, got %q", item.ScopeLabel)
+			}
+		}
+	}
+	if deviceWhitelistID == "" {
+		t.Fatalf("device whitelist not found in response: %+v", listResp.Whitelists)
+	}
+
+	// 4. 跨卡片越权隔离：用 cardB 的路径不能删除 cardA 的白名单
+	crossCardDel := doJSON(t, handler, http.MethodDelete,
+		"/api/v1/cards/"+cardB.ID.String()+"/tool-whitelists/"+deviceWhitelistID,
+		nil, cookie, nil)
+	if crossCardDel.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 deleting cardA whitelist via cardB, got %d %s", crossCardDel.Code, crossCardDel.Body.String())
+	}
+
+	// 跨工作区隔离：创建另一个工作区并建立卡片，当前会话访问应返回 404
+	otherWS, err := dataStore.CreateWorkspace(ctx, "Other Workspace")
+	if err != nil {
+		t.Fatalf("create other workspace: %v", err)
+	}
+	otherSource, err := dataStore.CreateSource(ctx, otherWS.ID, domain.SourceKindHuman, "Other")
+	if err != nil {
+		t.Fatalf("create other source: %v", err)
+	}
+	otherProj, err := dataStore.CreateProject(ctx, otherWS.ID, "Other Project", "")
+	if err != nil {
+		t.Fatalf("create other project: %v", err)
+	}
+	otherCard, err := dataStore.CreateDiscussion(ctx, otherWS.ID, otherProj.ID, otherSource.ID)
+	if err != nil {
+		t.Fatalf("create other card: %v", err)
+	}
+	if err := dataStore.AddCardScopeWhitelist(ctx, otherWS.ID, otherCard.ID, "device", "node-other", otherSource.ID); err != nil {
+		t.Fatalf("add other workspace whitelist: %v", err)
+	}
+	otherRows, err := dataStore.ListCardToolWhitelists(ctx, otherWS.ID, otherCard.ID)
+	if err != nil || len(otherRows) != 1 {
+		t.Fatalf("list other workspace whitelists: %v %+v", err, otherRows)
+	}
+	crossWSList := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+otherCard.ID.String()+"/tool-whitelists", nil, cookie, nil)
+	if crossWSList.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 listing other workspace card whitelists, got %d %s", crossWSList.Code, crossWSList.Body.String())
+	}
+	crossWSDel := doJSON(t, handler, http.MethodDelete,
+		"/api/v1/cards/"+otherCard.ID.String()+"/tool-whitelists/"+otherRows[0].ID.String(),
+		nil, cookie, nil)
+	if crossWSDel.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 deleting other workspace whitelist, got %d %s", crossWSDel.Code, crossWSDel.Body.String())
+	}
+
+	// 5. 正常撤销单条设备白名单
+	delRec := doJSON(t, handler, http.MethodDelete,
+		"/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists/"+deviceWhitelistID,
+		nil, cookie, nil)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("delete device whitelist: %d %s", delRec.Code, delRec.Body.String())
+	}
+	// 再次删除应返回 404
+	delAgain := doJSON(t, handler, http.MethodDelete,
+		"/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists/"+deviceWhitelistID,
+		nil, cookie, nil)
+	if delAgain.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 deleting already-removed whitelist, got %d %s", delAgain.Code, delAgain.Body.String())
+	}
+
+	// 撤销后再次触发该设备受保护命令，必须重新走 ask_human 审批
+	recheckedDecision := agent.EvaluateToolGuard(
+		ctx, dataStore, nil, nil, strictSettings,
+		workspaceID, cardA.ID, "node-prod", map[string]string{"node-prod": "Prod VPS"},
+		cardA.Title, cardA.Description,
+		"exec_command", map[string]any{"node_id": "node-prod", "cmd": "systemctl restart nginx"},
+	)
+	if recheckedDecision.Decision != "ask_human" {
+		t.Fatalf("expected revoked whitelist call to require ask_human again, got %+v", recheckedDecision)
+	}
+
+	// 6. 一键清空剩余白名单
+	clearRec := doJSON(t, handler, http.MethodDelete, "/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists", nil, cookie, nil)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear whitelists: %d %s", clearRec.Code, clearRec.Body.String())
+	}
+	var clearResp struct {
+		DeletedCount int64 `json:"deleted_count"`
+	}
+	decodeRecorder(t, clearRec, &clearResp)
+	if clearResp.DeletedCount != 1 {
+		t.Fatalf("expected deleted_count 1, got %d", clearResp.DeletedCount)
+	}
+
+	afterClearRec := doJSON(t, handler, http.MethodGet, "/api/v1/cards/"+cardA.ID.String()+"/tool-whitelists", nil, cookie, nil)
+	if afterClearRec.Code != http.StatusOK {
+		t.Fatalf("list whitelists after clear: %d %s", afterClearRec.Code, afterClearRec.Body.String())
+	}
+	var afterClearResp struct {
+		Whitelists []cardToolWhitelistResponse `json:"whitelists"`
+	}
+	decodeRecorder(t, afterClearRec, &afterClearResp)
+	if len(afterClearResp.Whitelists) != 0 {
+		t.Fatalf("expected 0 whitelists after clear, got %+v", afterClearResp.Whitelists)
 	}
 }

@@ -234,6 +234,55 @@ func (s *Store) IsCardScopeWhitelisted(ctx context.Context, workspaceID, cardID 
 	})
 }
 
+// ListCardToolWhitelists 列出指定卡片当前生效的所有临时工具守卫白名单（按创建时间倒序）
+func (s *Store) ListCardToolWhitelists(ctx context.Context, workspaceID, cardID uuid.UUID) ([]db.ListCardToolWhitelistsRow, error) {
+	if workspaceID == uuid.Nil || cardID == uuid.Nil {
+		return nil, fmt.Errorf("%w: workspace_id and card_id are required", domain.ErrConflict)
+	}
+	return s.queries.ListCardToolWhitelists(ctx, db.ListCardToolWhitelistsParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+	})
+}
+
+// DeleteCardToolWhitelist 撤销指定卡片下的单条临时工具守卫白名单
+func (s *Store) DeleteCardToolWhitelist(ctx context.Context, workspaceID, cardID, whitelistID uuid.UUID) error {
+	if workspaceID == uuid.Nil || cardID == uuid.Nil || whitelistID == uuid.Nil {
+		return domain.ErrNotFound
+	}
+	affected, err := s.queries.DeleteCardToolWhitelist(ctx, db.DeleteCardToolWhitelistParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		ID:          whitelistID,
+	})
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return domain.ErrNotFound
+	}
+	s.notifyWorkspaceChanged(workspaceID)
+	return nil
+}
+
+// ClearCardToolWhitelists 清空指定卡片下的全部临时工具守卫白名单
+func (s *Store) ClearCardToolWhitelists(ctx context.Context, workspaceID, cardID uuid.UUID) (int64, error) {
+	if workspaceID == uuid.Nil || cardID == uuid.Nil {
+		return 0, domain.ErrNotFound
+	}
+	affected, err := s.queries.DeleteAllCardToolWhitelists(ctx, db.DeleteAllCardToolWhitelistsParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if affected > 0 {
+		s.notifyWorkspaceChanged(workspaceID)
+	}
+	return affected, nil
+}
+
 type DeviceToolGuardInput struct {
 	DeviceNodeID string
 	DeviceName   string
