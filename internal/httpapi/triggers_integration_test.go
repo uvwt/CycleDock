@@ -730,3 +730,176 @@ func TestWorkspaceWatchersAndEnrichedTriggerDeliveries(t *testing.T) {
 	}
 }
 
+func TestWebhookTriggers_CircleCIPingAndRepositoryFilterCompat(t *testing.T) {
+	handler, _, dataStore := newHTTPIntegration(t)
+	ctx := context.Background()
+
+	login := doJSON(t, handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"password": httpIntegrationPassword,
+	}, nil, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookieName)
+	var identity identityResponse
+	decodeRecorder(t, login, &identity)
+	workspaceID := uuid.MustParse(identity.Workspace.ID)
+
+	projRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects", map[string]any{
+		"name": "CircleCI Compat", "description": "CircleCI ping and repo filter integration test",
+	}, cookie, nil)
+	if projRec.Code != http.StatusCreated {
+		t.Fatalf("create project: %d %s", projRec.Code, projRec.Body.String())
+	}
+	var project projectResponse
+	decodeRecorder(t, projRec, &project)
+
+	todoRec := doJSON(t, handler, http.MethodPost, "/api/v1/projects/"+project.ID+"/todos", map[string]any{
+		"title": "Watch CircleCI nexusdock-cloud", "description": "Wait for workflow-completed",
+	}, cookie, nil)
+	if todoRec.Code != http.StatusCreated {
+		t.Fatalf("create todo: %d %s", todoRec.Code, todoRec.Body.String())
+	}
+	var watcherCard cardResponse
+	decodeRecorder(t, todoRec, &watcherCard)
+	watcherCardID := uuid.MustParse(watcherCard.ID)
+
+	const circleSecret = "circleci-compat-secret"
+	createCircle := doJSON(t, handler, http.MethodPost, "/api/v1/triggers", map[string]any{
+		"name":         "CircleCI NexusDock Cloud",
+		"provider":     "circleci",
+		"secret":       circleSecret,
+		"routing_mode": "match_watchers",
+		"filter_config": map[string]any{
+			"events":       []string{"workflow-completed"},
+			"repositories": []string{"uvwt/nexusdock-cloud"},
+		},
+	}, cookie, nil)
+	if createCircle.Code != http.StatusCreated {
+		t.Fatalf("create circleci trigger: %d %s", createCircle.Code, createCircle.Body.String())
+	}
+	var circleCreated struct {
+		Trigger triggerResponse `json:"trigger"`
+	}
+	decodeRecorder(t, createCircle, &circleCreated)
+	webhookPath := circleCreated.Trigger.WebhookPath
+
+	// 1. CircleCI 官方创建 Webhook 时的 ping 校验：载荷无 type，仅带 circleci-event-type: ping 请求头
+	headerPingBody := []byte(`{"id":"cc-ping-1","happened_at":"2026-11-26T00:00:00Z","webhook":{"id":"wh-1","name":"cycledock"}}`)
+	headerPingResp := doRawRequest(handler, http.MethodPost, webhookPath, headerPingBody, map[string]string{
+		"Content-Type":        "application/json",
+		"circleci-event-type": "ping",
+		"circleci-signature":  "v1=" + hmacHexSHA256(circleSecret, headerPingBody),
+	})
+	if headerPingResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for circleci header ping, got %d %s", headerPingResp.Code, headerPingResp.Body.String())
+	}
+	var headerPingResult struct {
+		Delivery triggerDeliveryResponse `json:"delivery"`
+	}
+	decodeRecorder(t, headerPingResp, &headerPingResult)
+	if headerPingResult.Delivery.Status != string(domain.TriggerDeliveryFiltered) ||
+		headerPingResult.Delivery.Reason != "circleci_ping" ||
+		headerPingResult.Delivery.EventType != "ping" {
+		t.Fatalf("expected filtered circleci_ping delivery, got %+v", headerPingResult.Delivery)
+	}
+
+	// 2. CircleCI 空 body 的 ping 请求带 circleci-event-type: ping 同样返回 200 OK
+	emptyPingResp := doRawRequest(handler, http.MethodPost, webhookPath, nil, map[string]string{
+		"circleci-event-type":  "ping",
+		"circleci-delivery-id": "cc-empty-ping-1",
+		"circleci-signature":   "v1=" + hmacHexSHA256(circleSecret, nil),
+	})
+	if emptyPingResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for circleci empty-body ping, got %d %s", emptyPingResp.Code, emptyPingResp.Body.String())
+	}
+	var emptyPingResult struct {
+		Delivery triggerDeliveryResponse `json:"delivery"`
+	}
+	decodeRecorder(t, emptyPingResp, &emptyPingResult)
+	if emptyPingResult.Delivery.Status != string(domain.TriggerDeliveryFiltered) ||
+		emptyPingResult.Delivery.Reason != "circleci_ping" {
+		t.Fatalf("expected filtered circleci_ping delivery for empty body, got %+v", emptyPingResult.Delivery)
+	}
+
+	// 3. 载荷中自带 type: "ping" 时仍正常返回 200 OK
+	bodyPingPayload := []byte(`{"id":"cc-ping-2","type":"ping"}`)
+	bodyPingResp := doRawRequest(handler, http.MethodPost, webhookPath, bodyPingPayload, map[string]string{
+		"Content-Type":       "application/json",
+		"circleci-signature": "v1=" + hmacHexSHA256(circleSecret, bodyPingPayload),
+	})
+	if bodyPingResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for circleci body-type ping, got %d %s", bodyPingResp.Code, bodyPingResp.Body.String())
+	}
+	var bodyPingResult struct {
+		Delivery triggerDeliveryResponse `json:"delivery"`
+	}
+	decodeRecorder(t, bodyPingResp, &bodyPingResult)
+	if bodyPingResult.Delivery.Status != string(domain.TriggerDeliveryFiltered) ||
+		bodyPingResult.Delivery.Reason != "circleci_ping" {
+		t.Fatalf("expected filtered circleci_ping delivery for body type ping, got %+v", bodyPingResult.Delivery)
+	}
+
+	// 4. 注册不带 VCS 前缀的 watcher，验证 project.slug = "gh/uvwt/nexusdock-cloud" 命中 filter_config.repositories = ["uvwt/nexusdock-cloud"] 并唤醒 watcher
+	if _, err := dataStore.CreateCardWatcher(ctx, store.CreateCardWatcherParams{
+		WorkspaceID:    workspaceID,
+		CardID:         watcherCardID,
+		Kind:           domain.WatcherKindEvent,
+		MatchKey:       "circleci:uvwt/nexusdock-cloud:branch:main:ci_completed",
+		Note:           "CircleCI nexusdock-cloud 构建完成",
+		DispatchMode:   domain.DispatchModeEnqueue,
+		ExpiresAt:      time.Now().UTC().Add(30 * time.Minute),
+		IdempotencyKey: "watch-circleci-nexusdock-main",
+	}); err != nil {
+		t.Fatalf("create circleci watcher: %v", err)
+	}
+
+	matchedBody := []byte(`{
+		"id": "cc-wf-match-1",
+		"type": "workflow-completed",
+		"project": {"slug": "gh/uvwt/nexusdock-cloud", "name": "nexusdock-cloud"},
+		"pipeline": {"vcs": {"branch": "main", "revision": "deadbeef1234"}},
+		"workflow": {"id": "wf-match-1", "name": "build-and-test", "status": "success", "url": "https://app.circleci.com/pipelines/wf-match-1"}
+	}`)
+	matchedResp := doRawRequest(handler, http.MethodPost, webhookPath, matchedBody, map[string]string{
+		"Content-Type":        "application/json",
+		"circleci-event-type": "workflow-completed",
+		"circleci-signature":  "v1=" + hmacHexSHA256(circleSecret, matchedBody),
+	})
+	if matchedResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for matched circleci workflow, got %d %s", matchedResp.Code, matchedResp.Body.String())
+	}
+	var matchedResult struct {
+		Delivery triggerDeliveryResponse `json:"delivery"`
+	}
+	decodeRecorder(t, matchedResp, &matchedResult)
+	if matchedResult.Delivery.Status != string(domain.TriggerDeliveryTriggered) ||
+		len(matchedResult.Delivery.TriggeredWatcherTurnIDs) != 1 {
+		t.Fatalf("expected circleci workflow with gh/ prefix to pass repo filter and wake watcher, got %+v", matchedResult.Delivery)
+	}
+
+	// 5. 仓库名不匹配时仍被 filter_mismatch:repository 拦截
+	mismatchBody := []byte(`{
+		"id": "cc-wf-mismatch-1",
+		"type": "workflow-completed",
+		"project": {"slug": "gh/uvwt/other-repo", "name": "other-repo"},
+		"pipeline": {"vcs": {"branch": "main", "revision": "deadbeef9999"}},
+		"workflow": {"id": "wf-mismatch-1", "name": "build-and-test", "status": "success"}
+	}`)
+	mismatchResp := doRawRequest(handler, http.MethodPost, webhookPath, mismatchBody, map[string]string{
+		"Content-Type":        "application/json",
+		"circleci-event-type": "workflow-completed",
+		"circleci-signature":  "v1=" + hmacHexSHA256(circleSecret, mismatchBody),
+	})
+	if mismatchResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for mismatched circleci repo, got %d %s", mismatchResp.Code, mismatchResp.Body.String())
+	}
+	var mismatchResult struct {
+		Delivery triggerDeliveryResponse `json:"delivery"`
+	}
+	decodeRecorder(t, mismatchResp, &mismatchResult)
+	if mismatchResult.Delivery.Status != string(domain.TriggerDeliveryFiltered) ||
+		mismatchResult.Delivery.Reason != "filter_mismatch:repository" {
+		t.Fatalf("expected filter_mismatch:repository, got %+v", mismatchResult.Delivery)
+	}
+}

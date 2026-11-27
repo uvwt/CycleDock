@@ -179,13 +179,15 @@ func ExtractDeliveryID(provider domain.TriggerProvider, headers http.Header, raw
 			return truncateRunes(id, 128)
 		}
 	case domain.TriggerProviderCircleCI:
-		if id := strings.TrimSpace(headers.Get("X-CircleCI-Delivery-ID")); id != "" {
-			return truncateRunes(id, 128)
+		for _, header := range []string{"circleci-delivery-id", "X-CircleCI-Delivery-ID"} {
+			if id := strings.TrimSpace(headers.Get(header)); id != "" {
+				return truncateRunes(id, 128)
+			}
 		}
 		var envelope struct {
 			ID string `json:"id"`
 		}
-		if json.Unmarshal(rawBody, &envelope) == nil && strings.TrimSpace(envelope.ID) != "" {
+		if len(bytesTrimSpace(rawBody)) > 0 && json.Unmarshal(rawBody, &envelope) == nil && strings.TrimSpace(envelope.ID) != "" {
 			return truncateRunes(strings.TrimSpace(envelope.ID), 128)
 		}
 	case domain.TriggerProviderGeneric:
@@ -219,13 +221,18 @@ func ParseAndFilter(
 	rawBody []byte,
 ) (ParsedEvent, error) {
 	filter.Normalize()
-	if len(bytesTrimSpace(rawBody)) == 0 {
-		return ParsedEvent{}, errors.New("webhook payload is empty")
-	}
-
 	var rawMap map[string]any
-	if err := json.Unmarshal(rawBody, &rawMap); err != nil {
-		return ParsedEvent{}, fmt.Errorf("invalid JSON webhook payload: %w", err)
+	if len(bytesTrimSpace(rawBody)) == 0 {
+		// CircleCI 创建 Webhook 时的 ping 校验允许仅通过 circleci-event-type: ping 请求头声明，body 可能为空。
+		isCircleCIPing := provider == domain.TriggerProviderCircleCI &&
+			strings.EqualFold(strings.TrimSpace(headers.Get("circleci-event-type")), "ping")
+		if !isCircleCIPing {
+			return ParsedEvent{}, errors.New("webhook payload is empty")
+		}
+	} else {
+		if err := json.Unmarshal(rawBody, &rawMap); err != nil {
+			return ParsedEvent{}, fmt.Errorf("invalid JSON webhook payload: %w", err)
+		}
 	}
 
 	var event ParsedEvent
@@ -593,9 +600,9 @@ func parseGitHubEvent(filter FilterConfig, headers http.Header, rawBody []byte) 
 
 func parseCircleCIEvent(filter FilterConfig, headers http.Header, rawBody []byte) (ParsedEvent, error) {
 	var payload struct {
-		ID       string `json:"id"`
-		Type     string `json:"type"`
-		Project  struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Project struct {
 			Slug string `json:"slug"`
 			Name string `json:"name"`
 		} `json:"project"`
@@ -625,11 +632,17 @@ func parseCircleCIEvent(filter FilterConfig, headers http.Header, rawBody []byte
 			Status string `json:"status"`
 		} `json:"job"`
 	}
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
-		return ParsedEvent{}, fmt.Errorf("parse circleci webhook: %w", err)
+	if len(bytesTrimSpace(rawBody)) > 0 {
+		if err := json.Unmarshal(rawBody, &payload); err != nil {
+			return ParsedEvent{}, fmt.Errorf("parse circleci webhook: %w", err)
+		}
 	}
 
+	// 优先读取载荷中的 type；CircleCI ping 等官方请求可能省略 body.type，需回退读取 circleci-event-type 请求头。
 	eventType := strings.ToLower(strings.TrimSpace(payload.Type))
+	if eventType == "" {
+		eventType = strings.ToLower(strings.TrimSpace(headers.Get("circleci-event-type")))
+	}
 	if eventType == "" {
 		return ParsedEvent{}, errors.New("missing CircleCI webhook type")
 	}
@@ -649,15 +662,8 @@ func parseCircleCIEvent(filter FilterConfig, headers http.Header, rawBody []byte
 		return event, nil
 	}
 
-	slugKey := strings.ToLower(event.Repository)
 	// CircleCI project slug 形如 gh/org/repo 或 bb/org/repo，同时生成带与不带 VCS 前缀的 repo 键方便 Agent 直观匹配。
-	slugAliases := []string{}
-	if slugKey != "" {
-		slugAliases = append(slugAliases, slugKey)
-		if parts := strings.SplitN(slugKey, "/", 2); len(parts) == 2 && (parts[0] == "gh" || parts[0] == "github" || parts[0] == "bb" || parts[0] == "bitbucket" || parts[0] == "gl" || parts[0] == "gitlab") {
-			slugAliases = append(slugAliases, parts[1])
-		}
-	}
+	slugAliases := circleCIRepoAliases(event.Repository)
 	switch eventType {
 	case "workflow-completed":
 		event.Action = "completed"
@@ -691,18 +697,18 @@ func parseCircleCIEvent(filter FilterConfig, headers http.Header, rawBody []byte
 		event.Status = strings.ToLower(strings.TrimSpace(payload.Job.Status))
 		event.Conclusion = event.Status
 		event.Title = strings.TrimSpace(payload.Job.Name)
-		if slugKey != "" {
+		for _, key := range slugAliases {
 			if event.Title != "" {
-				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:job:%s:completed", slugKey, strings.ToLower(event.Title)))
+				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:job:%s:completed", key, strings.ToLower(event.Title)))
 			}
 			if wf := strings.ToLower(strings.TrimSpace(payload.Workflow.Name)); wf != "" {
-				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:workflow:%s:job_completed", slugKey, wf))
+				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:workflow:%s:job_completed", key, wf))
 			}
 			if event.Branch != "" {
-				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:branch:%s:job_completed", slugKey, strings.ToLower(event.Branch)))
+				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:branch:%s:job_completed", key, strings.ToLower(event.Branch)))
 			}
 			if event.CommitSHA != "" {
-				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:sha:%s:job_completed", slugKey, strings.ToLower(event.CommitSHA)))
+				event.MatchKeys = append(event.MatchKeys, fmt.Sprintf("circleci:%s:sha:%s:job_completed", key, strings.ToLower(event.CommitSHA)))
 			}
 		}
 		event.Summary = fmt.Sprintf(
@@ -801,7 +807,7 @@ func applyCommonFilters(event *ParsedEvent, filter FilterConfig, rawMap map[stri
 			return
 		}
 	}
-	if len(filter.Repositories) > 0 && !containsFold(filter.Repositories, event.Repository) {
+	if len(filter.Repositories) > 0 && !matchesRepositoryFilter(event.Provider, filter.Repositories, event.Repository) {
 		event.Skip = true
 		event.SkipReason = "filter_mismatch:repository"
 		return
@@ -953,6 +959,67 @@ func containsFold(items []string, target string) bool {
 		if strings.EqualFold(item, target) {
 			return true
 		}
+	}
+	return false
+}
+
+// splitCircleCIRepo 将 CircleCI project.slug 拆分为归一化后的 VCS 标识与去前缀后的裸仓库名。
+// 例如 gh/uvwt/CycleDock 与 github/uvwt/CycleDock 均会归一化为 ("github", "uvwt/cycledock", true)。
+func splitCircleCIRepo(raw string) (vcs string, bare string, hasPrefix bool) {
+	norm := strings.ToLower(strings.TrimSpace(raw))
+	if norm == "" {
+		return "", "", false
+	}
+	prefix, rest, ok := strings.Cut(norm, "/")
+	if !ok || strings.TrimSpace(rest) == "" {
+		return "", norm, false
+	}
+	switch prefix {
+	case "gh", "github":
+		return "github", rest, true
+	case "bb", "bitbucket":
+		return "bitbucket", rest, true
+	case "gl", "gitlab":
+		return "gitlab", rest, true
+	default:
+		return "", norm, false
+	}
+}
+
+// circleCIRepoAliases 返回 CircleCI 仓库标识的匹配别名（原始小写值 + 去 VCS 前缀别名）。
+func circleCIRepoAliases(raw string) []string {
+	norm := strings.ToLower(strings.TrimSpace(raw))
+	if norm == "" {
+		return nil
+	}
+	aliases := []string{norm}
+	if _, bare, ok := splitCircleCIRepo(norm); ok && bare != norm {
+		aliases = append(aliases, bare)
+	}
+	return aliases
+}
+
+// matchesRepositoryFilter 按 Provider 语义判断事件仓库是否命中过滤列表。
+// CircleCI 的 project.slug 带 VCS 前缀（如 gh/org/repo），与不带前缀的 org/repo 双向兼容；
+// GitHub 与 Generic 维持原有的忽略大小写精确匹配。
+func matchesRepositoryFilter(provider domain.TriggerProvider, patterns []string, repo string) bool {
+	if strings.TrimSpace(repo) == "" {
+		return false
+	}
+	if provider != domain.TriggerProviderCircleCI {
+		return containsFold(patterns, repo)
+	}
+	eventVCS, eventBare, eventHasVCS := splitCircleCIRepo(repo)
+	for _, pattern := range patterns {
+		patVCS, patBare, patHasVCS := splitCircleCIRepo(pattern)
+		if eventBare == "" || patBare == "" || eventBare != patBare {
+			continue
+		}
+		// 双方都显式指定 VCS 前缀时必须属于同一 VCS，避免不同托管平台的同名仓库误放行。
+		if eventHasVCS && patHasVCS && eventVCS != patVCS {
+			continue
+		}
+		return true
 	}
 	return false
 }
