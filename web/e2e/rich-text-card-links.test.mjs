@@ -300,7 +300,7 @@ test("ChatActionCard SSR 渲染：手机端上下两层布局、Markdown 摘要�
     (reviewHtml.match(/data-chat-card-complete="true"/g) || []).length,
     1,
   );
-  assert.match(reviewHtml, /data-chat-card-footer="true"/);
+  assert.match(reviewHtml, /data-chat-card-header="true"/);
   assert.match(reviewHtml, /<h4[^>]*line-clamp-2[^>]*sm:truncate/);
   assert.match(reviewHtml, /待确认/);
   assert.match(reviewHtml, /完成/);

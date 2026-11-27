@@ -34,7 +34,7 @@ const chatCardVariants = cva(
       },
       size: {
         sm: "p-2 max-w-sm text-xs",
-        default: "p-2.5 sm:p-3 w-full max-w-lg text-sm",
+        default: "px-3 py-2.5 sm:p-3 w-full max-w-lg text-sm",
       },
     },
     defaultVariants: {
@@ -304,71 +304,44 @@ export const ChatActionCard = React.forwardRef<
       >
         {/*
          * 响应式单树双布局：
-         * - 手机端（< sm）：上下两层，上层给标题（最多 2 行）与清洗后的摘要释放接近整卡宽度，
-         *   下层独立承载状态徽标/状态点与待确认「完成」快捷按钮，避免窄屏挤压标题；
+         * - 手机端（< sm）：上轻下稳，顶栏放轻量图标/状态胶囊与右侧快捷操作（普通卡放淡箭头平衡视觉），
+         *   下方 100% 整卡宽度留给主标题（最多 2 行）与清洗后摘要，无分割线、左轴统一对齐；
          * - 桌面端（>= sm）：通过 sm:contents 展开为原有 4 列紧凑横向网格，
          *   避免重复渲染按钮 DOM 破坏无障碍与自动化选择器唯一性。
          */}
         <div className="flex flex-col sm:grid sm:grid-cols-[auto_minmax(0,auto)_minmax(max-content,1fr)_auto] sm:items-start">
-          {/* 上层：图标 + 标题与摘要 */}
-          <div className="flex items-start gap-2.5 sm:contents">
-            {/* 左侧类型图标独立微底座 */}
-            <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-line/60 bg-surface shadow-2xs sm:col-start-1 sm:row-start-1 sm:row-span-2 sm:mr-3 sm:mt-0 sm:size-8">
-              {kindIcon}
-            </div>
-
-            {/* 标题与清洗后摘要 */}
-            <div className="min-w-0 flex-1 sm:contents">
-              <h4 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground group-hover/card:text-primary transition-colors sm:col-start-2 sm:row-start-1 sm:line-clamp-none sm:truncate sm:leading-normal">
-                {title}
-              </h4>
-
-              {cleanDescription ? (
-                <p className="mt-1 line-clamp-1 text-xs text-muted-foreground leading-normal sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:mt-0.5 sm:w-0 sm:min-w-full">
-                  {cleanDescription}
-                </p>
-              ) : (
-                <div className="mt-0.5 hidden items-center gap-1.5 text-[11px] text-faint sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:flex sm:w-0 sm:min-w-full">
-                  <span>{kindLabel}</span>
-                  <span>•</span>
-                  <span>{shortCardId}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* 下层：手机端独立状态与操作栏；桌面端通过 sm:contents 归位到标题右侧与最右操作区 */}
+          {/* 手机端顶栏：轻量元信息 + 右侧操作；桌面端通过 sm:contents 归位到各自列 */}
           <div
-            data-chat-card-footer="true"
-            className="mt-2 flex items-center justify-between gap-2 border-t border-line/50 pt-2 sm:contents"
+            data-chat-card-header="true"
+            className="flex items-center justify-between gap-2 sm:contents"
           >
-            {/* 状态徽标与状态点（无 card 兜底时展示种类与短 ID） */}
-            <div className="flex min-w-0 items-center gap-1.5 sm:col-start-3 sm:row-start-1 sm:ml-2 sm:self-center sm:justify-self-start">
-              {card ? (
-                <>
-                  {statusBadge}
-                  {visualStatus !== "idle" && (
-                    <CardStatusDot
-                      status={visualStatus}
-                      className="size-1.5"
-                    />
-                  )}
-                  {!cleanDescription && (
-                    <span className="truncate text-[11px] text-faint sm:hidden">
-                      {kindLabel} • {shortCardId}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <div className="flex items-center gap-1.5 text-[11px] text-faint sm:hidden">
-                  <span>{kindLabel}</span>
-                  <span>•</span>
-                  <span>{shortCardId}</span>
-                </div>
-              )}
+            <div className="flex min-w-0 items-center gap-1.5 sm:contents">
+              {/* 类型图标：手机端轻量化直接呈现在元信息行首，桌面端保留独立微底座 */}
+              <div className="inline-flex shrink-0 items-center justify-center sm:col-start-1 sm:row-start-1 sm:row-span-2 sm:mr-3 sm:grid sm:size-8 sm:place-items-center sm:rounded-lg sm:border sm:border-line/60 sm:bg-surface sm:shadow-2xs">
+                {kindIcon}
+              </div>
+
+              {/* 状态徽标与非空闲状态点 */}
+              <div className="flex min-w-0 items-center gap-1.5 sm:col-start-3 sm:row-start-1 sm:ml-2 sm:self-center sm:justify-self-start">
+                {card ? (
+                  <>
+                    {statusBadge}
+                    {visualStatus !== "idle" && (
+                      <CardStatusDot
+                        status={visualStatus}
+                        className="size-1.5"
+                      />
+                    )}
+                  </>
+                ) : (
+                  <span className="truncate text-[11px] font-medium text-muted-foreground sm:hidden">
+                    {kindLabel}
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* 操作区：待确认完成快捷按钮 + 桌面端跳转指示箭头 */}
+            {/* 操作区：待确认完成快捷按钮 + 跳转指示箭头（手机端普通卡保留淡箭头做视觉平衡，桌面端始终显示） */}
             <div className="flex shrink-0 items-center gap-1.5 sm:col-start-4 sm:row-start-1 sm:row-span-2 sm:ml-3 sm:pt-0.5">
               {canCompleteReview && card && (
                 <button
@@ -391,7 +364,7 @@ export const ChatActionCard = React.forwardRef<
                       e.stopPropagation();
                     }
                   }}
-                  className="inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium leading-none whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/20 active:scale-95 disabled:opacity-60 sm:min-h-0 sm:px-2 sm:py-0.5 sm:text-[11px] dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
+                  className="inline-flex min-h-[26px] shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium leading-none whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/20 active:scale-95 disabled:opacity-60 sm:min-h-0 sm:px-2 dark:border-emerald-400/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:hover:bg-emerald-500/25"
                 >
                   {completeReview.isPending ? (
                     <Loader2 className="size-3 animate-spin" />
@@ -401,10 +374,34 @@ export const ChatActionCard = React.forwardRef<
                   <span>{t("完成")}</span>
                 </button>
               )}
-              <div className="hidden text-muted-foreground/50 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all sm:block">
-                <ArrowUpRight className="size-4" />
+              <div
+                className={cn(
+                  "text-muted-foreground/45 group-hover/card:text-primary group-hover/card:translate-x-0.5 group-hover/card:-translate-y-0.5 transition-all sm:text-muted-foreground/50",
+                  canCompleteReview ? "hidden sm:block" : "block",
+                )}
+              >
+                <ArrowUpRight className="size-3.5 sm:size-4" />
               </div>
             </div>
+          </div>
+
+          {/* 手机端主内容区：整卡宽度承载标题与摘要，重心下沉更稳；桌面端归位到中间信息列 */}
+          <div className="mt-2 min-w-0 sm:contents">
+            <h4 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground group-hover/card:text-primary transition-colors sm:col-start-2 sm:row-start-1 sm:line-clamp-none sm:truncate sm:leading-normal">
+              {title}
+            </h4>
+
+            {cleanDescription ? (
+              <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground leading-normal sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:w-0 sm:min-w-full">
+                {cleanDescription}
+              </p>
+            ) : (
+              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-faint sm:col-start-2 sm:col-span-2 sm:row-start-2 sm:w-0 sm:min-w-full">
+                <span>{kindLabel}</span>
+                <span>•</span>
+                <span>{shortCardId}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
