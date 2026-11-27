@@ -215,9 +215,11 @@ function customUrlTransform(url: string): string {
 export const RichText = memo(function RichText({
   content,
   className = "text-[15px] leading-relaxed",
+  inline = false,
 }: {
   content: string;
   className?: string;
+  inline?: boolean;
 }) {
   const navigate = useNavigate();
   const { projectID } = useProject();
@@ -310,6 +312,9 @@ export const RichText = memo(function RichText({
           }
           return <div className="my-1.5">{children}</div>;
         }
+        if (inline) {
+          return <span>{children}</span>;
+        }
         return <p>{children}</p>;
       },
       a: ({
@@ -391,8 +396,23 @@ export const RichText = memo(function RichText({
         </td>
       ),
     }),
-    [handleLinkClick, projectID],
+    [handleLinkClick, inline, projectID],
   );
+
+  if (inline) {
+    return (
+      <span className={`prose-chat inline text-foreground ${className}`}>
+        <ReactMarkdown
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          urlTransform={customUrlTransform}
+          components={markdownComponents}
+        >
+          {normalizedContent}
+        </ReactMarkdown>
+      </span>
+    );
+  }
 
   return (
     <div className={`prose-chat text-foreground ${className}`}>

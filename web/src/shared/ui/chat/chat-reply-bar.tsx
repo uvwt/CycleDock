@@ -1,7 +1,8 @@
-import { Reply, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { formatQuotePreview } from "../../../features/timeline/selectionQuote";
+import { QuoteMarkIcon } from "./quote-mark-icon";
 
 export interface ChatReplyBarProps {
   sender: string;
@@ -22,17 +23,22 @@ export function ChatReplyBar({
     <div
       data-testid="chat-reply-bar"
       className={cn(
-        "relative mx-1 mt-0.5 mb-1.5 flex items-center justify-between gap-2 rounded-xl border border-line/60 border-l-3 border-l-primary bg-muted/75 px-2.5 py-1.5 text-xs shadow-2xs",
+        "relative mx-1 mt-0.5 mb-1.5 flex items-center justify-between gap-2 rounded-lg bg-slate-900/[0.045] px-2.5 py-1.5 text-xs dark:bg-white/[0.06]",
         className,
       )}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <Reply className="size-3.5 shrink-0 text-primary" />
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+        <QuoteMarkIcon className="size-3 shrink-0 text-primary/80 dark:text-sky-300/85" />
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span className="shrink-0 font-semibold text-primary">
-            {sender}
-          </span>
-          <span className="truncate text-muted-foreground" title={text}>
+          {sender.trim() && (
+            <span className="shrink-0 font-medium text-primary dark:text-sky-300">
+              {sender}
+            </span>
+          )}
+          <span
+            className="truncate text-primary/85 dark:text-sky-200/85"
+            title={text}
+          >
             {previewText}
           </span>
         </div>
@@ -40,7 +46,7 @@ export function ChatReplyBar({
       <button
         type="button"
         onClick={onClose}
-        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground transition hover:bg-muted-foreground/10 hover:text-foreground active:scale-95"
+        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-full text-muted-foreground transition hover:bg-slate-900/[0.08] hover:text-foreground active:scale-95 dark:hover:bg-white/[0.1]"
         title={t("取消引用")}
         aria-label={t("取消引用")}
       >

@@ -950,6 +950,13 @@ const en = {
   "已完成 {{succeeded}} 张卡片，{{failed}} 张失败":
     "Completed {{succeeded}} cards, {{failed}} failed",
   "批量验收失败（{{failed}} 张）": "Batch accept failed ({{failed}})",
+  查看原消息: "View original",
+  点击查看原消息: "Click to view original message",
+  取消引用: "Cancel quote",
+  "引用自 {{sender}}，点击查看原消息":
+    "Quoted from {{sender}}, click to view original message",
+  "引用自 {{sender}}，点击查看完整引用":
+    "Quoted from {{sender}}, click to view full quote",
 } as const;
 
 void i18n.use(initReactI18next).init({
