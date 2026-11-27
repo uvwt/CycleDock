@@ -69,7 +69,7 @@ func TestScheduleRuleInputValidation(t *testing.T) {
 
 func TestScheduleToolsDiscoveredByOfficialMCPClient(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "cycledock", Version: "test"}, nil)
-	registerTools(server, nil) // ListTools 不需要数据库；验证真实 SDK 生成的输入契约。
+	registerTools(server, nil, nil) // ListTools 不需要数据库；验证真实 SDK 生成的输入契约。
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
