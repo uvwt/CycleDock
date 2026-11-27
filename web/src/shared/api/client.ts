@@ -505,7 +505,10 @@ export const api = {
       125_000,
     ),
   nexus: () => request<NexusConnection>("/agent/nexusdock"),
-  nexusDevices: () => request<NexusDevices>("/agent/nexusdock/devices"),
+  nexusDevices: (refresh = false) =>
+    request<NexusDevices>(
+      `/agent/nexusdock/devices${refresh ? "?refresh=true" : ""}`,
+    ),
   nexusFleet: (refresh = false) =>
     request<NexusFleetResponse>(
       `/agent/nexusdock/fleet${refresh ? "?refresh=true" : ""}`,

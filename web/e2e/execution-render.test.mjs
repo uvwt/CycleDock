@@ -1415,6 +1415,63 @@ test("工具安全守卫卡片待确认时保留三按钮并默认折叠参数�
   assert.doesNotMatch(approvedHtml, /允许本次执行/);
   assert.doesNotMatch(approvedHtml, /重启容器具有短暂中断风险/);
 
+  // 折叠态带 completedAttempt 与 onOpenTrace 时，顶部渲染与普通气泡一致的发送者与耗时/链路入口，审批胶囊仅保留展开详情按钮与下箭头
+  const approvedWithTraceHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: { ...baseApproval, status: "approved" },
+      completedAttempt: attempt,
+      onOpenTrace() {},
+    }),
+  );
+  assert.match(
+    approvedWithTraceHtml,
+    /class="group my-1\.5 flex w-fit max-w-full flex-col items-start"/,
+  );
+  const headerMatch = approvedWithTraceHtml.match(
+    /<div data-tool-approval-header="true"[\s\S]*?(?=<div data-tool-approval-card="true")/,
+  );
+  assert.ok(headerMatch, "耗时/链路入口应渲染在审批胶囊正上方");
+  assert.match(headerMatch[0], />Cycle</);
+  assert.match(
+    headerMatch[0],
+    /opacity-0 group-hover:opacity-100 group-focus-within:opacity-100/,
+  );
+  assert.match(headerMatch[0], /0:12 ›/);
+
+  const cardMatch = approvedWithTraceHtml.match(
+    /<div data-tool-approval-card="true"[\s\S]*$/,
+  );
+  assert.ok(cardMatch);
+  const cardButtons = cardMatch[0].match(/<button\b[\s\S]*?<\/button>/g) || [];
+  assert.equal(cardButtons.length, 1);
+  const [capsuleButton] = cardButtons;
+  assert.match(capsuleButton, /rounded-xl border/);
+  assert.match(capsuleButton, /exec_command/);
+  assert.match(capsuleButton, /已允许执行/);
+  assert.match(capsuleButton, /lucide-chevron-down/);
+  assert.doesNotMatch(capsuleButton, /0:12/);
+  assert.doesNotMatch(capsuleButton, /›/);
+  assert.doesNotMatch(capsuleButton, /•/);
+
+  // 待确认态带 completedAttempt 时同样统一渲染在卡片正上方，不塞进卡片头部的风险标签旁
+  const pendingWithTraceHtml = renderToStaticMarkup(
+    createElement(ToolApprovalCard, {
+      cardID: "card-1",
+      approval: baseApproval,
+      completedAttempt: attempt,
+      onOpenTrace() {},
+    }),
+  );
+  assert.match(
+    pendingWithTraceHtml,
+    /data-tool-approval-header="true"[\s\S]*?0:12 ›[\s\S]*?data-tool-approval-card="true"/,
+  );
+  const pendingCardBody = pendingWithTraceHtml.split(
+    'data-tool-approval-card="true"',
+  )[1];
+  assert.doesNotMatch(pendingCardBody, /0:12 ›/);
+
   const rejectedHtml = renderToStaticMarkup(
     createElement(ToolApprovalCard, {
       cardID: "card-1",
@@ -2157,7 +2214,7 @@ test("工具守卫完成状态与气泡组首或审批卡片融合，不再另�
   assert.equal((withProcessHtml.match(/0:12/g) || []).length, 1);
   assert.doesNotMatch(withProcessHtml, /data-execution-status="completed"/);
 
-  // 场景 2：无任何 Agent 回复气泡、仅有工具守卫卡片时，耗时/链路入口融合进工具守卫胶囊内
+  // 场景 2：无任何 Agent 回复气泡、仅有工具守卫卡片时，耗时/链路入口与普通气泡一致展示在审批胶囊上方
   const approvalOnlyHtml = renderToStaticMarkup(
     createElement(ConversationView, {
       events: [comment, approvalEvent],
@@ -2172,6 +2229,10 @@ test("工具守卫完成状态与气泡组首或审批卡片融合，不再另�
   );
   assert.match(approvalOnlyHtml, /data-tool-approval-card/);
   assert.match(approvalOnlyHtml, /0:12 ›/);
+  assert.match(
+    approvalOnlyHtml,
+    /data-tool-approval-header="true"[\s\S]*?>Cycle<[\s\S]*?0:12 ›[\s\S]*?data-tool-approval-card="true"[\s\S]*?已允许执行/,
+  );
   assert.doesNotMatch(approvalOnlyHtml, /执行完成/);
   assert.doesNotMatch(approvalOnlyHtml, /data-execution-status="completed"/);
 });
@@ -2334,4 +2395,109 @@ test("ConversationView 在首条未读消息正上方渲染未读消息分隔符
     }),
   );
   assert.equal(htmlWithoutDivider.includes("data-unread-divider"), false);
+});
+
+test("气泡轻引用按正文复杂度自动切换行内混排与顶部单行，输入框引用条同步去粗竖线", () => {
+  const quotePayload = {
+    event_id: "evt-orig-1",
+    sender: "Cycle",
+    text: "已确认将引用样式调整为极简轻引用，并保留平滑回跳能力",
+  };
+  const events = [
+    {
+      id: "evt-inline",
+      sequence: 1,
+      type: "comment",
+      actor_kind: "human",
+      actor_name: "你",
+      content: "这个方案很干净，直接改吧",
+      created_at: "2026-11-27T10:00:00Z",
+      message: {
+        type: "text",
+        content: "这个方案很干净，直接改吧",
+        quote: quotePayload,
+      },
+    },
+    {
+      id: "evt-stacked-md",
+      sequence: 2,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "## 改动清单\n- 重构气泡引用\n- 同步简化输入框引用条",
+      created_at: "2026-11-27T10:01:00Z",
+      message: {
+        type: "text",
+        content: "## 改动清单\n- 重构气泡引用\n- 同步简化输入框引用条",
+        quote: quotePayload,
+      },
+    },
+    {
+      id: "evt-stacked-img",
+      sequence: 3,
+      type: "message",
+      actor_kind: "cycle_agent",
+      actor_name: "Cycle",
+      content: "附上验证截图",
+      created_at: "2026-11-27T10:02:00Z",
+      message: {
+        type: "text",
+        content: "附上验证截图",
+        images: ["https://example.com/preview.png"],
+        quote: {
+          event_id: "",
+          sender: "你",
+          text: "发一下亮暗对比图",
+        },
+      },
+    },
+  ];
+
+  const html = renderToStaticMarkup(
+    createElement(ConversationView, {
+      events,
+      live: null,
+      cardKind: "discussion",
+      pendingTurns: [],
+      currentAttempt: null,
+      attemptHistory: [],
+      onRetryAttempt() {},
+    }),
+  );
+
+  // 简单短句使用行内混排，保留既有 data-* 属性且不渲染粗左竖线
+  assert.ok(html.includes('data-testid="message-quote-block"'));
+  assert.ok(html.includes('data-quote-ignore="true"'));
+  assert.ok(html.includes('data-quote-layout="inline"'));
+  assert.ok(html.includes('data-quote-layout="stacked"'));
+  assert.ok(html.includes('data-quote-target-event-id="evt-orig-1"'));
+  assert.equal(html.includes("border-l-3"), false);
+
+  // 无跳转目标的引用依然渲染为可点击查看全文浮层的 button
+  const imgEventIdx = html.indexOf('id="event-evt-stacked-img"');
+  assert.ok(imgEventIdx >= 0);
+  const imgEventSlice = html.slice(imgEventIdx);
+  assert.ok(imgEventSlice.includes('data-quote-layout="stacked"'));
+  assert.ok(imgEventSlice.includes("<button"));
+
+  // 输入框引用条去粗左竖线并使用统一轻引用外观
+  const composerHtml = renderToStaticMarkup(
+    createElement(ConversationComposer, {
+      cardID: "card-1",
+      projectID: "proj-1",
+      comment: "",
+      setComment() {},
+      placeholder: "输入消息...",
+      onSubmit() {},
+      replyTo: {
+        id: "evt-orig-1",
+        sender: "Cycle",
+        text: "请确认暗色模式下的对比度与浮层边界夹紧",
+      },
+      onCancelReply() {},
+    }),
+  );
+  assert.ok(composerHtml.includes('data-testid="chat-reply-bar"'));
+  assert.ok(composerHtml.includes("请确认暗色模式下的对比度与浮层边界夹紧"));
+  assert.equal(composerHtml.includes("border-l-3"), false);
 });

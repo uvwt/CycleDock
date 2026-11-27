@@ -17,7 +17,7 @@ OAuth discovery、授权、refresh 和 Workspace scope 继续由 CycleDock 管�
 
 聊天、卡片、工作、计划、活动和设置页面右上角提供设备菜单。按钮显示在线数量，展开后按在线优先列出设备名称、系统和架构，并提供刷新和连接设置入口。菜单展开时每 10 秒刷新，收起时每 30 秒更新，后台标签页不轮询；错误不伪装成零台在线。未启用、未连接、空列表和授权过期分别提示。
 
-前端请求 `GET /api/v1/agent/nexusdock/devices`，后端复用认证 Workspace 的 OAuth 授权调用同 origin 的 `GET /v1/integrations/devices`。只返回 `available`、`connected` 和设备摘要，Bearer 不进入浏览器；请求上限 12 秒、响应上限 2 MiB，拒绝重定向。401/403 映射为重新授权提示。成员可只读设备列表，Owner 才能管理连接。
+前端设备小窗请求 `GET /api/v1/agent/nexusdock/devices`（点击“刷新设备状态”时附带 `?refresh=true` 穿透缓存），NexusDock 设备管理页请求 `GET /api/v1/agent/nexusdock/fleet`。后端统一复用认证 Workspace 的 MCP OAuth 授权调用同 origin 的 MCP `agentdock_context`，共享 15 秒内存短缓存与并发去重，不再使用 `mcp` Token 请求 REST `/v1/integrations/devices`。`/devices` 仅投影返回 `available`、`connected` 和公开设备摘要，Bearer 不进入浏览器；连接超时 10 秒、调用超时 15 秒、响应上限 4 MiB，拒绝重定向。上游返回 401 时先强制刷新一次 OAuth Token 并重试，刷新失败或再次 401/403 才映射为重新授权提示，临时上游异常映射为服务暂不可用。成员可只读设备列表与能力概览，Owner 才能管理连接。
 
 用户可以选择在线设备，或保持默认的“不指定设备”。选择在当前 Workspace 的页面间共享，切换 Workspace 或刷新页面后重置。断开连接时也清除选择；已选设备暂时不可用时保留偏好并提示，不静默切换目标。
 

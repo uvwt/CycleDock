@@ -45,12 +45,16 @@ func TestNexusDockFleet_未登录拒绝且未连接返回ConnectedFalse(t *testi
 		t.Errorf("未连接时设备列表必须为空")
 	}
 
-	// 3. 连接后平滑降级（MCP 离线时走 REST 提取设备并正确返回）
+	// 3. 连接后通过 MCP agentdock_context 拉取设备及能力，不再请求 REST /v1/integrations/devices
 	var person identityResponse
 	decodeRecorder(t, login, &person)
 	workspaceID := uuid.MustParse(person.Workspace.ID)
 	humanID := uuid.MustParse(person.HumanAccountID)
 	sourceID := uuid.MustParse(person.Source.ID)
+
+	mcpHandler := newTestNexusMCPHandler(func() string {
+		return `{"nodes":[{"node_id":"node-fleet-1","name":"Fleet Device 1","online":true,"os":"darwin","arch":"arm64","version":"1.1.1","capabilities":["exec_command"],"context":{"skills":[{"name":"deploy","description":"Deploy app","source_type":"managed"}],"dynamic_mcp":[]}}]}`
+	}, nil)
 
 	var upstream *httptest.Server
 	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,12 +68,17 @@ func TestNexusDockFleet_未登录拒绝且未连接返回ConnectedFalse(t *testi
 			respondUnified(t, w, map[string]any{"client_id": "fleet-test"})
 		case "/oauth/token":
 			respondUnified(t, w, map[string]any{"access_token": "fleet-secret", "refresh_token": "refresh-secret", "token_type": "Bearer", "expires_in": 3600, "sub": "fleet-account", "scope": "mcp"})
+		case "/mcp":
+			if r.Header.Get("Authorization") != "Bearer fleet-secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			mcpHandler.ServeHTTP(w, r)
 		case "/v1/integrations/devices":
-			respondUnified(t, w, map[string]any{"devices": []any{
-				map[string]any{"id": "node-fleet-1", "name": "Fleet Device 1", "online": true, "os": "darwin", "arch": "arm64", "agent_version": "1.1.1"},
-			}})
+			t.Errorf("fleet 不应回退请求 REST /v1/integrations/devices")
+			w.WriteHeader(http.StatusUnauthorized)
 		default:
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer upstream.Close()
@@ -109,8 +118,8 @@ func TestNexusDockFleet_未登录拒绝且未连接返回ConnectedFalse(t *testi
 	}
 	var fleetResp nexusdock.FleetResponse
 	decodeRecorder(t, fleetGot, &fleetResp)
-	if !fleetResp.Connected || len(fleetResp.Devices) != 1 || fleetResp.Devices[0].ID != "node-fleet-1" {
-		t.Fatalf("降级返回应包含 node-fleet-1: got=%+v", fleetResp)
+	if !fleetResp.Connected || len(fleetResp.Devices) != 1 || fleetResp.Devices[0].ID != "node-fleet-1" || len(fleetResp.Devices[0].Skills) != 1 {
+		t.Fatalf("MCP Fleet 返回应包含 node-fleet-1 及能力摘要: got=%+v", fleetResp)
 	}
 	if strings.Contains(fleetGot.Body.String(), "fleet-secret") {
 		t.Fatal("响应不得泄露凭据 token")
