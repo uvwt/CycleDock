@@ -117,7 +117,7 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 		t.Fatalf("agent reply did not produce unread state: %+v", afterReply)
 	}
 
-	// 详情只提供卡片本体，前端进入详情时不能依赖其中的 unread 字段。
+	// 详情接口返回与卡片列表一致的已读水位线，确保直链刷新与主聊天浮窗能准确定位未读消息分隔符。
 	detailRec := doJSON(t, handler, http.MethodGet,
 		"/api/v1/cards/"+card.ID.String(), nil, cookie, nil)
 	if detailRec.Code != http.StatusOK {
@@ -125,8 +125,55 @@ func testCardReadCursorHTTPFlow(t *testing.T, kind domain.CardKind) {
 	}
 	var detail cardDetailResponse
 	decodeRecorder(t, detailRec, &detail)
-	if detail.Card.Unread != nil || len(detail.Timeline) == 0 {
-		t.Fatalf("unexpected detail read contract: %+v", detail)
+	if detail.Card.Unread == nil || !*detail.Card.Unread ||
+		detail.Card.LatestMessageSequence == nil ||
+		detail.Card.LastReadMessageSequence == nil ||
+		*detail.Card.LatestMessageSequence != *afterReply.LatestMessageSequence ||
+		*detail.Card.LastReadMessageSequence != *afterReply.LastReadMessageSequence ||
+		len(detail.Timeline) == 0 {
+		t.Fatalf("unexpected detail read contract: detail=%+v summary=%+v", detail.Card, afterReply)
+	}
+	if kind == domain.CardKindDiscussion {
+		mainCardCreated, _, err := dataStore.EnsureMainDiscussion(ctx, workspaceID, project.ID, humanSourceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// 给主讨论写入一条 Agent 回复，确保 GET /main-discussion 返回真实未读水位线。
+		if _, err := dataStore.SubmitSessionComment(ctx, store.SubmitSessionCommentParams{
+			WorkspaceID: workspaceID, CardID: mainCardCreated.ID, AuthorSourceID: humanSourceID,
+			Content: "主讨论启动检查", IdempotencyKey: "main-read-self-1",
+			DispatchMode: domain.DispatchModeEnqueue,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		mainClaim, err := dataStore.ClaimCardTurnAttempt(
+			ctx, workspaceID, mainCardCreated.ID, agent.ID, time.Now().UTC(), time.Minute,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := dataStore.PublishReply(ctx, store.PublishReplyParams{
+			WorkspaceID: workspaceID, CardID: mainCardCreated.ID, AttemptID: mainClaim.Attempt.ID,
+			RunnerSourceID: agent.ID, IdempotencyKey: "main-read-reply-1",
+			Message:     store.ReplyMessage{Type: "text", Content: "主讨论新回复", EndTurn: true},
+			FinishOnEnd: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		mainRec := doJSON(t, handler, http.MethodGet,
+			"/api/v1/projects/"+project.ID.String()+"/main-discussion", nil, cookie, nil)
+		if mainRec.Code != http.StatusOK {
+			t.Fatalf("get main discussion: %d %s", mainRec.Code, mainRec.Body.String())
+		}
+		var mainCard cardResponse
+		decodeRecorder(t, mainRec, &mainCard)
+		if mainCard.ID != mainCardCreated.ID.String() ||
+			mainCard.Unread == nil || !*mainCard.Unread ||
+			mainCard.LatestMessageSequence == nil || mainCard.LastReadMessageSequence == nil ||
+			*mainCard.LatestMessageSequence <= *mainCard.LastReadMessageSequence {
+			t.Fatalf("main discussion unexpected read state: %+v", mainCard)
+		}
 	}
 
 	readRec := doJSON(t, handler, http.MethodPost,

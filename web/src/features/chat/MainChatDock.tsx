@@ -18,6 +18,7 @@ import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
 import type {
   Attempt,
+  Card,
   CardDetail,
   CommentQuote,
   Identity,
@@ -27,7 +28,9 @@ import {
   applyOptimisticSentTurn,
   upsertCachedProjectCard,
 } from "../../shared/lib/card-cache";
+import { activeCardAutoReadSuppression } from "../../shared/lib/card-read-state";
 import type { QuotedMessage } from "../timeline/ConversationView";
+import { useUnreadDividerSession } from "../timeline/useUnreadDividerSession";
 import { useCardStream } from "../../shared/realtime/useCardStream";
 import {
   cardMessageEvent,
@@ -457,6 +460,29 @@ export function MainChatDock() {
   }, [olderEvents, detail.data?.timeline]);
 
   const card = detail.data?.card;
+  const cachedMainCard =
+    (projectID
+      ? queryClient
+          .getQueryData<Card[]>(keys.cards(projectID))
+          ?.find((item) => item.id === cardID)
+      : undefined) ||
+    main.data ||
+    null;
+  const {
+    unreadDividerAfterSequence,
+    clearUnreadDivider,
+    handleNearBottomChange,
+    markCurrentCardRead,
+  } = useUnreadDividerSession({
+    cardID,
+    projectID,
+    detailCard: card,
+    cachedCard: cachedMainCard,
+    timeline: combinedTimeline,
+    active: open && Boolean(cardID),
+    detailFetching: detail.isFetching,
+    detailReady: Boolean(detail.data?.card),
+  });
   const isMainMuted = Boolean(
     card?.notifications_muted ?? main.data?.notifications_muted,
   );
@@ -503,6 +529,11 @@ export function MainChatDock() {
       return { ...result, content: text, attachments, quote, deviceTarget };
     },
     onSuccess: (result) => {
+      activeCardAutoReadSuppression.clearSuppressed(cardID);
+      clearUnreadDivider();
+      if (cardID && projectID) {
+        markCurrentCardRead(cardID, projectID);
+      }
       setComment("");
       setReplyTo(null);
       setSelectionQuote(null);
@@ -941,6 +972,7 @@ export function MainChatDock() {
                 </div>
               ) : (
                 <ConversationView
+                  key={cardID}
                   card={card}
                   events={combinedTimeline}
                   live={stream.live}
@@ -951,6 +983,8 @@ export function MainChatDock() {
                   hasMoreBefore={hasMoreBefore}
                   loadingMoreBefore={loadingMoreBefore}
                   onLoadMoreBefore={loadMoreBefore}
+                  unreadDividerAfterSequence={unreadDividerAfterSequence}
+                  onNearBottomChange={handleNearBottomChange}
                   bottomSpacerClass="h-2 shrink-0"
                   compact
                   retryingAttemptID={retryingAttemptID}

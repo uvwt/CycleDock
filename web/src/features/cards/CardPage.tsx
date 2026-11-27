@@ -38,6 +38,7 @@ import {
   ConversationView,
   type QuotedMessage,
 } from "../timeline/ConversationView";
+import { useUnreadDividerSession } from "../timeline/useUnreadDividerSession";
 import { ConversationSkeleton } from "../timeline/ConversationSkeleton";
 import { CardHeaderInfoCard } from "./CardHeaderInfoCard";
 import { CardStatusSwitch } from "./CardStatusSwitch";
@@ -505,70 +506,33 @@ function CardPageContent({
       navigate(path, { replace: true, state: location.state });
   }, [card, navigate, location.pathname, location.state]);
 
-  const latestVisibleMessageSequence = useMemo(
-    () =>
-      (detail.data?.timeline || []).reduce((max, event) => {
-        if (event.type !== "message" && event.type !== "comment") return max;
-        return Math.max(max, event.sequence || 0);
-      }, 0),
-    [detail.data?.timeline],
-  );
-
   // 切换到新卡片时，清理其他卡片遗留的手动未读自动已读抑制标记
   useEffect(() => {
     activeCardAutoReadSuppression.clearAllExcept(cardID);
   }, [cardID]);
 
-  const markCurrentCardRead = useCallback(
-    (targetCardID: string, targetProjectID: string) => {
-      void api
-        .markCardRead(targetCardID)
-        .then((result) => {
-          patchCachedCard(queryClient, targetCardID, targetProjectID, {
-            last_read_message_sequence: result.last_read_message_sequence,
-            unread: false,
-            marked_unread: false,
-          });
-          return Promise.all([
-            queryClient.invalidateQueries({
-              queryKey: keys.cards(targetProjectID),
-            }),
-            queryClient.invalidateQueries({
-              queryKey: keys.mainDiscussion(targetProjectID),
-            }),
-          ]);
-        })
-        .catch(() => {
-          // 读状态失败不影响卡片展示本身
-        });
-    },
-    [],
+  const cachedProjectCard = useMemo(
+    () => projectCards.find((item) => item.id === cardID) || null,
+    [projectCards, cardID],
   );
 
-  // 打开卡片详情或可见消息推进时更新服务端已读游标；
-  // 若用户在列表里手动将当前打开卡片标为未读，则抑制自动已读，直到重新点进该卡片或收到/发送新消息。
-  useEffect(() => {
-    if (!card?.id) return;
-    const effectiveLatestSeq = Math.max(
-      latestVisibleMessageSequence,
-      card.latest_message_sequence ?? 0,
-    );
-    if (
-      activeCardAutoReadSuppression.shouldSuppressAutoRead(
-        card.id,
-        effectiveLatestSeq,
-      )
-    ) {
-      return;
-    }
-    markCurrentCardRead(card.id, card.project_id);
-  }, [
-    card?.id,
-    card?.project_id,
-    card?.latest_message_sequence,
-    latestVisibleMessageSequence,
+  // 进入卡片时先捕获未读水位线快照再自动标已读，停留期间保持分隔符可见；
+  // 主动发消息或切走重进后再自然清除。
+  const {
+    unreadDividerAfterSequence,
+    clearUnreadDivider,
+    handleNearBottomChange,
     markCurrentCardRead,
-  ]);
+  } = useUnreadDividerSession({
+    cardID,
+    projectID: actualProjectID,
+    detailCard: card,
+    cachedCard: cachedProjectCard,
+    timeline: combinedTimeline,
+    active: Boolean(cardID),
+    detailFetching: detail.isFetching,
+    detailReady: Boolean(detail.data?.card),
+  });
 
   const sync = async () => {
     await Promise.all([
@@ -607,6 +571,7 @@ function CardPageContent({
     },
     onSuccess: (result) => {
       activeCardAutoReadSuppression.clearSuppressed(cardID);
+      clearUnreadDivider();
       if (card?.project_id) {
         markCurrentCardRead(cardID, card.project_id);
       }
@@ -1186,6 +1151,8 @@ function CardPageContent({
                 hasMoreBefore={hasMoreBefore}
                 loadingMoreBefore={loadingMoreBefore}
                 onLoadMoreBefore={loadMoreBefore}
+                unreadDividerAfterSequence={unreadDividerAfterSequence}
+                onNearBottomChange={handleNearBottomChange}
                 retryingAttemptID={retryingAttemptID}
                 regeneratingEventID={regeneratingEventID}
                 onRetryAttempt={(attemptID, preferredModelRouteID) =>
