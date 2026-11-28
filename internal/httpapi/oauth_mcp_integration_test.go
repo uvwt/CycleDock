@@ -573,7 +573,11 @@ func TestOAuthSPAConsentFlowAndProtocolCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create oauth service: %v", err)
 	}
-	handler := NewRouter(pool, dataStore, humanAuth, Config{OAuth: oauthService})
+	sessionService := agentsession.NewService(pool)
+	mcpHandlers := mcpserver.New(dataStore, sessionService, oauthService, nil)
+	handler := NewRouter(pool, dataStore, humanAuth, Config{
+		OAuth: oauthService, MCP: mcpHandlers.MCP, MCPMetadata: mcpHandlers.ProtectedResourceMetadata,
+	})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
@@ -794,10 +798,124 @@ func TestOAuthSPAConsentFlowAndProtocolCompatibility(t *testing.T) {
 		body, _ := io.ReadAll(tokenResp.Body)
 		t.Fatalf("token without resource status=%d body=%s", tokenResp.StatusCode, body)
 	}
-	var tokens oauthTokenResponse
+	tokens := oauthTokenResponse{}
 	decodeHTTPBody(t, tokenResp, &tokens)
 	if tokens.AccessToken == "" || tokens.Scope != cycledockoauth.ScopeMCP {
 		t.Fatalf("unexpected compat tokens: %+v", tokens)
+	}
+
+	// 7.1 验证反向代理场景：即使入口处于 https:// 公网域名下且后端监听 127.0.0.1，
+	// 携带外网 Host 头（模拟 Caddy/EdgeOne 回源）调用 /mcp 也必须成功握手并列出工具，
+	// 同时无状态 JSON 模式不依赖 Mcp-Session-Id，且保持本地 http:// 入口的 DNS rebinding 防护。
+	httpsPublicURL := "https://cycle.example.com"
+	httpsOAuthService, err := cycledockoauth.New(pool, cycledockoauth.Config{PublicURL: httpsPublicURL})
+	if err != nil {
+		t.Fatalf("create https OAuth service: %v", err)
+	}
+	httpsMCPHandlers := mcpserver.New(dataStore, sessionService, httpsOAuthService, nil)
+	httpsRouter := NewRouter(pool, dataStore, humanAuth, Config{
+		OAuth: httpsOAuthService, MCP: httpsMCPHandlers.MCP, MCPMetadata: httpsMCPHandlers.ProtectedResourceMetadata,
+	})
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = proxyListener.Close() })
+	proxyServer := &http.Server{Handler: httpsRouter, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = proxyServer.Serve(proxyListener) }()
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = proxyServer.Shutdown(shutdownCtx)
+	})
+
+	httpsHumanSession, err := humanAuth.Login(ctx, httpIntegrationPassword)
+	if err != nil {
+		t.Fatalf("login human session for https OAuth test: %v", err)
+	}
+	httpsHuman, err := httpsOAuthService.Authorize(ctx, httpsHumanSession.Identity, cycledockoauth.AuthorizeRequest{
+		ClientID:      registration.ClientID,
+		RedirectURI:   callbackURL,
+		CodeChallenge: challenge,
+		Scope:         cycledockoauth.ScopeMCP,
+		Resource:      httpsOAuthService.Resource(),
+	})
+	if err != nil {
+		t.Fatalf("authorize against https OAuth service: %v", err)
+	}
+	httpsTokens, err := httpsOAuthService.ExchangeCode(ctx, cycledockoauth.CodeTokenRequest{
+		Code:         httpsHuman.Code,
+		ClientID:     registration.ClientID,
+		RedirectURI:  callbackURL,
+		CodeVerifier: verifier,
+		Resource:     httpsOAuthService.Resource(),
+	})
+	if err != nil {
+		t.Fatalf("exchange code against https OAuth service: %v", err)
+	}
+
+	proxiedClient := &http.Client{
+		Transport: hostOverrideRoundTripper{
+			base: bearerRoundTripper{base: http.DefaultTransport, token: httpsTokens.AccessToken},
+			host: "cycle.example.com",
+		},
+	}
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"Google","version":"1.0"}}}`
+	initReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+proxyListener.Addr().String()+"/mcp", strings.NewReader(initBody))
+	initReq.Header.Set("Content-Type", "application/json; charset=utf-8")
+	initReq.Header.Set("Accept", "application/json, text/event-stream")
+	initReq.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	initResp, err := proxiedClient.Do(initReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initRespBody, _ := io.ReadAll(initResp.Body)
+	_ = initResp.Body.Close()
+	if initResp.StatusCode != http.StatusOK {
+		t.Fatalf("proxied HTTPS initialize status=%d body=%s", initResp.StatusCode, initRespBody)
+	}
+	if ct := initResp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("expected application/json response, got %q body=%s", ct, initRespBody)
+	}
+	if sid := initResp.Header.Get("Mcp-Session-Id"); sid != "" {
+		t.Fatalf("stateless server should not emit Mcp-Session-Id, got %q", sid)
+	}
+
+	toolsBody := `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`
+	toolsReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+proxyListener.Addr().String()+"/mcp", strings.NewReader(toolsBody))
+	toolsReq.Header.Set("Content-Type", "application/json; charset=utf-8")
+	toolsReq.Header.Set("Accept", "application/json, text/event-stream")
+	toolsReq.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	toolsResp, err := proxiedClient.Do(toolsReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolsRespBody, _ := io.ReadAll(toolsResp.Body)
+	_ = toolsResp.Body.Close()
+	if toolsResp.StatusCode != http.StatusOK {
+		t.Fatalf("proxied HTTPS tools/list status=%d body=%s", toolsResp.StatusCode, toolsRespBody)
+	}
+	if !strings.Contains(string(toolsRespBody), "list_projects") {
+		t.Fatalf("proxied HTTPS tools/list missing list_projects: %s", toolsRespBody)
+	}
+
+	// 本地 http:// 入口仍应拒绝伪造的外网 Host 头（保持 DNS-rebinding 防护）。
+	localDeniedClient := &http.Client{
+		Transport: hostOverrideRoundTripper{
+			base: bearerRoundTripper{base: http.DefaultTransport, token: tokens.AccessToken},
+			host: "evil.example.com",
+		},
+	}
+	localDeniedReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, publicURL+"/mcp", strings.NewReader(initBody))
+	localDeniedReq.Header.Set("Content-Type", "application/json")
+	localDeniedReq.Header.Set("Accept", "application/json, text/event-stream")
+	localDeniedResp, err := localDeniedClient.Do(localDeniedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = localDeniedResp.Body.Close()
+	if localDeniedResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-loopback Host on local HTTP server, got %d", localDeniedResp.StatusCode)
 	}
 
 	// 8. 兼容旧 POST /oauth/authorize 提交：响应不应带 form-action 限制，且能正常签发 code。
@@ -836,6 +954,17 @@ func (transport bearerRoundTripper) RoundTrip(request *http.Request) (*http.Resp
 	clone := request.Clone(request.Context())
 	clone.Header = request.Header.Clone()
 	clone.Header.Set("Authorization", "Bearer "+transport.token)
+	return transport.base.RoundTrip(clone)
+}
+
+type hostOverrideRoundTripper struct {
+	base http.RoundTripper
+	host string
+}
+
+func (transport hostOverrideRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.Host = transport.host
 	return transport.base.RoundTrip(clone)
 }
 
