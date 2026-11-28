@@ -630,6 +630,10 @@ const en = {
   "点击查看大图": "Click to view full size",
   "打开原图": "Open original",
   "图片加载失败": "Failed to load image",
+  "正在重试加载图片（{{attempt}}/{{total}}）...":
+    "Retrying image ({{attempt}}/{{total}})...",
+  "正在重新加载图片...": "Reloading image...",
+  "重新加载图片": "Reload image",
   "消息图片": "Message image",
   "图片大图预览": "Full-size image preview",
   "关闭预览": "Close preview",
