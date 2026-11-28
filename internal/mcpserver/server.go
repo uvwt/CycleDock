@@ -47,7 +47,17 @@ func New(dataStore *store.Store, sessionService *agentsession.Service, oauthServ
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{CrossOriginProtection: &http.CrossOriginProtection{}},
+		&mcp.StreamableHTTPOptions{
+			// 外部 MCP 客户端在完成 OAuth 后并发/无状态发起初始化与工具调用；
+			// 统一采用无状态 JSON 响应，避免内存会话与 SSE 流经 CDN/反代时失效，并对齐 Gemini 等客户端习惯。
+			Stateless:                    true,
+			JSONResponse:                 true,
+			PropagateRequestCancellation: true,
+			// 公网 HTTPS 入口经 EdgeOne/Caddy 反向代理回源到本机 loopback，Host 仍保持公网域名；
+			// 仅公网 HTTPS 入口关闭 go-sdk 的 localhost DNS-rebinding Host 检查，本地 HTTP 直连继续保留默认保护。
+			DisableLocalhostProtection: strings.HasPrefix(oauthService.Issuer(), "https://"),
+			CrossOriginProtection:      &http.CrossOriginProtection{},
+		},
 	)
 
 	resourceMetadataURL := oauthService.Issuer() + "/.well-known/oauth-protected-resource/mcp"
