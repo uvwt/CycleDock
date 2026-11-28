@@ -467,3 +467,104 @@ func (api *API) deleteDeviceToolGuard(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+type cardToolWhitelistResponse struct {
+	ID          string    `json:"id"`
+	ScopeType   string    `json:"scope_type"`
+	ScopeTarget string    `json:"scope_target"`
+	ScopeLabel  string    `json:"scope_label,omitempty"`
+	ToolName    string    `json:"tool_name,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func cardToolWhitelistFromDB(row db.ListCardToolWhitelistsRow) cardToolWhitelistResponse {
+	return cardToolWhitelistResponse{
+		ID:          row.ID.String(),
+		ScopeType:   row.ScopeType,
+		ScopeTarget: row.ScopeTarget,
+		ScopeLabel:  strings.TrimSpace(row.ScopeLabel),
+		ToolName:    strings.TrimSpace(row.ToolName),
+		CreatedAt:   row.CreatedAt.Time,
+	}
+}
+
+// listCardToolWhitelists 列出当前卡片生效的临时工具守卫白名单。
+func (api *API) listCardToolWhitelists(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if _, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	rows, err := api.store.ListCardToolWhitelists(r.Context(), identity.WorkspaceID, cardID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	out := make([]cardToolWhitelistResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, cardToolWhitelistFromDB(row))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"whitelists": out,
+	})
+}
+
+// deleteCardToolWhitelist 撤销当前卡片下的单条临时工具守卫白名单，撤销后下次受保护调用重新触发审批。
+func (api *API) deleteCardToolWhitelist(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	whitelistID, ok := parseUUIDParam(w, r, "whitelistID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if _, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if err := api.store.DeleteCardToolWhitelist(r.Context(), identity.WorkspaceID, cardID, whitelistID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if api.live != nil {
+		api.live.Publish(cardID, realtime.Event{
+			Type: "card.updated",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted": true,
+		"id":      whitelistID.String(),
+	})
+}
+
+// clearCardToolWhitelists 清空当前卡片下的全部临时工具守卫白名单。
+func (api *API) clearCardToolWhitelists(w http.ResponseWriter, r *http.Request) {
+	cardID, ok := parseUUIDParam(w, r, "cardID")
+	if !ok {
+		return
+	}
+	identity := identityFromRequest(r)
+	if _, err := api.store.GetCard(r.Context(), identity.WorkspaceID, cardID); err != nil {
+		api.handleError(w, err)
+		return
+	}
+	deletedCount, err := api.store.ClearCardToolWhitelists(r.Context(), identity.WorkspaceID, cardID)
+	if err != nil {
+		api.handleError(w, err)
+		return
+	}
+	if deletedCount > 0 && api.live != nil {
+		api.live.Publish(cardID, realtime.Event{
+			Type: "card.updated",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted_count": deletedCount,
+	})
+}

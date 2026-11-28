@@ -39,6 +39,7 @@ import type {
   TraceOverview,
   TraceEventsResponse,
   ToolApproval,
+  CardToolWhitelist,
   DeviceToolGuard,
   ToolGuardSettings,
   WorkspaceTrigger,
@@ -380,6 +381,20 @@ export const api = {
       `/cards/${cardID}/tool-approvals/${approvalID}/resolve`,
       "POST",
       { action, comment: comment || "" },
+    ),
+  cardToolWhitelists: (cardID: string) =>
+    request<{ whitelists: CardToolWhitelist[] }>(
+      `/cards/${encodeURIComponent(cardID)}/tool-whitelists`,
+    ).then((res) => res.whitelists || []),
+  deleteCardToolWhitelist: (cardID: string, whitelistID: string) =>
+    request<{ deleted: boolean; id: string }>(
+      `/cards/${encodeURIComponent(cardID)}/tool-whitelists/${encodeURIComponent(whitelistID)}`,
+      "DELETE",
+    ),
+  clearCardToolWhitelists: (cardID: string) =>
+    request<{ deleted_count: number }>(
+      `/cards/${encodeURIComponent(cardID)}/tool-whitelists`,
+      "DELETE",
     ),
   editComment: (id: string, eventID: string, content: string) =>
     request<{ event_id: string; turn_id: string }>(

@@ -14,6 +14,7 @@ import { Badge } from "../../shared/ui/badge";
 import { Spinner } from "../../shared/ui/components";
 import { OngoingHealthBadge } from "../../shared/ui/OngoingHealthBadge";
 import { CardStatusSwitch } from "./CardStatusSwitch";
+import { CardToolWhitelistsSection } from "./CardToolWhitelistsSection";
 import { CardWatchersSection } from "./CardWatchersSection";
 import { RichText } from "../timeline/RichText";
 import { MessageAttachmentGrid } from "../timeline/AttachmentGallery";
@@ -458,6 +459,14 @@ export function CardHeaderInfoCard({
           )}
         </div>
       )}
+
+      {/* 卡片临时工具守卫白名单（仅存在生效白名单时展示，支持逐条撤销或清空） */}
+      <CardToolWhitelistsSection
+        cardID={card.id}
+        onChanged={() => {
+          if (onSync) void onSync();
+        }}
+      />
 
       {/* 卡片等待与定时自唤醒 */}
       <CardWatchersSection

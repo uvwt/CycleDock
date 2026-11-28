@@ -630,6 +630,10 @@ const en = {
   "点击查看大图": "Click to view full size",
   "打开原图": "Open original",
   "图片加载失败": "Failed to load image",
+  "正在重试加载图片（{{attempt}}/{{total}}）...":
+    "Retrying image ({{attempt}}/{{total}})...",
+  "正在重新加载图片...": "Reloading image...",
+  "重新加载图片": "Reload image",
   "消息图片": "Message image",
   "图片大图预览": "Full-size image preview",
   "关闭预览": "Close preview",
@@ -902,6 +906,21 @@ const en = {
   等待与定时提醒: "Waiting & reminders",
   "当前没有等待中的事件或定时提醒。": "No waiting events or reminders.",
   预计唤醒: "Scheduled for",
+  临时免审白名单: "Temporary tool whitelist",
+  "仅对本卡片生效，撤销后下次受保护操作将重新触发审批。":
+    "Applies only to this card. Once revoked, protected actions will require approval again.",
+  "本卡片已临时放行 {{count}} 项工具白名单":
+    "{{count}} temporary tool whitelist rule(s) active on this card",
+  全部撤销: "Clear all",
+  撤销: "Revoke",
+  "撤销 {{target}} 的临时白名单": "Revoke temporary whitelist for {{target}}",
+  放行时间: "Allowed at",
+  "已撤销临时放行，下次操作将重新审批":
+    "Temporary allowance revoked; next protected action will require approval",
+  撤销临时白名单失败: "Failed to revoke temporary whitelist",
+  已清空本卡片临时白名单: "Cleared all temporary whitelist rules for this card",
+  清空临时白名单失败: "Failed to clear temporary whitelist",
+  工具: "Tool",
   标为未读: "Mark as unread",
   标为已读: "Mark as read",
   已标为未读: "Marked as unread",

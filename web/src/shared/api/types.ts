@@ -99,6 +99,14 @@ export type ToolApproval = {
   resolved_at?: string;
   created_at: string;
 };
+export type CardToolWhitelist = {
+  id: string;
+  scope_type: "device" | "mcp" | "tool" | string;
+  scope_target: string;
+  scope_label?: string;
+  tool_name?: string;
+  created_at: string;
+};
 export type AttachmentMeta = {
   id: string;
   workspace_id?: string;

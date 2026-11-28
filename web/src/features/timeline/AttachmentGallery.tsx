@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
@@ -10,6 +10,7 @@ import {
   FileX2,
   ImageOff,
   Loader2,
+  RefreshCw,
   X,
   ZoomIn,
 } from "lucide-react";
@@ -597,8 +598,19 @@ export function ImageLightboxModal({
   );
 }
 
-/** 单张外链消息图片卡片：支持加载失败回退到可点击的外链提示，点击正常图片打开应用内灯箱。 */
-function MessageExternalImageCard({
+// 外链图片加载失败时的温和退避重试间隔（毫秒）：最多自动重试 2 次，缓解短暂 429 或网络抖动。
+const EXTERNAL_IMAGE_AUTO_RETRY_DELAYS_MS = [1200, 3000] as const;
+
+type ExternalImagePhase = "loading" | "loaded" | "retrying" | "failed";
+
+/**
+ * 单张外链消息图片内部状态实现：
+ * - 保留 loading="lazy" 与灯箱预览体验；
+ * - 遇到短暂失败先按退避间隔自动重挂载 <img>（绝不篡改原始 URL，避免破坏签名链接的 HMAC 校验）；
+ * - 自动重试仍失败后展示清晰的回退卡片，提供手动「重试」按钮与「打开原图」链接；
+ * - 组件卸载时清理定时器，并用尝试序号屏蔽旧 <img> 的迟到回调。
+ */
+function MessageExternalImageCardInner({
   src,
   alt,
   single,
@@ -610,59 +622,225 @@ function MessageExternalImageCard({
   onPreview: (src: string) => void;
 }) {
   const { t } = useTranslation();
-  const [failed, setFailed] = useState(false);
+  const [phase, setPhase] = useState<ExternalImagePhase>("loading");
+  const [autoRetryCount, setAutoRetryCount] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [isManualReload, setIsManualReload] = useState(false);
 
-  if (failed) {
+  const retryTimerRef = useRef<number | null>(null);
+  const activeAttemptRef = useRef(0);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // 卸载前清理未触发的退避定时器，并推进尝试序号屏蔽任何迟到事件。
+      clearRetryTimer();
+      activeAttemptRef.current += 1;
+    };
+  }, [clearRetryTimer]);
+
+  // 同步兜底：若重挂载的图片直接命中浏览器内存缓存且已解码完成，及时切回 loaded 隐藏重载提示。
+  useEffect(() => {
+    if (
+      phase === "loading" &&
+      imgRef.current?.complete &&
+      imgRef.current.naturalWidth > 0
+    ) {
+      setPhase("loaded");
+      setIsManualReload(false);
+    }
+  }, [phase, reloadKey]);
+
+  const handleLoad = useCallback(
+    (attemptKey: number) => {
+      if (attemptKey !== activeAttemptRef.current) return;
+      clearRetryTimer();
+      setPhase("loaded");
+      setIsManualReload(false);
+    },
+    [clearRetryTimer],
+  );
+
+  const handleError = useCallback(
+    (attemptKey: number) => {
+      if (attemptKey !== activeAttemptRef.current) return;
+      clearRetryTimer();
+
+      if (
+        !isManualReload &&
+        autoRetryCount < EXTERNAL_IMAGE_AUTO_RETRY_DELAYS_MS.length
+      ) {
+        const delayMs = EXTERNAL_IMAGE_AUTO_RETRY_DELAYS_MS[autoRetryCount];
+        const nextAutoRetry = autoRetryCount + 1;
+        setPhase("retrying");
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          if (attemptKey !== activeAttemptRef.current) return;
+          const nextReloadKey = activeAttemptRef.current + 1;
+          activeAttemptRef.current = nextReloadKey;
+          setAutoRetryCount(nextAutoRetry);
+          setReloadKey(nextReloadKey);
+          setPhase("loading");
+        }, delayMs);
+        return;
+      }
+
+      setIsManualReload(false);
+      setPhase("failed");
+    },
+    [autoRetryCount, clearRetryTimer, isManualReload],
+  );
+
+  const handleManualRetry = useCallback(() => {
+    clearRetryTimer();
+    // 仅通过递增 React key 卸载并重挂载 <img>，保持原始签名 URL 字节级不变。
+    const nextReloadKey = activeAttemptRef.current + 1;
+    activeAttemptRef.current = nextReloadKey;
+    setIsManualReload(true);
+    setReloadKey(nextReloadKey);
+    setPhase("loading");
+  }, [clearRetryTimer]);
+
+  const fallbackSizeClass = single
+    ? "min-h-28 w-full max-w-sm sm:min-w-[220px]"
+    : "h-40 w-full sm:h-48";
+
+  if (phase === "retrying") {
+    return (
+      <div
+        data-testid="message-image-retrying"
+        className={`flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-muted/40 px-3 py-3 text-center text-xs text-muted-foreground ${fallbackSizeClass}`}
+      >
+        <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground/80" />
+        <span className="leading-snug">
+          {t("正在重试加载图片（{{attempt}}/{{total}}）...", {
+            attempt: autoRetryCount + 1,
+            total: EXTERNAL_IMAGE_AUTO_RETRY_DELAYS_MS.length,
+          })}
+        </span>
+      </div>
+    );
+  }
+
+  if (phase === "failed") {
     return (
       <div
         data-testid="message-image-fallback"
-        className={`flex flex-col items-start justify-center gap-1.5 rounded-xl border border-dashed border-border/80 bg-muted/40 px-3 py-3 text-xs text-muted-foreground ${
-          single ? "min-w-[220px] max-w-sm" : "min-h-28"
-        }`}
+        className={`flex flex-col items-start justify-center gap-2 rounded-xl border border-dashed border-border/80 bg-muted/40 px-3 py-3 text-xs text-muted-foreground ${fallbackSizeClass}`}
       >
         <div className="flex items-center gap-1.5 font-medium text-foreground/80">
           <ImageOff className="size-4 shrink-0 opacity-75" />
           <span>{t("图片加载失败")}</span>
         </div>
-        <a
-          href={src}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex max-w-full items-center gap-1 break-all text-[11px] text-primary underline underline-offset-2 hover:opacity-80"
-        >
-          <ExternalLink className="size-3 shrink-0" />
-          <span className="truncate">{t("打开原图")}</span>
-        </a>
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <button
+            type="button"
+            onClick={handleManualRetry}
+            data-testid="message-image-retry"
+            aria-label={t("重新加载图片")}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-border/80 bg-surface px-2.5 py-1 text-[11px] font-medium text-foreground shadow-2xs transition hover:border-primary/50 hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            <RefreshCw className="size-3 shrink-0" />
+            <span>{t("重试")}</span>
+          </button>
+          <a
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="message-image-open-original"
+            className="inline-flex max-w-full items-center gap-1 break-all text-[11px] text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            <ExternalLink className="size-3 shrink-0" />
+            <span className="truncate">{t("打开原图")}</span>
+          </a>
+        </div>
       </div>
     );
   }
 
+  // 仅在重试重挂载期间展示轻量加载提示；首次加载不叠遮罩，避免视口外懒加载图片一直转圈。
+  const isReloading = phase === "loading" && reloadKey > 0;
+
   return (
     <button
       type="button"
+      disabled={isReloading}
       onClick={() => onPreview(src)}
       data-testid="message-image-item"
       aria-label={t("点击查看大图")}
-      className={`group relative overflow-hidden rounded-xl border border-border/60 bg-muted/30 p-0 text-left transition hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-zoom-in ${
-        single ? "block max-w-full" : "block w-full"
+      className={`group relative overflow-hidden rounded-xl border border-border/60 bg-muted/30 p-0 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30 ${
+        isReloading
+          ? `cursor-wait ${fallbackSizeClass}`
+          : `cursor-zoom-in hover:border-primary/40 ${single ? "block max-w-full" : "block w-full"}`
       }`}
     >
       <img
+        key={reloadKey}
+        ref={imgRef}
         src={src}
         alt={alt}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
+        onLoad={() => handleLoad(reloadKey)}
+        onError={() => handleError(reloadKey)}
         className={
           single
-            ? "block max-h-96 max-w-full w-auto rounded-xl object-contain"
-            : "h-40 w-full object-cover sm:h-48"
+            ? `block max-h-96 max-w-full w-auto rounded-xl object-contain ${isReloading ? "opacity-0" : ""}`
+            : `h-40 w-full object-cover sm:h-48 ${isReloading ? "opacity-0" : ""}`
         }
       />
-      <span className="pointer-events-none absolute right-2 bottom-2 grid size-7 place-items-center rounded-full bg-black/50 text-white opacity-0 transition group-hover:opacity-100">
-        <ZoomIn className="size-3.5" />
-      </span>
+      {isReloading ? (
+        <span
+          data-testid="message-image-reloading"
+          className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-3 text-center text-xs text-muted-foreground"
+        >
+          <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground/80" />
+          <span className="leading-snug">
+            {isManualReload
+              ? t("正在重新加载图片...")
+              : t("正在重试加载图片（{{attempt}}/{{total}}）...", {
+                  attempt: autoRetryCount,
+                  total: EXTERNAL_IMAGE_AUTO_RETRY_DELAYS_MS.length,
+                })}
+          </span>
+        </span>
+      ) : (
+        <span className="pointer-events-none absolute right-2 bottom-2 grid size-7 place-items-center rounded-full bg-black/50 text-white opacity-0 transition group-hover:opacity-100">
+          <ZoomIn className="size-3.5" />
+        </span>
+      )}
     </button>
+  );
+}
+
+/** 单张外链消息图片卡片：按 src 隔离生命周期，支持温和自动退避重试、手动重试与灯箱预览。 */
+function MessageExternalImageCard({
+  src,
+  alt,
+  single,
+  onPreview,
+}: {
+  src: string;
+  alt: string;
+  single: boolean;
+  onPreview: (src: string) => void;
+}) {
+  // 以 src 作为 key，确保 URL 变更时旧实例立刻卸载并清理定时器，不会让旧回调污染新图片状态。
+  return (
+    <MessageExternalImageCardInner
+      key={src}
+      src={src}
+      alt={alt}
+      single={single}
+      onPreview={onPreview}
+    />
   );
 }
 
