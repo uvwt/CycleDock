@@ -30,14 +30,17 @@ const (
 )
 
 type Config struct {
-	BaseURL      string
-	Model        string
-	APIKey       string
-	Timeout      time.Duration
-	Temperature  float64
-	Transport    Transport
-	Headers      map[string]string
-	OutputSchema *OutputSchema
+	BaseURL     string
+	Model       string
+	APIKey      string
+	Timeout     time.Duration
+	Temperature float64
+	// ReasoningEffort 可选的推理强度提示（例如 "low"），仅对支持该字段的 Responses API 序列化为 reasoning.effort。
+	// 留空时不发送该字段；Chat Completions 默认不透传，避免不兼容该扩展字段的通用 openai_compatible 上游报错。
+	ReasoningEffort string
+	Transport       Transport
+	Headers         map[string]string
+	OutputSchema    *OutputSchema
 	// OnTextDelta forwards text to the ephemeral browser stream; never store raw tool traces.
 	OnTextDelta func(string)
 	// OnToolCall 接收当前调用的累计参数快照；回调只用于临时预览，不提前执行工具。
@@ -477,6 +480,7 @@ type Client struct {
 	httpClient    *http.Client
 	mu            sync.Mutex
 	noStreamUsage map[string]bool
+	noReasoning   map[string]bool
 	catalogMu     sync.Mutex
 	catalogCache  map[string]catalogCacheEntry
 }
@@ -485,6 +489,7 @@ func New() *Client {
 	return &Client{
 		httpClient:    &http.Client{},
 		noStreamUsage: make(map[string]bool),
+		noReasoning:   make(map[string]bool),
 	}
 }
 
@@ -495,7 +500,43 @@ func NewWithHTTPClient(client *http.Client) *Client {
 	return &Client{
 		httpClient:    client,
 		noStreamUsage: make(map[string]bool),
+		noReasoning:   make(map[string]bool),
 	}
+}
+
+func reasoningCacheKey(baseURL, model string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "\x00" + strings.ToLower(strings.TrimSpace(model))
+}
+
+func (c *Client) reasoningUnsupported(baseURL, model string) bool {
+	if c == nil {
+		return false
+	}
+	key := reasoningCacheKey(baseURL, model)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.noReasoning[key]
+}
+
+func (c *Client) markReasoningUnsupported(baseURL, model string) {
+	if c == nil {
+		return
+	}
+	key := reasoningCacheKey(baseURL, model)
+	c.mu.Lock()
+	if c.noReasoning == nil {
+		c.noReasoning = make(map[string]bool)
+	}
+	c.noReasoning[key] = true
+	c.mu.Unlock()
+}
+
+func isUnsupportedReasoningError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "reasoning")
 }
 
 func (c *Client) streamUsageUnsupported(baseURL string) bool {

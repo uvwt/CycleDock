@@ -564,3 +564,33 @@ func (s *Store) EnqueueToolApprovalTurn(
 	s.notifyWorkReady()
 	return CreateTurnResult{Turn: turn}, nil
 }
+
+// ListRecentCardHumanMessages 按时间正序（从早到晚）返回当前卡片最近的真实人工发言原文。
+// 仅保留 source='human'、作者来源为 human 且未取消的轮次，自动排除系统回调、延时唤醒、
+// 外部 Webhook 触发、工具审批自动续跑等非人工输入；maxSequence > 0 时仅读取不晚于当前轮次的发言。
+func (s *Store) ListRecentCardHumanMessages(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	maxSequence int64,
+	limit int,
+) ([]string, error) {
+	if s == nil || workspaceID == uuid.Nil || cardID == uuid.Nil || limit <= 0 {
+		return nil, nil
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	rows, err := s.queries.ListRecentCardHumanTurns(ctx, db.ListRecentCardHumanTurnsParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		MaxSequence: maxSequence,
+		RowLimit:    int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows, nil
+}

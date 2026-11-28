@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,7 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 	dec, err := evaluateDynamicModel(
 		ctx, nil, client, nil, settings, policy, workspaceID,
 		"部署服务", "更新线上配置",
+		nil,
 		"exec_command", map[string]any{"cmd": "docker compose up -d --force-recreate"},
 	)
 	if err != nil {
@@ -205,6 +207,7 @@ func TestToolGuard_ScopedDynamicSmallModelAndFallback(t *testing.T) {
 		ctx, nil, modelclient.NewWithHTTPClient(errServer.Client()), nil,
 		errSettings, mcpPolicy, workspaceID,
 		"数据库运维", "变更生产数据",
+		nil,
 		"call_mcp_tool", map[string]any{"tool_id": "production-db:drop_table"},
 	)
 	if err == nil {
@@ -340,6 +343,7 @@ func TestToolGuard_DynamicModelRouteFailover(t *testing.T) {
 	dec, err := evaluateDynamicModel(
 		ctx, nil, client, nil, settings, policy, workspaceID,
 		"巡检容器", "查看容器运行状态",
+		nil,
 		"exec_command", map[string]any{"cmd": `docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"`},
 	)
 	if err != nil {
@@ -364,6 +368,7 @@ func TestToolGuard_DynamicModelRouteFailover(t *testing.T) {
 	_, err = evaluateDynamicModel(
 		canceledCtx, nil, client, nil, settings, policy, workspaceID,
 		"巡检容器", "查看容器运行状态",
+		nil,
 		"exec_command", map[string]any{"cmd": "docker ps"},
 	)
 	if err == nil {
@@ -441,3 +446,261 @@ func TestToolGuard_CanonicalizeToolArguments(t *testing.T) {
 		t.Fatalf("expected canonical JSON to match:\npg=%s\ngo=%s", string(canonPG), string(canonGo))
 	}
 }
+
+func TestToolGuard_ReadOnlySubActionsStaticRules(t *testing.T) {
+	allowed := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"task_manage", map[string]any{"action": "list"}},
+		{"task_manage", map[string]any{"action": "get"}},
+		{"workflow_template_manage", map[string]any{"action": "list"}},
+		{"workflow_template_manage", map[string]any{"action": "match"}},
+		{"skill_manage", map[string]any{"action": "env_list"}},
+		{"plugin_manage", map[string]any{"action": "inspect"}},
+		{"acp_session", map[string]any{"action": "info"}},
+		{"acp_session", map[string]any{"action": "list"}},
+		{"acp_session", map[string]any{"action": "inspect"}},
+		{"acp_interaction", map[string]any{"action": "list"}},
+		{"mcp_tool_call", map[string]any{"name": "github:get_pull_request"}},
+	}
+	for _, tc := range allowed {
+		if !isSafeReadOnlyTool(tc.tool, tc.args) {
+			t.Fatalf("expected %s(%v) to be classified as safe read-only", tc.tool, tc.args)
+		}
+	}
+
+	guarded := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"task_manage", map[string]any{"action": "create"}},
+		{"task_manage", map[string]any{"action": "complete"}},
+		{"workflow_template_manage", map[string]any{"action": "publish"}},
+		{"skill_manage", map[string]any{"action": "install"}},
+		{"skill_manage", map[string]any{"action": "env_set"}},
+		{"plugin_manage", map[string]any{"action": "install"}},
+		{"acp_session", map[string]any{"action": "new"}},
+		{"acp_session", map[string]any{"action": "delete"}},
+		{"acp_interaction", map[string]any{"action": "respond"}},
+		{"mcp_tool_call", map[string]any{"name": "github:merge_pull_request"}},
+		{"cycledock_create_trigger", map[string]any{"provider": "github"}},
+	}
+	for _, tc := range guarded {
+		if isSafeReadOnlyTool(tc.tool, tc.args) {
+			t.Fatalf("expected mutating tool %s(%v) NOT to bypass guard as read-only", tc.tool, tc.args)
+		}
+	}
+}
+
+func TestToolGuard_SelectTrustedHumanInstructionsFilteringAndTruncation(t *testing.T) {
+	longOld := strings.Repeat("旧", 700)
+	longNewest := "请重启测试环境容器：" + strings.Repeat("新", 600)
+
+	raw := []string{
+		"更早的一条普通指令",
+		"[系统终态回调] 子任务已完成",
+		"<external_event_envelope>{\"event\":\"push\"}</external_event_envelope>",
+		"[系统自动续跑] 安全守卫审批已通过，请继续执行",
+		"任务「部署后端」已自动进入 Review",
+		longOld,
+		"  第二条有效指令\r\n\r\n\r\n请先看容器状态  ",
+		"延时自唤醒已触发，请复查结果",
+		longNewest,
+	}
+
+	got := selectTrustedHumanInstructions(raw, 3, 500, 1200)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 filtered human instructions, got %d: %#v", len(got), got)
+	}
+	// 时间正序（从早到晚）：longOld -> 第二条有效指令 -> longNewest
+	if !strings.HasPrefix(got[0], "旧") || !strings.HasSuffix(got[0], "…") {
+		t.Fatalf("expected oldest kept item to be truncated longOld, got %q", got[0])
+	}
+	if got[1] != "第二条有效指令\n\n请先看容器状态" {
+		t.Fatalf("unexpected normalized middle instruction: %q", got[1])
+	}
+	if !strings.HasPrefix(got[2], "请重启测试环境容器：") || !strings.HasSuffix(got[2], "…") {
+		t.Fatalf("expected newest instruction to be preserved and truncated at single limit, got %q", got[2])
+	}
+
+	totalRunes := 0
+	for i, item := range got {
+		r := len([]rune(item))
+		if r > 500 {
+			t.Fatalf("item[%d] exceeds single rune limit: %d", i, r)
+		}
+		totalRunes += r
+	}
+	if totalRunes > 1200 {
+		t.Fatalf("total runes %d exceeds budget 1200", totalRunes)
+	}
+
+	// 验证总预算很紧时优先保留最新一条
+	tight := selectTrustedHumanInstructions([]string{
+		strings.Repeat("A", 300),
+		strings.Repeat("B", 300),
+		"最新一条短指令",
+	}, 3, 500, 100)
+	if len(tight) != 2 {
+		t.Fatalf("expected 2 items under tight budget, got %d: %#v", len(tight), tight)
+	}
+	if tight[1] != "最新一条短指令" {
+		t.Fatalf("expected newest instruction intact under tight budget, got %q", tight[1])
+	}
+	if len([]rune(tight[0]))+len([]rune(tight[1])) > 100 {
+		t.Fatalf("expected total runes <= 100, got %d", len([]rune(tight[0]))+len([]rune(tight[1])))
+	}
+}
+
+func TestToolGuard_DynamicModelPromptIncludesTrustedHumanInstructionsAndFallbackSummary(t *testing.T) {
+	ctx := context.Background()
+	workspaceID := uuid.New()
+
+	// 1. 验证守卫 prompt 包含最近人工原始指令与授权边界说明
+	var capturedSystem, capturedUser string
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, m := range req.Messages {
+			if m.Role == "system" {
+				capturedSystem = m.Content
+			}
+			if m.Role == "user" {
+				capturedUser = m.Content
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": `{"reversible": true, "risk_level": "low", "decision": "allow", "reason": "符合用户最近明确授权"}`,
+					},
+				},
+			},
+		})
+	}))
+	defer okServer.Close()
+
+	routeOK := uuid.New()
+	settings := store.AgentSettings{
+		Routes: []store.ModelRoute{
+			{
+				ID:                routeOK,
+				ApiCredentialName: "guard-ok",
+				Enabled:           true,
+				ProviderType:      "openai_compatible",
+				ProviderBaseUrl:   okServer.URL,
+				Model:             "gpt-4o-mini",
+			},
+		},
+	}
+	settings.DefaultModelRouteID = uuid.NullUUID{UUID: routeOK, Valid: true}
+	policy := ScopedGuardPolicy{
+		ScopeType:      "device",
+		ScopeTarget:    "node-tianyi",
+		Mode:           "strict",
+		ModelRouteID:   uuid.NullUUID{UUID: routeOK, Valid: true},
+		TimeoutSeconds: 5,
+	}
+
+	dec, err := evaluateDynamicModel(
+		ctx, nil, modelclient.NewWithHTTPClient(okServer.Client()), nil,
+		settings, policy, workspaceID,
+		"主聊天", "项目的主聊天",
+		[]string{"先帮我看一下 Docker 服务", "把 staging-api 容器重启一下"},
+		"exec_command", map[string]any{"cmd": "docker restart staging-api"},
+	)
+	if err != nil {
+		t.Fatalf("evaluateDynamicModel: %v", err)
+	}
+	if dec.Decision != "allow" {
+		t.Fatalf("expected allow decision, got %+v", dec)
+	}
+	if !strings.Contains(capturedSystem, "最近人工原始指令") {
+		t.Fatalf("expected systemPrompt to explain trusted human instructions, got:\n%s", capturedSystem)
+	}
+	if !strings.Contains(capturedUser, "最近人工原始指令（可信授权依据") ||
+		!strings.Contains(capturedUser, "1. 先帮我看一下 Docker 服务") ||
+		!strings.Contains(capturedUser, "2. 把 staging-api 容器重启一下") {
+		t.Fatalf("expected userPrompt to contain recent human instructions in order, got:\n%s", capturedUser)
+	}
+
+	// 2. 多条启用路由全部失败时，汇总展示尝试路由数与各路由失败原因
+	failRoute1Calls := 0
+	failServer1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failRoute1Calls++
+		http.Error(w, "route1 timeout", http.StatusGatewayTimeout)
+	}))
+	defer failServer1.Close()
+
+	failRoute2Calls := 0
+	failServer2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failRoute2Calls++
+		http.Error(w, "route2 overloaded", http.StatusServiceUnavailable)
+	}))
+	defer failServer2.Close()
+
+	route1ID := uuid.New()
+	route2ID := uuid.New()
+	allFailSettings := store.AgentSettings{
+		Routes: []store.ModelRoute{
+			{
+				ID:                route1ID,
+				ApiCredentialName: "PrimaryGuard",
+				Enabled:           true,
+				ProviderType:      "openai_compatible",
+				ProviderBaseUrl:   failServer1.URL,
+				Model:             "guard-fast-1",
+			},
+			{
+				ID:                route2ID,
+				ApiCredentialName: "BackupGuard",
+				Enabled:           true,
+				ProviderType:      "openai_compatible",
+				ProviderBaseUrl:   failServer2.URL,
+				Model:             "guard-backup-2",
+			},
+		},
+	}
+	allFailSettings.DefaultModelRouteID = uuid.NullUUID{UUID: route1ID, Valid: true}
+	allFailPolicy := ScopedGuardPolicy{
+		ScopeType:      "device",
+		ScopeTarget:    "node-tianyi",
+		Mode:           "strict",
+		ModelRouteID:   uuid.NullUUID{UUID: route1ID, Valid: true},
+		TimeoutSeconds: 5,
+	}
+
+	_, err = evaluateDynamicModel(
+		ctx, nil, modelclient.NewWithHTTPClient(failServer1.Client()), nil,
+		allFailSettings, allFailPolicy, workspaceID,
+		"主聊天", "项目的主聊天",
+		[]string{"重启一下 staging-api"},
+		"exec_command", map[string]any{"cmd": "docker restart staging-api"},
+	)
+	if err == nil {
+		t.Fatal("expected aggregated error when all guard routes fail")
+	}
+	if failRoute1Calls != 1 || failRoute2Calls != 1 {
+		t.Fatalf("expected both routes tried once, got route1=%d route2=%d", failRoute1Calls, failRoute2Calls)
+	}
+	errMsg := err.Error()
+	for _, want := range []string{"2 条守卫路由", "PrimaryGuard/guard-fast-1", "BackupGuard/guard-backup-2", "504", "503"} {
+		if !strings.Contains(errMsg, want) {
+			t.Fatalf("expected aggregated error %q to contain %q", errMsg, want)
+		}
+	}
+}
+
