@@ -333,3 +333,145 @@ func TestResponsesStreamParsesResponseModel(t *testing.T) {
 	})
 }
 
+func TestResponsesReasoningEffortSerializationAndFallback(t *testing.T) {
+	t.Run("omits reasoning for regular chat when ReasoningEffort is empty", func(t *testing.T) {
+		var rawBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+				t.Errorf("decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintln(w, `data: {"type":"response.output_text.delta","delta":"ok"}`)
+			fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[]}}`)
+		}))
+		defer server.Close()
+
+		client := NewWithHTTPClient(server.Client())
+		_, err := client.Complete(context.Background(), Config{
+			BaseURL:   server.URL + "/v1",
+			Model:     "gpt-5.4-mini",
+			APIKey:    "test-token",
+			Timeout:   time.Second,
+			Transport: TransportResponses,
+		}, []Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, exists := rawBody["reasoning"]; exists {
+			t.Fatalf("expected reasoning field to be omitted for regular request, got %#v", rawBody["reasoning"])
+		}
+	})
+
+	t.Run("serializes reasoning.effort when configured on Responses transport", func(t *testing.T) {
+		var rawBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+				t.Errorf("decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintln(w, `data: {"type":"response.output_text.delta","delta":"allow"}`)
+			fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[]}}`)
+		}))
+		defer server.Close()
+
+		client := NewWithHTTPClient(server.Client())
+		_, err := client.Complete(context.Background(), Config{
+			BaseURL:         server.URL + "/v1",
+			Model:           "gpt-5.4-mini",
+			APIKey:          "test-token",
+			Timeout:         time.Second,
+			Transport:       TransportResponses,
+			ReasoningEffort: "low",
+		}, []Message{{Role: "user", Content: "guard check"}}, nil)
+		if err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		reasoning, ok := rawBody["reasoning"].(map[string]any)
+		if !ok || reasoning["effort"] != "low" {
+			t.Fatalf("expected reasoning.effort=low, got %#v", rawBody["reasoning"])
+		}
+	})
+
+	t.Run("retries without reasoning and caches unsupported model on 400", func(t *testing.T) {
+		var seen []bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var rawBody map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+				t.Errorf("decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, hasReasoning := rawBody["reasoning"]
+			seen = append(seen, hasReasoning)
+			if hasReasoning {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'reasoning' is not supported with this model."}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintln(w, `data: {"type":"response.output_text.delta","delta":"ok"}`)
+			fmt.Fprintln(w, `data: {"type":"response.completed","response":{"output":[]}}`)
+		}))
+		defer server.Close()
+
+		client := NewWithHTTPClient(server.Client())
+		cfg := Config{
+			BaseURL:         server.URL + "/v1",
+			Model:           "non-reasoning-model",
+			APIKey:          "test-token",
+			Timeout:         time.Second,
+			Transport:       TransportResponses,
+			ReasoningEffort: "low",
+		}
+		if _, err := client.Complete(context.Background(), cfg, []Message{{Role: "user", Content: "first"}}, nil); err != nil {
+			t.Fatalf("first Complete: %v", err)
+		}
+		if _, err := client.Complete(context.Background(), cfg, []Message{{Role: "user", Content: "second"}}, nil); err != nil {
+			t.Fatalf("second Complete: %v", err)
+		}
+		if len(seen) != 3 || !seen[0] || seen[1] || seen[2] {
+			t.Fatalf("expected reasoning sequence [true, false, false], got %#v", seen)
+		}
+	})
+
+	t.Run("chat completions transport ignores ReasoningEffort for upstream compatibility", func(t *testing.T) {
+		var rawBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+				t.Errorf("decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"role": "assistant", "content": "ok"}},
+				},
+			})
+		}))
+		defer server.Close()
+
+		client := NewWithHTTPClient(server.Client())
+		_, err := client.Complete(context.Background(), Config{
+			BaseURL:         server.URL,
+			Model:           "generic-compatible-model",
+			Timeout:         time.Second,
+			ReasoningEffort: "low",
+		}, []Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if _, exists := rawBody["reasoning"]; exists {
+			t.Fatalf("chat completions request must not include reasoning field: %#v", rawBody)
+		}
+		if _, exists := rawBody["reasoning_effort"]; exists {
+			t.Fatalf("chat completions request must not include reasoning_effort field: %#v", rawBody)
+		}
+	})
+}
+
+

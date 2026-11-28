@@ -590,6 +590,54 @@ func (q *Queries) ListEnabledWorkspaceMCPConnections(ctx context.Context, worksp
 	return items, nil
 }
 
+const listRecentCardHumanTurns = `-- name: ListRecentCardHumanTurns :many
+SELECT t.content
+FROM card_turns t
+JOIN sources s
+  ON s.workspace_id = t.workspace_id
+ AND s.id = t.created_by_source_id
+WHERE t.workspace_id = $1
+  AND t.card_id = $2
+  AND t.source = 'human'
+  AND t.cancelled_at IS NULL
+  AND s.kind = 'human'
+  AND ($3::bigint <= 0 OR t.sequence <= $3::bigint)
+ORDER BY t.sequence DESC
+LIMIT $4
+`
+
+type ListRecentCardHumanTurnsParams struct {
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	CardID      uuid.UUID `json:"card_id"`
+	MaxSequence int64     `json:"max_sequence"`
+	RowLimit    int32     `json:"row_limit"`
+}
+
+func (q *Queries) ListRecentCardHumanTurns(ctx context.Context, arg ListRecentCardHumanTurnsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listRecentCardHumanTurns,
+		arg.WorkspaceID,
+		arg.CardID,
+		arg.MaxSequence,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return nil, err
+		}
+		items = append(items, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnconsumedApprovedCardToolApprovals = `-- name: ListUnconsumedApprovedCardToolApprovals :many
 SELECT id, workspace_id, card_id, turn_id, attempt_id, tool_call_id, tool_name, arguments, risk_level, reversible, reason, status, resolution_comment, resolved_by_source_id, resolved_at, created_at, updated_at, scope_type, scope_target, scope_label, allow_session_whitelist, consumed_at
 FROM card_tool_approvals

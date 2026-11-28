@@ -29,6 +29,10 @@ type responsesText struct {
 	Format responsesTextFormat `json:"format"`
 }
 
+type responsesReasoning struct {
+	Effort string `json:"effort"`
+}
+
 type responsesItem struct {
 	Type      string `json:"type,omitempty"`
 	Role      string `json:"role,omitempty"`
@@ -100,66 +104,82 @@ func (c *Client) completeResponses(
 			Strict: false,
 		})
 	}
-	body := struct {
-		Model        string          `json:"model"`
-		Instructions string          `json:"instructions,omitempty"`
-		Input        []responsesItem `json:"input"`
-		Tools        []responsesTool `json:"tools,omitempty"`
-		Store        bool            `json:"store"`
-		Stream       bool            `json:"stream"`
-		Text         *responsesText  `json:"text,omitempty"`
-	}{
-		Model: strings.TrimSpace(config.Model), Instructions: instructions,
-		Input: input, Tools: responseTools, Store: false, Stream: true,
-	}
-	if config.OutputSchema != nil {
-		body.Text = &responsesText{Format: responsesTextFormat{Type: "json_schema", OutputSchema: config.OutputSchema}}
-	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return Completion{}, fmt.Errorf("encode Responses request: %w", err)
-	}
-
+	reasoningEffort := strings.TrimSpace(config.ReasoningEffort)
+	includeReasoning := reasoningEffort != "" && !c.reasoningUnsupported(config.BaseURL, config.Model)
 	endpoint := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/") + "/responses"
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(raw))
-	if err != nil {
-		return Completion{}, fmt.Errorf("create Responses request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
-	if config.APIKey != "" {
-		request.Header.Set("Authorization", "Bearer "+config.APIKey)
-	}
-	for name, value := range config.Headers {
-		if strings.TrimSpace(name) != "" && strings.TrimSpace(value) != "" {
-			request.Header.Set(name, value)
-		}
-	}
 
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return Completion{}, fmt.Errorf("Responses request: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		responseBody, readErr := readBounded(response.Body, response.ContentLength, maxResponseBytes)
-		if readErr != nil {
-			return Completion{}, readErr
+	for {
+		body := struct {
+			Model        string              `json:"model"`
+			Instructions string              `json:"instructions,omitempty"`
+			Input        []responsesItem     `json:"input"`
+			Tools        []responsesTool     `json:"tools,omitempty"`
+			Store        bool                `json:"store"`
+			Stream       bool                `json:"stream"`
+			Reasoning    *responsesReasoning `json:"reasoning,omitempty"`
+			Text         *responsesText      `json:"text,omitempty"`
+		}{
+			Model: strings.TrimSpace(config.Model), Instructions: instructions,
+			Input: input, Tools: responseTools, Store: false, Stream: true,
 		}
-		return Completion{}, &APIError{
-			StatusCode: response.StatusCode,
-			Body:       summarizeBody(responseBody),
+		if includeReasoning {
+			body.Reasoning = &responsesReasoning{Effort: reasoningEffort}
 		}
-	}
+		if config.OutputSchema != nil {
+			body.Text = &responsesText{Format: responsesTextFormat{Type: "json_schema", OutputSchema: config.OutputSchema}}
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return Completion{}, fmt.Errorf("encode Responses request: %w", err)
+		}
 
-	completion, err := readResponsesStream(response, config.OnTextDelta, config.OnToolCall)
-	if err != nil {
-		return Completion{}, err
+		request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(raw))
+		if err != nil {
+			return Completion{}, fmt.Errorf("create Responses request: %w", err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "text/event-stream")
+		if config.APIKey != "" {
+			request.Header.Set("Authorization", "Bearer "+config.APIKey)
+		}
+		for name, value := range config.Headers {
+			if strings.TrimSpace(name) != "" && strings.TrimSpace(value) != "" {
+				request.Header.Set(name, value)
+			}
+		}
+
+		response, err := c.httpClient.Do(request)
+		if err != nil {
+			return Completion{}, fmt.Errorf("Responses request: %w", err)
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			responseBody, readErr := readBounded(response.Body, response.ContentLength, maxResponseBytes)
+			response.Body.Close()
+			if readErr != nil {
+				return Completion{}, readErr
+			}
+			// 部分非推理模型或代理端点不支持 reasoning.effort，遇到明确字段报错时降级重发并记住该模型。
+			if includeReasoning && isUnsupportedReasoningError(response.StatusCode, responseBody) {
+				c.markReasoningUnsupported(config.BaseURL, config.Model)
+				includeReasoning = false
+				continue
+			}
+			return Completion{}, &APIError{
+				StatusCode: response.StatusCode,
+				Body:       summarizeBody(responseBody),
+			}
+		}
+
+		completion, err := readResponsesStream(response, config.OnTextDelta, config.OnToolCall)
+		response.Body.Close()
+		if err != nil {
+			return Completion{}, err
+		}
+		if strings.TrimSpace(completion.Content) == "" && len(completion.ToolCalls) == 0 {
+			return Completion{}, ErrEmptyResponse
+		}
+		return completion, nil
 	}
-	if strings.TrimSpace(completion.Content) == "" && len(completion.ToolCalls) == 0 {
-		return Completion{}, ErrEmptyResponse
-	}
-	return completion, nil
 }
 
 func buildResponsesInput(messages []Message) (string, []responsesItem, error) {
