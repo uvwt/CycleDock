@@ -16,6 +16,30 @@ export type LoginMethods = {
   password: boolean;
   providers: { id: string; name: string; start_url: string }[];
 };
+export type OAuthConsentParams = {
+  response_type: string;
+  client_id: string;
+  redirect_uri: string;
+  scope: string;
+  state: string;
+  code_challenge: string;
+  code_challenge_method: string;
+  resource: string;
+};
+export type OAuthConsentInfo = {
+  client_id: string;
+  client_name: string;
+  redirect_uri: string;
+  scope: string;
+  resource: string;
+  workspace_name: string;
+};
+export type OAuthConsentDecisionInput = OAuthConsentParams & {
+  decision: "approve" | "deny";
+};
+export type OAuthConsentDecisionResult = {
+  redirect_to: string;
+};
 export type Project = {
   id: string;
   name: string;

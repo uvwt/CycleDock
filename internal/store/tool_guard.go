@@ -119,20 +119,60 @@ func (s *Store) ListCardToolApprovals(ctx context.Context, workspaceID, cardID u
 	})
 }
 
-// ResolveToolApprovalParams 解决审批参数
-type ResolveToolApprovalParams struct {
-	WorkspaceID        uuid.UUID
-	CardID             uuid.UUID
-	ApprovalID         uuid.UUID
-	Status             string // "approved" | "rejected"
-	Comment            string
-	ResolvedBySourceID uuid.UUID
+// ListUnconsumedApprovedToolApprovals 查询当前卡片下指定工具尚未被消费的已批准记录（按批准先后顺序）。
+func (s *Store) ListUnconsumedApprovedToolApprovals(
+	ctx context.Context,
+	workspaceID, cardID uuid.UUID,
+	toolName string,
+) ([]db.CardToolApproval, error) {
+	return s.queries.ListUnconsumedApprovedCardToolApprovals(ctx, db.ListUnconsumedApprovedCardToolApprovalsParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		ToolName:    strings.TrimSpace(toolName),
+	})
 }
 
-// ResolveToolApproval 解决工具审批（允许或拒绝）
+// ConsumeToolApproval 原子消费一条已批准且未消费的单次工具审批凭证。
+// 返回 consumed=true 表示本次调用成功抢占并消费；并发或重复调用时返回 consumed=false。
+func (s *Store) ConsumeToolApproval(
+	ctx context.Context,
+	workspaceID, cardID, approvalID uuid.UUID,
+) (db.CardToolApproval, bool, error) {
+	approval, err := s.queries.ConsumeCardToolApproval(ctx, db.ConsumeCardToolApprovalParams{
+		WorkspaceID: workspaceID,
+		CardID:      cardID,
+		ID:          approvalID,
+	})
+	if errors.Is(err, sqldb.ErrNoRows) {
+		return db.CardToolApproval{}, false, nil
+	}
+	if err != nil {
+		return db.CardToolApproval{}, false, err
+	}
+	return approval, true, nil
+}
+
+// ResolveToolApprovalParams 解决审批参数
+type ResolveToolApprovalParams struct {
+	WorkspaceID           uuid.UUID
+	CardID                uuid.UUID
+	ApprovalID            uuid.UUID
+	Status                string // "approved" | "rejected"
+	Comment               string
+	ResolvedBySourceID    uuid.UUID
+	GrantSessionWhitelist bool
+	WhitelistScopeType    string
+	WhitelistScopeTarget  string
+}
+
+// ResolveToolApproval 解决工具审批（允许或拒绝）。
+// 若同时需要授予本卡片作用域白名单，在同一事务内原子写入，避免唤醒 Dispatcher 后出现白名单尚未生效的竞态窗口。
 func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalParams) (db.CardToolApproval, error) {
 	if p.Status != string(domain.ToolApprovalStatusApproved) && p.Status != string(domain.ToolApprovalStatusRejected) {
 		return db.CardToolApproval{}, fmt.Errorf("%w: status must be approved or rejected", domain.ErrConflict)
+	}
+	if p.GrantSessionWhitelist && p.Status != string(domain.ToolApprovalStatusApproved) {
+		return db.CardToolApproval{}, fmt.Errorf("%w: session whitelist can only be granted on approved status", domain.ErrConflict)
 	}
 
 	var sourceID uuid.NullUUID
@@ -140,7 +180,14 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 		sourceID = uuid.NullUUID{UUID: p.ResolvedBySourceID, Valid: true}
 	}
 
-	approval, err := s.queries.ResolveCardToolApproval(ctx, db.ResolveCardToolApprovalParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return db.CardToolApproval{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	q := db.New(tx)
+	approval, err := q.ResolveCardToolApproval(ctx, db.ResolveCardToolApprovalParams{
 		WorkspaceID:        p.WorkspaceID,
 		CardID:             p.CardID,
 		ID:                 p.ApprovalID,
@@ -150,7 +197,14 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 	})
 	if errors.Is(err, sqldb.ErrNoRows) {
 		// 区分“记录不存在”与“并发下已被处理或自动失效”，避免将状态冲突误报为 404
-		current, getErr := s.GetToolApproval(ctx, p.WorkspaceID, p.CardID, p.ApprovalID)
+		current, getErr := q.GetCardToolApproval(ctx, db.GetCardToolApprovalParams{
+			WorkspaceID: p.WorkspaceID,
+			CardID:      p.CardID,
+			ID:          p.ApprovalID,
+		})
+		if errors.Is(getErr, sqldb.ErrNoRows) {
+			return db.CardToolApproval{}, domain.ErrNotFound
+		}
 		if getErr != nil {
 			return db.CardToolApproval{}, getErr
 		}
@@ -159,10 +213,23 @@ func (s *Store) ResolveToolApproval(ctx context.Context, p ResolveToolApprovalPa
 		}
 		return db.CardToolApproval{}, fmt.Errorf("%w: tool approval has already been resolved", domain.ErrConflict)
 	}
-	if err == nil {
-		s.notifyWorkspaceChanged(p.WorkspaceID)
+	if err != nil {
+		return db.CardToolApproval{}, err
 	}
-	return approval, err
+
+	if p.GrantSessionWhitelist {
+		if err := upsertCardScopeWhitelist(ctx, q, p.WorkspaceID, p.CardID, p.WhitelistScopeType, p.WhitelistScopeTarget, p.ResolvedBySourceID); err != nil {
+			return db.CardToolApproval{}, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return db.CardToolApproval{}, err
+	}
+	// 审批解除阻塞后立即唤醒 Dispatcher 继续消费卡片队列，同时通知前端刷新审批状态。
+	s.notifyWorkReady()
+	s.notifyWorkspaceChanged(p.WorkspaceID)
+	return approval, nil
 }
 
 // supersedePendingToolApprovalsTx 在同一业务事务内作废指定卡片下仍处于 pending 的工具审批，
@@ -185,8 +252,13 @@ func supersedePendingToolApprovalsTx(
 	return err
 }
 
-// AddCardScopeWhitelist 为卡片添加按作用域（device / mcp / 兜底 tool）的临时放行白名单
-func (s *Store) AddCardScopeWhitelist(ctx context.Context, workspaceID, cardID uuid.UUID, scopeType, scopeTarget string, sourceID uuid.UUID) error {
+func upsertCardScopeWhitelist(
+	ctx context.Context,
+	q *db.Queries,
+	workspaceID, cardID uuid.UUID,
+	scopeType, scopeTarget string,
+	sourceID uuid.UUID,
+) error {
 	if workspaceID == uuid.Nil || cardID == uuid.Nil {
 		return fmt.Errorf("%w: workspace_id and card_id are required", domain.ErrConflict)
 	}
@@ -208,7 +280,7 @@ func (s *Store) AddCardScopeWhitelist(ctx context.Context, workspaceID, cardID u
 	if sourceID != uuid.Nil {
 		src = uuid.NullUUID{UUID: sourceID, Valid: true}
 	}
-	return s.queries.UpsertCardToolWhitelist(ctx, db.UpsertCardToolWhitelistParams{
+	return q.UpsertCardToolWhitelist(ctx, db.UpsertCardToolWhitelistParams{
 		ID:                uuid.New(),
 		WorkspaceID:       workspaceID,
 		CardID:            cardID,
@@ -217,6 +289,11 @@ func (s *Store) AddCardScopeWhitelist(ctx context.Context, workspaceID, cardID u
 		ScopeTarget:       scopeTarget,
 		CreatedBySourceID: src,
 	})
+}
+
+// AddCardScopeWhitelist 为卡片添加按作用域（device / mcp / 兜底 tool）的临时放行白名单
+func (s *Store) AddCardScopeWhitelist(ctx context.Context, workspaceID, cardID uuid.UUID, scopeType, scopeTarget string, sourceID uuid.UUID) error {
+	return upsertCardScopeWhitelist(ctx, s.queries, workspaceID, cardID, scopeType, scopeTarget, sourceID)
 }
 
 // IsCardScopeWhitelisted 检查当前作用域（device / mcp / 兜底 tool）是否在该卡片的临时白名单中

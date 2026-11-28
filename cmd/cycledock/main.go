@@ -200,6 +200,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	sessionService := agentsession.NewPostgresService(pool)
+
 	var oauthService *cycledockoauth.Service
 	var mcpHandlers mcpserver.Handlers
 	if publicURL != "" {
@@ -208,7 +210,7 @@ func main() {
 			logger.Error("configure MCP OAuth", "error", err)
 			os.Exit(1)
 		}
-		mcpHandlers = mcpserver.New(dataStore, oauthService, logger)
+		mcpHandlers = mcpserver.New(dataStore, sessionService, oauthService, logger)
 	}
 	channelManager := channels.NewManager(dataStore, logger, publicURL)
 	channelManager.SetAttachmentsService(attachmentsService)
@@ -245,7 +247,6 @@ func main() {
 	}
 	defer channelManager.Stop()
 	go channelDispatcher.Run(ctx, 2*time.Second)
-	sessionService := agentsession.NewPostgresService(pool)
 	artifactService := agentartifact.NewPostgresService(pool)
 	dispatcher := agent.NewDispatcher(dataStore, modelClient, logger, agent.DispatcherConfig{
 		MaxConcurrent:             maxConcurrent,

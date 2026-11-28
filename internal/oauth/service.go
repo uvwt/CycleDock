@@ -21,12 +21,25 @@ import (
 	"github.com/uvwt/CycleDock/internal/store/db"
 )
 
-const ScopeMCP = "cycledock:mcp"
+const (
+	ScopeMCP          = "cycledock:mcp"
+	defaultClientName = "MCP Client"
+)
+
+// 兼容外部 OAuth / MCP 客户端在授权请求中顺带携带的标准 OIDC 或离线刷新辅助 scope。
+// CycleDock 只有一个受保护资源（MCP），校验后按 RFC 6749 §3.3 收敛为单一规范 ScopeMCP，不扩大权限面。
+var ignoredAuxiliaryScopes = []string{
+	"openid",
+	"profile",
+	"email",
+	"offline_access",
+}
 
 var (
 	ErrInvalidConfig       = errors.New("invalid oauth configuration")
 	ErrInvalidRequest      = errors.New("invalid oauth request")
 	ErrInvalidClient       = errors.New("invalid oauth client")
+	ErrUntrustedRedirect   = errors.New("untrusted oauth redirect")
 	ErrInvalidGrant        = errors.New("invalid oauth grant")
 	ErrInvalidToken        = errors.New("invalid oauth token")
 	ErrInvalidScope        = errors.New("invalid oauth scope")
@@ -153,8 +166,11 @@ func (s *Service) Resource() string { return s.resource }
 
 func (s *Service) RegisterClient(ctx context.Context, name string, redirectURIs []string) (Client, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 100 {
-		return Client{}, fmt.Errorf("%w: client_name must contain 1-100 characters", ErrInvalidRequest)
+	if name == "" {
+		name = defaultClientName
+	}
+	if len(name) > 100 {
+		return Client{}, fmt.Errorf("%w: client_name must contain at most 100 characters", ErrInvalidRequest)
 	}
 	if len(redirectURIs) == 0 || len(redirectURIs) > 20 {
 		return Client{}, fmt.Errorf("%w: redirect_uris must contain 1-20 URLs", ErrInvalidRequest)
@@ -227,27 +243,45 @@ func (s *Service) ListAuthorizedClients(
 	return clients, nil
 }
 
-func (s *Service) ValidateAuthorizationRequest(ctx context.Context, request AuthorizeRequest) (Client, error) {
-	client, err := s.GetClient(ctx, request.ClientID)
+// ValidateClientRedirect 仅校验 client_id 是否已注册且 redirect_uri 属于该客户端。
+// 在确认 client 与 redirect_uri 可信之前，绝不允许向 redirect_uri 重定向错误信息（防止开放重定向）。
+func (s *Service) ValidateClientRedirect(ctx context.Context, clientID, redirectURI string) (Client, error) {
+	client, err := s.GetClient(ctx, clientID)
 	if err != nil {
 		return Client{}, err
 	}
-	if !contains(client.RedirectURIs, request.RedirectURI) {
-		return Client{}, fmt.Errorf("%w: redirect_uri is not registered", ErrInvalidRequest)
-	}
-	if request.Scope == "" {
-		request.Scope = ScopeMCP
-	}
-	if request.Scope != ScopeMCP {
-		return Client{}, ErrInvalidScope
-	}
-	if request.Resource != s.resource {
-		return Client{}, ErrInvalidResource
-	}
-	if err := validateCodeChallenge(request.CodeChallenge); err != nil {
-		return Client{}, err
+	if !contains(client.RedirectURIs, redirectURI) {
+		return Client{}, fmt.Errorf("%w: %w: redirect_uri is not registered", ErrInvalidRequest, ErrUntrustedRedirect)
 	}
 	return client, nil
+}
+
+// NormalizeAuthorizationRequest 校验授权请求，并将缺省或兼容形式的 scope/resource 收敛为规范值。
+func (s *Service) NormalizeAuthorizationRequest(ctx context.Context, request AuthorizeRequest) (Client, AuthorizeRequest, error) {
+	client, err := s.ValidateClientRedirect(ctx, request.ClientID, request.RedirectURI)
+	if err != nil {
+		return Client{}, AuthorizeRequest{}, err
+	}
+	normalizedScope, err := normalizeScope(request.Scope)
+	if err != nil {
+		return Client{}, AuthorizeRequest{}, err
+	}
+	normalizedResource, err := s.normalizeResource(request.Resource)
+	if err != nil {
+		return Client{}, AuthorizeRequest{}, err
+	}
+	if err := validateCodeChallenge(request.CodeChallenge); err != nil {
+		return Client{}, AuthorizeRequest{}, err
+	}
+	request.ClientID = client.ID
+	request.Scope = normalizedScope
+	request.Resource = normalizedResource
+	return client, request, nil
+}
+
+func (s *Service) ValidateAuthorizationRequest(ctx context.Context, request AuthorizeRequest) (Client, error) {
+	client, _, err := s.NormalizeAuthorizationRequest(ctx, request)
+	return client, err
 }
 
 func (s *Service) Authorize(
@@ -255,13 +289,11 @@ func (s *Service) Authorize(
 	human auth.Identity,
 	request AuthorizeRequest,
 ) (AuthorizationCode, error) {
-	client, err := s.ValidateAuthorizationRequest(ctx, request)
+	client, normalized, err := s.NormalizeAuthorizationRequest(ctx, request)
 	if err != nil {
 		return AuthorizationCode{}, err
 	}
-	if request.Scope == "" {
-		request.Scope = ScopeMCP
-	}
+	request = normalized
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -363,7 +395,7 @@ func (s *Service) ExchangeCode(ctx context.Context, request CodeTokenRequest) (T
 	if request.Code == "" || request.ClientID == "" || request.RedirectURI == "" || request.CodeVerifier == "" {
 		return TokenSet{}, ErrInvalidRequest
 	}
-	if request.Resource != s.resource {
+	if _, err := s.normalizeResource(request.Resource); err != nil {
 		return TokenSet{}, ErrInvalidResource
 	}
 	if !validCodeVerifier(request.CodeVerifier) {
@@ -417,7 +449,7 @@ func (s *Service) Refresh(ctx context.Context, request RefreshTokenRequest) (Tok
 	if request.RefreshToken == "" || request.ClientID == "" {
 		return TokenSet{}, ErrInvalidRequest
 	}
-	if request.Resource != "" && request.Resource != s.resource {
+	if _, err := s.normalizeResource(request.Resource); err != nil {
 		return TokenSet{}, ErrInvalidResource
 	}
 
@@ -615,6 +647,59 @@ func randomOpaque(prefix string, bytesCount int) (string, error) {
 		return "", err
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func (s *Service) normalizeResource(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return s.resource, nil
+	}
+	if sameResource(raw, s.resource) {
+		return s.resource, nil
+	}
+	return "", ErrInvalidResource
+}
+
+// normalizeScope 将缺省或附带标准 OIDC/离线辅助 scope 的请求收敛为单一规范 ScopeMCP；
+// 出现任何未声明的越权或未知 scope 时直接拒绝。
+func normalizeScope(raw string) (string, error) {
+	tokens := strings.Fields(raw)
+	for _, token := range tokens {
+		if token == ScopeMCP || contains(ignoredAuxiliaryScopes, token) {
+			continue
+		}
+		return "", ErrInvalidScope
+	}
+	return ScopeMCP, nil
+}
+
+// sameResource 比较两个 resource URI：scheme/host 大小写、默认端口与路径末尾斜杠不影响等价性。
+func sameResource(left, right string) bool {
+	a, okA := canonicalResource(left)
+	b, okB := canonicalResource(right)
+	return okA && okB && a == b
+}
+
+func canonicalResource(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return "", false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" && scheme != "http" {
+		return "", false
+	}
+	host, port := strings.ToLower(parsed.Hostname()), parsed.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	return scheme + "://" + host + path, true
 }
 
 func contains(values []string, target string) bool {

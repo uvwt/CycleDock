@@ -746,6 +746,28 @@ func formatStatusChangesPrompt(changes []store.CardStatusChange) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// formatSupersededToolApprovalsPrompt 将自上一轮执行以来被自动作废的工具审批拼装为静默提示，
+// 同步给模型避免其继续依据历史 suspended ToolResponse 催促用户点击已失效的旧审批卡片。
+func formatSupersededToolApprovalsPrompt(approvals []store.SupersededToolApproval) string {
+	if len(approvals) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("自上一轮执行以来已自动失效的工具审批：\n")
+	for _, item := range approvals {
+		b.WriteString(fmt.Sprintf("- 工具 `%s`（approval_id=%s", item.ToolName, item.ID.String()))
+		if scope := strings.TrimSpace(item.ScopeLabel); scope != "" {
+			b.WriteString(fmt.Sprintf("，作用域：%s", scope))
+		}
+		if comment := strings.TrimSpace(item.ResolutionComment); comment != "" {
+			b.WriteString(fmt.Sprintf("，失效原因：%s", comment))
+		}
+		b.WriteString("）\n")
+	}
+	b.WriteString("以上旧的工具审批卡片已自动失效且不可点击，切勿再要求用户去点击旧审批卡片确认；对应工具此前被拦截并未执行。如果结合当前最新上下文仍需要执行该操作，请重新发起工具调用（系统会按需重新评估或生成新的审批卡片）；否则直接按当前最新上下文继续推进即可。")
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // formatTurnQuotePrompt 将用户本轮引用的历史消息原文拼装为清晰上下文，
 // 让模型准确知道用户针对哪段内容发问，同时保持前端人类气泡正文不被 `> ...` 污染。
 func formatTurnQuotePrompt(quote *store.CommentQuote) string {
@@ -781,6 +803,10 @@ func turnMessage(card store.AgentCardContext) string {
 	}
 
 	if prompt := formatStatusChangesPrompt(card.StatusChanges); prompt != "" {
+		sections = append(sections, prompt)
+	}
+
+	if prompt := formatSupersededToolApprovalsPrompt(card.SupersededToolApprovals); prompt != "" {
 		sections = append(sections, prompt)
 	}
 

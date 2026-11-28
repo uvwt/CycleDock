@@ -272,6 +272,27 @@ FROM card_tool_approvals
 WHERE workspace_id = $1 AND card_id = $2
 ORDER BY created_at DESC;
 
+-- name: ListUnconsumedApprovedCardToolApprovals :many
+SELECT *
+FROM card_tool_approvals
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND tool_name = sqlc.arg(tool_name)
+  AND status = 'approved'
+  AND consumed_at IS NULL
+ORDER BY resolved_at ASC, created_at ASC, id ASC;
+
+-- name: ConsumeCardToolApproval :one
+UPDATE card_tool_approvals
+SET consumed_at = now(),
+    updated_at = now()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id)
+  AND status = 'approved'
+  AND consumed_at IS NULL
+RETURNING *;
+
 -- name: UpsertCardToolWhitelist :exec
 INSERT INTO card_tool_whitelists (
     id, workspace_id, card_id, tool_name, pattern,
