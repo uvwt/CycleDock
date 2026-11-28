@@ -42,6 +42,7 @@ export function useCardStream(cardID: string, projectID: string): StreamState {
       Promise.all([
         query.invalidateQueries({ queryKey: keys.card(cardID) }),
         query.invalidateQueries({ queryKey: keys.cards(projectID) }),
+        query.invalidateQueries({ queryKey: keys.cardToolWhitelists(cardID) }),
       ]);
     const sync = () => {
       void refresh();

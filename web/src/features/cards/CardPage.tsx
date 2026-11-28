@@ -12,7 +12,7 @@ import {
 import { useSwipeGesture, useSwipeUpGesture } from "../../shared/lib/useSwipeGesture";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { BellOff, Check, Info, PanelLeft, Radar } from "lucide-react";
+import { BellOff, Check, Info, PanelLeft, Radar, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
@@ -284,6 +284,13 @@ function CardPageContent({
     () => (cardWatchers.data || []).filter((w) => w.status === "armed").length,
     [cardWatchers.data],
   );
+  const cardToolWhitelists = useQuery({
+    queryKey: keys.cardToolWhitelists(cardID),
+    queryFn: () => api.cardToolWhitelists(cardID),
+    enabled: Boolean(cardID),
+    staleTime: 10_000,
+  });
+  const toolWhitelistCount = cardToolWhitelists.data?.length || 0;
   const card = detail.data?.card;
   const actualProjectID = card?.project_id || projectID;
   const stream = useCardStream(cardID, actualProjectID);
@@ -965,6 +972,18 @@ function CardPageContent({
                   <span className="tabular-nums">{armedWatcherCount}</span>
                 </span>
               )}
+              {toolWhitelistCount > 0 && (
+                <span
+                  data-testid="mobile-header-whitelist-badge"
+                  aria-label={t("本卡片已临时放行 {{count}} 项工具白名单", {
+                    count: toolWhitelistCount,
+                  })}
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                >
+                  <ShieldCheck className="size-2.5" />
+                  <span className="tabular-nums">{toolWhitelistCount}</span>
+                </span>
+              )}
             </button>
 
             <div className="relative flex shrink-0 items-center gap-1.5 pointer-events-auto">
@@ -987,7 +1006,9 @@ function CardPageContent({
                 title={t("任务详情")}
                 onClick={() => setInfoOpen((prev) => !prev)}
                 className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs leading-none shadow-xs transition ${
-                  liveTaskTotal > 0 || armedWatcherCount > 0
+                  liveTaskTotal > 0 ||
+                  armedWatcherCount > 0 ||
+                  toolWhitelistCount > 0
                     ? "px-2.5"
                     : "w-8 sm:w-auto sm:px-2.5"
                 } ${
@@ -1012,6 +1033,18 @@ function CardPageContent({
                   >
                     <Radar className="size-2.5" />
                     <span className="tabular-nums">{armedWatcherCount}</span>
+                  </span>
+                )}
+                {toolWhitelistCount > 0 && (
+                  <span
+                    data-testid="desktop-header-whitelist-badge"
+                    aria-label={t("本卡片已临时放行 {{count}} 项工具白名单", {
+                      count: toolWhitelistCount,
+                    })}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                  >
+                    <ShieldCheck className="size-2.5" />
+                    <span className="tabular-nums">{toolWhitelistCount}</span>
                   </span>
                 )}
               </button>

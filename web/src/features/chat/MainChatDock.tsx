@@ -9,13 +9,14 @@ import {
 } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BellOff, Expand, X } from "lucide-react";
+import { BellOff, Expand, ShieldCheck, X } from "lucide-react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { api } from "../../shared/api/client";
 import { keys, queryClient } from "../../app/query";
 import { useProject } from "../../app/project-context";
 import { useDeviceSelection } from "../devices/device-selection";
+import { CardToolWhitelistsSection } from "../cards/CardToolWhitelistsSection";
 import type {
   Attempt,
   Card,
@@ -71,19 +72,25 @@ export interface MainChatDockHeaderProps {
   title: string;
   isMainMuted: boolean;
   canExpand: boolean;
+  whitelistCount?: number;
+  whitelistsOpen?: boolean;
+  onToggleWhitelists?: () => void;
   onExpand: () => void;
   onClose: () => void;
   onDragStart?: (e: React.MouseEvent<HTMLElement>) => void;
 }
 
 /**
- * 主聊天小窗顶栏：仅保留标题（含已静音时的只读图标提示）、完整页面打开与关闭按钮。
+ * 主聊天小窗顶栏：仅保留标题（含已静音时的只读图标提示）、临时白名单快捷入口（仅存在白名单时显示）、完整页面打开与关闭按钮。
  * 通知静音开关统一收口在卡片详情与操作菜单中，避免小窗顶栏按钮拥挤。
  */
 export function MainChatDockHeader({
   title,
   isMainMuted,
   canExpand,
+  whitelistCount = 0,
+  whitelistsOpen = false,
+  onToggleWhitelists,
   onExpand,
   onClose,
   onDragStart,
@@ -117,6 +124,29 @@ export function MainChatDockHeader({
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        {whitelistCount > 0 && onToggleWhitelists && (
+          <button
+            type="button"
+            data-testid="dock-header-whitelist-btn"
+            aria-expanded={whitelistsOpen}
+            title={t("本卡片已临时放行 {{count}} 项工具白名单", {
+              count: whitelistCount,
+            })}
+            aria-label={t("本卡片已临时放行 {{count}} 项工具白名单", {
+              count: whitelistCount,
+            })}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={onToggleWhitelists}
+            className={`inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-medium shadow-2xs backdrop-blur-md transition cursor-pointer ${
+              whitelistsOpen
+                ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                : "border-emerald-500/30 bg-surface/85 text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300"
+            }`}
+          >
+            <ShieldCheck className="size-3.5 shrink-0" />
+            <span className="tabular-nums">{whitelistCount}</span>
+          </button>
+        )}
         <button
           type="button"
           title={t("在完整页面打开")}
@@ -170,6 +200,15 @@ export function MainChatDock() {
   const hidden = isViewingMainDiscussion || isSettings;
 
   const [open, setOpen] = useState(false);
+  const [whitelistsOpen, setWhitelistsOpen] = useState(false);
+  const cardToolWhitelists = useQuery({
+    queryKey: keys.cardToolWhitelists(cardID),
+    queryFn: () => api.cardToolWhitelists(cardID),
+    enabled: Boolean(cardID) && open,
+    staleTime: 10_000,
+  });
+  const toolWhitelistCount = cardToolWhitelists.data?.length || 0;
+  const showWhitelistsPopover = whitelistsOpen && toolWhitelistCount > 0;
   const [peek, setPeek] = useState<DockPeekMessage | null>(null);
   const [comment, setComment] = useState("");
   const [replyTo, setReplyTo] = useState<QuotedMessage | null>(null);
@@ -948,6 +987,9 @@ export function MainChatDock() {
             title={card?.title || t("主聊天")}
             isMainMuted={isMainMuted}
             canExpand={Boolean(cardID)}
+            whitelistCount={toolWhitelistCount}
+            whitelistsOpen={showWhitelistsPopover}
+            onToggleWhitelists={() => setWhitelistsOpen((prev) => !prev)}
             onDragStart={handleDragStart}
             onExpand={() =>
               cardID &&
@@ -957,6 +999,18 @@ export function MainChatDock() {
             }
             onClose={() => setOpen(false)}
           />
+
+          {showWhitelistsPopover && cardID && (
+            <div className="absolute top-12 inset-x-2 z-20 overflow-hidden rounded-xl border border-line bg-surface/95 shadow-lg">
+              <CardToolWhitelistsSection
+                cardID={cardID}
+                variant="compact"
+                onChanged={() => {
+                  void sync();
+                }}
+              />
+            </div>
+          )}
 
           <Suspense
             fallback={

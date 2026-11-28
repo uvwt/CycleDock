@@ -313,6 +313,58 @@ SELECT EXISTS (
       AND scope_target = sqlc.arg(scope_target)
 ) AS whitelisted;
 
+-- name: ListCardToolWhitelists :many
+SELECT
+    w.id,
+    w.workspace_id,
+    w.card_id,
+    w.tool_name,
+    w.pattern,
+    w.scope_type,
+    w.scope_target,
+    COALESCE(
+        (
+            SELECT a.scope_label
+            FROM card_tool_approvals a
+            WHERE a.workspace_id = w.workspace_id
+              AND a.card_id = w.card_id
+              AND a.scope_type = w.scope_type
+              AND a.scope_target = w.scope_target
+              AND a.scope_label <> ''
+            ORDER BY a.created_at DESC
+            LIMIT 1
+        ),
+        CASE
+            WHEN w.scope_type = 'device' THEN (
+                SELECT g.device_name
+                FROM workspace_device_tool_guards g
+                WHERE g.workspace_id = w.workspace_id
+                  AND g.device_node_id = w.scope_target
+                  AND g.device_name <> ''
+                LIMIT 1
+            )
+            ELSE NULL
+        END,
+        ''
+    )::text AS scope_label,
+    w.created_by_source_id,
+    w.created_at
+FROM card_tool_whitelists w
+WHERE w.workspace_id = sqlc.arg(workspace_id)
+  AND w.card_id = sqlc.arg(card_id)
+ORDER BY w.created_at DESC, w.id DESC;
+
+-- name: DeleteCardToolWhitelist :execrows
+DELETE FROM card_tool_whitelists
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id)
+  AND id = sqlc.arg(id);
+
+-- name: DeleteAllCardToolWhitelists :execrows
+DELETE FROM card_tool_whitelists
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND card_id = sqlc.arg(card_id);
+
 -- name: GetWorkspaceDeviceToolGuard :one
 SELECT *
 FROM workspace_device_tool_guards
